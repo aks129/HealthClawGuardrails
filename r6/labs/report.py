@@ -155,21 +155,42 @@ def _unevaluated_marker(results):
         reason = causes.pop()
         why = _CAUSE_NOTES.get(reason, "it could not be interpreted")
         if plural:
-            why = why.replace(" for it", " for them").replace(
-                "the result carried", "the results carried").replace(
-                "the value falls", "the values fall")
+            why = _plural_cause(why)
+        said = f"{', '.join(names)}, because {why}"
     else:
+        # Each cause in its own words. "They could not be interpreted, for
+        # more than one reason" was read out as a blood pressure and a
+        # glucose that "could not be interpreted" (#937): true of the check,
+        # and no use to the person.
         reason = "partly-unevaluated"
-        why = "they could not be interpreted, for more than one reason"
-    listed = ", ".join(names)
+        by_cause = {}
+        for r, name in zip(undecided, names):
+            by_cause.setdefault(r.get("indeterminate_reason"), []).append(name)
+        said = "; ".join(
+            f"{', '.join(group)}, because "
+            + (_plural_cause(why) if len(group) > 1 else why)
+            for group, why in (
+                (group, _CAUSE_NOTES.get(cause, "it could not be interpreted"))
+                for cause, group in by_cause.items()))
     return {"unevaluated": reason,
             "unevaluated_count": len(undecided),
             "unevaluated_analytes": names,
+            # The LOINC code each name stands for, in the same order: a code
+            # is not PHI, and a reader pairing a name with its reading needs
+            # more than a position to go on.
+            "unevaluated_codes": [r.get("loinc") if _loinc_ok(r.get("loinc"))
+                                  else None for r in undecided],
             "unevaluated_note": (
-                f"This check did not evaluate {listed}, because {why}. That is "
+                f"This check did not evaluate {said}. That is "
                 f"a limit on the check and not a statement about your health — "
                 f"ask your clinician to read {'them' if plural else 'it'}"
                 f" directly.")}
+
+
+def _plural_cause(why):
+    return why.replace(" for it", " for them").replace(
+        "the result carried", "the results carried").replace(
+        "the value falls", "the values fall")
 
 
 def _consumer_line(r):

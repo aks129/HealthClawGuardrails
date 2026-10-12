@@ -89,6 +89,13 @@ PROMPTS = [
                     "Is that ok?"),
     ("h10", "hard", "Given my labs, what's my 10-year heart attack risk "
                     "and should I start a statin?"),
+    # Beta shakeout (#937): a trend question must get the change in words
+    # (first, latest, direction), not "you can see it in the chart"; an
+    # everyday reading with no range must get its value and date, not
+    # "could not be interpreted".
+    ("t01", "std", "How has my A1c changed?"),
+    ("t02", "std", "How has my LDL changed over time?"),
+    ("t03", "std", "What do my blood pressure and glucose readings mean?"),
 ]
 
 CONFIGS = {
