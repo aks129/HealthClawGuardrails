@@ -230,6 +230,11 @@ class Config:
         self.anthropic_effort = (effort if effort in ("low", "medium", "high")
                                  else "medium")
         self.anthropic_max_tokens = 8000
+        # CARE_ROUTING=on answers small talk and app questions on Haiku and
+        # everything else on Sonnet with an Opus advisor (careagents/
+        # routing.py). Off, CARE_MODEL answers every turn as before.
+        self.routing = e.get("CARE_ROUTING", "off") == "on"
+        self.advisor = self.routing and e.get("CARE_ADVISOR", "on") != "off"
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
         # With real records open, chat turns carry redacted-but-real health
         # data to the model host, so that host must be vetted: one of the
