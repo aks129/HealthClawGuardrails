@@ -101,11 +101,14 @@ export async function signIn(
   await page.locator('#code').fill(code);
   await page.locator('#verify-btn').click();
 
-  // On a WebAuthn-capable browser the first verified sign-in offers passkey
-  // enrolment (auth.js:72); elsewhere it goes straight to the hub. Creating a
-  // passkey is out of scope here and needs a virtual authenticator.
-  if (await page.evaluate(() => !!window.PublicKeyCredential)) {
-    await expect(page.locator('#step-passkey')).toBeVisible();
+  // An account with nothing connected goes straight to the hub (first_run:
+  // the passkey waits in the chat's menu). One that has records already is
+  // offered passkey enrolment on a WebAuthn-capable browser. This helper's
+  // shared accounts are either, so accept both. Creating a passkey is out of
+  // scope here and needs a virtual authenticator.
+  await expect(
+    page.locator('#step-passkey:not([hidden]), main.hub')).toBeVisible();
+  if (await page.locator('#skip-passkey-btn').isVisible()) {
     await page.locator('#skip-passkey-btn').click();
   }
   await expect(page).toHaveURL(/\/home$/);

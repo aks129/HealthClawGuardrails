@@ -45,6 +45,16 @@ SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
                 "you.")
 
 
+def under_banner(text: str) -> str:
+    """A sample answer as the web chat shows it under its sticky banner:
+    without the worker's leading copy of SAMPLE_FRAME, so the line shows
+    once per view. Only that exact copy on its own line, and never down
+    to nothing. Called only where the banner is rendered on the page."""
+    lead = SAMPLE_FRAME + "\n\n"
+    rest = text[len(lead):] if text.startswith(lead) else ""
+    return rest if rest.strip() else text
+
+
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
 #: True before and after #565 is approved: a connection made before the
