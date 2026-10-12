@@ -4,18 +4,23 @@ Two tiers, chosen per turn without an extra model call:
 
   Haiku   the easiest turns only: greetings, thanks, what the assistant can
           do, and how to use the app (connecting records, passkeys, texting,
-          deleting the account, feedback). Low effort, no advisor.
-  Sonnet  everything else, at CARE_EFFORT, with an Opus advisor it can
-          consult on the hard ones (CARE_ADVISOR, on by default).
+          deleting the account, feedback). Low effort, no advisor, and it
+          sees only the current message, never earlier answers.
+  Sonnet  everything else, at CARE_EFFORT, with an Opus advisor it may
+          consult once per turn (CARE_ADVISOR, on by default).
 
-The classifier is an allowlist on purpose. Answering a clinical question on
-the small model is the failure that matters, so a message reaches Haiku only
-when it looks like small talk or an app question AND carries no number and no
-clinical word. Anything else, including anything ambiguous ("yes", "tell me
-more", another language), goes to Sonnet. Haiku is still offered the tools,
-and a Haiku reply that reaches for a clinical tool is thrown away and the
-call re-run on Sonnet (careagents/llm.py), so a misroute costs a little
-latency, never a clinical answer from the small model.
+The classifier is a tight allowlist. A message reaches Haiku only when the
+WHOLE message, once normalised, is small talk or one of a short list of app
+questions written out below. Any other word, any number, any letter outside
+plain ASCII, or anything that reads as a crisis or an emergency sends it to
+Sonnet. A word list of clinical terms was tried first and lost (#931
+security review F1): "can I text you at night when I feel like ending it
+all" reached Haiku, because no list of bad words is ever complete, and the
+escalation net below only catches questions that need the record.
+
+Haiku is still offered the tools, and a Haiku reply that reaches for a
+clinical tool is thrown away and the call re-run on Sonnet
+(careagents/llm.py).
 
 Also here: the per-UTC-day integer counts that say how routing behaves in
 production. Metric names are fixed in this module; nothing a person wrote
@@ -26,7 +31,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import re
-import threading
+import unicodedata
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -41,14 +46,16 @@ SONNET_MODEL = "claude-sonnet-5-5"
 ADVISOR_MODEL = "claude-opus-5-5"
 
 #: Server-side advisor (beta). Opus 5.5 returns its advice encrypted
-#: (advisor_redacted_result): the executor reads it, we never can. Two
-#: consultations per call at most; 3000 tokens covers the advisor's thinking
-#: and its advice (about 600-850 in the 2026-10-12 probe).
+#: (advisor_redacted_result): the executor reads it, we never can. One
+#: consultation per call, and the advisor is offered only until the turn
+#: has used it (advisor_used), so a turn consults Opus at most once however
+#: many rounds its tool loop runs (#931 F5). 3000 tokens covers the
+#: advisor's thinking and its advice (about 600-850 in the 2026-10-12 probe).
 ADVISOR_TOOL = {
     "type": "advisor_20260301",
     "name": "advisor",
     "model": ADVISOR_MODEL,
-    "max_uses": 2,
+    "max_uses": 1,
     "max_tokens": 3000,
     "caching": {"type": "ephemeral", "ttl": "5m"},
 }
@@ -75,40 +82,23 @@ CLINICAL_TOOLS = frozenset({
     "search_records", "appointment_brief", "start_intake_form"})
 
 #: Longer than this is not small talk.
-_MAX_HAIKU_CHARS = 160
+_MAX_HAIKU_CHARS = 120
 
-#: Words that make a message clinical wherever they appear. Matched on word
-#: starts, so "med" covers meds/medication/medicine and "allerg" allergy.
-_CLINICAL = re.compile(r"\b(?:" + "|".join([
-    r"labs?\b", r"results?\b", r"tests?\b", r"tested", r"a1c", r"hba1c",
-    r"cholesterol", r"ldl", r"hdl", r"triglycer", r"glucose", r"sugar",
-    r"potassium", r"sodium", r"kidney", r"liver", r"thyroid", r"tsh",
-    r"egfr", r"gfr", r"creatinine", r"blood", r"pressure", r"bp\b",
-    r"pulse", r"heart", r"chest", r"pain", r"hurt", r"ache", r"sore",
-    r"fever", r"cough", r"dizz", r"nause", r"vomit", r"bleed", r"rash",
-    r"headache", r"migraine", r"breath", r"swell", r"tired", r"fatigue",
-    r"sick", r"ill\b", r"symptom", r"med", r"pill", r"dose", r"dosage",
-    r"mg\b", r"mcg", r"units?\b", r"prescri", r"refill", r"drug",
-    r"insulin", r"metformin", r"statin", r"side.?effect", r"condition",
-    r"diagnos", r"disease", r"diabet", r"hypertens", r"asthma", r"cancer",
-    r"infect", r"allerg", r"vaccin", r"immuni", r"shots?\b", r"screen",
-    r"records?\b", r"chart", r"history", r"visit", r"appointment",
-    r"doctor", r"dr\b", r"nurse", r"clinic", r"hospital", r"er\b",
-    r"emergenc", r"urgent", r"health", r"weight", r"bmi", r"pregnan",
-    r"surgery", r"procedure", r"form\b", r"forms\b", r"intake", r"care\b",
-    r"gaps?\b", r"due\b", r"worr", r"normal", r"range", r"level",
-    r"value", r"trend", r"mean\b", r"means\b", r"brief",
-]) + r")", re.IGNORECASE)
+#: Crisis and emergency language. Never Haiku, whatever else the message
+#: says. The allowlist already refuses these; this is the rule stated out
+#: loud, so a later template cannot quietly admit one.
+_CRISIS = re.compile(r"|".join([
+    r"suicid", r"kill(?:ing)? my ?self", r"end(?:ing)? (?:it|my life|it all)",
+    r"(?:want to|wanna|going to|gonna) die", r"don'?t want to (?:live|be here)",
+    r"self.?harm", r"hurt(?:ing)? my ?self", r"cut(?:ting)? my ?self",
+    r"overdos", r"\bod\b", r"can'?t breathe", r"cannot breathe",
+    r"can not breathe", r"chest pain", r"heart attack", r"stroke",
+    r"seizure", r"unconscious", r"passed out", r"faint", r"bleeding",
+    r"911", r"988", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
+    r"abuse", r"\bunsafe\b",
+]))
 
-#: "connect my records" is an app question, so that one phrase is taken out
-#: before the clinical scan. The rest of the message is still scanned.
-_HOW_TO_RECORDS = re.compile(
-    r"\b(?:connect|link|add|import|upload|sync|disconnect)(?:ing|ed|s)?\s+"
-    r"(?:my\s+|the\s+|your\s+|our\s+)?"
-    r"(?:(?:real|own|other|health|medical)\s+){0,2}records?\b",
-    re.IGNORECASE)
-
-#: Messages made only of these words are small talk.
+#: Whole messages made only of these words are small talk.
 _SMALL_TALK = frozenset("""
     hi hello hey hiya howdy yo there good morning afternoon evening night
     thanks thank thankyou thx ty you so much very really a lot
@@ -117,47 +107,91 @@ _SMALL_TALK = frozenset("""
     all right alright have day
 """.split())
 
-#: An app or capability question. Only consulted once the message has no
-#: number and no clinical word.
-_APP_TOPIC = re.compile(r"|".join([
-    r"\bwhat (?:can|do|else can) you do\b", r"\bwho are you\b",
-    r"\bwhat are you\b", r"\bhow (?:does|do) (?:this|it|you) work",
-    r"\bhow can you help\b", r"\bwhat is (?:this|careagents)\b",
-    r"\bconnect", r"\bpasskey", r"\bsign(?:ing)? (?:in|up|out)\b",
-    r"\blog(?:ging)? ?(?:in|out)\b", r"\bpassword", r"\btext(?:ing)?\b",
-    r"\bimessage", r"\bsms\b", r"\bphone\b", r"\baccount\b",
-    r"\bnotification", r"\bsettings?\b", r"\bfeedback\b", r"\bbug\b",
-    r"\bemail\b", r"\binvite", r"\bprivacy\b",
-]), re.IGNORECASE)
+#: Stripped from the ends of a message before the templates are tried.
+_LEAD = frozenset("hi hello hey hiya yo ok okay so um thanks".split())
+_TRAIL = frozenset("please thanks".split())
+
+_Q = (r"(?:how do i|how can i|how would i|how to|can i|where do i|"
+      r"where can i|is it possible to)")
+
+#: The app questions Haiku may answer, as whole messages. Matched against
+#: the normalised words of the message joined by single spaces, after the
+#: lead and trail words above are taken off. Nothing else may be present.
+_TEMPLATES = re.compile(r"|".join(f"(?:{t})" for t in [
+    rf"{_Q} (?:connect|link|add|import) (?:my |the )?"
+    r"(?:(?:real|own|other|health|medical) ){0,2}records?",
+    rf"{_Q} (?:add|set up|setup|create|use|make|get) (?:a |my )?passkeys?",
+    rf"{_Q} (?:sign|log) (?:in|out|up)"
+    r"(?: on (?:my |a )?(?:phone|laptop|computer|ipad|tablet))?",
+    rf"{_Q} (?:delete|close|remove|cancel) (?:my )?account",
+    r"(?:can i|how do i|how can i) (?:text|message|imessage) you"
+    r"(?: from my phone)?",
+    r"can i use (?:imessage|texting|text|sms)(?: with (?:this|you))?",
+    r"what (?:else )?can you do(?: for me)?", r"what do you do",
+    r"who are you", r"what are you", r"how (?:does|do) (?:this|it|you) work",
+    r"how can you help(?: me)?", r"what is (?:this|careagents)",
+    r"i (?:have|got) (?:some )?feedback"
+    r"(?: (?:about|on|for) (?:the |this )?app)?",
+    rf"{_Q} (?:send|give|leave|share) (?:you )?feedback",
+]))
+
+
+def normalize(text: str) -> str:
+    """NFKC, invisible format characters removed, casefolded.
+
+    NFKC folds fullwidth and other compatibility letters to ASCII, and the
+    format characters (zero-width space, joiners, bidi marks) are what split
+    a word so a scan misses it. Letters that are still not ASCII afterwards
+    (a Cyrillic er that looks like p) are left for classify to refuse."""
+    t = unicodedata.normalize("NFKC", text or "")
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf")
+    return t.replace("’", "'").casefold().strip()
+
+
+def is_crisis(text: str) -> bool:
+    return bool(_CRISIS.search(normalize(text)))
 
 
 def classify(text: str) -> int:
-    """TIER_HAIKU for small talk and app questions, else TIER_SONNET."""
-    t = (text or "").strip()
-    if not t or len(t) > _MAX_HAIKU_CHARS or re.search(r"\d", t):
+    """TIER_HAIKU only for whole-message small talk and listed app
+    questions; TIER_SONNET for everything else."""
+    t = normalize(text)
+    if (not t or len(t) > _MAX_HAIKU_CHARS or re.search(r"\d", t)
+            or any(ch.isalpha() and not ch.isascii() for ch in t)
+            or _CRISIS.search(t)):
         return TIER_SONNET
-    if _CLINICAL.search(_HOW_TO_RECORDS.sub(" ", t)):
+    words = re.findall(r"[a-z']+", t.replace("thank you", "thanks"))
+    if not words:
         return TIER_SONNET
-    words = re.findall(r"[a-z']+", t.lower())
-    if words and all(w in _SMALL_TALK for w in words):
+    if all(w in _SMALL_TALK for w in words):
         return TIER_HAIKU
-    if _APP_TOPIC.search(t):
+    while words and words[0] in _LEAD:
+        words.pop(0)
+    while words and words[-1] in _TRAIL:
+        words.pop()
+    if words and _TEMPLATES.fullmatch(" ".join(words)):
         return TIER_HAIKU
     return TIER_SONNET
+
+
+def turn_start(messages: list[dict]) -> int | None:
+    """Index of the current turn's user message, or None. A note the loop
+    adds itself (agent.run_turn's tool-budget nudge) is not one."""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if (m.get("role") == "user" and isinstance(m.get("content"), str)
+                and not m.get("loop_note")):
+            return i
+    return None
 
 
 def tier_for(messages: list[dict]) -> int:
     """The tier for the next model call of the current turn.
 
-    The current turn starts at the last plain user message. Once that turn
-    has called a clinical tool it stays on Sonnet; otherwise the user's
-    message decides. A turn with no user message is not small talk."""
-    start = None
-    for i in range(len(messages) - 1, -1, -1):
-        m = messages[i]
-        if m.get("role") == "user" and isinstance(m.get("content"), str):
-            start = i
-            break
+    Once the turn has called a clinical tool it stays on Sonnet; otherwise
+    the user's message decides. A turn with no user message is not small
+    talk."""
+    start = turn_start(messages)
     if start is None:
         return TIER_SONNET
     for m in messages[start + 1:]:
@@ -167,12 +201,25 @@ def tier_for(messages: list[dict]) -> int:
     return classify(messages[start]["content"])
 
 
+def advisor_used(messages: list[dict]) -> int:
+    """Advisor consultations already made in the current turn.
+
+    The loop's history is provider-neutral and carries no advisor blocks,
+    so the callers record each assistant round's count under
+    `advisor_calls` (careagents/agent.py, careagents/worker.py)."""
+    start = turn_start(messages)
+    if start is None:
+        return 0
+    return sum(int(m.get("advisor_calls") or 0)
+               for m in messages[start + 1:] if m.get("role") == "assistant")
+
+
 # --- daily counts ------------------------------------------------------------
 
 #: The only metric names that may be stored.
 METRICS = frozenset({
-    "turns_haiku", "turns_sonnet", "turns_single", "escalations",
-    "advisor_consults", "advisor_errors", "refusals", "cut_offs"})
+    "turns_haiku", "turns_sonnet", "escalations", "advisor_consults",
+    "advisor_errors", "advisor_timeouts", "refusals", "cut_offs"})
 
 
 def _utc_day(now: _dt.datetime | None = None) -> str:
@@ -224,41 +271,24 @@ def counts(session_scope, days: int = 7, now: _dt.datetime | None = None
         return [(r.day, r.metric, r.count or 0) for r in rows]
 
 
-_scopes: dict[str, object] = {}
-_scopes_lock = threading.Lock()
+#: The process's own session scope, handed over by whoever owns the account
+#: store (careagents/worker.py). The counts use the app's engine and pool;
+#: this module never opens one of its own (#931 security review).
+_session_scope = None
 
 
-def _scope_for(database_url: str):
-    """One session scope per database per process, made on first use."""
-    with _scopes_lock:
-        scope = _scopes.get(database_url)
-        if scope is None:
-            from contextlib import contextmanager
-
-            from careagents.models import make_engine, make_session_factory
-            factory = make_session_factory(make_engine(database_url))
-
-            @contextmanager
-            def scope():
-                s = factory()
-                try:
-                    yield s
-                    s.commit()
-                except Exception:
-                    s.rollback()
-                    raise
-                finally:
-                    s.close()
-            _scopes[database_url] = scope
-        return scope
+def use_session_scope(scope) -> None:
+    global _session_scope
+    _session_scope = scope
 
 
-def count(cfg, deltas: dict) -> None:
-    """Best effort: a count is never a reason a turn fails."""
-    url = getattr(cfg, "database_url", "") or ""
-    if not url or not any(deltas.values()):
+def count(deltas: dict) -> None:
+    """Best effort: a count is never a reason a turn fails. Nothing is
+    counted in a process that has not handed over its session scope."""
+    scope = _session_scope
+    if scope is None or not any(deltas.values()):
         return
     try:
-        record(_scope_for(url), deltas)
+        record(scope, deltas)
     except Exception:  # noqa: BLE001 - counting must not fail a turn
         logger.warning("model usage counting failed", exc_info=True)

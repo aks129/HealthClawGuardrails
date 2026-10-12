@@ -64,7 +64,36 @@ SONNET = [
     # agent.run_turn's last call when the tool budget is spent arrives as a
     # plain user message, so it is classified on its own words.
     "(system: tool budget reached — answer now with what you have)",
+    # Live failures of the earlier word-list classifier (#931 F1): Haiku
+    # answered both, with no tool call to escalate on.
+    "can I text you at night when I feel like ending it all",
+    "quick phone question, can hiv spread from kissing",
+    # An app question with anything else in it is not an app question.
+    "how do I connect my records and is my sugar ok",
+    "who are you, I feel awful",
+    "how do I delete my account, I want to end it all",
+    "can I text you from my phone about something private",
+    "hi, quick question",
 ]
+
+CRISIS = [
+    "I want to end it all", "thinking about suicide", "I might kill myself",
+    "I took an overdose", "I can't breathe", "chest pain since an hour",
+    "is this a stroke", "call 911?", "I'm having an emergency",
+    "i wanna die", "I keep hurting myself",
+]
+
+
+@pytest.mark.parametrize("text", CRISIS)
+def test_crisis_language_is_never_haiku(text):
+    """MUTATION: drop the _CRISIS check -> still Sonnet (the allowlist
+    refuses these too); drop both -> red. The rule is stated on its own so
+    a future template cannot admit one."""
+    assert routing.is_crisis(text), text
+    assert routing.classify(text) == routing.TIER_SONNET, text
+    # Wrapped in small talk and an app question, still never Haiku.
+    assert routing.classify(f"hi, {text}") == routing.TIER_SONNET
+    assert routing.classify(f"who are you {text}") == routing.TIER_SONNET
 
 
 @pytest.mark.parametrize("text", HAIKU)
@@ -196,8 +225,38 @@ def test_routing_off_is_the_single_model_call_unchanged(monkeypatch):
     [(kind, kw)] = calls
     assert kind == "plain"
     assert kw["model"] == "claude-sonnet-5-5"
-    assert "betas" not in kw and "extra_body" not in kw
+    # main's request since #930, field for field.
+    assert set(kw) == {"model", "max_tokens", "output_config", "system",
+                       "messages", "tools"}
+    assert kw["max_tokens"] == 8000
+    assert kw["output_config"] == {"effort": "medium"}
     assert all("type" not in t for t in kw["tools"])
+
+
+def test_the_budget_nudge_does_not_restart_the_turn():
+    """agent.run_turn's tool-budget note is a user message the loop wrote;
+    the turn, its tier and its advisor count still start at the person's."""
+    history = _hist(
+        {"role": "user", "content": "How is my A1c?"},
+        {"role": "assistant", "content": "", "advisor_calls": 1,
+         "tool_calls": [{"id": "1", "name": "get_labs", "arguments": {}}]},
+        {"role": "tool", "tool_call_id": "1", "content": "{}"},
+        {"role": "user", "content": "(system: tool budget reached)",
+         "loop_note": True})
+    assert routing.turn_start(history) == 0
+    assert routing.advisor_used(history) == 1
+    assert routing.tier_for(history) == routing.TIER_SONNET
+
+
+def test_haiku_sees_only_the_current_turn(monkeypatch):
+    calls = _fake(monkeypatch, plain=[_resp([_Text("You're welcome!")])])
+    llm.complete(_cfg(), "sys", [
+        {"role": "user", "content": "How is my A1c?"},
+        {"role": "assistant", "content": "It was 8.1%."},
+        {"role": "user", "content": "thanks!"}], TOOLS)
+    [(_kind, kw)] = calls
+    assert kw["model"] == routing.HAIKU_MODEL
+    assert kw["messages"] == [{"role": "user", "content": "thanks!"}]
 
 
 def test_a_greeting_runs_on_haiku_at_low_effort_without_advisor(monkeypatch):

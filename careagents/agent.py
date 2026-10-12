@@ -862,7 +862,9 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
                                        for c in turn.tool_calls],
                         # Preserve provider-native call objects for replay
                         # (Gemini thought_signature); ignored by Anthropic.
-                        "_openai_tool_calls": turn.raw_tool_calls})
+                        "_openai_tool_calls": turn.raw_tool_calls,
+                        # Caps the advisor per turn (careagents/routing.py).
+                        "advisor_calls": getattr(turn, "advisor_calls", 0)})
         for call in turn.tool_calls:
             yield {"type": "tool", "name": call.name,
                    "label": TOOL_LABELS.get(call.name, call.name)}
@@ -886,7 +888,10 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
             # is answer, then return regardless of what comes back.
             history.append({"role": "user", "content": (
                 "(system: tool budget reached — answer now with what you "
-                "have)")})
+                "have)"),
+                # Not the person's message: the turn (routing tier, advisor
+                # cap) still starts at theirs (careagents/routing.py).
+                "loop_note": True})
             try:
                 final = llm.complete(cfg, system, history, [])
             except llm.LLMError as exc:

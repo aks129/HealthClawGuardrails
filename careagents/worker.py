@@ -18,7 +18,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-from careagents import beta, llm, tester_terms
+from careagents import beta, llm, routing, tester_terms
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
@@ -384,6 +384,7 @@ class RunWorker:
                 "content": payload.get("text") or "",
                 "tool_calls": calls,
                 "_openai_tool_calls": payload.get("raw_tool_calls") or [],
+                "advisor_calls": payload.get("advisor_calls") or 0,
             })
             for call in calls:
                 result = tool_results.get(str(call.get("id")))
@@ -457,6 +458,9 @@ class RunWorker:
                          "arguments": call.arguments}
                         for call in turn.tool_calls],
                     "raw_tool_calls": turn.raw_tool_calls,
+                    # Caps the advisor per turn across a recovered run too
+                    # (careagents/routing.py advisor_used).
+                    "advisor_calls": getattr(turn, "advisor_calls", 0),
                 }
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.checkpoint",
@@ -467,6 +471,7 @@ class RunWorker:
                     "role": "assistant", "content": turn.text,
                     "tool_calls": pending_checkpoint["tool_calls"],
                     "_openai_tool_calls": turn.raw_tool_calls,
+                    "advisor_calls": pending_checkpoint["advisor_calls"],
                 })
 
             calls = pending_checkpoint.get("tool_calls") or []
@@ -651,6 +656,9 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
+    # The routing counts (careagents/routing.py) write through this pool
+    # rather than opening one of their own.
+    routing.use_session_scope(getattr(accounts, "session", None))
     base_id = _worker_base_id()
     backoff = _IdleBackoff(cfg.run_worker_concurrency, cfg.run_poll_seconds,
                            cfg.run_poll_max_seconds)
