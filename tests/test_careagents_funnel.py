@@ -300,7 +300,8 @@ def test_digest_is_off_without_an_address(svc):  # noqa: F811
 def test_digest_sends_once_per_day(svc, monkeypatch):  # noqa: F811
     from careagents import mail
     from tests.test_careagents_beta_signup import _cfg
-    cfg_ = _cfg(CARE_DIGEST_TO="owner@example.com", RESEND_API_KEY="re_x")
+    cfg_ = _cfg(CARE_DIGEST_TO="owner@example.com", RESEND_API_KEY="re_x",
+                CARE_ALLOW_REAL_MAIL="1")
     sent = []
 
     def fake_send(_cfg, to, subject, html, text, reply_to=None):
@@ -326,7 +327,8 @@ def test_digest_sends_once_per_day(svc, monkeypatch):  # noqa: F811
 def test_a_refused_digest_is_tried_again(svc, monkeypatch):  # noqa: F811
     from careagents import mail
     from tests.test_careagents_beta_signup import _cfg
-    cfg_ = _cfg(CARE_DIGEST_TO="owner@example.com", RESEND_API_KEY="re_x")
+    cfg_ = _cfg(CARE_DIGEST_TO="owner@example.com", RESEND_API_KEY="re_x",
+                CARE_ALLOW_REAL_MAIL="1")
     outcomes = [mail.NOT_SENT, mail.SENT]
     monkeypatch.setattr(mail, "send_message",
                         lambda *a, **k: outcomes.pop(0))
@@ -334,9 +336,9 @@ def test_a_refused_digest_is_tried_again(svc, monkeypatch):  # noqa: F811
     assert funnel.send_digest_if_due(svc.session, cfg_, day) == mail.NOT_SENT
     assert funnel.send_digest_if_due(svc.session, cfg_, day) == mail.SENT
     assert funnel.send_digest_if_due(svc.session, cfg_, day) is None
-    # The refusal was a real send that failed: counted.
-    assert funnel.daily(svc.session, days=1,
-                        moment=day)["days"][0]["mail_failed"] == 1
+    # The refusal was a real send that failed: counted on the day it failed
+    # (today), not the day the digest reports on.
+    assert funnel.daily(svc.session, days=1)["days"][0]["mail_failed"] == 1
 
 
 def test_racing_workers_send_one_digest(tmp_path, monkeypatch):
