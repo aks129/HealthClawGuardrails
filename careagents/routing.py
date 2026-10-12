@@ -189,8 +189,10 @@ _TEMPLATES = re.compile(r"|".join(f"(?:{t})" for t in [
     r"(?:a |my )?passkeys?",
     rf"{_Q} invite (?:a |my |some )?(?:friends?|family|people|someone|others)"
     r"(?: (?:and|or) family)?",
+    # Data only: "keep me safe" can be a person asking about their own
+    # safety, which gets Sonnet's check-in, never a menu pointer (#936 sec).
     r"how (?:do|does) (?:you|this|it|careagents) keep "
-    r"(?:me|my (?:data|records|information)) safe",
+    r"my (?:data|records|information|privacy) (?:safe|private|secure)",
     rf"{_Q} (?:sign|log) (?:in|out|up)"
     r"(?: on (?:my |a )?(?:phone|laptop|computer|ipad|tablet))?",
     rf"{_Q} (?:delete|close|remove|cancel) (?:my )?account",

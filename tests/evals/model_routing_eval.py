@@ -56,7 +56,7 @@ PROMPTS = [
     ("e11", "easy", "How do I remove a passkey?"),
     ("e12", "easy", "How do I invite friends?"),
     ("e13", "easy", "How do I sign out?"),
-    ("e14", "easy", "How do you keep me safe?"),
+    ("e14", "easy", "How do you keep my data safe?"),
     ("e15", "easy", "How do I send feedback?"),
     ("e16", "easy", "What is this?"),
     ("s01", "std", "What is my latest A1c?"),

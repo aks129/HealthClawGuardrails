@@ -59,7 +59,7 @@ HISTORY = [{"role": "user", "content": "How is my A1c?"},
 def test_a_pass_reply_is_discarded_and_rerun_on_sonnet(monkeypatch, reply):
     log = _sdk(monkeypatch, reply)
     turn = llm.complete(_cfg(), "SYS", HISTORY + [
-        {"role": "user", "content": "how do you keep me safe"}], [])
+        {"role": "user", "content": "how do you keep my data safe"}], [])
     assert [b["model"] for b in log] == [routing.HAIKU_MODEL,
                                          routing.SONNET_MODEL]
     assert turn.text == "S" and turn.escalated

@@ -113,7 +113,7 @@ def test_sonnet_never_gets_the_card(monkeypatch):
     "how do i remove a passkey",
     "how do I invite friends",
     "how can I invite my family",
-    "how do you keep me safe",
+    "how do you keep my data safe",
     "how do I sign out",
 ])
 def test_the_new_card_questions_reach_haiku(text):
@@ -123,6 +123,8 @@ def test_the_new_card_questions_reach_haiku(text):
 @pytest.mark.parametrize("text", [
     "how do I invite friends to see my labs",
     "how do you keep me safe from my A1c",
+    "how do you keep me safe",  # could be about the person's own safety
+    "how do you keep me safe tonight",
     "how do I remove a passkey and check my potassium",
 ])
 def test_the_new_templates_admit_nothing_more(text):
