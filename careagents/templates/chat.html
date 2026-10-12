@@ -122,7 +122,7 @@
      _chat_connect_next). "after": chat.js shows it once an answer is done. #}
   {% if connect_next %}
   <p class="chat-next" id="connect-next"{% if connect_next == "after" %} hidden{% endif %}>Ready for your own records?
-    <a href="/home#connect-records">Connect your records</a></p>
+    {% if link_session %}<a href="/auth?connect=1">Sign in again to connect your records</a>{% else %}<a href="/home#connect-records">Connect your records</a>{% endif %}</p>
   {% endif %}
   <p class="chat-feedback">Something confusing? <a href="/feedback">Tell us</a>.</p>
 </main>

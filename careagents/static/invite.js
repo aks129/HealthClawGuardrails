@@ -6,8 +6,10 @@
   if (!url) return;
   const link = url.textContent.trim();
   const msg = $("invite-msg");
+  // Both lines are news, not errors: the neutral style, never the red.
   function say(text) {
     msg.textContent = text;
+    msg.classList.add("is-ok");
     msg.hidden = false;
   }
 

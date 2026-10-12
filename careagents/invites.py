@@ -405,14 +405,21 @@ def register(app, svc, cfg, beta_context) -> None:
             return _closed(429)
         with svc.session() as s:
             link = _live(s, code, cfg.invite_link_cap)
-            name = (inviter_first_name(s, link.account_id)
+            inviter_id = link.account_id if link is not None else None
+            name = (inviter_first_name(s, inviter_id)
                     if link is not None else None)
         if link is None:
             # Unknown, revoked and full: the same page and status.
             return _closed(404)
+        # Whether a join through this link would carry real records today,
+        # so the page does not say "made-up only" to someone it would not
+        # be true for (#934 QA). The grant itself is decided at confirm.
+        real = (cfg.real_records != "off" and tester_terms.approved()
+                and inviter_has_access(svc, cfg, svc.get_account(inviter_id)))
         resp = make_response(render_template(
             "beta.html", **beta_context(), invite={"code": code,
-                                               "first_name": name}))
+                                               "first_name": name,
+                                               "real": real}))
         # The code is in this page's address: it goes to no other site.
         resp.headers["Referrer-Policy"] = "no-referrer"
         return resp

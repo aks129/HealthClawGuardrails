@@ -468,6 +468,12 @@ def create_app(config: Config | None = None,
         agent = request.args.get("agent") or ""
         if asked_enroll and me and svc.get_agent_context(me.id, agent):
             back = url_for("chat", agent=agent)
+        # "Sign in again to connect your records" from a link session's
+        # hub card or chat (#934 QA F1): a code first, then back to the card.
+        code_for_connect = (request.args.get("connect") == "1"
+                            and via_link and me is not None)
+        if code_for_connect:
+            back = url_for("home") + "#connect-records"
         if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
         # Set by a beta confirm that could not sign in (beta_signup): the
@@ -480,6 +486,7 @@ def create_app(config: Config | None = None,
                                # "Add a passkey" from a link session: say
                                # why a code comes first (patient walk F1).
                                code_for_passkey=asked_enroll and via_link,
+                               code_for_connect=code_for_connect,
                                prefill=(prefill if isinstance(prefill, str)
                                         else ""),
                                imessage_pending=bool(
@@ -516,6 +523,9 @@ def create_app(config: Config | None = None,
         return render_template(
             "home.html", me=acct,
             connect_next=_connect_next(acct, view, menu, real_open, paused),
+            # A confirm-link session connects only after a code (#920 F1):
+            # the card says so and goes to /auth (#934 QA F1).
+            link_session=bool(session.get(_VIA_LINK)),
             invite_line=_invite_line(acct, real_open),
             stale_consent=stale_consent,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
@@ -591,8 +601,8 @@ def create_app(config: Config | None = None,
             return ("Connecting your own records isn't open yet, so you're "
                     "using made-up records.")
         if outcome == invites.NONE:
-            return ("Your invite is for made-up records, so connecting your "
-                    "own records isn't open for you yet.")
+            return ("For now you can use made-up records. Connecting your "
+                    "own records isn't open to you yet.")
         return None
 
     @app.get("/settings")
@@ -1765,6 +1775,7 @@ def create_app(config: Config | None = None,
                                    request.args.get("passkey") == "added"
                                    and svc.has_passkey(acct.id)),
                                connect_next=_chat_connect_next(acct, sample),
+                               link_session=bool(session.get(_VIA_LINK)),
                                sample_line=(beta.SAMPLE_FRAME
                                             if sample else None))
 

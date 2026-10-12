@@ -68,8 +68,14 @@
       <p class="card-note">You've seen how it works on made-up records. Now
         bring in your own from your doctor or hospital. You'll read the
         terms first, and you sign in on their site, not ours.</p>
+      {% if link_session %}
+      {# Opened by the confirm link: a code first, then back here. #}
+      <a class="btn-primary btn-block" id="connect-signin"
+         href="/auth?connect=1">Sign in again to connect your records</a>
+      {% else %}
       <button type="button" class="btn-primary btn-block connector-tile"
               data-connector="fasten" data-consent="1">Connect your records</button>
+      {% endif %}
     </div>
   </section>
   {% endif %}

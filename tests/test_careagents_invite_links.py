@@ -428,7 +428,7 @@ def test_a_link_passes_on_real_records_only_from_an_inviter_who_has_them(
     assert invites.join_outcome(svc.session, "late@example.com") == "none"
     assert _invite_row(svc, "late@example.com") is None
     hub = c.get("/home").get_data(as_text=True)
-    assert "Your invite is for made-up records" in hub
+    assert "For now you can use made-up records" in hub
 
 
 def test_a_confirm_link_session_of_the_owner_gets_no_funnel_page(
@@ -511,3 +511,95 @@ def test_a_paused_inviter_passes_on_nothing(made, sent, monkeypatch):  # noqa: F
     svc.set_paused("inviter@example.com", True)
     _join_via(app, sent, code, "p@example.com", first_run=False)
     assert invites.join_outcome(svc.session, "p@example.com") == "none"
+
+
+# --- #934 QA: the connect step in a confirm-link session --------------------
+
+def test_a_link_session_is_sent_to_sign_in_before_connecting(
+        made, sent, monkeypatch):  # noqa: F811
+    """Every new joiner is in a confirm-link session when the card first
+    shows (#934 QA F1). The card and the chat say "Sign in again", /auth
+    asks for a code with the address filled in and returns to the card,
+    and the connect refusal carries a sentence, never only a code."""
+    from careagents import agent as agent_mod, tester_terms
+    from tests.test_careagents import _turn
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "an answer", [], []
+    monkeypatch.setattr(agent_mod.llm, "complete", lambda *a, **k: _Turn())
+    app, svc = made(RESEND_API_KEY="re_test", CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="inviter@example.com",
+                    FASTEN_PUBLIC_KEY="pub123")
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    c, r = _join_via(app, sent, code, "newbie@example.com")
+    assert r.status_code == 303
+    agent = re.search(r"agent=(\w+)", r.headers["Location"]).group(1)
+    assert invites.join_outcome(svc.session, "newbie@example.com") == "granted"
+    _turn(c, agent, "what do my labs say?")
+
+    hub = c.get("/home").get_data(as_text=True)
+    card = hub[hub.index('id="connect-records"'):]
+    card = card[:card.index("</section>")]
+    assert 'href="/auth?connect=1"' in card
+    assert "Sign in again to connect your records" in card
+    assert "connector-tile" not in card
+    chat = c.get(f"/chat?agent={agent}").get_data(as_text=True)
+    assert 'href="/auth?connect=1"' in chat
+
+    # A tap that reaches the server anyway is refused with a sentence.
+    refused = c.post("/api/connections/fasten", json={
+        "consent": True, "consent_version": tester_terms.CONSENT_VERSION})
+    assert refused.status_code == 403
+    assert " " in refused.get_json()["message"]
+
+    page = c.get("/auth?connect=1").get_data(as_text=True)
+    assert 'value="newbie@example.com"' in page
+    assert 'data-back="/home#connect-records"' in page
+    assert 'id="connect-why"' in page
+
+    # The code sign-in ends the link session; the card is the real tile.
+    _login(c, svc, monkeypatch, email="newbie@example.com")
+    hub = c.get("/home").get_data(as_text=True)
+    card = hub[hub.index('id="connect-records"'):]
+    assert 'data-connector="fasten"' in card[:card.index("</section>")]
+    ok = c.post("/api/connections/fasten", json={
+        "consent": True, "consent_version": tester_terms.CONSENT_VERSION})
+    assert ok.status_code == 200
+    assert "/connect/" in ok.get_json()["connect_url"]
+
+
+def test_connect_for_a_full_session_changes_nothing(made, monkeypatch):  # noqa: F811
+    """`?connect=1` matters only in a link session."""
+    app, svc = made()
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="full@example.com")
+    r = c.get("/auth?connect=1")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/home")
+
+
+def _static(name):
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parents[1] / "careagents" /
+            "static" / name).read_text()
+
+
+def test_home_js_never_shows_a_bare_refusal_code():
+    js = _static("home.js")
+    assert "res.d.error ||" not in js
+    assert 'refusal(res.d, "Couldn\'t connect that source.")' in js
+
+
+def test_the_invite_page_says_records_can_follow_when_they_can(
+        made, monkeypatch):  # noqa: F811
+    app, svc = made(CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="inviter@example.com")
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    html = app.test_client().get(f"/i?c={code}").get_data(as_text=True)
+    assert 'id="beta-records-line"' in html and "not your own" not in html
+    _, other, _ = _inviter(app, svc, monkeypatch, email="plain@example.com")
+    html = app.test_client().get(f"/i?c={other}").get_data(as_text=True)
+    assert "not your own" in html and 'id="beta-records-line"' not in html
+
+
+def test_link_copied_is_not_drawn_as_an_error():
+    assert 'classList.add("is-ok")' in _static("invite.js")
