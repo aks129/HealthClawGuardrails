@@ -85,9 +85,6 @@ DEMO_VIDEOS_URL = ("https://github.com/aks129/HealthClawGuardrails/releases/"
                    "tag/demo-videos-2026-10")
 
 _REF = re.compile(r"[a-z0-9-]{1,32}")
-# Labels split on dots with no overlap, so matching is linear (CodeQL
-# polynomial-regex); an empty label (a@b..c) is refused.
-_EMAIL = re.compile(r"[^@\s,]+@[^@\s,.]+(?:\.[^@\s,.]+)+")
 _TOKEN_MAX = 64
 _DAY = 86400
 _GMAIL = ("gmail.com", "googlemail.com")
@@ -147,9 +144,20 @@ def has_control(value: str) -> bool:
     return any(unicodedata.category(c) in ("Cc", "Cf") for c in value)
 
 
+def _plain_part(part: str) -> bool:
+    return bool(part) and not any(c.isspace() or c in ",@" for c in part)
+
+
 def valid_email(value: str) -> bool:
-    return (len(value) <= 254 and value.count("@") == 1
-            and not has_control(value) and bool(_EMAIL.fullmatch(value)))
+    """local@label.label, no spaces, commas or empty labels. String checks,
+    not a regex, so there is no backtracking on long input (CodeQL)."""
+    if (len(value) > 254 or value.count("@") != 1
+            or has_control(value)):
+        return False
+    local, domain = value.split("@")
+    labels = domain.split(".")
+    return (_plain_part(local) and len(labels) >= 2
+            and all(_plain_part(label) for label in labels))
 
 
 def ascii_email(value: str) -> str | None:
