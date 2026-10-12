@@ -1,6 +1,11 @@
-{% extends "base.html" %}
+{#- patient_view: opened from CareAgents with a valid tag (app.py,
+    _opened_from_careagents, #937). That view has no HealthClaw nav, no
+    tenant id, and no agent-access path at all — the read token is never
+    minted or shown from it — and it links back to the CareAgents hub. Every
+    other caller gets the developer page as it was. #}
+{% extends "connect_patient_base.html" if patient_view else "base.html" %}
 
-{% block title %}Connect your records · HealthClaw{% endblock %}
+{% block title %}Connect your records{% if not patient_view %} · HealthClaw{% endif %}{% endblock %}
 
 {% block head %}
 <style>
@@ -208,11 +213,16 @@
 {% endblock %}
 
 {% block content %}
+{% if patient_view %}
+<div class="patient-top">
+  <a href="{{ careagents_home }}">&larr; Back to CareAgents</a>
+</div>
+{% endif %}
 <div class="connect-shell">
   {#- Plain words only (#326): the patient sees Fasten's provider search by
       default, and CLEAR / ID.me only when FASTEN_TEFCA_MODE=true. Network
       names (TEFCA, QHIN) mean nothing to them, so neither mode shows them. #}
-  <div class="connect-eyebrow">Fasten Connect</div>
+  <div class="connect-eyebrow">{% if patient_view %}CareAgents{% else %}Fasten Connect{% endif %}</div>
 {% if tefca_mode %}
   <h1 class="connect-title">Verify once. Records arrive automatically.</h1>
   <p class="connect-sub">
@@ -221,6 +231,13 @@
     to each one. After that, records arrive over the next 5–45 minutes and
     HealthClaw applies the full guardrail stack (PHI redaction, audit,
     step-up, human-in-the-loop) before any AI agent sees them.
+  </p>
+{% elif patient_view %}
+  <h1 class="connect-title">Connect your health records.</h1>
+  <p class="connect-sub">
+    Find your doctor's office or health system and sign in to its patient
+    portal, the same way you would to see your records there. You sign in
+    on their site, and CareAgents never sees your password.
   </p>
 {% else %}
   <h1 class="connect-title">Connect your health records.</h1>
@@ -233,7 +250,9 @@
   </p>
 {% endif %}
 
+{% if not patient_view %}
   <span class="connect-tenant">Tenant: <strong>{{ tenant_id }}</strong></span>
+{% endif %}
 
   <div class="stitch-card">
 {% if tefca_mode %}
@@ -273,6 +292,24 @@
 </div>
 {% endif %}
 
+{% if patient_view %}
+  <div class="stitch-card">
+    <h3>Step 2 — Your records arrive on your hub</h3>
+    <p>
+      Records usually arrive within 5 to 45 minutes. Sometimes it takes
+      longer. You can close this page while you wait.
+    </p>
+    <p>
+      We don't send a message when they arrive. Your CareAgents hub shows
+      them: the card changes from "Connecting…" to "Connected".
+    </p>
+    <a class="back-btn" id="back-to-careagents" href="{{ careagents_home }}">Back to CareAgents</a>
+    <p style="margin:18px 0 0">
+      Nothing there after a day? Write to
+      <a href="mailto:contactus@healthclaw.io">contactus@healthclaw.io</a>.
+    </p>
+  </div>
+{% else %}
   <div class="stitch-card">
     <h3>Step 2 — Records flow in the background</h3>
     <p>
@@ -293,6 +330,7 @@
       with your tenant id and we will check the connection.
     </div>
   </div>
+{% endif %}
 </div>
 
 <script>
@@ -338,6 +376,16 @@
           portal_id: data.portal_id || null
         })
       });
+{% if patient_view %}
+      {#- No agent-access poll here: the patient view never mints or shows
+          the read token (#937). Their hub is where the records show up. #}
+      showStatus(
+        resp.ok
+          ? 'Connected. Your records are on their way. Go back to CareAgents: your hub shows them when they arrive.'
+          : 'Saving the connection did not work. Please try again, or write to contactus@healthclaw.io.',
+        resp.ok ? 'success' : 'error'
+      );
+{% else %}
       showStatus(
         resp.ok
           ? 'Connection registered. Records will stream in over the next 5–45 minutes. Nothing will notify you when they land.'
@@ -349,11 +397,13 @@
         // connection (usually seconds). Poll briefly.
         _pollAgentAccess(data.org_connection_id, 30);
       }
+{% endif %}
     } catch (err) {
       showStatus('Network error: ' + err.message, 'error');
     }
   }
 
+{% if not patient_view %}
   async function _pollAgentAccess(orgConnectionId, attemptsLeft) {
     if (attemptsLeft <= 0) {
       showStatus('Connection made — your assistant key is still being verified. ' +
@@ -415,6 +465,7 @@
     statusEl.parentNode.insertBefore(el, statusEl.nextSibling);
   }
 
+{% endif %}
   window.addEventListener('message', async function (event) {
     var data = event.data || {};
     var type = data.type || data.event || data.action || '';

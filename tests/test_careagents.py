@@ -5214,16 +5214,16 @@ def test_connect_and_reauth_links_never_use_the_internal_base():
     from careagents.healthclaw import HealthClawClient
     client = HealthClawClient("https://internal.up.railway.app/", "m",
                               public_base="https://app.healthclaw.io/")
-    assert client.fasten_connect_url("t-1") == (
-        "https://app.healthclaw.io/connect/t-1")
+    assert client.fasten_connect_url("t-1").startswith(
+        "https://app.healthclaw.io/connect/t-1?src=careagents&sig=")
     assert client.wearables_connect_url("t-1", "oura").startswith(
         "https://app.healthclaw.io/wearables/oauth/start?")
     # Server-to-server stays internal.
     assert client.fhir == "https://internal.up.railway.app/r6/fhir"
     # Without a public base the client behaves as before (tests, dev).
     plain = HealthClawClient("https://internal.up.railway.app", "m")
-    assert plain.fasten_connect_url("t-1") == (
-        "https://internal.up.railway.app/connect/t-1")
+    assert plain.fasten_connect_url("t-1").startswith(
+        "https://internal.up.railway.app/connect/t-1?src=careagents&sig=")
 
 
 def test_the_app_builds_its_client_with_the_public_base(svc):

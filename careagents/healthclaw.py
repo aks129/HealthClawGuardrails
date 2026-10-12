@@ -8,6 +8,8 @@ browser never sees (the mint secret and tenant-bound step-up tokens).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -648,8 +650,20 @@ class HealthClawClient:
         HMAC-verified `patient.connection_success` webhook then registers the
         org_connection_id back to this tenant and ingests the records. We do
         NOT build a Fasten-hosted URL ourselves — the provider domain differs
-        by TEFCA/mode and only the HealthClaw page has the verified key."""
-        return f"{self.public_base}/connect/{tenant}"
+        by TEFCA/mode and only the HealthClaw page has the verified key.
+
+        The link carries a tag over the tenant, keyed from the secret both
+        sides hold (app.py, connect_view_tag), so the engine shows its
+        patient view: no HealthClaw nav, no tenant id, no assistant token,
+        and a way back to the hub (#937). Without a secret, no tag, and the
+        engine shows its developer page."""
+        url = f"{self.public_base}/connect/{tenant}"
+        if not self.mint_secret:
+            return url
+        key = hashlib.sha256(b"healthclaw-connect-view:"
+                             + self.mint_secret.encode("utf-8")).digest()
+        tag = hmac.new(key, tenant.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{url}?src=careagents&sig={tag}"
 
     def wearables_connect_url(self, tenant: str, provider: str) -> str:
         """Route to HealthClaw's wearables OAuth kickoff for this tenant +

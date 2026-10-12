@@ -248,12 +248,62 @@ import re as _re
 _TENANT_ID_PATTERN = _re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')
 
 
+# Where "Back to CareAgents" goes from the patient connect page. Only ever
+# server configuration, never the request: the origin of the consent URL
+# CareAgents already registers here, else the production hub.
+_CAREAGENTS_HOME_DEFAULT = 'https://careagents.cloud/home'
+
+
+def _careagents_home():
+    from urllib.parse import urlsplit
+    configured = os.environ.get('CAREAGENTS_CONSENT_URL', '').strip()
+    parts = urlsplit(configured)
+    if parts.scheme in ('http', 'https') and parts.netloc \
+            and _re.fullmatch(r'[A-Za-z0-9.:\-]+', parts.netloc):
+        return f'{parts.scheme}://{parts.netloc}/home'
+    return _CAREAGENTS_HOME_DEFAULT
+
+
+def connect_view_tag(tenant_id):
+    """HMAC over the tenant, keyed from the secret CareAgents and the engine
+    already share, domain-separated the way r6/oauth.py derives its handoff
+    key. CareAgents puts it in the connect link it builds
+    (careagents/healthclaw.py, fasten_connect_url). None when unset."""
+    import hmac as _hmac
+    secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '').strip()
+    if not secret:
+        return None
+    key = hashlib.sha256(b'healthclaw-connect-view:' + secret.encode('utf-8')).digest()
+    return _hmac.new(key, tenant_id.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _opened_from_careagents(tenant_id):
+    """The patient view, decided here and not by the browser (#937).
+
+    Forging it would gain nothing: the patient view shows LESS (no tenant
+    id, and no agent-access path, so no read token is minted or shown from
+    it). The tag is defence in depth, and it keeps the page a developer
+    reaches directly exactly as it was.
+    """
+    import hmac as _hmac
+    if request.args.get('src') != 'careagents':
+        return False
+    expected = connect_view_tag(tenant_id)
+    given = request.args.get('sig', '')
+    return bool(expected) and isinstance(given, str) \
+        and _hmac.compare_digest(given, expected)
+
+
 @web_blueprint.route('/connect/<tenant_id>')
 def fasten_connect(tenant_id):
     """
     Lean Fasten-Connect TEFCA verification page bound to a specific tenant.
     The Stitch widget renders only when FASTEN_PUBLIC_KEY is set; otherwise
     we show a "configure server first" banner so demos fail loudly.
+
+    Opened from CareAgents with a valid tag it is the patient view: no
+    HealthClaw nav, no tenant id, no assistant token, and a way back to the
+    CareAgents hub (#937).
     """
     if not _TENANT_ID_PATTERN.match(tenant_id):
         return 'Invalid tenant id', 400
@@ -262,9 +312,12 @@ def fasten_connect(tenant_id):
     from r6.fasten.models import tenant_closed
     if tenant_closed(tenant_id):
         return render_template('fasten_connect_disconnected.html')
+    patient_view = _opened_from_careagents(tenant_id)
     return render_template(
         'fasten_connect.html',
         tenant_id=tenant_id,
+        patient_view=patient_view,
+        careagents_home=_careagents_home() if patient_view else None,
         fasten_public_key=os.environ.get('FASTEN_PUBLIC_KEY', '').strip(),
         # Opt-IN, not opt-out. This defaulted to 'true', so any deployment
         # that never set the variable requested TEFCA IAS — a mode that
