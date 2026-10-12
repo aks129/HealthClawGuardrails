@@ -229,7 +229,7 @@ h1 em { font-style: italic; color: var(--clay); }
 .chat-menu-list button {
   display: block; width: 100%; text-align: left; padding: 12px 14px;
   border: 0; border-radius: 10px; background: none; cursor: pointer;
-  font: inherit; font-size: 15px; font-weight: 600; color: var(--ink);
+  font: inherit; font-size: 16px; font-weight: 600; color: var(--ink);
 }
 .chat-menu-list button:hover { background: var(--paper); color: var(--clay-deep); }
 .pill {

@@ -85,7 +85,9 @@ DEMO_VIDEOS_URL = ("https://github.com/aks129/HealthClawGuardrails/releases/"
                    "tag/demo-videos-2026-10")
 
 _REF = re.compile(r"[a-z0-9-]{1,32}")
-_EMAIL = re.compile(r"[^@\s,]+@[^@\s,]+\.[^@\s,]+")
+# Labels split on dots with no overlap, so matching is linear (CodeQL
+# polynomial-regex); an empty label (a@b..c) is refused.
+_EMAIL = re.compile(r"[^@\s,]+@[^@\s,.]+(?:\.[^@\s,.]+)+")
 _TOKEN_MAX = 64
 _DAY = 86400
 _GMAIL = ("gmail.com", "googlemail.com")
