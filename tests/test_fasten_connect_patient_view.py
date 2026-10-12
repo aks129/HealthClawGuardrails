@@ -64,7 +64,9 @@ def test_developer_page_is_unchanged_without_a_valid_tag(client, monkeypatch):
     for params in ({}, {"src": "careagents"},
                    {"src": "careagents", "sig": "0" * 64},
                    {"src": "careagents", "sig": _tag("ca-someoneelse")},
-                   {"src": "careagents", "sig": _tag(TENANT, "wrong")}):
+                   {"src": "careagents", "sig": _tag(TENANT, "wrong")},
+                   # Non-ASCII is a mismatch, never a 500 (#557).
+                   {"src": "careagents", "sig": "café" * 16}):
         html = _get(client, **params)
         assert 'id="main-nav"' in html, params
         assert "Tenant:" in html, params

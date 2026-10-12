@@ -285,13 +285,14 @@ def _opened_from_careagents(tenant_id):
     it). The tag is defence in depth, and it keeps the page a developer
     reaches directly exactly as it was.
     """
-    import hmac as _hmac
+    # constant_time.equal, not hmac.compare_digest: the sig is the caller's,
+    # and a non-ASCII one must be a mismatch, not a 500 (#557).
+    from r6 import constant_time
     if request.args.get('src') != 'careagents':
         return False
     expected = connect_view_tag(tenant_id)
     given = request.args.get('sig', '')
-    return bool(expected) and isinstance(given, str) \
-        and _hmac.compare_digest(given, expected)
+    return bool(expected) and constant_time.equal(given, expected)
 
 
 @web_blueprint.route('/connect/<tenant_id>')
