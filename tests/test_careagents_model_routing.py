@@ -28,6 +28,7 @@ HAIKU = [
     "who are you",
     "how does this work?",
     "How do I connect my records?",
+    "How do I connect my real records?",
     "how do I add a passkey",
     "Can I text you from my phone?",
     "how do I delete my account",
