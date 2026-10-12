@@ -8,7 +8,7 @@ remains, and no label table will ever fix that row. The agent called it
 nothing to act on.
 
 Two situations, two sentences:
-- code present, label unknown  -> "unlabeled record, code X"   (our table gap)
+- code present, label unknown  -> "unlabeled record (SYSTEM code)" (our table gap; never the code itself)
 - nothing codeable ever existed -> "recorded but not coded at the source"
 
 Both keep unreadable=True: whatever the sentence, the record is never absent
@@ -46,13 +46,13 @@ def test_a_record_with_no_code_field_at_all_gets_the_same_sentence():
     assert items[0]["name"] == "recorded but not coded at the source"
 
 
-def test_a_known_gap_still_names_the_code():
+def test_a_known_gap_still_names_its_code_system():
     """Our-table-gap wording is unchanged: the code is real and actionable."""
     items = _summarize_bundle(_bundle(
         {"resourceType": "Condition",
          "code": {"coding": [{"system": "http://snomed.info/sct",
                               "code": "9014002"}]}}))
-    assert items[0]["name"] == "unlabeled record, code 9014002"
+    assert items[0]["name"] == "unlabeled record (SNOMED CT code)"
     assert "uncoded" not in items[0]
     assert items[0]["unreadable"] is True
 
@@ -64,7 +64,7 @@ def test_a_code_in_a_later_coding_entry_is_still_found():
         {"resourceType": "Condition",
          "code": {"coding": [{}, {"system": "http://snomed.info/sct",
                                   "code": "9014002"}]}}))
-    assert items[0]["name"] == "unlabeled record, code 9014002"
+    assert items[0]["name"] == "unlabeled record (SNOMED CT code)"
 
 
 def test_a_labelled_record_is_untouched():
