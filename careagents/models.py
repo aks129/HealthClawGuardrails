@@ -301,6 +301,22 @@ class PageViewDay(Base):
     views = Column(Integer, default=0)
 
 
+class ModelUsageDay(Base):
+    """How chat turns were answered, one integer per UTC day per metric.
+
+    The metric is one of careagents/routing.py's fixed names (turns by tier,
+    escalations, advisor consultations, refusals, cut-offs). No account, no
+    conversation, no text: a row cannot be about a person.
+    """
+    __tablename__ = "ca_model_usage_days"
+    __table_args__ = (UniqueConstraint("day", "metric",
+                                       name="uq_ca_model_usage_days_day_metric"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("mu"))
+    day = Column(String(10), nullable=False, index=True)    # UTC "YYYY-MM-DD"
+    metric = Column(String(32), nullable=False)
+    count = Column(Integer, default=0)
+
+
 class RealRecordInvite(Base):
     """An invitation to connect real records (beta pathway spec section 4.2).
 
