@@ -51,6 +51,14 @@ PROMPTS = [
     ("e08", "easy", "I have some feedback about the app"),
     ("e09", "easy", "who are you"),
     ("e10", "easy", "good morning"),
+    # #935: e02 and e07 are the two the issue reported; these are the rest
+    # of the how-to card.
+    ("e11", "easy", "How do I remove a passkey?"),
+    ("e12", "easy", "How do I invite friends?"),
+    ("e13", "easy", "How do I sign out?"),
+    ("e14", "easy", "How do you keep me safe?"),
+    ("e15", "easy", "How do I send feedback?"),
+    ("e16", "easy", "What is this?"),
     ("s01", "std", "What is my latest A1c?"),
     ("s02", "std", "What medications am I on?"),
     ("s03", "std", "Do I have any allergies on file?"),
