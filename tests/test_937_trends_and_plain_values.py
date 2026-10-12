@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from careagents.agent import _execute_tool
 from r6.labs.interpret import NO_NUMERIC_VALUE, UNKNOWN_ANALYTE
 from r6.labs.report import build_consumer_summary
@@ -154,6 +156,23 @@ def _labs(hc):
 
 def test_a_blood_pressure_in_a_unit_we_do_not_recognise_has_no_number():
     out = _labs(_LabsHC(_CONSUMER, _bundle_of(_bp(sys_unit="mm/x"))))
+    (bp,) = out["not_evaluated"]
+    assert (bp["value"], bp["unit"]) == (None, ""), bp
+    assert "150" not in json.dumps(out)
+
+
+@pytest.mark.parametrize("sys_unit,dia_unit", [
+    ("mmHg", "cm[H2O]"),  # both allow-listed, but not the same unit
+    (None, None),          # neither part states a unit
+])
+def test_a_blood_pressure_needs_one_allowed_unit_on_both_parts(
+        sys_unit, dia_unit):
+    """QA #938: "138/88" only when both parts carry the same allowed unit.
+    MUTATION: drop the systolic/diastolic unit-equality check -> red (first
+    case). MUTATION: drop `not unit` for a part -> red (second case); each
+    survived the PR's own tests, which only vary one part."""
+    out = _labs(_LabsHC(_CONSUMER, _bundle_of(
+        _bp(sys_unit=sys_unit, dia_unit=dia_unit))))
     (bp,) = out["not_evaluated"]
     assert (bp["value"], bp["unit"]) == (None, ""), bp
     assert "150" not in json.dumps(out)
