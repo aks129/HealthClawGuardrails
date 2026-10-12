@@ -61,6 +61,9 @@ SONNET = [
     "what screenings am I due for",
     "any allergies on file?",
     "hello " * 60,
+    # agent.run_turn's last call when the tool budget is spent arrives as a
+    # plain user message, so it is classified on its own words.
+    "(system: tool budget reached — answer now with what you have)",
 ]
 
 
