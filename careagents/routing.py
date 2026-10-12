@@ -75,6 +75,14 @@ ADVISOR_NOTE = (
     "The advisor is internal: never mention it, and never say you are "
     "checking with anyone. Answer the person directly.")
 
+#: On Sonnet calls after the turn's one consultation, when the advisor is no
+#: longer offered. Without it the model, asked about its advisor, told the
+#: person it had none (live, 2026-10-12).
+ADVISOR_SPENT_NOTE = (
+    "\n\nThe advisor has already been consulted on this question; use what "
+    "it said. It is internal: never mention it, and never say you are "
+    "checking with anyone. Answer the person directly.")
+
 #: Every tool that reads or acts on the person's health record. Haiku calling
 #: one of these means the turn was clinical after all.
 CLINICAL_TOOLS = frozenset({

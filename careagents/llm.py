@@ -285,10 +285,13 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
                 budget = {"timeout": max(5.0, left), "max_retries": 0}
             else:
                 budget = _budget
+            spent = (getattr(cfg, "advisor", False) and not advisor_timed_out
+                     and routing.advisor_used(messages))
             turn = _anthropic_call(
                 anthropic,
                 _anthropic_client(anthropic, cfg, **budget).beta.messages,
-                system=system, tools=a_tools,
+                system=system + (routing.ADVISOR_SPENT_NOTE if spent else ""),
+                tools=a_tools,
                 betas=[*oauth, routing.FALLBACK_BETA], **sonnet)
     turn.tier, turn.escalated = tier, escalated
     turn.advisor_timed_out = advisor_timed_out
