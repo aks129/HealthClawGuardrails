@@ -19,6 +19,13 @@
   const shownConsentVersion = versioned ? versioned.dataset.consentVersion : "";
   const termsChanged = (res) =>
     !res.ok && res.d.error === "consent_required";
+  // What a refusal says to a person: its `message`, or an `error` that is a
+  // sentence. A bare code (sign_in_again, records_paused) is never shown
+  // (#934 QA F1); the fallback is said instead.
+  const refusal = (d, fallback) =>
+    (d && typeof d.message === "string" && d.message) ||
+    (d && typeof d.error === "string" && d.error.includes(" ") && d.error) ||
+    fallback;
 
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
@@ -47,7 +54,7 @@
         // Inline, directly under the tile that was tapped: never blocks, never
         // needs dismissing, and the page stays usable.
         return say(tile, $("connect-msg"),
-                   res.d.error || "Couldn't connect that source.");
+                   refusal(res.d, "Couldn't connect that source."));
       }
       if (res.d.redirect) { location.assign(res.d.redirect); return; }
       if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
@@ -374,8 +381,8 @@
       btn.disabled = false;
       // `message` first: a coded refusal (records_paused) carries its
       // sentence there, and the code itself is never shown (#856 review).
-      if (!res.ok) return report(res.d.message || res.d.error ||
-                                 "Couldn't refresh right now.");
+      if (!res.ok) return report(refusal(res.d,
+                                         "Couldn't refresh right now."));
       if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
         window.open(res.d.reauth_url, "_blank", "noopener");
@@ -583,7 +590,7 @@
       const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
       if (!res.ok) {
         btn.disabled = false;
-        announce(msg, res.d.error || "Couldn't disconnect.");
+        announce(msg, refusal(res.d, "Couldn't disconnect."));
         return;
       }
       carryNotice(res.d.message || "Disconnected.");
@@ -881,7 +888,7 @@
       const name = await askForName(btn.dataset.name);
       if (!name) return;
       const res = await post(`/api/agents/${btn.dataset.agent}/rename`, { name });
-      if (!res.ok) return announce(agentMsg(btn), res.d.error || "Couldn't rename.");
+      if (!res.ok) return announce(agentMsg(btn), refusal(res.d, "Couldn't rename."));
       location.reload();
     });
   });
@@ -949,7 +956,7 @@
         "Start a chat with your assistant first, then connect iMessage.");
     }
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
-    if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
+    if (!res.ok) return say(im, $("surfaces-msg"), refusal(res.d, "That didn't work."));
     $("im-state").textContent = "pending — text to finish";
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
@@ -992,7 +999,7 @@
         if (status) { status.textContent = "revoked"; status.className = "status status-revoked"; }
       } else {
         btn.disabled = false;
-        if (msg) announce(msg, res.d.message || res.d.error || "That didn't work.");
+        if (msg) announce(msg, refusal(res.d, "That didn't work."));
       }
     });
   });

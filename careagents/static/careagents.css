@@ -972,6 +972,12 @@ textarea:focus-visible {
   align-items: center; min-height: 52px; color: var(--on-accent);
   background: var(--accent); border-color: var(--accent); font-weight: 600; }
 #explore-sample.connector-tile:hover { background: var(--accent-hover); }
+/* The primary next step on the hub is a button, not a list row: the
+   `.connector-tile` reset above must not flatten it (#934 QA M1). */
+.connector-tile.btn-primary { flex-direction: row; justify-content: center;
+  align-items: center; min-height: 52px; color: var(--on-accent);
+  background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.connector-tile.btn-primary:hover { background: var(--accent-hover); }
 .menu-closed-line { margin: 12px 0 0; color: var(--ink-soft); }
 .past summary { cursor: pointer; min-height: 44px; display: flex;
   align-items: center; font-weight: 600; }
@@ -1051,3 +1057,28 @@ textarea:focus-visible {
 /* /safety (#884 G7): the way back and the technical report on one line. */
 .safety-links { display: flex; justify-content: space-between;
   align-items: baseline; gap: 16px; margin-top: 20px; font-size: 16px; }
+
+/* --- invite link, next step, owner funnel (2026-10-11) ------------------- */
+/* Settings: the invite link is one row, the link itself in the mono. */
+.invite-row { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 13px 16px; min-height: 52px; }
+.invite-row-head { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.invite-used { color: var(--ink-soft); font-size: 16px; }
+.invite-url { display: block; margin-top: 6px; font-family: var(--mono);
+  font-size: 15px; color: var(--ink); overflow-wrap: anywhere;
+  user-select: all; }
+.invite-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.invite-actions .pill { min-height: 44px; }
+/* The chat's pointer to the hub's "Connect your records". */
+.chat-next { margin: 8px 0 0; font-size: 16px; text-align: center; }
+.chat-next a { color: var(--accent-ink); font-weight: 600; }
+.connect-next .btn-primary { margin-top: 12px; }
+/* /admin/funnel: counts in tables, numbers in the mono. */
+.funnel-scroll { overflow-x: auto; margin: 0 0 16px; }
+.funnel-table { width: 100%; border-collapse: collapse;
+  background: var(--surface); border: 1px solid var(--hairline); }
+.funnel-table th, .funnel-table td { padding: 8px 10px; text-align: left;
+  border-top: 1px solid var(--hairline); font-size: 15px; }
+.funnel-table td.num { font-family: var(--mono);
+  font-variant-numeric: tabular-nums; text-align: right; }

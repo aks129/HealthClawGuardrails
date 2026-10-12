@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Funnel — CareAgents{% endblock %}
+{% block bodyclass %}page-home{% endblock %}
+{# The owner's page (careagents/funnel.py, CARE_OWNER_EMAILS). Counts and
+   account ids only: no email, no message, nothing about a record. #}
+{% block content %}
+<main class="hub">
+  <div class="hub-head">
+    <div>
+      <h1>Funnel</h1>
+      <p class="hub-sub">Counts per UTC day. Today is {{ today.day }}.</p>
+    </div>
+    <a class="pill" href="/home">Back to your hub</a>
+  </div>
+
+  <section class="hub-section" id="funnel-days">
+    <div class="section-head"><h2>Accounts reaching each step</h2></div>
+    <div class="funnel-scroll">
+    <table class="funnel-table">
+      <thead><tr><th>Step</th><th>Today</th><th>7 days</th>
+        {% for d in report.days[1:] %}<th>{{ d.day[5:] }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for m in milestones %}
+      <tr><th>{{ m | replace("_", " ") }}</th>
+        <td class="num">{{ today[m] }}</td>
+        <td class="num">{{ report.window[m] }}</td>
+        {% for d in report.days[1:] %}<td class="num">{{ d[m] }}</td>{% endfor %}</tr>
+      {% endfor %}
+      <tr><th>joined via invite</th>
+        <td class="num">{{ today.via_invite }}</td>
+        <td class="num">{{ report.window.via_invite }}</td>
+        {% for d in report.days[1:] %}<td class="num">{{ d.via_invite }}</td>{% endfor %}</tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="card-note">Beta requests waiting to be confirmed:
+      <span class="num">{{ report.requests_waiting }}</span></p>
+  </section>
+
+  <section class="hub-section" id="funnel-conversion">
+    <div class="section-head"><h2>Conversion between steps (all time)</h2></div>
+    <div class="funnel-scroll">
+    <table class="funnel-table">
+      <thead><tr><th>From</th><th>To</th><th>Reached</th><th>Rate</th></tr></thead>
+      <tbody>
+      {% for c in report.conversion %}
+      <tr><td>{{ c["from"] | replace("_", " ") }}</td>
+        <td>{{ c["to"] | replace("_", " ") }}</td>
+        <td class="num">{{ c.to_n }} of {{ c.from_n }}</td>
+        <td class="num">{% if c.percent is none %}-{% else %}{{ c.percent }}%{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="hub-section" id="funnel-issues">
+    <div class="section-head"><h2>Issues</h2></div>
+    <div class="funnel-scroll">
+    <table class="funnel-table">
+      <thead><tr><th>Kind</th><th>Today</th><th>7 days</th></tr></thead>
+      <tbody>
+      {% for k in issue_kinds %}
+      <tr><th>{{ k | replace("_", " ") }}</th>
+        <td class="num">{{ today[k] }}</td>
+        <td class="num">{{ report.window[k] }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="hub-section" id="funnel-inviters">
+    <div class="section-head"><h2>Invites per inviter</h2></div>
+    {% if report.per_inviter %}
+    <div class="funnel-scroll">
+    <table class="funnel-table">
+      <thead><tr><th>Inviter account</th><th>Joined</th></tr></thead>
+      <tbody>
+      {% for r in report.per_inviter %}
+      <tr><td class="num">{{ r.inviter_id }}</td><td class="num">{{ r.joined }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="empty">Nobody has joined through an invite link yet.</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

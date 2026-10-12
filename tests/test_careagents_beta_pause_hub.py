@@ -148,8 +148,14 @@ def test_refresh_shows_the_sentence_not_the_code():
     src = HOME_JS.read_text()
     handler = src.split('document.querySelectorAll(".conn-refresh")', 1)[1]
     handler = handler.split("});\n  });", 1)[0]
-    assert "res.d.message || res.d.error" in handler
+    # `refusal` (home.js, #934 QA F1) reads `message` first and never shows
+    # a bare code such as records_paused.
+    assert "report(refusal(res.d," in handler
     assert "report(res.d.error ||" not in handler
+    helper = src.split("const refusal = (d, fallback) =>", 1)[1]
+    helper = helper.split(";\n", 1)[0]
+    assert helper.index("d.message") < helper.index("d.error")
+    assert 'd.error.includes(" ")' in helper
 
 
 _HARNESS = r"""

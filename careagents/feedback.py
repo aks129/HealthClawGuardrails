@@ -27,7 +27,7 @@ from flask import jsonify, render_template, request, session
 from markupsafe import escape
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from careagents import mail
+from careagents import funnel, mail
 from careagents.beta_signup import valid_email
 
 logger = logging.getLogger("careagents.feedback")
@@ -185,6 +185,7 @@ def register(app, svc, cfg) -> None:
         acct = _account()
         key = f"acct:{acct.id}" if acct else f"ip:{_client_key()}"
         if not _allow(key):
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return jsonify({"error": "rate_limited"}), 429
         reply_to = None
         if acct and valid_email(acct.email or ""):
@@ -198,10 +199,13 @@ def register(app, svc, cfg) -> None:
             logger.warning("feedback email failed to send")
             outcome = mail.NOT_SENT
         if outcome == mail.NOT_SENT:
+            funnel.note_mail(svc.session, cfg, outcome)
             # Nothing left, so the page keeps the answers and says so.
             _refund(key)
             return jsonify({"error": "not_sent"}), 503
         # SENT, or UNCONFIRMED: the request went out and the answer was
         # lost, so the mail may have arrived. The thank-you page claims
         # nothing about delivery.
+        if acct is not None:
+            funnel.safely(funnel.mark, svc.session, acct.id, "feedback_sent")
         return jsonify({"ok": True, "redirect": "/feedback/thanks"})

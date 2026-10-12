@@ -45,7 +45,7 @@ from markupsafe import Markup, escape
 from sqlalchemy import Column, Float, String, update
 from sqlalchemy.exc import IntegrityError
 
-from careagents import mail
+from careagents import funnel, invites, mail
 from careagents.models import Base, now
 
 logger = logging.getLogger("careagents.beta_signup")
@@ -741,6 +741,13 @@ def _notify_owner(cfg, joined: dict) -> None:
 
 # --- routes and commands ------------------------------------------------------
 
+def page_context() -> dict:
+    """What beta.html needs besides `ref` and `invite`; the invite link
+    page (careagents/invites.py) renders the same form."""
+    return {"demo_url": DEMO_VIDEOS_URL, "feedback": FEEDBACK_URL,
+            "mobile_days": MOBILE_DAYS, "request_days": REQUEST_DAYS}
+
+
 #: Requests after which someone may have been promoted from the waitlist.
 _FREES_A_SPOT = frozenset({"beta_remove", "delete_account"})
 
@@ -818,8 +825,7 @@ def register(app, svc, cfg, first_run=None) -> None:
         # The ref is never shown; that one came at all is the opening line.
         return render_template(
             "beta.html", ref=clean_ref(request.args.get("ref")) or "",
-            demo_url=DEMO_VIDEOS_URL, feedback=FEEDBACK_URL,
-            mobile_days=MOBILE_DAYS, request_days=REQUEST_DAYS)
+            **page_context())
 
     @app.post("/beta")
     def beta_submit():
@@ -831,6 +837,7 @@ def register(app, svc, cfg, first_run=None) -> None:
         if not isinstance(body, dict):
             return jsonify({"error": "json_required"}), 415
         if not _allow_submit(_client_key()):
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return jsonify({"error": "rate_limited"}), 429
         # A bot fills every field. Same answer, nothing kept or sent.
         if body.get("website"):
@@ -851,6 +858,12 @@ def register(app, svc, cfg, first_run=None) -> None:
                 return jsonify({"error": "mobile"}), 400
         ref = clean_ref(body.get("ref"))
         tokens = submit(svc.session, first_name, email, mobile, ref)
+        if body.get("invite"):
+            # Through a personal invite link (careagents/invites.py). Spent
+            # only when the address confirms; a dead code is ignored, and
+            # the answer below is the same either way.
+            funnel.safely(invites.note_pending, svc.session, email,
+                          body.get("invite"), cfg.invite_link_cap)
         if tokens:
             url = f"{cfg.origin}/beta/confirm?t={tokens['confirm']}"
             if tokens["kind"] == "join":
@@ -867,8 +880,10 @@ def register(app, svc, cfg, first_run=None) -> None:
                          "If it wasn't you, ignore this email and nothing "
                          "changes."]
             try:
-                _tester_email(cfg, email, subject, lines, tokens["removal"],
-                              link=("Confirm", url))
+                outcome = _tester_email(cfg, email, subject, lines,
+                                        tokens["removal"],
+                                        link=("Confirm", url))
+                funnel.note_mail(svc.session, cfg, outcome)
             except Exception:               # pragma: no cover - defensive
                 logger.warning("beta confirmation email failed to send")
         # The same answer whatever happened, so nothing can be learned
@@ -898,6 +913,13 @@ def register(app, svc, cfg, first_run=None) -> None:
         if done is None:
             return _page("gone", 410)
         if done["kind"] == "join":
+            # Before first_run: the account it makes then reads the join.
+            try:
+                invites.on_join(svc, cfg, done["email"])
+            except Exception:               # pragma: no cover - defensive
+                logger.warning("invite join not recorded")
+            funnel.safely(funnel.mark_for_email, svc.session, done["email"],
+                          "confirmed")
             try:
                 lines = youre_in_lines(cfg, done["first_name"])
                 if done["status"] == "waitlist" and done["note"]:

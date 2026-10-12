@@ -58,6 +58,28 @@
   </section>
   {% endif %}
 
+  {# The next step once made-up records have answered a question, for an
+     account the real-records gate already opens (app.py _connect_next).
+     The same tile as the menu's: the consent card, then Fasten. #}
+  {% if connect_next %}
+  <section class="hub-section connect-next" id="connect-records">
+    <div class="hub-card">
+      <div class="hub-card-name">Connect your records</div>
+      <p class="card-note">You've seen how it works on made-up records. Now
+        bring in your own from your doctor or hospital. You'll read the
+        terms first, and you sign in on their site, not ours.</p>
+      {% if link_session %}
+      {# Opened by the confirm link: a code first, then back here. #}
+      <a class="btn-primary btn-block" id="connect-signin"
+         href="/auth?connect=1">Sign in again to connect your records</a>
+      {% else %}
+      <button type="button" class="btn-primary btn-block connector-tile"
+              data-connector="fasten" data-consent="1">Connect your records</button>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
   <!-- 2. YOUR ASSISTANT -->
   <section class="hub-section">
     <div class="section-head"><h2>Your assistant</h2></div>
@@ -166,7 +188,9 @@
     {% if not menu_open %}
     <button type="button" class="btn-primary btn-block connector-tile"
             id="explore-sample" data-connector="sample">Explore with made-up records</button>
-    {% if invited %}
+    {% if invite_line %}
+    <p class="menu-closed-line" id="invite-line">{{ invite_line }}</p>
+    {% elif invited %}
     <p class="menu-closed-line">You're invited. This opens soon.</p>
     {% elif hub.has_real %}
     <p class="menu-closed-line">Adding more records isn't open right now.</p>
