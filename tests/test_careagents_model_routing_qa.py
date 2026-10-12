@@ -1,9 +1,10 @@
 """QA review of #931 (model routing) at 2ecdf65.
 
 Two rows pin classifier guards that mutation testing showed no test held
-(the digit rule and the stated crisis rule). One strict-xfail row pins a
-live finding: a small-talk reply straight after a crisis message goes to
-Haiku, which sees only that reply. It XPASSes (goes red) once fixed.
+(the digit rule and the stated crisis rule). A strict-xfail row pinned a
+live finding: a small-talk reply straight after a crisis message went to
+Haiku, which saw only that reply. Fixed in routing.tier_for; the marker is
+off.
 Synthetic text only, no network.
 """
 from __future__ import annotations
@@ -44,11 +45,37 @@ _CRISIS_TURN = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #931: a farewell after a crisis turn goes to Haiku, which sees only "
-    "the farewell. Live 3/3: Haiku said goodbye with no 911/988; routing "
-    "off, Sonnet re-checked safety 3/3."))
 @pytest.mark.parametrize("follow", ["ok. bye", "thanks", "good night"])
 def test_a_reply_after_a_crisis_message_stays_on_sonnet(follow):
+    # Was a strict xfail: live 3/3, Haiku said goodbye with no 911/988;
+    # with routing off, Sonnet re-checked safety 3/3. Fixed in tier_for.
     messages = _CRISIS_TURN + [{"role": "user", "content": follow}]
     assert routing.tier_for(messages) == routing.TIER_SONNET
+
+
+def test_an_answer_that_gave_crisis_lines_keeps_the_conversation_on_sonnet():
+    """The person's words may not match; the answer that gave 911/988 does."""
+    messages = [
+        {"role": "user", "content": "everything feels pointless lately"},
+        {"role": "assistant",
+         "content": "If you might act on that, call or text 988 now."},
+        {"role": "user", "content": "thanks"}]
+    assert routing.tier_for(messages) == routing.TIER_SONNET
+
+
+def test_small_talk_without_a_crisis_in_the_window_still_goes_to_haiku():
+    messages = [
+        {"role": "user", "content": "How is my A1c?"},
+        {"role": "assistant", "content": "The sample A1c is 8.1%."},
+        {"role": "user", "content": "thanks"}]
+    assert routing.tier_for(messages) == routing.TIER_HAIKU
+
+
+def test_record_content_in_a_tool_result_does_not_pin_sonnet():
+    messages = [
+        {"role": "user", "content": "thanks"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "check_form_status", "arguments": {}}]},
+        {"role": "tool", "tool_call_id": "1",
+         "content": '{"note": "emergency contact on file"}'}]
+    assert routing.tier_for(messages) == routing.TIER_HAIKU

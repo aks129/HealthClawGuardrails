@@ -326,6 +326,25 @@ def test_haiku_reaching_for_a_clinical_tool_is_rerun_on_sonnet(monkeypatch):
     assert turn.escalated is True
 
 
+def test_every_api_call_gets_its_own_log_line(monkeypatch, caplog):
+    """QA #931 Q3: the discarded Haiku call is logged too, so the cost of an
+    escalation can be read from the logs. MUTATION: drop the Haiku
+    _log_call -> one line -> red."""
+    import logging
+    _fake(monkeypatch,
+          plain=[_resp([_ToolUse("get_labs", "h1")], "tool_use")],
+          beta=[_resp([_Text("Your A1c rose.")])])
+    with caplog.at_level(logging.INFO, logger="careagents.llm"):
+        llm.complete(_cfg(), "sys", [{"role": "user", "content": "hi"}],
+                     TOOLS)
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("model call")]
+    assert len(lines) == 2
+    assert "kind=haiku" in lines[0] and "outcome=discarded" in lines[0]
+    assert "kind=advised" in lines[1] and "outcome=ok" in lines[1]
+    assert all("hi" not in line.split("kind=")[0] for line in lines)
+
+
 def test_haiku_may_check_a_form_without_escalating(monkeypatch):
     calls = _fake(monkeypatch, plain=[
         _resp([_ToolUse("check_form_status", "h1")], "tool_use")])

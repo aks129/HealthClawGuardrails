@@ -213,7 +213,25 @@ def tier_for(messages: list[dict]) -> int:
         for call in m.get("tool_calls") or []:
             if call.get("name") in CLINICAL_TOOLS:
                 return TIER_SONNET
+    if crisis_in_window(messages):
+        return TIER_SONNET
     return classify(messages[start]["content"])
+
+
+def crisis_in_window(messages: list[dict]) -> bool:
+    """Crisis or emergency wording anywhere in the conversation loaded for
+    this turn, from the person or in an answer (a reply that gave 911 or
+    988 is itself the signal).
+
+    After a crisis message the person's likeliest next words are "ok. bye"
+    or "thanks". On Haiku, which sees only that reply (#931 F2), they got a
+    cheerful goodbye; Sonnet, with the history, checked they were safe
+    (QA #931 Q1, live 3 of 3). The conversation stays on Sonnet instead.
+    Tool results (record content) are not scanned."""
+    return any(
+        m.get("role") in ("user", "assistant")
+        and isinstance(m.get("content"), str) and is_crisis(m["content"])
+        for m in messages)
 
 
 def advisor_used(messages: list[dict]) -> int:

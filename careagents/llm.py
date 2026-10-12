@@ -243,6 +243,7 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
         start = routing.turn_start(messages) or 0
         # No fallbacks: Haiku 5.5 has no server-side fallback, and a list of
         # fallback models is a 400 there.
+        t0 = _time_mod.monotonic()
         turn = _anthropic_call(
             anthropic, _anthropic_client(anthropic, cfg, **_budget).messages,
             model=routing.HAIKU_MODEL, max_tokens=max_tokens,
@@ -252,6 +253,7 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
             # The turn was clinical after all. Haiku's reply is discarded
             # unexecuted, so its tool call never reaches the history.
             tier, escalated = routing.TIER_SONNET, True
+        _log_call("haiku", turn, t0, "discarded" if escalated else "ok")
     if tier == routing.TIER_SONNET:
         sonnet = {"model": routing.SONNET_MODEL, "max_tokens": max_tokens,
                   "output_config": {"effort": effort},
@@ -275,6 +277,7 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
             client = _anthropic_client(anthropic, cfg,
                                        timeout=_advised_timeout(cfg),
                                        max_retries=0)
+            t0 = _time_mod.monotonic()
             try:
                 turn = _anthropic_call(
                     anthropic, client.beta.messages,
@@ -282,6 +285,7 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
                     tools=[*a_tools, routing.ADVISOR_TOOL],
                     betas=[*oauth, routing.ADVISOR_BETA,
                            routing.FALLBACK_BETA], **sonnet)
+                _log_call("advised", turn, t0, "ok")
             except LLMTransient as exc:
                 # A timeout, a 5xx/529 or a dropped connection: with no SDK
                 # retries on this call, answer without the advisor rather
@@ -289,18 +293,20 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
                 # the deadline kept back for it.
                 advisor_failed = True
                 advisor_timed_out = isinstance(exc, LLMTimeout)
-                logger.warning("advisor call failed (%s); answering without "
-                               "it", type(exc.__cause__).__name__)
+                _log_call("advised", None, t0, type(exc.__cause__).__name__)
         if turn is None:
             budget = _fallback_budget(cfg) if advisor_failed else _budget
             spent = (getattr(cfg, "advisor", False)
                      and (advisor_failed or routing.advisor_used(messages)))
+            t0 = _time_mod.monotonic()
             turn = _anthropic_call(
                 anthropic,
                 _anthropic_client(anthropic, cfg, **budget).beta.messages,
                 system=system + (routing.ADVISOR_SPENT_NOTE if spent else ""),
                 tools=a_tools,
                 betas=[*oauth, routing.FALLBACK_BETA], **sonnet)
+            _log_call("fallback" if advisor_failed else "sonnet", turn, t0,
+                      "ok")
     turn.tier, turn.escalated = tier, escalated
     turn.advisor_timed_out = advisor_timed_out
     turn.advisor_failed = advisor_failed
@@ -417,16 +423,25 @@ def _anthropic_call(anthropic, endpoint, **kw) -> LLMTurn:
     return turn
 
 
-def _observe(turn: LLMTurn, tier, started: float) -> None:
-    """One log line per routed model call, and the day's counts. Never
-    content."""
-    name = "haiku" if tier == routing.TIER_HAIKU else "sonnet"
+def _log_call(kind: str, turn: LLMTurn | None, t0: float,
+              outcome: str) -> None:
+    """One line per API call, the discarded Haiku call and a failed advised
+    attempt included, so escalation and fallback cost can be read from the
+    logs (QA #931 Q3). Never content: kind, model, outcome, stop reason,
+    seconds and token counts only."""
     logger.info(
-        "model call tier=%s model=%s stop=%s secs=%.1f in=%d out=%d "
-        "advisor=%d advisor_out=%d advisor_timeout=%s escalated=%s", name,
-        turn.model, turn.stop_reason or "-", _time_mod.monotonic() - started,
-        turn.input_tokens, turn.output_tokens, turn.advisor_calls,
-        turn.advisor_output_tokens, turn.advisor_timed_out, turn.escalated)
+        "model call kind=%s model=%s outcome=%s stop=%s secs=%.1f in=%d "
+        "out=%d advisor=%d advisor_out=%d", kind,
+        turn.model if turn else "-", outcome,
+        (turn.stop_reason if turn else "") or "-",
+        _time_mod.monotonic() - t0, turn.input_tokens if turn else 0,
+        turn.output_tokens if turn else 0, turn.advisor_calls if turn else 0,
+        turn.advisor_output_tokens if turn else 0)
+
+
+def _observe(turn: LLMTurn, tier, started: float) -> None:
+    """The day's counts, once per routed llm.complete. Never content."""
+    name = "haiku" if tier == routing.TIER_HAIKU else "sonnet"
     # A call that answers (no tool calls) ends the turn: count it once there.
     answered = not turn.tool_calls
     routing.count({
