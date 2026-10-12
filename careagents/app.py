@@ -588,6 +588,9 @@ def create_app(config: Config | None = None,
         if outcome == invites.CLOSED:
             return ("Connecting your own records isn't open yet, so you're "
                     "using made-up records.")
+        if outcome == invites.NONE:
+            return ("Your invite is for made-up records, so connecting your "
+                    "own records isn't open for you yet.")
         return None
 
     @app.get("/settings")
@@ -595,11 +598,15 @@ def create_app(config: Config | None = None,
     def settings():
         acct = current_account()
         data = svc.list_home(acct.id)
-        try:
-            invite = invites.settings_row(svc, cfg, acct.id)
-        except Exception:  # noqa: BLE001 - the row is left out, not the page
-            logger.warning("invite link not shown")
-            invite = None
+        # A link is a lasting power to sign people up, so it is made and
+        # shown only after a full sign-in (#928 F6), as full_sign_in_required
+        # holds for the routes that widen an account.
+        invite = None
+        if not session.get(_VIA_LINK):
+            try:
+                invite = invites.settings_row(svc, cfg, acct.id)
+            except Exception:  # noqa: BLE001 - the row is left out, not the page
+                logger.warning("invite link not shown")
         return render_template(
             "settings.html", me=acct, invite=invite,
             passkeys=svc.list_passkeys(acct.id),
@@ -3211,6 +3218,7 @@ def create_app(config: Config | None = None,
     beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
     invites.register(app, svc, cfg, beta_signup.page_context)
-    funnel.register(app, svc, cfg)
+    funnel.register(app, svc, cfg, full_session=lambda: not session.get(
+        _VIA_LINK))
 
     return app

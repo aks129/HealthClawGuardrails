@@ -29,11 +29,6 @@ def _active_invites(svc) -> int:
                 .filter(RealRecordInvite.revoked_at.is_(None)).count())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#928 F1: invite_real_records is count-then-insert ('a hand-run "
-    "command, not worth a lock'), and this PR puts it on the public "
-    "/beta/confirm path. Concurrent confirms at 24 live invites pass the "
-    "stage 1 cap of 25."))
 def test_concurrent_confirms_never_pass_the_stage1_cap(tmp_path, monkeypatch):
     from careagents.accounts import AccountService
     from tests.test_careagents import _make_account
@@ -79,10 +74,6 @@ def test_concurrent_confirms_never_pass_the_stage1_cap(tmp_path, monkeypatch):
         svc.engine.dispose()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#928 F2: on_join calls invite_real_records, which reopens a revoked "
-    "invite. A peer's link undoes the operator's revoke with no operator "
-    "step, and invited_by is overwritten."))
 def test_a_peer_link_does_not_reopen_an_operator_revoked_invite(
         made, sent, monkeypatch):  # noqa: F811
     app, svc = made(RESEND_API_KEY="re_test")
@@ -97,13 +88,6 @@ def test_a_peer_link_does_not_reopen_an_operator_revoked_invite(
     assert by == "operator"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#928 F3: every account gets a link, including one with no real-record "
-    "access made through the public sign-in. A second mailbox joined "
-    "through it gets a RealRecordInvite, so one stranger self-grants real "
-    "records with no operator step. Needs an owner ruling: should a link "
-    "grant real records only when its owner holds them (or only operator-"
-    "approved inviters)?"))
 def test_an_uninvited_account_cannot_grant_real_records_to_a_second_mailbox(
         made, sent, monkeypatch):  # noqa: F811
     app, svc = made(RESEND_API_KEY="re_test", CARE_REAL_RECORDS="allowlist",
@@ -124,10 +108,6 @@ def test_an_uninvited_account_cannot_grant_real_records_to_a_second_mailbox(
     assert r.status_code == 503, "second mailbox can start a real connection"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#928 F4 (Low): pending notes, joins and RealRecordInvite key on the raw "
-    "address, not the mailbox. One inbox via +tags takes several seats and "
-    "several stage 1 invites."))
 def test_plus_aliases_of_one_inbox_take_one_real_record_invite(
         made, sent, monkeypatch):  # noqa: F811
     app, svc = made(RESEND_API_KEY="re_test")
@@ -184,12 +164,6 @@ def _deployed_access_log_formats():
     return [docker.replace('\\"', '"'), service.replace("%%", "%")]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#928 F5 (Low): the invite code is in the PATH (/i/<code>), and the "
-    "deployed access log keeps the path (%(U)s); it drops only the query "
-    "string, which is where the repo keeps link secrets (/link?t=...). "
-    "Every opened code, a capability that hands out real-record invites, "
-    "lands in the platform log."))
 @pytest.mark.parametrize("fmt", _deployed_access_log_formats())
 def test_the_access_log_never_holds_an_invite_code(fmt):
     import datetime
@@ -200,8 +174,9 @@ def test_the_access_log_never_holds_an_invite_code(fmt):
 
     code = "0123456789abcdef0123456789abcdef"
     log = Logger(GConfig())
-    environ = {"REQUEST_METHOD": "GET", "RAW_URI": f"/i/{code}",
-               "PATH_INFO": f"/i/{code}", "QUERY_STRING": "",
+    # The link as Settings now writes it (#928 F5): the code in the query.
+    environ = {"REQUEST_METHOD": "GET", "RAW_URI": f"/i?c={code}",
+               "PATH_INFO": "/i", "QUERY_STRING": f"c={code}",
                "SERVER_PROTOCOL": "HTTP/1.1", "REMOTE_ADDR": "10.0.0.1"}
     resp = SimpleNamespace(status="200 OK", sent=10, headers=[])
     req = SimpleNamespace(headers=[])

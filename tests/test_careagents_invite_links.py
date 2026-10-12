@@ -22,7 +22,7 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
 
 def _code(client) -> str:
     html = client.get("/settings").get_data(as_text=True)
-    m = re.search(r"/i/([0-9a-f]{32})", html)
+    m = re.search(r"/i\?c=([0-9a-f]{32})", html)
     assert m, html
     return m.group(1)
 
@@ -43,7 +43,7 @@ def _join_via(app, sent, code, email, ip="203.0.113.9", first_run=True):  # noqa
     """Open the link, submit the form with its code, then confirm from the
     email, on the confirm page in this browser (so it signs in)."""
     c = app.test_client()
-    assert c.get(f"/i/{code}", headers={"X-Real-IP": ip}).status_code == 200
+    assert c.get(f"/i?c={code}", headers={"X-Real-IP": ip}).status_code == 200
     r = _post(c, ip=ip, email=email, first_name="Robin", invite=code)
     assert r.status_code == 200
     token = _confirm_token([m for m in sent if m[0] == email][-1][3])
@@ -78,7 +78,7 @@ def test_settings_shows_one_link_made_on_first_view(made, monkeypatch):  # noqa:
     html = c.get("/settings").get_data(as_text=True)
     assert "Invite friends and family" in html
     assert "0 of 5 used" in html
-    assert f"http://localhost/i/{first}" in html
+    assert f"http://localhost/i?c={first}" in html
     with svc.session() as s:
         assert s.query(invites.InviteLink).count() == 1
 
@@ -125,7 +125,7 @@ def test_racing_first_views_make_one_link(tmp_path, monkeypatch):
 def test_a_live_link_opens_the_sign_up_with_its_code(made, monkeypatch):  # noqa: F811
     app, svc = made()
     c, code, _ = _inviter(app, svc, monkeypatch)
-    r = app.test_client().get(f"/i/{code}")
+    r = app.test_client().get(f"/i?c={code}")
     html = r.get_data(as_text=True)
     assert r.status_code == 200
     assert 'id="beta-form"' in html
@@ -140,7 +140,7 @@ def test_the_inviters_own_first_name_is_shown(made, sent, monkeypatch):  # noqa:
     app, svc = made(RESEND_API_KEY="re_test")
     _join(app, sent, email="inviter@example.com", first_name="Sam")
     c, code, _ = _inviter(app, svc, monkeypatch)
-    html = app.test_client().get(f"/i/{code}").get_data(as_text=True)
+    html = app.test_client().get(f"/i?c={code}").get_data(as_text=True)
     assert "Sam invited you" in html
     assert "inviter@example.com" not in html
 
@@ -154,7 +154,7 @@ def test_unknown_revoked_and_full_links_show_the_same_plain_page(
     assert invites.revoke(svc.session, revoked)
     bodies = set()
     for code in (full, revoked, "0" * 32, "not-a-code", "A" * 32):
-        r = app.test_client().get(f"/i/{code}")
+        r = app.test_client().get(f"/i?c={code}")
         assert r.status_code == 404
         assert r.headers["Referrer-Policy"] == "no-referrer"
         bodies.add(r.get_data(as_text=True))
@@ -167,12 +167,12 @@ def test_opens_are_rate_limited_per_address(made, monkeypatch):  # noqa: F811
     app, svc = made()
     c = app.test_client()
     for i in range(invites.OPENS_PER_WINDOW):
-        assert c.get(f"/i/{i:032x}",
+        assert c.get(f"/i?c={i:032x}",
                      headers={"X-Real-IP": "198.51.100.4"}).status_code == 404
-    r = c.get("/i/" + "1" * 32, headers={"X-Real-IP": "198.51.100.4"})
+    r = c.get("/i?c=" + "1" * 32, headers={"X-Real-IP": "198.51.100.4"})
     assert r.status_code == 429
     # Another address is not held back by this one.
-    assert c.get("/i/" + "1" * 32,
+    assert c.get("/i?c=" + "1" * 32,
                  headers={"X-Real-IP": "198.51.100.5"}).status_code == 404
     report = funnel.daily(svc.session, days=1)
     assert report["days"][0]["rate_limited"] == 1
@@ -184,6 +184,7 @@ def test_a_join_takes_a_seat_and_gets_the_real_record_invite(
         made, sent, monkeypatch):  # noqa: F811
     from careagents import funnel
     app, svc = made(RESEND_API_KEY="re_test")
+    svc.invite_real_records("inviter@example.com", "operator")
     _, code, _ = _inviter(app, svc, monkeypatch)
     inviter_id = _account_id(svc, "inviter@example.com")
     _post(app.test_client(), email="robin@example.com", invite=code)
@@ -228,8 +229,10 @@ def test_the_cap_is_enforced(made, sent, monkeypatch):  # noqa: F811
     assert _link(svc, code)["used"] == 2
     admitted = [invites.join_outcome(svc.session, f"j{i}@example.com")
                 for i in range(3)]
-    assert admitted.count("granted") == 2 and admitted.count(None) == 1
-    assert app.test_client().get(f"/i/{code}").status_code == 404
+    # The inviter has no real-record access, so the two admitted join on
+    # made-up records ("none"); the third was not admitted at all.
+    assert admitted.count("none") == 2 and admitted.count(None) == 1
+    assert app.test_client().get(f"/i?c={code}").status_code == 404
 
 
 def test_concurrent_joins_never_pass_the_cap(tmp_path, monkeypatch):
@@ -269,7 +272,7 @@ def test_a_revoked_link_admits_nobody_even_a_request_made_before(
     c.post("/beta/confirm", data={"t": _confirm_token(sent[-1][3])})
     assert _link(svc, code)["used"] == 0
     assert _invite_row(svc, "late@example.com") is None
-    assert app.test_client().get(f"/i/{code}").status_code == 404
+    assert app.test_client().get(f"/i?c={code}").status_code == 404
 
 
 def test_the_inviter_cannot_spend_their_own_link(made, sent, monkeypatch):  # noqa: F811
@@ -287,7 +290,9 @@ def test_the_real_record_invite_respects_the_stage_1_cap(
     the hub says why in one line."""
     app, svc = made(RESEND_API_KEY="re_test", CARE_REAL_RECORDS="allowlist",
                     FASTEN_PUBLIC_KEY="pub123")
-    for i in range(beta.STAGE1_INVITE_CAP):
+    # The inviter's own invite is one of the 25.
+    svc.invite_real_records("inviter@example.com", "operator")
+    for i in range(beta.STAGE1_INVITE_CAP - 1):
         svc.invite_real_records(f"t{i}@example.com", "operator")
     _, code, _ = _inviter(app, svc, monkeypatch)
     c, r = _join_via(app, sent, code, "nine@example.com")
@@ -318,7 +323,8 @@ def test_deleting_the_inviter_removes_their_link(made, sent, monkeypatch):  # no
     with svc.session() as s:
         assert s.query(invites.InviteLink).count() == 0
         # The join stays: it is someone else's sign-up.
-        assert s.get(invites.InviteJoin, "stays@example.com") is not None
+        assert s.get(invites.InviteJoin,
+                     invites.mailbox_hash("stays@example.com")) is not None
 
 
 # --- operator commands ------------------------------------------------------
@@ -334,7 +340,7 @@ def test_cli_lists_revokes_and_sets_a_cap(made, sent, monkeypatch):  # noqa: F81
                             "1"])
     assert r.exit_code == 0, r.output
     assert _link(svc, code)["cap"] == 1
-    assert app.test_client().get(f"/i/{code}").status_code == 404   # full
+    assert app.test_client().get(f"/i?c={code}").status_code == 404   # full
     r = runner.invoke(args=["invite-links", "cap", code, "default"])
     assert r.exit_code == 0 and _link(svc, code)["cap"] is None
     r = runner.invoke(args=["invite-links", "cap", code, "-1"])
@@ -344,7 +350,7 @@ def test_cli_lists_revokes_and_sets_a_cap(made, sent, monkeypatch):  # noqa: F81
     r = runner.invoke(args=["invite-links", "revoke", code])
     assert r.exit_code != 0                      # nothing left to revoke
     html = _login_settings(app, svc, monkeypatch)
-    assert "turned off" in html and f"/i/{code}" not in html
+    assert "turned off" in html and f"/i?c={code}" not in html
 
 
 def _login_settings(app, svc, monkeypatch):
@@ -356,3 +362,152 @@ def _login_settings(app, svc, monkeypatch):
 @pytest.mark.parametrize("raw,want", [("7", 7), ("x", 5), ("-3", 0)])
 def test_the_cap_setting(raw, want):
     assert Config(env={"CARE_INVITE_LINK_CAP": raw}).invite_link_cap == want
+
+
+# --- #928 security fixes ------------------------------------------------------
+
+def test_the_path_form_of_a_link_is_gone(made, monkeypatch):  # noqa: F811
+    """The code travels in the query string, which the access log drops
+    (#928 F5); /i/<code> answers like any unknown page."""
+    app, svc = made()
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    assert app.test_client().get(f"/i/{code}").status_code == 404
+    assert app.test_client().get(f"/i?c={code}").status_code == 200
+
+
+def test_a_confirm_link_session_gets_no_invite_link(made, sent, monkeypatch):  # noqa: F811
+    """A session opened by a beta confirm link is limited (#920 F1): it
+    neither makes nor sees an invite link (#928 F6)."""
+    app, svc = made(RESEND_API_KEY="re_test")
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    c, r = _join_via(app, sent, code, "linked@example.com")
+    assert r.status_code == 303
+    html = c.get("/settings").get_data(as_text=True)
+    assert "Invite friends and family" not in html and "/i?c=" not in html
+    with svc.session() as s:
+        assert s.query(invites.InviteLink).filter_by(
+            account_id=_account_id(svc, "linked@example.com")).count() == 0
+
+
+def test_removing_a_request_and_asking_again_takes_no_second_seat(
+        made, sent, monkeypatch):  # noqa: F811
+    from tests.test_careagents_beta_signup import _age_caps, _token
+    app, svc = made(RESEND_API_KEY="re_test")
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    _join_via(app, sent, code, "again@example.com", first_run=False)
+    assert _link(svc, code)["used"] == 1
+    removal = _token([m for m in sent if m[0] == "again@example.com"][-1][2])
+    c = app.test_client()
+    assert c.post("/beta/remove", data={"t": removal}).status_code == 200
+    _age_caps(svc)
+    _join_via(app, sent, code, "again@example.com", first_run=False)
+    assert _link(svc, code)["used"] == 1
+
+
+def test_a_link_passes_on_real_records_only_from_an_inviter_who_has_them(
+        made, sent, monkeypatch):  # noqa: F811
+    """Owner ruling on #928 F3: access flows from the operator, one link at
+    a time; an account with none hands on none, and the joiner is told."""
+    app, svc = made(RESEND_API_KEY="re_test", CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="root@example.com",
+                    FASTEN_PUBLIC_KEY="pub123")
+    _, root_code, _ = _inviter(app, svc, monkeypatch, email="root@example.com")
+    _join_via(app, sent, root_code, "child@example.com", first_run=False)
+    assert invites.join_outcome(svc.session, "child@example.com") == "granted"
+    # The child now holds a live invite, so its link passes one on.
+    _, child_code, _ = _inviter(app, svc, monkeypatch,
+                                email="child@example.com")
+    _join_via(app, sent, child_code, "grandchild@example.com",
+              ip="203.0.113.50", first_run=False)
+    assert invites.join_outcome(
+        svc.session, "grandchild@example.com") == "granted"
+    # Revoked by the operator: the child's link hands on nothing more.
+    assert svc.revoke_real_records_invite("child@example.com")
+    c, _ = _join_via(app, sent, child_code, "late@example.com",
+                     ip="203.0.113.51")
+    assert invites.join_outcome(svc.session, "late@example.com") == "none"
+    assert _invite_row(svc, "late@example.com") is None
+    hub = c.get("/home").get_data(as_text=True)
+    assert "Your invite is for made-up records" in hub
+
+
+def test_a_confirm_link_session_of_the_owner_gets_no_funnel_page(
+        made, sent, monkeypatch):  # noqa: F811
+    """#928 F6: /admin/funnel wants a full sign-in, as the routes that
+    widen an account do."""
+    app, svc = made(RESEND_API_KEY="re_test",
+                    CARE_OWNER_EMAILS="owner@example.com")
+    c = app.test_client()
+    assert _post(c, email="owner@example.com").status_code == 200
+    token = _confirm_token([m for m in sent
+                            if m[0] == "owner@example.com"][-1][3])
+    page = c.get(f"/beta/confirm?t={token}").get_data(as_text=True)
+    nonce = re.search(r'name="n" value="([^"]+)"', page).group(1)
+    assert c.post("/beta/confirm",
+                  data={"t": token, "n": nonce}).status_code == 303
+    assert c.get("/admin/funnel").status_code == 404
+    full = app.test_client()
+    _login(full, svc, monkeypatch, email="owner@example.com")
+    assert full.get("/admin/funnel").status_code == 200
+
+
+def test_racing_grants_fill_the_stage1_cap_exactly(tmp_path):
+    """#928 F1: the count and the write are one statement (and, on
+    Postgres, one advisory-locked transaction). Twelve racing grants at 20
+    live invites make exactly five, and the operator's command shares the
+    same path."""
+    from careagents.accounts import AccountService
+    cfg = Config(env={"CARE_DATABASE_URL": f"sqlite:///{tmp_path}/g.db",
+                      "OPENAI_API_KEY": "k"})
+    svc = AccountService(cfg)
+    try:
+        for i in range(beta.STAGE1_INVITE_CAP - 5):
+            svc.invite_real_records(f"t{i}@example.com", "operator")
+        out, start = [], threading.Barrier(12)
+
+        def grant(i):
+            start.wait()
+            out.append(svc.grant_join_invite(f"r{i}@example.org", "acct_x"))
+        threads = [threading.Thread(target=grant, args=(i,))
+                   for i in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert out.count("created") == 5 and out.count("full") == 7
+        with svc.session() as s:
+            assert s.query(RealRecordInvite).filter(
+                RealRecordInvite.revoked_at.is_(None)).count() == 25
+        with pytest.raises(ValueError, match="full"):
+            svc.invite_real_records("one-more@example.com", "operator")
+    finally:
+        svc.engine.dispose()
+
+
+def test_a_join_never_reopens_or_rewrites_an_invite(svc_join):
+    svc = svc_join
+    svc.invite_real_records("x@example.com", "operator")
+    assert svc.grant_join_invite("x@example.com", "acct_a") == "live"
+    assert svc.revoke_real_records_invite("x@example.com")
+    assert svc.grant_join_invite("x@example.com", "acct_a") == "revoked"
+    assert _invite_row(svc, "x@example.com")[0] == "operator"
+    assert _invite_row(svc, "x@example.com")[1] is not None
+
+
+@pytest.fixture
+def svc_join(tmp_path):
+    from careagents.accounts import AccountService
+    service = AccountService(Config(env={
+        "CARE_DATABASE_URL": f"sqlite:///{tmp_path}/j.db",
+        "OPENAI_API_KEY": "k"}))
+    yield service
+    service.engine.dispose()
+
+
+def test_a_paused_inviter_passes_on_nothing(made, sent, monkeypatch):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    svc.invite_real_records("inviter@example.com", "operator")
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    svc.set_paused("inviter@example.com", True)
+    _join_via(app, sent, code, "p@example.com", first_run=False)
+    assert invites.join_outcome(svc.session, "p@example.com") == "none"

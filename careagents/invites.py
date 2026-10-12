@@ -1,30 +1,39 @@
 """Personal invite links: "Invite friends and family".
 
-Each account has exactly one link, `/i/<code>`, made the first time its
-owner opens Settings. The code is 128 random bits, so links cannot be
-guessed, and opens are rate-limited per client address on top. A link
-admits CARE_INVITE_LINK_CAP sign-ups (default 5), or its own cap when the
-operator set one; the operator can also revoke it (`flask invite-links`).
+Each account has exactly one link, `/i?c=<code>`, made the first time its
+owner opens Settings after a full sign-in. The code is 128 random bits and
+travels in the query string, which the access log drops (#928 F5); opens
+are rate-limited per client address on top. A link admits
+CARE_INVITE_LINK_CAP sign-ups (default 5), or its own cap when the operator
+set one; the operator can also revoke it (`flask invite-links`).
 
 Opening a live link shows the one-step sign-up (/beta) with the code in a
 hidden field. A submit notes which link the request came through
 (`ca_invite_pending`); nothing is spent until the address confirms. On
-that confirm the link's seat is taken with one conditional UPDATE, so
-concurrent joins cannot pass the cap. The person who joined gets a
-real-record invite (careagents/models.py RealRecordInvite) with
-`invited_by` set to the inviter's account id, within the 25-invite stage 1
-cap and only once the tester terms are approved. When it cannot be given
-they join on made-up records, and the hub says so in one line.
+that confirm the mailbox's one join row is written first, then the link's
+seat is taken with one conditional UPDATE, so concurrent joins cannot pass
+the cap and one inbox (+tags, Gmail dots) takes one seat, once, even after
+removing its request and asking again (#928 F4).
+
+Real records come with a join only when the inviter has real-record access
+now: the environment allowlist, an owner address, or a live
+RealRecordInvite (owner ruling on #928 F3). Then the joiner gets a fresh
+RealRecordInvite, `invited_by` the inviter's account id, within the stage 1
+cap (atomic, accounts.py) and once the tester terms are approved. An
+invite that already exists, live or revoked by the operator, is never
+touched (#928 F2). Otherwise they join on made-up records, and the hub says
+so in one line.
 
 The invitee sees the inviter's first name, if the inviter gave one on
 their own beta request, and nothing else about them.
 
-Account data only: codes, counts, timestamps, account ids, and the
-joiner's email (the key RealRecordInvite also uses). No health data.
+Account data only: codes, counts, timestamps, account ids, and a SHA-256
+of the joiner's mailbox. No health data.
 """
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import logging
 import re
@@ -55,8 +64,10 @@ PENDING_SECONDS = 8 * 86400
 
 _CODE = re.compile(r"[0-9a-f]{32}")
 
-#: What the joiner was given, for the hub's one line.
-GRANTED, FULL, CLOSED, HAD = "granted", "full", "closed", "had"
+#: What the joiner was given, for the hub's one line. NONE: the inviter
+#: has no real-record access, or the joiner's invite was revoked.
+GRANTED, FULL, CLOSED, HAD, NONE = ("granted", "full", "closed", "had",
+                                    "none")
 
 
 class InviteLink(Base):
@@ -75,21 +86,31 @@ class InviteLink(Base):
     revoked_at = Column(Float, nullable=True)
 
 
+def mailbox_hash(email: str) -> str:
+    """SHA-256 of the inbox an address delivers to (beta_signup's folding:
+    case, +tags, Gmail dots). The key of the two tables below."""
+    from careagents import beta_signup
+    return hashlib.sha256(
+        beta_signup.account_key(email).encode("utf-8")).hexdigest()
+
+
 class InvitePending(Base):
     """A beta request made through a link, waiting for its confirm."""
     __tablename__ = "ca_invite_pending"
-    email = Column(String(255), primary_key=True)
+    mailbox_hash = Column(String(64), primary_key=True)
     link_id = Column(String(32), nullable=False)
     created_at = Column(Float, nullable=False, default=now)
 
 
 class InviteJoin(Base):
-    """Someone who joined through a link: which link, whose, when, and
+    """One mailbox that joined through a link: which link, whose, when, and
     what the real-record invite came to (`granted`, `had`, `full`,
-    `closed`). `link_id` and `inviter_id` are plain pointers, so the row
-    stays a count after the inviter leaves."""
+    `closed`, `none`). One row per mailbox, ever: it is written before the
+    seat is taken, so a second alias or a second request takes none. Keyed
+    by a hash, not an address, so it can outlive the account as a count.
+    `link_id` and `inviter_id` are plain pointers."""
     __tablename__ = "ca_invite_joins"
-    email = Column(String(255), primary_key=True)
+    mailbox_hash = Column(String(64), primary_key=True)
     link_id = Column(String(32), nullable=False, index=True)
     inviter_id = Column(String(32), nullable=False, index=True)
     joined_at = Column(Float, nullable=False, default=now)
@@ -173,9 +194,10 @@ def note_pending(session_scope, email: str, code, default_cap: int) -> bool:
         if owner is not None and (beta_signup.account_key(owner.email)
                                   == beta_signup.account_key(email)):
             return False
-        row = s.get(InvitePending, email)
+        key = mailbox_hash(email)
+        row = s.get(InvitePending, key)
         if row is None:
-            s.add(InvitePending(email=email, link_id=link.id,
+            s.add(InvitePending(mailbox_hash=key, link_id=link.id,
                                 created_at=now()))
         else:
             row.link_id, row.created_at = link.id, now()
@@ -195,37 +217,68 @@ def claim_seat(session_scope, link_id: str, default_cap: int) -> bool:
         return s.execute(stmt).rowcount == 1
 
 
+def inviter_has_access(svc, cfg, account) -> bool:
+    """May this account's link pass on real records (#928 F3, owner
+    ruling)? Only while it has real-record access itself: its email on the
+    environment allowlist or the owner list, or a live invite. Never while
+    paused."""
+    if account is None or svc.is_paused(account.id):
+        return False
+    email = (account.email or "").strip().lower()
+    return (email in cfg.real_records_allowlist
+            or email in cfg.owner_emails
+            or svc.real_records_invited(email))
+
+
+def _real_records_for(svc, cfg, email: str, inviter_id: str) -> str:
+    """The real-record outcome of one join. Only ever a fresh invite."""
+    from careagents import beta_signup
+    from careagents.models import RealRecordInvite
+    if not tester_terms.approved():
+        return CLOSED
+    if not inviter_has_access(svc, cfg, svc.get_account(inviter_id)):
+        return NONE
+    key = beta_signup.account_key(email)
+    with svc.session() as s:
+        for (other,) in s.query(RealRecordInvite.email):
+            if other != email and beta_signup.account_key(other) == key:
+                return NONE         # the inbox holds one under another alias
+    outcome = svc.grant_join_invite(email, inviter_id)
+    return {"created": GRANTED, "live": HAD, "full": FULL}.get(outcome, NONE)
+
+
 def on_join(svc, cfg, email: str) -> dict | None:
     """A beta request just confirmed as a new join. If it came through a
-    link and a seat is free, record the join, give the real-record invite
-    when it can be given, and record the inviter on the account's funnel
-    row if the account exists. None when no link is involved."""
+    link, the mailbox has never joined through one, and a seat is free:
+    record the join, settle real records (`_real_records_for`), and record
+    the inviter on the account's funnel row if the account exists. None
+    when no link is involved."""
+    key = mailbox_hash(email)
     with svc.session() as s:
-        pending = s.get(InvitePending, email)
+        pending = s.get(InvitePending, key)
         if pending is None:
             return None
         link_id = pending.link_id
         s.delete(pending)
-    if not claim_seat(svc.session, link_id, cfg.invite_link_cap):
+        link = s.get(InviteLink, link_id)
+        inviter_id = link.account_id if link is not None else None
+    if inviter_id is None:
         return {"joined": False}
-    with svc.session() as s:
-        inviter_id = s.get(InviteLink, link_id).account_id
-    outcome = CLOSED
-    if tester_terms.approved():
-        try:
-            outcome = (GRANTED if svc.invite_real_records(email, inviter_id)
-                       else HAD)
-        except ValueError:
-            outcome = FULL
     try:
         with svc.session() as s:
-            s.add(InviteJoin(email=email, link_id=link_id,
+            s.add(InviteJoin(mailbox_hash=key, link_id=link_id,
                              inviter_id=inviter_id, joined_at=now(),
-                             real_records=outcome))
+                             real_records=NONE))
     except IntegrityError:
-        # The same address joined through a link before (it was removed and
-        # asked again). The seat is spent; the first record stands.
-        pass
+        # This inbox joined through a link before: no second seat.
+        return {"joined": False}
+    if not claim_seat(svc.session, link_id, cfg.invite_link_cap):
+        with svc.session() as s:
+            s.query(InviteJoin).filter_by(mailbox_hash=key).delete()
+        return {"joined": False}
+    outcome = _real_records_for(svc, cfg, email, inviter_id)
+    with svc.session() as s:
+        s.get(InviteJoin, key).real_records = outcome
     with svc.session() as s:
         acct = s.query(Account).filter_by(email=email).first()
         account_id = acct.id if acct is not None else None
@@ -237,33 +290,34 @@ def on_join(svc, cfg, email: str) -> dict | None:
 
 
 def inviter_for_email(s, email: str) -> str | None:
-    row = s.get(InviteJoin, (email or "").strip().lower())
+    row = s.get(InviteJoin, mailbox_hash(email))
     return row.inviter_id if row is not None else None
 
 
 def join_outcome(session_scope, email: str) -> str | None:
-    """What the real-record invite came to for an address that joined
-    through a link, or None."""
+    """What the real-record invite came to for an address whose mailbox
+    joined through a link, or None."""
     with session_scope() as s:
-        row = s.get(InviteJoin, (email or "").strip().lower())
+        row = s.get(InviteJoin, mailbox_hash(email))
         return row.real_records if row is not None else None
 
 
 def per_inviter(s) -> list[dict]:
     """Joins per inviter account id, most first."""
-    rows = (s.query(InviteJoin.inviter_id, func.count(InviteJoin.email))
+    rows = (s.query(InviteJoin.inviter_id,
+                    func.count(InviteJoin.mailbox_hash))
             .group_by(InviteJoin.inviter_id).all())
     return sorted(({"inviter_id": i, "joined": n} for i, n in rows),
                   key=lambda r: (-r["joined"], r["inviter_id"]))
 
 
 def delete_for_account(s, account) -> None:
-    """With the account: its link, and its own join and pending notes. The
-    joins its link admitted stay (they are other people's sign-ups)."""
+    """With the account: its link and its pending note. Join rows stay, its
+    own and the ones its link admitted: they hold a hash and ids, not an
+    address, and keep a returning inbox from taking a second seat."""
     s.query(InviteLink).filter_by(account_id=account.id).delete()
-    email = (account.email or "").strip().lower()
-    s.query(InviteJoin).filter_by(email=email).delete()
-    s.query(InvitePending).filter_by(email=email).delete()
+    s.query(InvitePending).filter_by(
+        mailbox_hash=mailbox_hash(account.email or "")).delete()
 
 
 # --- operator -----------------------------------------------------------------
@@ -310,7 +364,7 @@ def set_cap(session_scope, which: str, cap: int | None) -> bool:
 # --- routes and commands ------------------------------------------------------
 
 def register(app, svc, cfg, beta_context) -> None:
-    """`/i/<code>` and the `invite-links` commands. `beta_context()` is
+    """`/i?c=<code>` and the `invite-links` commands. `beta_context()` is
     the sign-up page's own template context (careagents/beta_signup.py)."""
     opens: OrderedDict[str, deque] = OrderedDict()
 
@@ -341,8 +395,11 @@ def register(app, svc, cfg, beta_context) -> None:
         resp.headers["Referrer-Policy"] = "no-referrer"
         return resp
 
-    @app.get("/i/<code>")
-    def invite_open(code):
+    @app.get("/i")
+    def invite_open():
+        # In the query string, never the path: the access log keeps the
+        # path and drops the query (#928 F5). There is no /i/<code> route.
+        code = str(request.args.get("c") or "")
         if not _allow_open(_client_key()):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return _closed(429)
@@ -409,5 +466,5 @@ def register(app, svc, cfg, beta_context) -> None:
 def settings_row(svc, cfg, account_id: str) -> dict:
     """What Settings shows: the link, seats used of the cap, and state."""
     link = link_for(svc.session, account_id, cfg.invite_link_cap)
-    return {**link, "url": f"{cfg.origin}/i/{link['code']}"}
+    return {**link, "url": f"{cfg.origin}/i?c={link['code']}"}
 
