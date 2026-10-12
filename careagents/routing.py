@@ -104,7 +104,8 @@ _CLINICAL = re.compile(r"\b(?:" + "|".join([
 #: before the clinical scan. The rest of the message is still scanned.
 _HOW_TO_RECORDS = re.compile(
     r"\b(?:connect|link|add|import|upload|sync|disconnect)(?:ing|ed|s)?\s+"
-    r"(?:my\s+|the\s+|your\s+|our\s+)?(?:health\s+|medical\s+)?records?\b",
+    r"(?:my\s+|the\s+|your\s+|our\s+)?"
+    r"(?:(?:real|own|other|health|medical)\s+){0,2}records?\b",
     re.IGNORECASE)
 
 #: Messages made only of these words are small talk.
