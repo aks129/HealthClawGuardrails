@@ -389,8 +389,10 @@ def is_owner(cfg, email: str | None) -> bool:
     return bool(email) and email.strip().lower() in cfg.owner_emails
 
 
-def register(app, svc, cfg) -> None:
-    """The owner page /admin/funnel and the `funnel` command group."""
+def register(app, svc, cfg, full_session=lambda: True) -> None:
+    """The owner page /admin/funnel and the `funnel` command group.
+    `full_session()` says the session came from a code or passkey sign-in,
+    not a beta confirm link (careagents/app.py, full_sign_in_required)."""
 
     def owner_only(fn):
         @wraps(fn)
@@ -399,7 +401,8 @@ def register(app, svc, cfg) -> None:
             # page exists. Unset CARE_OWNER_EMAILS closes it for everyone.
             aid = session.get("account_id")
             acct = svc.get_account(aid) if aid else None
-            if acct is None or not is_owner(cfg, acct.email):
+            if (acct is None or not is_owner(cfg, acct.email)
+                    or not full_session()):
                 abort(404)
             return fn(*a, **k)
         return wrapper

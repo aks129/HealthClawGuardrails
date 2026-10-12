@@ -49,9 +49,9 @@ _ALLOWED = {
     "ca_invite_links": {"id": String, "account_id": String, "code": String,
                         "cap": Integer, "used": Integer, "created_at": Float,
                         "revoked_at": Float},
-    "ca_invite_pending": {"email": String, "link_id": String,
+    "ca_invite_pending": {"mailbox_hash": String, "link_id": String,
                           "created_at": Float},
-    "ca_invite_joins": {"email": String, "link_id": String,
+    "ca_invite_joins": {"mailbox_hash": String, "link_id": String,
                         "inviter_id": String, "joined_at": Float,
                         "real_records": String},
 }
@@ -209,7 +209,8 @@ def test_daily_report_counts_days_conversion_and_inviters(svc, monkeypatch):  # 
     funnel.mark(svc.session, a.id, "first_answer")
     funnel.set_inviter(svc.session, b.id, a.id)
     with svc.session() as s:
-        s.add(invites.InviteJoin(email="b@example.com", link_id="inv_x",
+        s.add(invites.InviteJoin(mailbox_hash=invites.mailbox_hash(
+            "b@example.com"), link_id="inv_x",
                                  inviter_id=a.id, joined_at=1.0,
                                  real_records="granted"))
     report = funnel.daily(svc.session, days=3)
