@@ -57,8 +57,13 @@ _HEALTHCLAW = [
 ]
 
 _CAREAGENTS = [
-    ("Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400", "fraunces"),
-    ("Public+Sans:ital,wght@0,400..700;1,400", "public-sans"),
+    # Atkinson Hyperlegible Next (Braille Institute, OFL) — drawn so that
+    # look-alike letters (I l 1, O 0, rn m) stay distinct for low-vision
+    # readers. Our testers include people in their seventies; that is the
+    # reason, not a style choice. Variable, one file per subset for 400..700.
+    ("Atkinson+Hyperlegible+Next:ital,wght@0,400..700;1,400", "atkinson-next"),
+    # Its mono sibling, for lab values, units, codes and pairing codes.
+    ("Atkinson+Hyperlegible+Mono:wght@400..700", "atkinson-mono"),
 ]
 
 _BLOCK = re.compile(

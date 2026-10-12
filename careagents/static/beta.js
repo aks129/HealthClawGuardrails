@@ -31,6 +31,7 @@
         body: JSON.stringify({
           first_name: field("first_name"), email: field("email"),
           mobile: field("mobile"), ref: field("ref"),
+          invite: field("invite"),
           website: field("website"), consent: consent.checked,
         }),
       });

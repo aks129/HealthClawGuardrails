@@ -40,7 +40,7 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, feedback
+from careagents import beta_signup, feedback, funnel, invites
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -468,6 +468,12 @@ def create_app(config: Config | None = None,
         agent = request.args.get("agent") or ""
         if asked_enroll and me and svc.get_agent_context(me.id, agent):
             back = url_for("chat", agent=agent)
+        # "Sign in again to connect your records" from a link session's
+        # hub card or chat (#934 QA F1): a code first, then back to the card.
+        code_for_connect = (request.args.get("connect") == "1"
+                            and via_link and me is not None)
+        if code_for_connect:
+            back = url_for("home") + "#connect-records"
         if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
         # Set by a beta confirm that could not sign in (beta_signup): the
@@ -480,6 +486,7 @@ def create_app(config: Config | None = None,
                                # "Add a passkey" from a link session: say
                                # why a code comes first (patient walk F1).
                                code_for_passkey=asked_enroll and via_link,
+                               code_for_connect=code_for_connect,
                                prefill=(prefill if isinstance(prefill, str)
                                         else ""),
                                imessage_pending=bool(
@@ -511,8 +518,15 @@ def create_app(config: Config | None = None,
         # rather than "coming for invited testers" to someone who is one.
         invited = (cfg.real_records == "allowlist"
                    and svc.real_records_invited(acct.email))
+        menu = hub_view.menu_items(
+            connectors.catalog(cfg, real_records=real_open), real_open)
         return render_template(
             "home.html", me=acct,
+            connect_next=_connect_next(acct, view, menu, real_open, paused),
+            # A confirm-link session connects only after a code (#920 F1):
+            # the card says so and goes to /auth (#934 QA F1).
+            link_session=bool(session.get(_VIA_LINK)),
+            invite_line=_invite_line(acct, real_open),
             stale_consent=stale_consent,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
             invited=invited,
@@ -533,16 +547,80 @@ def create_app(config: Config | None = None,
             tester_terms_approved=tester_terms.approved(),
             consent_version=tester_terms.CONSENT_VERSION,
             terms_change=tester_terms.CHANGE_SUMMARY,
-            menu=hub_view.menu_items(
-                connectors.catalog(cfg, real_records=real_open), real_open))
+            menu=menu)
+
+    def _can_connect_next(menu, real_open, paused, has_real) -> bool:
+        """May "Connect your records" be offered? When the account may
+        start a real-record connection (`_real_records_open`, the one
+        gate), the Fasten tile is live, and it has no real records yet."""
+        return (not paused and real_open and not has_real
+                and any(m["id"] == "fasten" and m["tier"] != "soon"
+                        for m in menu))
+
+    def _answered(acct) -> bool:
+        try:
+            return funnel.reached(svc.session, acct.id, "first_answer")
+        except Exception:  # noqa: BLE001 - the card is left out, not the page
+            return False
+
+    def _connect_next(acct, view, menu, real_open, paused) -> bool:
+        """Is "Connect your records" the hub's next step? Once made-up
+        records have answered a question, and `_can_connect_next`."""
+        return (_can_connect_next(menu, real_open, paused, view["has_real"])
+                and _answered(acct))
+
+    def _chat_connect_next(acct, sample: bool) -> str | None:
+        """The chat's pointer to the hub's card: "now" once a made-up answer
+        has come, "after" to show it when this page's first answer does, or
+        None. On a sample chat only."""
+        if not sample:
+            return None
+        real_open = _real_records_open(acct)
+        menu = hub_view.menu_items(
+            connectors.catalog(cfg, real_records=real_open), real_open)
+        has_real = any(c["kind"] != "sample" and c["status"] != "revoked"
+                       for c in svc.list_home(acct.id)["connections"])
+        if not _can_connect_next(menu, real_open, svc.is_paused(acct.id),
+                                 has_real):
+            return None
+        return "now" if _answered(acct) else "after"
+
+    def _invite_line(acct, real_open) -> str | None:
+        """The honest line for someone who joined through an invite link
+        but could not be given real records."""
+        if real_open:
+            return None
+        try:
+            outcome = invites.join_outcome(svc.session, acct.email)
+        except Exception:  # noqa: BLE001
+            return None
+        if outcome == invites.FULL:
+            return ("Spots for connecting your own records are full right "
+                    "now, so you're using made-up records.")
+        if outcome == invites.CLOSED:
+            return ("Connecting your own records isn't open yet, so you're "
+                    "using made-up records.")
+        if outcome == invites.NONE:
+            return ("For now you can use made-up records. Connecting your "
+                    "own records isn't open to you yet.")
+        return None
 
     @app.get("/settings")
     @login_required
     def settings():
         acct = current_account()
         data = svc.list_home(acct.id)
+        # A link is a lasting power to sign people up, so it is made and
+        # shown only after a full sign-in (#928 F6), as full_sign_in_required
+        # holds for the routes that widen an account.
+        invite = None
+        if not session.get(_VIA_LINK):
+            try:
+                invite = invites.settings_row(svc, cfg, acct.id)
+            except Exception:  # noqa: BLE001 - the row is left out, not the page
+                logger.warning("invite link not shown")
         return render_template(
-            "settings.html", me=acct,
+            "settings.html", me=acct, invite=invite,
             passkeys=svc.list_passkeys(acct.id),
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
@@ -577,6 +655,7 @@ def create_app(config: Config | None = None,
             # unknown. Ordered before MailError: MailUnconfirmed subclasses it.
             return jsonify({"sent": None, "notice": str(exc)}), 202
         except MailError as exc:
+            funnel.note_mail(svc.session, cfg, mail.NOT_SENT)
             # Never report "sent" when nothing was sent — this is the front
             # door, and a silent failure leaves the person watching an empty
             # inbox with no idea whether to wait or retry.
@@ -606,6 +685,7 @@ def create_app(config: Config | None = None,
             acct = svc.verify_email_code(body.get("email", ""),
                                          body.get("code", ""))
         except AuthError as exc:
+            funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
         _login(acct)
         # Nothing connected yet: the records come first, and the passkey
@@ -655,8 +735,10 @@ def create_app(config: Config | None = None,
             acct = svc.finish_authentication(request.get_json(force=True),
                                              challenge)
         except AuthError as exc:
+            funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
         except Exception:  # noqa: BLE001
+            funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": "passkey sign-in failed"}), 400
         _login(acct)
         return jsonify({"ok": True})
@@ -855,10 +937,16 @@ def create_app(config: Config | None = None,
     def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
         # existing connection never consult the real-records switch.
+        real_open = _real_records_open(acct)
         plan = connectors.start(
             connector_id, body.get("provider"), cfg, hc,
-            real_records=_real_records_open(acct))
+            real_records=real_open)
         if plan.get("error"):
+            if connector_id == "fasten" and real_open:
+                # Past the gate and still refused: Fasten is not available
+                # here. A refusal at the gate is not a Fasten failure.
+                funnel.safely(funnel.count_issue, svc.session,
+                              "fasten_failed")
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
         if plan.get("soon"):
             # Not live yet — acknowledge intent (never a dead-end button).
@@ -914,6 +1002,10 @@ def create_app(config: Config | None = None,
                                  status=plan["status"],
                                  provider=plan.get("provider"),
                                  consent_version=consent_version)
+        if consent_version is not None:
+            # A real-record connection, past the gate and the consent.
+            funnel.safely(funnel.mark, svc.session, acct.id,
+                          "connect_started")
         if connector_id == "sample":
             # A count for the record card, and the first assistant. Neither
             # blocks the connect: an unknown count renders as no count.
@@ -1139,6 +1231,8 @@ def create_app(config: Config | None = None,
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
+            funnel.safely(funnel.mark, svc.session, acct.id,
+                          "records_connected")
             uncounted = None
             try:
                 readable_total = hc.record_count(conn["tenant_id"])
@@ -1439,6 +1533,9 @@ def create_app(config: Config | None = None,
             }), 503
         if landed:
             svc.activate_connection(conn_tenant)
+            if conns[conn_tenant]["kind"] != "sample":
+                funnel.safely(funnel.mark, svc.session, acct.id,
+                              "records_connected")
             out = {"status": "active"}
             # After a refresh, report growth against the baseline that refresh
             # recorded. Read-only: the count is re-baselined by the next
@@ -1677,6 +1774,8 @@ def create_app(config: Config | None = None,
                                passkey_added=(
                                    request.args.get("passkey") == "added"
                                    and svc.has_passkey(acct.id)),
+                               connect_next=_chat_connect_next(acct, sample),
+                               link_session=bool(session.get(_VIA_LINK)),
                                sample_line=(beta.SAMPLE_FRAME
                                             if sample else None))
 
@@ -1827,6 +1926,8 @@ def create_app(config: Config | None = None,
                 # an exception message here would be the first place engine
                 # internals reached a patient's screen.
                 logger.warning("run event stream failed for tenant %s", tenant)
+                funnel.safely(funnel.count_issue, svc.session,
+                              "run_replay_error")
                 yield "data: " + json.dumps({
                     "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
                 return
@@ -1878,8 +1979,10 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "message must be 1-2000 characters"}), 400
         workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
+            funnel.safely(funnel.count_issue, svc.session, "chat_error")
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return jsonify({"error": "rate_limited"}), 429
         # A turn the worker will refuse (paused, or terms not accepted; beta
         # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
@@ -1894,6 +1997,8 @@ def create_app(config: Config | None = None,
         if not refused:
             used = svc.daily_turns_used(acct.id)
             if used >= cfg.chat_turns_per_day:
+                funnel.safely(funnel.count_issue, svc.session,
+                              "rate_limited")
                 return jsonify({
                     "error": "daily_limit_reached",
                     "used": used,
@@ -1913,11 +2018,13 @@ def create_app(config: Config | None = None,
         created, user_message_id = hc.claim_inbound_message(
             tenant, text, agent["id"], conversation_id, "web", request_id)
         if created is None or not user_message_id:
+            funnel.safely(funnel.count_issue, svc.session, "chat_error")
             return jsonify({"error": "message store unavailable"}), 503
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
         except HealthClawError:
+            funnel.safely(funnel.count_issue, svc.session, "chat_error")
             return jsonify({"error": "run queue unavailable"}), 503
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
@@ -1943,6 +2050,8 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "unknown run"}), 404
             # "Unknown run" is a claim about what exists. During an incident
             # it is not true — we just could not look it up (#410).
+            funnel.safely(funnel.count_issue, svc.session,
+                          "run_replay_error")
             return jsonify({"error": "run service unavailable"}), 503
         if not _run_belongs_to(run, ctx["tenant"], agent_id):
             return jsonify({"error": "unknown run"}), 404
@@ -2347,6 +2456,8 @@ def create_app(config: Config | None = None,
         """One approval on a real-record assistant, for the weekly number
         (beta spec 4.5). The sample is not counted. Never fails a review."""
         acct = current_account()
+        # The funnel counts an approval on any records, the sample included.
+        funnel.safely(funnel.mark, svc.session, acct.id, "action_approved")
         try:
             ctx = svc.get_agent_context(acct.id, agent_id)
             if ctx and ctx["connection"]["kind"] != "sample":
@@ -2634,6 +2745,8 @@ def create_app(config: Config | None = None,
     def _imessage_connected(account_id: str, handle: str) -> None:
         """Tell the owner by email that a phone was connected. One line, the
         handle masked. Skipped quietly when email is not set up."""
+        funnel.safely(funnel.mark, svc.session, account_id,
+                      "imessage_linked")
         if not cfg.resend_api_key:
             return
         acct = svc.get_account(account_id)
@@ -2965,7 +3078,7 @@ def create_app(config: Config | None = None,
         return jsonify({
             "name": "CareAgents", "short_name": "CareAgents",
             "start_url": "/home", "display": "standalone",
-            "background_color": "#FBF6EE", "theme_color": "#C2532E",
+            "background_color": "#F6F8F7", "theme_color": "#0B6B5D",
             "icons": [{"src": "/static/icon.svg", "sizes": "any",
                        "type": "image/svg+xml"}]})
 
@@ -3117,5 +3230,8 @@ def create_app(config: Config | None = None,
     operator_cli.register(app, svc)
     beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
+    invites.register(app, svc, cfg, beta_signup.page_context)
+    funnel.register(app, svc, cfg, full_session=lambda: not session.get(
+        _VIA_LINK))
 
     return app

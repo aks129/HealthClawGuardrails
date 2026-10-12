@@ -65,26 +65,11 @@ and it needs zero JavaScript, so it survives the CSP, the webviews, and
 
 ## CareAgents tokens
 
-```css
---cream:     #FBF6EE;   /* page */
---paper:     #F4ECDF;   /* raised surface */
---card:      #FFFDF8;   /* card */
---ink:       #22190E;   /* body text */
---ink-soft:  #5E5240;   /* secondary text */
---clay:      #C2532E;   /* primary action */
---clay-deep: #A03F1F;   /* links, hover */
---sage:      #5F7D62;   /* support, success */
---hairline:  #E4D7C2;   /* borders */
---shadow:    0 2px 24px rgba(84, 62, 36, .10);
---radius:    18px;
-```
-
-- **Display:** `"Fraunces", Georgia, serif` at weight 560, `letter-spacing:
-  -0.015em` — h1, h2, wordmark, chat name.
-- **Body:** `"Public Sans", -apple-system, sans-serif`, `line-height: 1.55`.
-- One radius (`18px`) and one shadow. Do not introduce a second of either.
-- The page background is a single soft radial warm-up at top right over
-  `--cream`. That is the only gradient in the product.
+CareAgents has its own language: a cool white ground, one teal accent, amber
+only for made-up records, and Atkinson Hyperlegible Next with its Mono. The
+tokens, type scale and components are in
+[docs/design/careagents-design-language.md](docs/design/careagents-design-language.md).
+The cream, Fraunces and clay look it replaced is retired.
 
 ## HealthClaw tokens
 
@@ -130,8 +115,8 @@ sit on light paper and have to clear WCAG AA against it.
 - **Fragment Mono** carries data, codes, labels and every number.
   Deliberately **not** JetBrains Mono: every developer-tool site already uses
   it, and identifiers here should read as record-keeping, not as an IDE.
-- Both are vendored (`static/fonts/`). So are Fraunces and Public Sans
-  (`careagents/static/fonts/`). Re-vendor with
+- Both are vendored (`static/fonts/`). So are CareAgents' Atkinson
+  Hyperlegible Next and Mono (`careagents/static/fonts/`). Re-vendor with
   `scripts/vendor_frontend_assets.py`.
 - Numbers are `tabular-nums` everywhere. Two readings of the same lab test must
   not render at different widths.
@@ -159,8 +144,8 @@ of these. Page max-width `1240px`; reading measure `64ch`.
 - **Fonts:** Inter, Roboto, Open Sans, Lato, Montserrat, or a bare
   `system-ui` stack as the *primary* face. `-apple-system` stays in the
   fallback chain — that is performance, not laziness.
-- **Purple gradients**, neon glows, and "AI-looking" iridescence. The one
-  gradient we have is CareAgents' background warm-up, documented above. The
+- **Purple gradients**, neon glows, and "AI-looking" iridescence. Neither
+  surface uses a gradient. The
   project site has **no** gradients and **no** glows; the `--cyan-glow` and
   `.hero-glow` it used to carry were exactly the tell this system removes.
 - **Generic vector illustrations** and stock photography of smiling people
@@ -211,7 +196,7 @@ These are not stylistic preferences. Violating them breaks the product.
 4. **Respect `prefers-reduced-motion`.** Someone reading a lab result they are
    frightened of should not have to sit through a transition.
 5. **Contrast:** WCAG AA minimum, AA-large for display type. `--ink-soft` on
-   `--cream` is the lightest permitted body combination; do not go lighter.
+   `--bg` (CareAgents) is the lightest permitted body combination; do not go lighter.
 6. **Focus rings are never removed.** Keyboard users are not an edge case on a
    page that leads to a health record. `:focus { outline: none }` with a
    border-colour change as the substitute is a removal.
