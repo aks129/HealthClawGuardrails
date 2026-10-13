@@ -560,6 +560,15 @@ def create_app(config: Config | None = None,
                 for r in view["records"]
                 if r["kind"] == "fasten" and r["status"] == "pending"}),
             has_grants=bool(svc.list_grants(acct.id)),
+            # One status per source row, chosen in one place (hub critique).
+            chip=hub_view.status_chip,
+            # "Where you can reach me": connected phones, masked as Settings
+            # shows them. Setting one up stays on Settings.
+            reach_phones=[imessage.masked_display(x["handle"])
+                          for x in data["surfaces"]
+                          if x["kind"] == "imessage"
+                          and x["status"] == "active"],
+            imessage_handle=cfg.imessage_handle,
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
@@ -993,7 +1002,7 @@ def create_app(config: Config | None = None,
             if refused:
                 return refused
             consent_version = tester_terms.CONSENT_VERSION
-        if connector_id != "fasten":
+        if connector_id not in ("fasten", "direct"):
             return _persist_connection(connector_id, acct, plan,
                                        consent_version)
         # Two tabs or devices connecting at once (#847): both passed the
@@ -1010,6 +1019,17 @@ def create_app(config: Config | None = None,
             # two taps made two identical rows, both stuck connecting. Only
             # a pending row is reused, and only after the gate and consent
             # above.
+            if connector_id == "direct":
+                # Same for a file: a connection still waiting for its first
+                # file takes the next one, so a second try never adds a
+                # second card.
+                waiting = svc.pending_connection(acct.id, "direct",
+                                                 status="empty")
+                if waiting:
+                    return jsonify({"id": waiting["id"], "status": "empty",
+                                    "existing": True})
+                return _persist_connection(connector_id, acct, plan,
+                                           consent_version)
             waiting = svc.pending_connection(acct.id, "fasten")
             if waiting:
                 return jsonify({
@@ -1333,6 +1353,13 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        # The typed DELETE, checked here as the account delete checks it
+        # (security review of #944): the modal alone is a client's promise.
+        # After the ownership check, so a stranger's id still reads 404.
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirm") != "DELETE":
+            return jsonify({"error": "confirm_required",
+                            "message": "Type DELETE to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
@@ -1823,6 +1850,34 @@ def create_app(config: Config | None = None,
                                     hc.uncounted_record_count(ctx["tenant"]))
                 except HealthClawError:
                     logger.warning("record count unavailable on activation")
+        # Starter taps tuned to what the records can answer (hub critique
+        # 2026-10). Labs only when laboratory results are known to be there,
+        # not a heart rate (QA #944 F2). Only a total crosses, as for the
+        # greeting: the engine's `code` filter matches a category's code
+        # too, so `code=laboratory` counts Observations filed as labs
+        # (pinned on the real engine by test_hub_labs_count_real_engine).
+        # The made-up records are a fixed seed that holds lab results and
+        # files none by category. A failed count hides the tap, never
+        # offers it. "What changed since my last visit?" is not offered:
+        # records hold no visit to compare with (patient tester on #944).
+        has_labs = False
+        if totals and totals["labs"] == 0:
+            has_labs = False
+        elif sample:
+            has_labs = True
+        else:
+            try:
+                has_labs = int(hc.search(
+                    ctx["tenant"], "Observation",
+                    {"code": "laboratory", "_summary": "count"}
+                ).get("total") or 0) > 0
+            except (HealthClawError, TypeError, ValueError):
+                has_labs = False
+        has_records = (any(totals.values()) if totals is not None
+                       else bool(conn.get("last_count")))
+        starters = [s for s, ok in (
+            ("Make my visit brief", has_records),
+            ("Explain my latest labs", has_labs)) if ok]
         # The "Open the review" card is a turn event, and history keeps only
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.
@@ -1855,6 +1910,7 @@ def create_app(config: Config | None = None,
                                importing=importing,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               starters=starters,
                                # A link session reaches it through a code
                                # sign-in first (/auth, #920 F1).
                                offer_passkey=not svc.has_passkey(acct.id),

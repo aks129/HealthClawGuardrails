@@ -522,7 +522,9 @@ def row_delete(s, base, conn, agent, action_id, run):
     connection it never showed would read as gone afterwards."""
     before = s.get(f"{base}/home", timeout=20)
     listed_before = before.status_code == 200 and conn in before.text
-    r = s.delete(f"{base}/api/connections/{conn}", timeout=60)
+    # The typed DELETE the hub sends; the server checks it (#944).
+    r = s.delete(f"{base}/api/connections/{conn}",
+                 json={"confirm": "DELETE"}, timeout=60)
     body = _json(r)
     if r.status_code == 502:
         return run.step("delete: records and connection", "UNAVAILABLE",
@@ -538,7 +540,8 @@ def row_delete(s, base, conn, agent, action_id, run):
              rows_deleted=body.get("rows_deleted"))
     home = s.get(f"{base}/home", timeout=20)
     labs = s.get(f"{base}/api/labs/timeline", params={"agent": agent}, timeout=20)
-    again = s.delete(f"{base}/api/connections/{conn}", timeout=60)
+    again = s.delete(f"{base}/api/connections/{conn}",
+                     json={"confirm": "DELETE"}, timeout=60)
     seen = {"hub": (listed_before and home.status_code == 200
                     and conn not in home.text),
             "labs": labs.status_code == 404,
