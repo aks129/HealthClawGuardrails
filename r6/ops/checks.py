@@ -14,6 +14,7 @@ from datetime import timedelta
 from sqlalchemy import text
 
 from models import db
+from r6.runtime_config import internal_mint_secret
 from r6.actions.events import ActionEvent
 from r6.actions.models import _utcnow
 from r6.actions.registry import all_kinds, get_executor
@@ -74,7 +75,7 @@ def check_fasten_webhook_secret():
 def check_internal_mint_secret():
     """Non-public token mints fail closed without it (r6/routes.py)."""
     fatal = _is_production()
-    if os.environ.get('INTERNAL_TOKEN_MINT_SECRET'):
+    if internal_mint_secret():
         return _result('internal_mint_secret', True, 'set', fatal)
     return _result(
         'internal_mint_secret', False,

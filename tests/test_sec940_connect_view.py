@@ -6,9 +6,10 @@ still sets the enrollment proof in the browser, and GET .../agent-access
 mints a 30-day read token for whoever holds that proof. So "the patient
 view never mints a read token" holds for the page's script only.
 
-SEC940-F1 pins that gap (strict xfail, flips red when a server-side
-refusal for CareAgents tenants lands). The rest pin what held: forged or
-replayed sigs, the back link, and the confirm-link session.
+SEC940-F1 pinned that gap and SEC940-F2 pinned a token outliving
+Disconnect; both are fixed server-side (tests/test_fasten_token_scope.py
+holds the narrower pins). The rest pin what held: forged or replayed sigs,
+the back link, and the confirm-link session.
 
 Synthetic tenant and connection ids only.
 """
@@ -46,9 +47,6 @@ def _patient_view(html: str) -> bool:
 
 # --- SEC940-F1: the patient view is a template, not a server decision -------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "SEC940-F1: a CareAgents tenant's browser can mint the 30-day read "
-    "token from the patient view; agent-access does not know the view"))
 def test_patient_view_browser_cannot_mint_a_read_token(client, app, env):
     from models import db
     from r6.fasten.models import FastenConnection
@@ -152,21 +150,15 @@ def test_unsigned_page_gives_no_tenant_oracle(client, env):
     assert live.replace(CA_TENANT, "T") == made_up.replace("ca-99ee88dd77", "T")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "SEC940-F2: a read token minted for a CareAgents tenant keeps reading "
-    "after CareAgents' Disconnect (fasten-revoke); only purge empties it"))
 def test_disconnect_ends_an_issued_read_token(client, app, env):
-    from models import db
-    from r6.fasten.models import FastenConnection
+    # Since F1 the patient view's browser cannot mint this token, so take
+    # one minted before the fix, exactly as agent-access shaped it.
+    from r6.stepup import (PATIENT_CONNECT_SUBJECT, READ_TOKEN_TTL_SECONDS,
+                           generate_step_up_token)
 
-    org_id = "sec940-oc-2"
-    client.post("/fasten/connections", headers={"X-Tenant-Id": CA_TENANT},
-                json={"org_connection_id": org_id})
-    conn = db.session.get(FastenConnection, org_id)
-    conn.webhook_verified_at = datetime.now(timezone.utc)
-    db.session.commit()
-    token = client.get(
-        f"/fasten/connections/{org_id}/agent-access").get_json()["read_token"]
+    token = generate_step_up_token(
+        CA_TENANT, agent_id=PATIENT_CONNECT_SUBJECT,
+        ttl_seconds=READ_TOKEN_TTL_SECONDS, scope="read")
     reader = app.test_client()
     headers = {"X-Tenant-Id": CA_TENANT, "X-Step-Up-Token": token}
     assert reader.get("/r6/fhir/Observation", headers=headers).status_code == 200

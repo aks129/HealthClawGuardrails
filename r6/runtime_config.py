@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
+
+logger = logging.getLogger(__name__)
 
 
 VALID_APP_ENVS = frozenset({"development", "testing", "production"})
@@ -23,6 +26,32 @@ _MIN_SECRET_LENGTH = 32
 def read_auth_enabled() -> bool:
     """Whether tenant read authentication is explicitly enabled."""
     return os.environ.get("READ_AUTH_ENABLED", "").strip().lower() in TRUE_VALUES
+
+
+def internal_mint_secret() -> str:
+    """The shared CareAgents/engine secret, trimmed; '' when unset.
+
+    Every reader goes through here. A value pasted with a trailing newline
+    on one side and not the other never matched, and the failure was
+    silent: the connect page fell back to the developer view and handoff
+    tags never verified. CareAgents trims its copy the same way
+    (careagents/config.py), so the two sides agree on the bytes.
+    """
+    return os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "").strip()
+
+
+def warn_on_padded_secrets() -> None:
+    """Log once, at startup, when the shared secret carries whitespace.
+
+    It still works (internal_mint_secret trims it); the warning is so an
+    operator fixes the variable rather than learning about it from the
+    other service. Names the variable, never the value.
+    """
+    raw = os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "")
+    if raw and raw != raw.strip():
+        logger.warning(
+            "INTERNAL_TOKEN_MINT_SECRET has leading or trailing whitespace; "
+            "it is trimmed before use. Remove it from the environment.")
 
 
 def public_tenants() -> frozenset[str]:
