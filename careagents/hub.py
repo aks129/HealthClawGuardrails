@@ -64,12 +64,25 @@ def build(home: dict, now: float) -> dict:
     records = [{**_record(c, now), "readers": ", ".join(readers.get(c["id"], []))}
                for c in conns if c["status"] != "revoked"]
     active = [r for r in records if r["status"] == "active"]
+    # Change records offers only the same person's records: an assistant
+    # never moves to someone else's (one assistant per person spec, 9).
+    # The hub's one list is the holder's; the per-person map is for the
+    # card that renders people.
+    by_person: dict = {}
+    for r in active:
+        by_person.setdefault(r.get("person_id"), []).append(
+            {"id": r["id"], "label": r["label"]})
+    me = next((p["id"] for p in home.get("people", [])
+               if p["kind"] == "self"), None)
     return {
         "agents": [{**a, "reads": (by_id.get(a["connection_id"]) or {})
                     .get("label", "")} for a in home["agents"]],
         "records": records,
         "active_records": active,
-        "move_choices": [{"id": r["id"], "label": r["label"]} for r in active],
+        "move_choices": (by_person.get(me, []) if me is not None else
+                         [{"id": r["id"], "label": r["label"]}
+                          for r in active]),
+        "move_choices_by_person": by_person,
         "past": [{**_record(c, now),
                   "readers": ", ".join(readers.get(c["id"], []))}
                  for c in conns if c["status"] == "revoked"],
@@ -166,6 +179,7 @@ def assistants(home: dict) -> dict:
     people = {p["id"]: p for p in home.get("people", [])}
     active = {c["id"] for c in home["connections"]
               if c["status"] == "active"}
+    labels = {c["id"]: c.get("label") or "" for c in home["connections"]}
     by_person: dict = {}
     for a in sorted(home["agents"], key=lambda a: (
             a.get("connection_id") not in active, a.get("created_at") or 0)):
@@ -179,6 +193,7 @@ def assistants(home: dict) -> dict:
             ids = routines_for(a)
             tone = PERSONAS.get(a.get("persona"), PERSONAS[DEFAULT_PERSONA])
             out.append({**a, "person": person, "tone": tone["name"],
+                        "reads": labels.get(a.get("connection_id"), ""),
                         "routines": [ROUTINES[r]["name"] for r in ids],
                         "focuses_on": focuses_on(ids),
                         "is_primary": i == 0, "legacy_extra": i > 0})

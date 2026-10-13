@@ -28,6 +28,9 @@ URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
 
 def _app(cfg, svc, client=None):  # noqa: F811
     from careagents.app import create_app
+    # "Add someone you care for" is behind CARE_PEOPLE until the hub
+    # renders people (#947 QA).
+    cfg.people_enabled = True
     app = create_app(config=cfg, client=client or FakeClient(), accounts=svc)
     app.config["TESTING"] = True
     return app
@@ -392,6 +395,64 @@ def test_someone_you_care_for_is_not_offered_to_a_third_party_app(
     mom = c.post("/api/people", json={"relationship": "parent"}).get_json()
     assert mom["connection_id"] in svc.other_person_connection_ids(aid)
     assert len(svc.other_person_connection_ids(aid)) == 1
+
+
+def test_adding_someone_is_off_until_the_hub_renders_people(
+        cfg, svc, monkeypatch):
+    """#947 QA: until the hub shows whose assistant is whose, adding
+    someone made two identical cards. CARE_PEOPLE, default off."""
+    from careagents.app import create_app
+    from careagents.config import Config
+    assert Config(env={}).people_enabled is False
+    assert Config(env={"CARE_PEOPLE": "on"}).people_enabled is True
+    cfg.people_enabled = False
+    app = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="flag@example.com")
+    r = c.post("/api/people", json={"relationship": "parent"})
+    assert r.status_code == 404
+    with svc.session() as s:
+        aid = s.query(models.Account).filter_by(email="flag@example.com").one().id
+    assert _people(svc, aid) == [("self", None, None)]
+
+
+def test_change_records_offers_only_the_same_persons_records(
+        cfg, svc, monkeypatch):
+    from careagents import hub
+    aid = _make_account(svc, monkeypatch, "mv@example.com").id
+    mine = svc.add_connection(aid, "sample", "t-mv1", "Sample records")
+    mine2 = svc.add_connection(aid, "direct", "t-mv2", "Uploaded")
+    mom = svc.add_person(aid, "parent", "Mom")
+    mom_conn = svc.add_connection(aid, "sample", "t-mv3", "Sample records",
+                                  person_id=mom)
+    view = hub.build(svc.list_home(aid), 0.0)
+    assert {c["id"] for c in view["move_choices"]} == {mine, mine2}
+    by_person = view["move_choices_by_person"]
+    me = next(p["id"] for p in svc.list_home(aid)["people"]
+              if p["kind"] == "self")
+    assert {c["id"] for c in by_person[me]} == {mine, mine2}
+    assert [c["id"] for c in by_person[mom]] == [mom_conn]
+
+
+def test_settings_labels_and_offers_remove_on_a_legacy_account(
+        cfg, svc, monkeypatch):
+    _, c, aid = _signed_in(cfg, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()
+    extra = _legacy_agent(svc, aid, conn["id"], name="Coach")
+    html = c.get("/settings").get_data(as_text=True)
+    assert html.count("Reads sample records") == 2
+    assert f'class="pill danger assistant-remove" data-agent="{extra}"' in html
+    # The primary assistant is not offered for removal here.
+    assert f'assistant-remove" data-agent="{conn["agent_id"]}"' not in html
+
+
+def test_settings_offers_no_remove_to_a_single_assistant(
+        cfg, svc, monkeypatch):
+    _, c, aid = _signed_in(cfg, svc, monkeypatch)
+    c.post("/api/connections/sample")
+    html = c.get("/settings").get_data(as_text=True)
+    assert "assistant-remove" not in html.split("<script")[0]
 
 
 def test_settings_pairs_a_phone_to_your_own_assistant(

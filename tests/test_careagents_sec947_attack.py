@@ -34,6 +34,9 @@ URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
 
 def _app(cfg, svc, client=None):
     from careagents.app import create_app
+    # "Add someone you care for" is behind CARE_PEOPLE until the hub
+    # renders people (#947 QA).
+    cfg.people_enabled = True
     app = create_app(config=cfg, client=client or FakeClient(), accounts=svc)
     app.config["TESTING"] = True
     return app

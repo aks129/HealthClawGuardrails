@@ -1675,6 +1675,9 @@ def create_app(config: Config | None = None,
         owner decision D1). A relationship and an optional nickname; the
         body is read for nothing else, so there is no path here to real
         records. Their own sample tenant, their own assistant."""
+        if not cfg.people_enabled:
+            # Behind CARE_PEOPLE until the hub renders people (#947 QA).
+            return jsonify({"error": "not found"}), 404
         acct = current_account()
         body = request.get_json(silent=True) or {}
         if svc.is_paused(acct.id):

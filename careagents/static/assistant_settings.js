@@ -31,5 +31,36 @@
       }
       say(ok ? "Saved." : "That didn't save. Try again.", ok);
     });
+
+    // An extra assistant on an account from before (owner decision D5):
+    // Remove asks first, in place, then deletes only that assistant.
+    const remove = form.querySelector(".assistant-remove");
+    const confirm = form.querySelector(".assistant-remove-confirm");
+    if (!remove || !confirm) return;
+    remove.addEventListener("click", () => {
+      confirm.hidden = false;
+      remove.hidden = true;
+      confirm.querySelector(".assistant-remove-no").focus();
+    });
+    confirm.querySelector(".assistant-remove-no").addEventListener(
+      "click", () => {
+        confirm.hidden = true;
+        remove.hidden = false;
+        remove.focus();
+      });
+    confirm.querySelector(".assistant-remove-yes").addEventListener(
+      "click", async () => {
+        let ok = false;
+        try {
+          const r = await fetch(
+            `/api/agents/${encodeURIComponent(form.dataset.agent)}`,
+            { method: "DELETE" });
+          ok = r.ok;
+        } catch (e) {
+          ok = false;
+        }
+        if (ok) return location.reload();
+        say("That didn't remove it. Try again.", false);
+      });
   });
 })();
