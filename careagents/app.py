@@ -1650,7 +1650,8 @@ def create_app(config: Config | None = None,
         if "persona" not in body and "routines" not in body:
             return jsonify({"error": "nothing to change"}), 400
         persona = body.get("persona", ctx["agent"]["persona"])
-        if persona not in PERSONAS:
+        # A string first: a list or object is unhashable, not a tone.
+        if not isinstance(persona, str) or persona not in PERSONAS:
             return jsonify({"error": "unknown tone"}), 400
         if "routines" in body:
             asked = body["routines"]
@@ -2011,8 +2012,13 @@ def create_app(config: Config | None = None,
             "message": "Chat is temporarily unavailable. Try again soon.",
         }), 503
 
-    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0):
-        """Replay durable UI events. Disconnecting only stops this projection."""
+    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
+                    account_id: str | None = None):
+        """Replay durable UI events. Disconnecting only stops this projection.
+
+        The body runs after login_required has returned, so each read names
+        the account itself (spec 6.2), scoped to that one call: a block held
+        across a yield would outlive the request on this thread."""
         cursor = max(0, after)
         started = time.monotonic()
         # #575: the wait after a page with events is the base; after the k-th
@@ -2025,8 +2031,9 @@ def create_app(config: Config | None = None,
             "next_cursor": cursor}) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
             try:
-                page = hc.agent_run_events(tenant, run_id, after=cursor,
-                                           limit=100)
+                with acting_for(account_id):
+                    page = hc.agent_run_events(tenant, run_id, after=cursor,
+                                               limit=100)
             except HealthClawError:
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
@@ -2139,7 +2146,7 @@ def create_app(config: Config | None = None,
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(
-            tenant, agent["id"], run["id"], after),
+            tenant, agent["id"], run["id"], after, account_id=acct.id),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no",
@@ -2167,7 +2174,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown run"}), 404
         after = _parse_cursor(request.args.get("after") or
                               request.headers.get("Last-Event-ID"))
-        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after),
+        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after,
+                                    account_id=acct.id),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})

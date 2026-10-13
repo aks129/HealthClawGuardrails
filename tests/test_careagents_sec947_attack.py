@@ -576,11 +576,6 @@ def test_a_seed_that_fails_leaves_no_person_connection_or_assistant(
 
 # --- V2 attribution: tenant reads made while a response streams -------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Info, #947 review: the replay runs after acting_for exits, so it "
-    "sends plain `careagents`. The engine neither audits nor reads "
-    "X-Agent-Id on /command-center/api/runs/<id>/events, so no audit row "
-    "is mislabelled today; this pins the gap if that route gains audit."))
 def test_run_event_reads_while_streaming_name_the_account(
         cfg, svc, monkeypatch):
     """The run-event replay (`hc.agent_run_events`, a tenant-scoped call
