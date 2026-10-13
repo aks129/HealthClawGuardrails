@@ -128,7 +128,8 @@
     {% for a in assistants %}
     <form class="assistant-settings hub-card" data-agent="{{ a.id }}">
       <div class="hub-card-name">{{ a.name }}{% if a.person.kind == 'other' %}
-        <span class="hub-card-sub">for {{ a.person.nickname or ('your ' ~ a.person.relationship) }}</span>{% endif %}</div>
+        {# hub.for_line, the hub's rule: never "your other". #}
+        <span class="hub-card-sub">{{ a.for_line }}</span>{% endif %}</div>
       {# An account from before keeps several assistants (owner decision
          D5): each says which records it reads, so they are told apart. #}
       {% if several and a.reads %}

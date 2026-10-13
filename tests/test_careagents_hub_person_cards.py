@@ -267,6 +267,29 @@ def test_the_server_refuses_a_long_nickname_or_unknown_relationship(
                   json={"relationship": "boss"}).status_code == 400
 
 
+def test_settings_names_someone_you_care_for_as_the_hub_does(
+        cfg, svc, monkeypatch):
+    """A nickname-less "other" is "someone you care for" in Settings too,
+    never "your other" (hub.for_line, one rule for both pages)."""
+    c, _, _ = _client(cfg, svc, monkeypatch, people=True)
+    c.post("/api/connections/sample")
+    c.post("/api/people", json={"relationship": "other"})
+    c.post("/api/people", json={"relationship": "parent", "nickname": "Mom"})
+    page = " ".join(c.get("/settings").get_data(as_text=True).split())
+    assert "your other" not in page.lower()
+    assert "For someone you care for" in page
+    assert "For Mom" in page
+
+
+def test_picking_a_relationship_clears_the_choose_message():
+    """"Choose who they are to you." goes as soon as a relationship is
+    picked, not only on the next submit."""
+    body = _HOME_JS.split('const addPerson = $("add-person-form");')[1]
+    assert 'addPerson.addEventListener("change"' in body
+    change = body.split('addPerson.addEventListener("change"')[1][:300]
+    assert '$("add-person-msg").hidden = true' in change
+
+
 # --- the nickname: escaped everywhere, never to the model, logs or engine -----
 
 def test_a_nickname_is_escaped_on_every_page(cfg, svc, monkeypatch):

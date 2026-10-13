@@ -1058,6 +1058,10 @@
   // The server checks the relationship and the 24-character nickname; this
   // only stops an empty choice before the round trip.
   const addPerson = $("add-person-form");
+  // A pick answers "Choose who they are to you.", so the line goes now.
+  if (addPerson) addPerson.addEventListener("change", (e) => {
+    if (e.target.name === "relationship") $("add-person-msg").hidden = true;
+  });
   if (addPerson) addPerson.addEventListener("submit", async (e) => {
     e.preventDefault();
     const picked = addPerson.querySelector('input[name="relationship"]:checked');
