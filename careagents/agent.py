@@ -770,7 +770,30 @@ def _timeline_in_words(series: dict) -> dict:
     return out
 
 
-def _empty_summary_note(hc: HealthClawClient, tenant: str) -> str:
+def records_arriving(hc: HealthClawClient, tenant: str,
+                     connection: dict) -> bool:
+    """Whether this connection's records may still be arriving.
+
+    The stored status cannot say: the chat page settles a connection to
+    `active` as soon as anything lands, so a first answer mid-import was
+    never told the rest was on its way (QA945-F1). The engine's Fasten job
+    list can (#940). A look that fails answers True: "may still be
+    loading" is true either way, and silence read as "that is all".
+    Made-up records never arrive, so they cost no look.
+    """
+    if connection.get("kind") == "sample":
+        return False
+    try:
+        state = hc.fasten_import_state(tenant)
+    except HealthClawError:
+        return True
+    # "none" with a pending connection: connected, and the job not yet made.
+    return state == "running" or (
+        state == "none" and connection.get("status") == "pending")
+
+
+def _empty_summary_note(hc: HealthClawClient, tenant: str,
+                        arriving: bool = False) -> str:
     """Why four empty lists are empty, for the model.
 
     Empty from "nothing here" and empty from "nothing here yet" are the same
@@ -787,6 +810,14 @@ def _empty_summary_note(hc: HealthClawClient, tenant: str) -> str:
                 "are on file. Never say the person has no records or that "
                 "nothing is connected: say you could not read their records "
                 "just now and offer to try again.")
+    if total > 0 and arriving:
+        return ("No conditions, medications or allergies came back yet, but "
+                "some records are on file for this person, and more are "
+                "still loading. Say plainly that their records are still "
+                "loading and they can ask again shortly. Never say they "
+                "have no records, no conditions, medications or allergies, "
+                "or that nothing is connected. Offer to look at what has "
+                "arrived, such as lab results or vaccines.")
     if total > 0:
         return ("No conditions, medications or allergies came back, but "
                 "some records are on file for this person. Never say they "
@@ -802,7 +833,8 @@ def _empty_summary_note(hc: HealthClawClient, tenant: str) -> str:
 
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
-                  surface: str = "", origin: str = "") -> str:
+                  surface: str = "", origin: str = "",
+                  arriving: bool = False) -> str:
     on_text = surface in TEXT_SURFACES
     origin = (origin or "").rstrip("/")
     if name == "get_health_summary":
@@ -834,7 +866,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 "other lists show, say plainly which part you could not read "
                 "this time, and offer to try again.")
         elif not any(parts.values()):
-            parts["note"] = _empty_summary_note(hc, tenant)
+            parts["note"] = _empty_summary_note(hc, tenant, arriving)
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)

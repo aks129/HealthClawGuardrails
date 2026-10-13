@@ -326,7 +326,9 @@ def test_first_turn_before_records_land_says_still_loading(
     with chain.engine_app.app_context():
         R6Resource.query.filter_by(tenant_id=TENANT).delete()
         db.session.commit()
-    # A connection whose records have not been seen to land.
+    # A Fasten connection just made: pending, and the engine has no job
+    # for it yet. (Made-up records never arrive, so the sample cannot.)
+    _as_fasten(svc)
     svc.set_connection_status(TENANT, "pending")
     out, system = _first_turn(chain, monkeypatch)
     assert all(out[k] == [] for k in SUMMARY_KEYS)
@@ -470,3 +472,125 @@ def test_a_cut_allergy_list_never_says_the_records_are_silent(tail):
     assert any(i.get("truncated") for i in items)
     assert not any("don't say whether" in json.dumps(i) for i in items)
     assert all("statement" not in i for i in items)
+
+
+# --- 9. still arriving: the import, not the stored status (QA945-F1) ---------
+#
+# The chat page settles a connection to `active` once anything lands, so a
+# first answer mid-import never heard that records were still arriving.
+# The engine's Fasten job list (#940) is what knows; a look that fails says
+# "may still be loading" rather than nothing.
+
+class _Jobs:
+    def __init__(self, state):
+        self.state, self.asked = state, 0
+
+    def fasten_import_state(self, tenant):
+        self.asked += 1
+        if isinstance(self.state, Exception):
+            raise self.state
+        return self.state
+
+
+@pytest.mark.parametrize("state,status,arriving", [
+    ("running", "active", True),
+    ("running", "pending", True),
+    ("done", "pending", False),
+    ("failed", "active", False),
+    ("none", "pending", True),
+    ("none", "active", False),
+    (HealthClawError("import status failed (503)", 503), "active", True),
+])
+def test_arriving_follows_the_import_and_fails_closed(state, status,
+                                                      arriving):
+    from careagents.agent import records_arriving
+    hc = _Jobs(state)
+    assert records_arriving(hc, "t", {"kind": "fasten",
+                                      "status": status}) is arriving
+    assert hc.asked == 1
+
+
+def test_made_up_records_are_never_arriving_and_cost_no_look():
+    from careagents.agent import records_arriving
+    hc = _Jobs(HealthClawError("down", 503))
+    assert records_arriving(hc, "t", {"kind": "sample",
+                                      "status": "active"}) is False
+    assert hc.asked == 0
+
+
+def test_records_on_file_mid_import_say_more_may_still_be_loading():
+    hc = _HC(count=39)
+    out = json.loads(_execute_tool(hc, "t", "get_health_summary", {}, [],
+                                   arriving=True))
+    note = out["note"].lower()
+    assert "some records are on file" in note
+    assert "still loading" in note
+    settled = json.loads(_execute_tool(_HC(count=39), "t",
+                                       "get_health_summary", {}, []))
+    assert "still loading" not in settled["note"].lower()
+
+
+def _as_fasten(svc):  # noqa: F811
+    """The Chain's connection, as a consented Fasten connection."""
+    from careagents import tester_terms
+    from careagents.models import Connection
+    with svc.session() as s:
+        for c in s.query(Connection).filter_by(tenant_id=TENANT).all():
+            c.kind = "fasten"
+            c.consent_version = tester_terms.CONSENT_VERSION
+
+
+def _mid_import(chain, status="ingesting"):
+    """Labs have landed; conditions, medications and allergies have not,
+    and the engine's Fasten job is still writing."""
+    from models import db
+    from r6.fasten.models import FastenJob
+    from r6.models import R6Resource
+    with chain.engine_app.app_context():
+        R6Resource.query.filter(
+            R6Resource.tenant_id == TENANT,
+            R6Resource.resource_type.in_((
+                "Condition", "MedicationRequest", "MedicationStatement",
+                "AllergyIntolerance"))).delete(synchronize_session=False)
+        db.session.add(FastenJob(task_id="fa-mid-1", org_connection_id="oc-1",
+                                 tenant_id=TENANT, status=status))
+        db.session.commit()
+
+
+@pytest.mark.parametrize("job,arriving", [("ingesting", True),
+                                          ("complete", False)])
+def test_mid_import_first_answer_on_the_real_engine(
+        cfg, svc, monkeypatch, job, arriving):  # noqa: F811
+    chain = Chain(cfg, svc, monkeypatch)
+    _as_fasten(svc)
+    _mid_import(chain, status=job)
+    # Settled, as the chat page leaves it once labs have landed.
+    svc.set_connection_status(TENANT, "active")
+    out, system = _first_turn(chain, monkeypatch)
+    assert (personas.ARRIVING_STYLE in system) is arriving
+    assert ("still loading" in out["note"].lower()) is arriving
+    assert "some records are on file" in out["note"].lower()
+
+
+def test_an_unanswered_import_look_fails_closed_on_the_real_engine(
+        cfg, svc, monkeypatch):  # noqa: F811
+    chain = Chain(cfg, svc, monkeypatch)
+    _as_fasten(svc)
+    _mid_import(chain, status="complete")
+    svc.set_connection_status(TENANT, "active")
+    real_get = chain.relay.get
+    looked = []
+
+    def get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/fasten/jobs"):
+            looked.append(url)
+            r = requests.Response()
+            r.status_code = 503
+            r._content = b"{}"
+            return r
+        return real_get(url, params=params, headers=headers, timeout=timeout)
+    monkeypatch.setattr(chain.relay, "get", get)
+    out, system = _first_turn(chain, monkeypatch)
+    assert looked
+    assert personas.ARRIVING_STYLE in system
+    assert "still loading" in out["note"].lower()

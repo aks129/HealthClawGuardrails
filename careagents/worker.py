@@ -22,6 +22,7 @@ from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
                               failure_text as agent_failure_text,
+                              records_arriving,
                               tool_error_result as agent_tool_error_result,
                               _execute_tool, _trim_history)
 from careagents.config import Config
@@ -351,10 +352,12 @@ class RunWorker:
         sample = context["connection"].get("kind") == "sample"
         # The engine tags each run with the surface its message arrived on;
         # a text thread gets the texting style (careagents/personas.py).
+        # From the engine's import, not the stored status (QA945-F1).
+        arriving = records_arriving(self.hc, tenant, context["connection"])
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
             surface=str(run.get("surface") or ""), sample=sample,
-            arriving=context["connection"].get("status") == "pending")
+            arriving=arriving)
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -499,7 +502,7 @@ class RunWorker:
                 result_event = tool_results.get(call_id)
                 if result_event is None:
                     result_event = self._execute_durable_tool(
-                        run, call, emitted, labels)
+                        run, call, emitted, labels, arriving=arriving)
                     tool_results[call_id] = result_event
                 history.append({"role": "tool", "tool_call_id": call_id,
                                 "content": result_event.get("content") or "{}"})
@@ -508,7 +511,8 @@ class RunWorker:
 
     def _execute_durable_tool(self, run: dict, call: dict,
                               emitted: set[tuple[str, str]],
-                              labels: dict = TOOL_LABELS) -> dict:
+                              labels: dict = TOOL_LABELS,
+                              arriving: bool = False) -> dict:
         run_id = str(run["id"])
         tenant = str(run["tenant_id"])
         provider_call_id = str(call["id"])
@@ -547,7 +551,7 @@ class RunWorker:
                     self.hc, tenant, tool_name, arguments, side_events,
                     agent_id=str(run.get("agent_id") or ""),
                     surface=str(run.get("surface") or ""),
-                    origin=self.cfg.origin)
+                    origin=self.cfg.origin, arriving=arriving)
             except HealthClawError as exc:
                 content = agent_tool_error_result(exc)
             envelope = {"content": content, "ui_events": side_events}

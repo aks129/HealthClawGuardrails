@@ -15,30 +15,29 @@ then took the "records are on file" branch, which says nothing about
 loading. The answer was honest ("came back empty ... doesn't mean none
 exist") but never said the records were still arriving.
 
-Strict xfail: it goes red when the gap is closed, by either route (key
-`arriving` on the connection's age rather than its stored status, or say
-"may still be loading" in the records-on-file note). Remove the marker then.
+Closed by keying `arriving` on the engine's Fasten import state (#940)
+rather than the stored status, failing closed when the engine cannot say;
+the records-on-file note then says more may still be loading. The strict
+xfail was removed with the fix. The scenario is a Fasten import, so the
+Chain's connection is made a consented Fasten connection with a job still
+ingesting.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from careagents import personas
 from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, cfg, svc)
-from tests.test_careagents_first_answer import _first_turn
+from tests.test_careagents_first_answer import _as_fasten, _first_turn
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#945 QA: the chat page settles pending -> active once labs land, so "
-    "a mid-import first answer gets neither ARRIVING_STYLE nor a loading "
-    "note"))
 def test_labs_landed_first_the_first_answer_still_says_records_are_arriving(
         cfg, svc, monkeypatch):  # noqa: F811
     chain = Chain(cfg, svc, monkeypatch)
+    _as_fasten(svc)
     from models import db
+    from r6.fasten.models import FastenJob
     from r6.models import R6Resource
     with chain.engine_app.app_context():
         # Labs have landed; the problem list, medications and allergies
@@ -48,6 +47,9 @@ def test_labs_landed_first_the_first_answer_still_says_records_are_arriving(
             R6Resource.resource_type.in_((
                 "Condition", "MedicationRequest", "MedicationStatement",
                 "AllergyIntolerance"))).delete(synchronize_session=False)
+        # The engine's job is still writing them.
+        db.session.add(FastenJob(task_id="qa945-1", org_connection_id="oc-1",
+                                 tenant_id=TENANT, status="ingesting"))
         db.session.commit()
         assert R6Resource.query.filter_by(
             tenant_id=TENANT, resource_type="Observation").count() > 0
