@@ -168,6 +168,28 @@ def test_the_chat_page_shows_no_count_until_the_import_is_done(cfg, svc,
     assert _stored(svc, conn) == ("active", 150)
 
 
+def test_the_chat_page_settles_nothing_when_it_cannot_ask(cfg, svc,
+                                                         monkeypatch):
+    """MUTATION: settle on a failed import look -> a count stored while the
+    import may still be running."""
+    from careagents.healthclaw import HealthClawError
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    own = c.post("/api/agents", json={
+        "name": "Rowan", "persona": "calm",
+        "connection_id": conn}).get_json()["id"]
+    fake.search = lambda t, rt, params=None: {"total": {
+        "Condition": 2, "Observation": 5}.get(rt, 0)}
+
+    def down(tenant):
+        raise HealthClawError("down")
+    fake.fasten_import_running = down
+    assert c.get(f"/chat?agent={own}").status_code == 200
+    assert _stored(svc, conn) == ("pending", None)
+
+
 def test_a_refresh_reports_no_new_records_until_the_import_is_done(
         cfg, svc, monkeypatch):
     """The refresh watcher stops at the first "N new records", so a delta
