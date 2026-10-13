@@ -561,6 +561,83 @@ def _latest_per_analyte(consumer: dict, bundle: dict) -> list[dict] | None:
     return out
 
 
+#: The two parts of a blood pressure, by LOINC code. A reading made of
+#: parts is given a number only when it is exactly these two.
+_SYSTOLIC, _DIASTOLIC = "8480-6", "8462-4"
+
+
+def _plain_value(resource: dict) -> tuple[object, str]:
+    """(value, unit) for a reading the range check did not score, or
+    (None, "") when there is no number we can stand behind: no number, or a
+    unit we do not recognise (#884 QA F1). A blood pressure is its two parts,
+    as "138/88"."""
+    key = _ANALYTE_KEY.get(_obs_loinc(resource) or "")
+    vq = resource.get("valueQuantity")
+    if isinstance(vq, dict):
+        value = vq.get("value")
+        unit = labs_timeline.coded_unit(vq, key)
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and unit):
+            # A number with no unit at all, for a test whose usual unit we
+            # do not know, is a number the reader would put a unit beside.
+            return value, unit
+        return None, ""
+    parts = {}
+    for c in resource.get("component") or []:
+        if not isinstance(c, dict):
+            return None, ""
+        code = _obs_loinc(c)
+        cvq = c.get("valueQuantity") or {}
+        value = cvq.get("value") if isinstance(cvq, dict) else None
+        unit = (labs_timeline.coded_unit(cvq, None)
+                if isinstance(cvq, dict) else None)
+        if (code in parts or not isinstance(value, (int, float))
+                or isinstance(value, bool) or not unit):
+            return None, ""
+        parts[code] = (value, unit)
+    if set(parts) != {_SYSTOLIC, _DIASTOLIC} or \
+            parts[_SYSTOLIC][1] != parts[_DIASTOLIC][1]:
+        return None, ""
+    return (f"{parts[_SYSTOLIC][0]:g}/{parts[_DIASTOLIC][0]:g}",
+            parts[_SYSTOLIC][1])
+
+
+def _not_evaluated(consumer: dict, bundle: dict) -> list[dict] | None:
+    """Each reading the range check did not score: the engine's name for it,
+    its value and date, and whether the record itself carried a reference
+    range. None when the engine's answer cannot be read that way.
+
+    "Could not be interpreted" is what reached the person for a blood
+    pressure of 138/88 and a glucose of 180 (#937): true of the check, and no
+    use to them. The reading itself is. The pairing is the engine's own
+    order, checked code by code against `unevaluated_codes`; any mismatch
+    gives None and the engine's note stands alone. The label is the
+    engine's (r6/terminology.py by code), never the reading's own text.
+    """
+    names = consumer.get("unevaluated_analytes")
+    codes = consumer.get("unevaluated_codes")
+    if not isinstance(names, list) or not isinstance(codes, list) \
+            or len(names) != len(codes) or not names:
+        return None
+    unscored = [(e or {}).get("resource") or {}
+                for e in (bundle.get("entry") or [])]
+    unscored = [r for r in unscored if r.get("resourceType") == "Observation"
+                and not _obs_flag(r)]
+    if len(unscored) != len(names) or any(
+            not isinstance(name, str) or not code or _obs_loinc(r) != code
+            for name, code, r in zip(names, codes, unscored)):
+        return None
+    out = []
+    for name, r in zip(names, unscored):
+        value, unit = _plain_value(r)
+        rng = r.get("referenceRange")
+        out.append({"analyte": name, "date": _obs_date(r), "value": value,
+                    "unit": unit,
+                    "reference_range_in_records": bool(
+                        isinstance(rng, list) and rng)})
+    return out
+
+
 #: For a trend sentence from the engine's KDIGO creatinine check (#867),
 #: wherever the model meets one: get_labs' `trends` and the brief's
 #: lab-trends section. The sentence already says what to do and stops short
@@ -647,7 +724,37 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 "earlier readings are counted, not listed. Describe the "
                 "latest as the person's current result, and an earlier high "
                 "or low only as history.")
-        if consumer.get("unevaluated"):
+        not_evaluated = (_not_evaluated(consumer, labs.get("bundle") or {})
+                         if consumer.get("unevaluated") else None)
+        if not_evaluated:
+            # The reading, plainly: its value, its date, and that there is
+            # nothing in the records to compare it to (#937). Never a range or
+            # a verdict of the model's own; "never inferred" holds here too.
+            out["not_evaluated"] = not_evaluated
+            # The engine's note gives the check's reason, and for a blood
+            # pressure that reason is "carried no number" beside a reading
+            # of 138/88: the readings above say it better.
+            out["consumer_summary"] = {
+                k: v for k, v in out["consumer_summary"].items()
+                if k != "unevaluated_note"}
+            out["note"] =((out["note"] + " ") if out.get("note") else "") + (
+                "This lab answer is INCOMPLETE: "
+                f"{len(not_evaluated)} reading(s) in not_evaluated were not "
+                "scored against a reference range. Zero flagged results here "
+                "means nothing was SCORED as abnormal, not that nothing is "
+                "abnormal. Report the "
+                + ("latest readings" if latest is not None else "lines")
+                + " you were given AND, for each not_evaluated reading, give "
+                "its value and date in plain words and say there is no "
+                "reference range in the records to compare it to (where "
+                "reference_range_in_records is true, say instead that the "
+                "check could not compare it to the range given). A reading "
+                "with value null is on file without a number you can give: "
+                "say so. Do not say it 'could not be interpreted'. Do not "
+                "call it normal, fine, high, low, or within range, and do not "
+                "supply a range or target of your own: the person's clinician "
+                "can say what it means for them.")
+        elif consumer.get("unevaluated"):
             # The marker arriving is necessary and not sufficient. Care gaps
             # learned that a model handed lines plus an unevaluated note leads
             # with the lines (#417); handed "high: 0, critical: 0" plus a note,
@@ -693,7 +800,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "link to the chart is included below your answer. A "
                          "series with trend_plottable false has a single "
                          "reading — say so, and never describe it as rising "
-                         "or falling. A series with readings_unit_unconfirmed "
+                         "or falling. A plottable series with no direction "
+                         "has readings whose units differ or could not be "
+                         "confirmed: give no numbers and no direction for "
+                         "it. A series with readings_unit_unconfirmed "
                          "has that many readings whose unit could not be "
                          "confirmed: say they are on file but give no "
                          "numbers for them."
@@ -703,25 +813,29 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "had this test — say so, and do not report it as "
                          "absent."),
             })
-        # The model gets SHAPE, not the readings: how many series, how many
-        # points, whether a trend is even plottable. The chart carries the
-        # numbers. Handing them over too would invite the model to restate
-        # every value and, worse, to narrate a direction from a single point.
+        # The chart carries every reading; the model gets the same first,
+        # latest and direction a text gets, worked out here. Given only the
+        # chart's shape, it answered "How has my A1c changed?" with "you can
+        # see the direction in the chart", every time (#937). Still not every
+        # value, and still no direction from a single reading or across units
+        # that differ or could not be confirmed (_timeline_in_words).
         return json.dumps({
             "chart_shown": any(s["readings"] for s in series),
-            "series": [{"name": s["name"], "readings": len(s["readings"]),
-                        "trend_plottable": s["trend_plottable"],
-                        **({"readings_unit_unconfirmed": s["withheld"]}
-                           if s.get("withheld") else {})}
-                       for s in series],
-            "note": ("A chart is now visible to the person. Describe what it "
-                     "shows in one or two sentences and invite a question; do "
-                     "not list every value. A series with trend_plottable "
+            "series": [_timeline_in_words(s) for s in series],
+            "note": ("A chart is now visible to the person. Answer the "
+                     "question in plain words in one or two sentences: for "
+                     "each series with a direction, say it went from its "
+                     "first reading to its latest, with dates, and whether "
+                     "that is higher, lower or unchanged; then invite a "
+                     "question. Do not list every value, and do not call the "
+                     "change good or bad. A series with trend_plottable "
                      "false has a single reading — say so, and never describe "
-                     "it as rising or falling. A series with "
-                     "readings_unit_unconfirmed has readings on file whose "
-                     "unit could not be confirmed, so they are not charted: "
-                     "say they exist, give no numbers."
+                     "it as rising or falling. A plottable series with no "
+                     "direction has readings whose units differ or could not "
+                     "be confirmed: give no numbers and no direction for it. "
+                     "A series with readings_unit_unconfirmed has readings on "
+                     "file whose unit could not be confirmed, so they are not "
+                     "charted: say they exist, give no numbers."
                      if series else
                      "No lab series matched in the CONNECTED records. That is "
                      "not the same as the person never having had this test — "
