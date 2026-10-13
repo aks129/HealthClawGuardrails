@@ -1155,3 +1155,5 @@ textarea:focus-visible {
 .inline-msg.is-next { color: var(--ink); background: var(--accent-tint);
   border-radius: var(--radius-sm); padding: 10px 12px; }
 .inline-msg.is-next a { color: var(--accent-ink); font-weight: 600; }
+/* Empty for a moment while announce() reveals it: no tinted bar. */
+.inline-msg.is-next:empty { background: none; padding: 0; }
