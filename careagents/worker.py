@@ -8,7 +8,6 @@ tool results let another worker continue without repeating completed tools.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -23,6 +22,7 @@ from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
                               failure_text as agent_failure_text,
+                              tool_error_result as agent_tool_error_result,
                               _execute_tool, _trim_history)
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
@@ -353,7 +353,8 @@ class RunWorker:
         # a text thread gets the texting style (careagents/personas.py).
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
-            surface=str(run.get("surface") or ""), sample=sample)
+            surface=str(run.get("surface") or ""), sample=sample,
+            arriving=context["connection"].get("status") == "pending")
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -548,7 +549,7 @@ class RunWorker:
                     surface=str(run.get("surface") or ""),
                     origin=self.cfg.origin)
             except HealthClawError as exc:
-                content = json.dumps({"error": str(exc)})
+                content = agent_tool_error_result(exc)
             envelope = {"content": content, "ui_events": side_events}
             outcome_ref = next((
                 str(event.get("action_id"))

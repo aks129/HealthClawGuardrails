@@ -1899,8 +1899,8 @@ def test_a_truncated_list_says_so_rather_than_looking_complete():
 
     marker = [i for i in items if i.get("truncated")]
     assert marker, "a truncated list must carry a truncation marker"
-    assert marker[0]["total"] == 30
-    assert marker[0]["shown"] == 12
+    # No counts to quote back at the patient (#939).
+    assert "total" not in marker[0] and "shown" not in marker[0]
     # Must not be mistakable for a record.
     assert "name" not in marker[0] and "type" not in marker[0]
     assert "complete" in marker[0]["note"].lower()
@@ -1927,8 +1927,10 @@ def test_truncation_total_ignores_operation_outcomes():
                              "code": {"text": f"C{i}"}}} for i in range(13)]
     entries.append({"resource": {"resourceType": "OperationOutcome"}})
     items = _summarize_bundle({"entry": entries})
-    marker = [i for i in items if i.get("truncated")][0]
-    assert marker["total"] == 13
+    assert [i for i in items if i.get("truncated")]
+    # Twelve records and an outcome fit: no records are promised.
+    items = _summarize_bundle({"entry": entries[1:]})
+    assert not [i for i in items if i.get("truncated")]
 
 
 def test_safety_core_forbids_presenting_a_truncated_list_as_complete():

@@ -69,6 +69,23 @@ def failure_text(exc: Exception) -> str:
     return GENERIC_FAILURE_TEXT
 
 
+#: For the model, when a read failed: what it means and what to say. The
+#: exception's own text never goes with it; "search Condition failed (503)"
+#: told the model nothing it could say, and a model with nothing else to go
+#: on told the person no records were connected (2026-10-12).
+READ_FAILED_NOTE = (
+    "These records could not be read just now, on our side. They are not "
+    "absent: never say the person has no records, that nothing is "
+    "connected, or that they have none of this kind. Say plainly that you "
+    "could not read their records this time and offer to try again.")
+
+
+def tool_error_result(exc: Exception) -> str:
+    """The tool result for a tool whose HealthClaw read failed."""
+    return json.dumps({"error": "records_unavailable",
+                       "note": READ_FAILED_NOTE})
+
+
 def _trim_history(history: list) -> None:
     """Drop the oldest turns in place, cutting only at a safe boundary.
 
@@ -238,6 +255,35 @@ def _medication_resolver(hc: HealthClawClient, tenant: str):
     return resolve
 
 
+ALLERGY_STATUS_STATEMENT = (
+    "Your records don't say whether you have allergies.")
+
+#: Codes an AllergyIntolerance carries when it records that allergy
+#: information is missing, not an allergy. Keyed by system and code, never
+#: by label. "No known allergy" codes are deliberately absent: what to say
+#: for one is a separate question, and it is never "no known allergies"
+#: inferred here.
+_ALLERGY_STATUS_CODES = frozenset({
+    ("http://snomed.info/sct", "1631000175102"),  # Patient not asked
+    *(("http://terminology.hl7.org/CodeSystem/v3-NullFlavor", c)
+      for c in ("NI", "UNK", "ASKU", "NAV", "NASK")),
+    *(("http://terminology.hl7.org/CodeSystem/data-absent-reason", c)
+      for c in ("unknown", "asked-unknown", "temp-unknown", "not-asked",
+                "asked-declined")),
+})
+
+
+def _is_allergy_status(res: dict) -> bool:
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    # Strings only: a list in `code` is unhashable, and ingest stores
+    # whatever arrived (#885).
+    return any(isinstance(c, dict) and isinstance(c.get("system"), str)
+               and isinstance(c.get("code"), str)
+               and (c["system"], c["code"]) in _ALLERGY_STATUS_CODES
+               for c in (codings if isinstance(codings, list) else ()))
+
+
 def _summarize_bundle(bundle: dict, limit: int = 12,
                       resolve_ref=None) -> list[dict]:
     """Compact, model-friendly view of a searchset bundle (already redacted).
@@ -265,6 +311,21 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         if rt == "OperationOutcome":
             continue
         item = {"type": rt}
+        if rt == "AllergyIntolerance" and _is_allergy_status(res):
+            # Not an allergy: a note that none were recorded. Its label
+            # ("Patient not asked", the terminology service's for SNOMED
+            # 1631000175102) reached a person verbatim as if it were one.
+            # Never read as "no known allergies" either: that is only ever
+            # the person's own attestation.
+            item.update({
+                "not_an_allergy": True,
+                "statement": ALLERGY_STATUS_STATEMENT,
+                "note": ("This record is not an allergy. Tell the person, in "
+                         "these plain words, that their records don't say "
+                         "whether they have allergies. Do not quote the "
+                         "record, and never say they have no allergies.")})
+            out.append(item)
+            continue
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
             c.get("display", "") for c in (code.get("coding") or [])[:1])
@@ -355,18 +416,29 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             item["date"] = date
         out.append(item)
 
+    # The bundle's total, when the engine gives one: the entries are one page
+    # (50 by default), so counting them calls a longer list complete.
+    stated = bundle.get("total")
+    if isinstance(stated, int) and not isinstance(stated, bool):
+        total = max(total, stated)
     if total > len(out):
         # Deliberately shaped so it cannot be mistaken for a record: no
         # "type", no "name". The instruction is carried in the payload rather
         # than left to the system prompt alone, because this is the one place
         # the model can tell complete from partial.
+        #
+        # No counts in it: handed "12 of 19", the model told a patient "I
+        # could only see part of the records (12 of 19)", which reads as
+        # being blocked from their own records (#939).
         out.append({
             "truncated": True,
-            "shown": len(out),
-            "total": total,
-            "note": (f"Only {len(out)} of {total} records are shown. Do not "
-                     f"describe this list as complete or as all the person "
-                     f"has; say more exist and offer to narrow the search."),
+            "note": ("This is not the whole list: more records of this kind "
+                     "are on file. Do not describe it as complete, do not "
+                     "count it, and do not say how many you were shown or "
+                     "that you could only see part. Answer from what is "
+                     "here, then say in plain words that there are more and "
+                     "that they can ask you to narrow it down, for example "
+                     "to one test or one condition."),
         })
     return out
 
@@ -680,6 +752,36 @@ def _timeline_in_words(series: dict) -> dict:
     return out
 
 
+def _empty_summary_note(hc: HealthClawClient, tenant: str) -> str:
+    """Why four empty lists are empty, for the model.
+
+    Empty from "nothing here" and empty from "nothing here yet" are the same
+    four lists, and a model handed them told a person with records that none
+    were connected. The count is the one the hub uses (totals only, no
+    resources) and is taken only when every list came back empty. A count
+    that fails says nothing either way, as on the chat page
+    (careagents/intake_state.py): unknown is never zero.
+    """
+    try:
+        total = hc.record_count(tenant)
+    except HealthClawError:
+        return ("Nothing came back, and we could not check whether records "
+                "are on file. Never say the person has no records or that "
+                "nothing is connected: say you could not read their records "
+                "just now and offer to try again.")
+    if total > 0:
+        return ("No conditions, medications or allergies came back, but "
+                "records are on file for this person, such as lab results. "
+                "Never say they have no records or that nothing is "
+                "connected. Say these lists are empty in what you can read, "
+                "and offer to look at their lab results.")
+    return ("No records have arrived here yet. Say plainly that their records "
+            "are not here yet: if they connected them recently, they are "
+            "still loading, which can take up to 45 minutes, and they can "
+            "ask again shortly. Never say they have no conditions, "
+            "medications or allergies.")
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
                   surface: str = "", origin: str = "") -> str:
@@ -688,6 +790,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
+        failed = False
         # Statements get their own key and are never folded into
         # "medications": a merged list needs a dedup rule that code cannot
         # supply (#377, docs/2026-08-05-medicationstatement-support-decision.md).
@@ -695,9 +798,25 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                         ("MedicationRequest", "medications"),
                         ("MedicationStatement", "medication_statements"),
                         ("AllergyIntolerance", "allergies")):
-            parts[key] = _summarize_bundle(
-                hc.search(tenant, rt),
-                resolve_ref=med_resolver if rt in _MEDICATION_TYPES else None)
+            # One failed search used to raise out of the whole tool, and the
+            # three that worked went with it.
+            try:
+                parts[key] = _summarize_bundle(
+                    hc.search(tenant, rt),
+                    resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
+                                 else None))
+            except HealthClawError:
+                parts[key] = {"could_not_read": True}
+                failed = True
+        if failed:
+            parts["note"] = (
+                "A list marked could_not_read could not be read just now, on "
+                "our side. It is not absent: never say the person has none "
+                "of that kind, or that nothing is connected. Give what the "
+                "other lists show, say plainly which part you could not read "
+                "this time, and offer to try again.")
+        elif not any(parts.values()):
+            parts["note"] = _empty_summary_note(hc, tenant)
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
@@ -988,7 +1107,7 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
                                        call.arguments, side_events,
                                        agent_id=agent_id)
             except HealthClawError as exc:
-                result = json.dumps({"error": str(exc)})
+                result = tool_error_result(exc)
             history.append({"role": "tool", "tool_call_id": call.id,
                             "content": result})
             for ev in side_events:
