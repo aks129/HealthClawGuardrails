@@ -532,7 +532,9 @@ def test_a_real_tile_in_a_link_session_offers_the_code_sign_in():
     # Before the consent card: no terms to read only to be refused.
     assert tile.index("linkSession") < tile.index("showConsentCard(")
     # #940's code-is-coming copy, and a same-tab link to the code sign-in.
-    assert tile.count("CODE_FIRST, CODE_SIGN_IN") == 2
+    assert tile.count("sayNext(tile)") == 2
+    assert "CODE_FIRST, CODE_SIGN_IN" in _HOME_JS[
+        _HOME_JS.index("function sayNext("):]
     consts = _HOME_JS[_HOME_JS.index("const CODE_FIRST"):]
     consts = consts[:consts.index("};")]
     assert "We'll email you a code to sign in." in consts
@@ -561,3 +563,69 @@ def test_menus_and_the_drawer_carry_a_chevron():
                 ".made-up-sources[open] > summary::after"):
         assert sel in block, sel
     assert "::-webkit-details-marker" in block
+
+
+# --- patient tester recheck on #944 ------------------------------------------
+
+_CSS = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+        / "static" / "careagents.css").read_text()
+
+
+def test_the_code_sign_in_line_is_a_next_step_not_an_error():
+    """"Sign in again" is the normal way forward, so it reads in the
+    next-step teal, and any other message under a tile drops that look."""
+    tile = _HOME_JS[_HOME_JS.index(
+        'document.querySelectorAll(".connector-tile")'):]
+    tile = tile[:tile.index("function showConsentCard")]
+    assert tile.count("sayNext(tile)") == 2
+    assert 'classList.remove("is-next")' in tile
+    helper = _HOME_JS[_HOME_JS.index("function sayNext("):]
+    helper = helper[:helper.index("\n  }\n")]
+    assert 'classList.add("is-next")' in helper
+    rule = _CSS[_CSS.index(".inline-msg.is-next {"):]
+    rule = rule[:rule.index("}")]
+    assert "critical" not in rule and "--accent" in rule
+
+
+def _ancestors_of(page, target_id):
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        stack, found = [], None
+
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            if a.get("id") == target_id and self.found is None:
+                self.found = [x for x in self.stack]
+            if tag not in ("input", "br", "img", "meta", "link"):
+                self.stack.append(a.get("id") or tag)
+
+        def handle_endtag(self, tag):
+            if self.stack:
+                self.stack.pop()
+    p = P()
+    p.stack, p.found = [], None
+    p.feed(page)
+    return p.found
+
+
+def test_the_starters_sit_above_the_composer_not_in_the_log(app, svc,
+                                                            monkeypatch):
+    """At 375x640 the starters were under the message box (patient tester
+    recheck on #944): they now sit just above it, outside the scrolling
+    log, so they show without scrolling."""
+    c, agent, _ = _chat(app, svc, monkeypatch, {
+        "Condition": 3, "MedicationRequest": 2, "Observation": 12})
+    page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
+    assert "log" not in _ancestors_of(page, "starters")
+    assert page.index('id="log"') < page.index('id="starters"') \
+        < page.index('id="composer"')
+    assert _starters(page) == [INTAKE, *TUNED]
+
+
+def test_an_error_brings_the_starters_back_where_they_live():
+    js = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+          / "static" / "chat.js").read_text()
+    show = js[js.index("function showSuggestions()"):]
+    show = show[:show.index("\n  }\n")]
+    assert "n !== starters" in show

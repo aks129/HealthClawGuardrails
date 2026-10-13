@@ -63,6 +63,12 @@
   const CODE_SIGN_IN = { href: "/auth?connect=1",
                          text: "Sign in again to connect your records",
                          sameTab: true };
+  // The normal way forward, so it reads in the next-step teal, not as an
+  // error (patient tester recheck on #944).
+  function sayNext(tile) {
+    $("connect-msg").classList.add("is-next");
+    say(tile, $("connect-msg"), CODE_FIRST, CODE_SIGN_IN);
+  }
 
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
@@ -73,6 +79,9 @@
       const opensPage = id === "fasten";
       let page = null;
       $("connect-msg").hidden = true;
+      // Only the code sign-in reads as a next step; anything else said
+      // under a tile keeps the message colour.
+      $("connect-msg").classList.remove("is-next");
       // An upload row still waiting for its file is where this tap belongs
       // (QA #944 F1, as #860's startFileUpload): its consent was given when
       // it was made, and its picker opens inside this tap.
@@ -87,7 +96,7 @@
       // Opened from the confirm link: real records wait on a code sign-in
       // (#920 F1). Say so on the tap, before any terms, with the way there.
       if (tile.dataset.consent && linkSession) {
-        return say(tile, $("connect-msg"), CODE_FIRST, CODE_SIGN_IN);
+        return sayNext(tile);
       }
       if (tile.dataset.providers) {
         const provider = await pickProvider(JSON.parse(tile.dataset.providers));
@@ -114,7 +123,7 @@
       if (body.consent && termsChanged(res)) { location.reload(); return; }
       if (!res.ok && res.d.error === "sign_in_again") {
         // A page from before the session changed: the same way forward.
-        return say(tile, $("connect-msg"), CODE_FIRST, CODE_SIGN_IN);
+        return sayNext(tile);
       }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
@@ -699,8 +708,10 @@
 
       btn.disabled = true;
       announce(msg, "Deleting…");
-      const r = await fetch(`/api/connections/${btn.dataset.conn}`,
-                            { method: "DELETE" });
+      // The typed word goes with the request: the server checks it too.
+      const r = await fetch(`/api/connections/${btn.dataset.conn}`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE" }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         btn.disabled = false;

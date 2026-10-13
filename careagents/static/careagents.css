@@ -434,7 +434,11 @@ h1 em { font-style: normal; color: var(--accent-ink); }
 .card.pdf .btn-primary { background: var(--surface); color: var(--accent-ink);
   border-color: var(--field-line); }
 
-.starters { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+/* Above the message box, outside the log: never squeezed by it, and
+   compact so three fit on a 640px-tall phone (patient tester on #944). */
+.starters { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px;
+  flex: none; }
+.starters .starter { min-height: 44px; padding: 8px 12px; font-size: 15px; }
 .starter {
   font-family: inherit; font-size: 16px; font-weight: 400; min-height: 44px;
   color: var(--ink); background: var(--surface); text-align: left;
@@ -1146,3 +1150,8 @@ textarea:focus-visible {
   transform: translateY(2px) rotate(-135deg); }
 .card-menu > summary:hover, .made-up-sources > summary:hover {
   border-color: var(--accent); color: var(--accent-ink); }
+/* The code sign-in under a tile: the next step, in the accent tint, not
+   the error colour (patient tester recheck on #944). */
+.inline-msg.is-next { color: var(--ink); background: var(--accent-tint);
+  border-radius: var(--radius-sm); padding: 10px 12px; }
+.inline-msg.is-next a { color: var(--accent-ink); font-weight: 600; }

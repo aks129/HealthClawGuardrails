@@ -1353,6 +1353,13 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        # The typed DELETE, checked here as the account delete checks it
+        # (security review of #944): the modal alone is a client's promise.
+        # After the ownership check, so a stranger's id still reads 404.
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirm") != "DELETE":
+            return jsonify({"error": "confirm_required",
+                            "message": "Type DELETE to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
