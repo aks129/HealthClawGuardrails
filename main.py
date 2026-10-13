@@ -22,7 +22,8 @@ from flask import Flask, g, request as flask_request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
 from r6.database_migrations import register_model_metadata, upgrade_database
-from r6.runtime_config import validate_runtime_environment
+from r6.runtime_config import (validate_runtime_environment,
+                               warn_on_padded_secrets)
 from r6.safe_read import StrictJSONProvider
 
 
@@ -397,6 +398,7 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
     supplied_settings = dict(settings or {})
     app_env = validate_runtime_environment()
     _configure_logging(app_env)
+    warn_on_padded_secrets()
 
     flask_app = Flask(
         __name__,

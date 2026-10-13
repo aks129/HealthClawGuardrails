@@ -26,6 +26,7 @@ from flask import Blueprint, jsonify, request
 
 from models import db
 from r6 import constant_time
+from r6.runtime_config import internal_mint_secret
 from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
                        require_grant, require_open_tenant, tenant_from_request)
 from r6.actions import errors
@@ -896,7 +897,7 @@ def issue_action_approval_token(action_id):
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
 
-    expected = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '')
+    expected = internal_mint_secret()
     provided = request.headers.get('X-Internal-Secret', '')
     if not expected or not constant_time.equal(provided, expected):
         return _error(403, 'Forbidden')
