@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from models import db
 from r6 import constant_time
+from r6.runtime_config import internal_mint_secret
 from r6.agent_runs.models import AgentRun, AgentRunEvent, AgentToolCall
 from r6.agent_runs.service import (
     append_event,
@@ -65,7 +66,7 @@ def _tenant_authorized(tenant_id: str) -> bool:
 
 
 def _internal_authorized() -> bool:
-    expected = os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "")
+    expected = internal_mint_secret()
     provided = request.headers.get("X-Internal-Secret", "")
     return bool(expected and constant_time.equal(provided, expected))
 

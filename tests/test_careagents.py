@@ -2296,6 +2296,20 @@ class FakeClient:
     def tenant_has_records(self, tenant):
         return True
 
+    # Settable: whether a Fasten export is still being written (QA940-F1).
+    importing = False
+
+    def fasten_import_running(self, tenant):
+        return self.importing
+
+    # Settable: the newest Fasten job failed (QA940 round 3).
+    import_failed = False
+
+    def fasten_import_state(self, tenant):
+        if self.importing:
+            return "running"
+        return "failed" if self.import_failed else "none"
+
     # Settable so a test can simulate a refresh pulling additional records.
     counted = 100
 
@@ -3757,7 +3771,8 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     created = c.post("/api/connections/sample").get_json()
     conn = created["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 200
     d = r.get_json()
     assert d["deleted"] is True and d["rows_deleted"] == 42
@@ -3857,7 +3872,8 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 502
     body = r.get_json()
     # #586: the purge raises on any non-200 and on a lost answer, so the
@@ -5214,16 +5230,16 @@ def test_connect_and_reauth_links_never_use_the_internal_base():
     from careagents.healthclaw import HealthClawClient
     client = HealthClawClient("https://internal.up.railway.app/", "m",
                               public_base="https://app.healthclaw.io/")
-    assert client.fasten_connect_url("t-1") == (
-        "https://app.healthclaw.io/connect/t-1")
+    assert client.fasten_connect_url("t-1").startswith(
+        "https://app.healthclaw.io/connect/t-1?src=careagents&sig=")
     assert client.wearables_connect_url("t-1", "oura").startswith(
         "https://app.healthclaw.io/wearables/oauth/start?")
     # Server-to-server stays internal.
     assert client.fhir == "https://internal.up.railway.app/r6/fhir"
     # Without a public base the client behaves as before (tests, dev).
     plain = HealthClawClient("https://internal.up.railway.app", "m")
-    assert plain.fasten_connect_url("t-1") == (
-        "https://internal.up.railway.app/connect/t-1")
+    assert plain.fasten_connect_url("t-1").startswith(
+        "https://internal.up.railway.app/connect/t-1?src=careagents&sig=")
 
 
 def test_the_app_builds_its_client_with_the_public_base(svc):
@@ -5757,12 +5773,14 @@ def test_the_timeline_endpoint_degrades_rather_than_500ing(
     assert c.get(f"/api/labs/timeline?agent={agent_id}").status_code == 502
 
 
-def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
+def test_show_lab_timeline_emits_a_card_and_gives_first_latest_direction(
         cfg, svc, monkeypatch):
-    """The chart carries the values. Handing them to the model too invites it
-    to restate every number and to narrate a direction from a single point.
+    """The chart carries every value. The model gets the first and latest
+    reading and the direction, worked out here: given only the chart's
+    shape, it would not say how a result changed (#937). Not every value,
+    and never a direction from a single point.
 
-    MUTATION: return the readings in the tool result -> red.
+    MUTATION: return every reading in the tool result -> red.
     """
     import json as _json
 
@@ -5778,9 +5796,13 @@ def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
     assert events == [{"type": "card", "kind": "lab-timeline",
                        "topic": "cholesterol"}]
     assert out["chart_shown"] is True
-    assert out["series"] == [{"name": "Total cholesterol", "readings": 2,
-                              "trend_plottable": True}]
-    assert "244" not in _json.dumps(out), "the tool handed the model raw values"
+    assert out["series"] == [{
+        "name": "Total cholesterol", "readings": 2, "trend_plottable": True,
+        "first": {"date": "2025-01-01", "value": 210, "unit": "mg/dL"},
+        "latest": {"date": "2026-03-01", "value": 244, "unit": "mg/dL"},
+        "direction": "higher"}]
+    assert "readings\": [" not in _json.dumps(out), \
+        "the tool handed the model every reading"
 
 
 def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
@@ -6087,7 +6109,8 @@ def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
         {"resourceType": "Bundle", "type": "collection", "entry": []}),
         content_type="application/fhir+json")
     assert r.status_code == 200
-    assert c.delete(f"/api/connections/{fasten['id']}").status_code == 200
+    assert c.delete(f"/api/connections/{fasten['id']}",
+                 json={"confirm": "DELETE"}).status_code == 200
 
 
 def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,

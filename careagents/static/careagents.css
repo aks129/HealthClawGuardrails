@@ -434,7 +434,11 @@ h1 em { font-style: normal; color: var(--accent-ink); }
 .card.pdf .btn-primary { background: var(--surface); color: var(--accent-ink);
   border-color: var(--field-line); }
 
-.starters { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+/* Above the message box, outside the log: never squeezed by it, and
+   compact so three fit on a 640px-tall phone (patient tester on #944). */
+.starters { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px;
+  flex: none; }
+.starters .starter { min-height: 44px; padding: 8px 12px; font-size: 15px; }
 .starter {
   font-family: inherit; font-size: 16px; font-weight: 400; min-height: 44px;
   color: var(--ink); background: var(--surface); text-align: left;
@@ -964,6 +968,12 @@ textarea:focus-visible {
   align-items: center; min-height: 52px; color: var(--on-accent);
   background: var(--accent); border-color: var(--accent); font-weight: 600; }
 #explore-sample.connector-tile:hover { background: var(--accent-hover); }
+/* The primary next step on the hub is a button, not a list row: the
+   `.connector-tile` reset above must not flatten it (#934 QA M1). */
+.connector-tile.btn-primary { flex-direction: row; justify-content: center;
+  align-items: center; min-height: 52px; color: var(--on-accent);
+  background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.connector-tile.btn-primary:hover { background: var(--accent-hover); }
 .menu-closed-line { margin: 12px 0 0; color: var(--ink-soft); }
 .past summary { cursor: pointer; min-height: 44px; display: flex;
   align-items: center; font-weight: 600; }
@@ -1043,3 +1053,99 @@ textarea:focus-visible {
 /* /safety (#884 G7): the way back and the technical report on one line. */
 .safety-links { display: flex; justify-content: space-between;
   align-items: baseline; gap: 16px; margin-top: 20px; font-size: 16px; }
+
+/* --- invite link, next step, owner funnel (2026-10-11) ------------------- */
+/* Settings: the invite link is one row, the link itself in the mono. */
+.invite-row { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 13px 16px; min-height: 52px; }
+.invite-row-head { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.invite-used { color: var(--ink-soft); font-size: 16px; }
+.invite-url { display: block; margin-top: 6px; font-family: var(--mono);
+  font-size: 15px; color: var(--ink); overflow-wrap: anywhere;
+  user-select: all; }
+.invite-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.invite-actions .pill { min-height: 44px; }
+/* The chat's pointer to the hub's "Connect your records". */
+.chat-next { margin: 8px 0 0; font-size: 16px; text-align: center; }
+.chat-next a { color: var(--accent-ink); font-weight: 600; }
+.connect-next .btn-primary { margin-top: 12px; }
+/* /admin/funnel: counts in tables, numbers in the mono. */
+.funnel-scroll { overflow-x: auto; margin: 0 0 16px; }
+.funnel-table { width: 100%; border-collapse: collapse;
+  background: var(--surface); border: 1px solid var(--hairline); }
+.funnel-table th, .funnel-table td { padding: 8px 10px; text-align: left;
+  border-top: 1px solid var(--hairline); font-size: 15px; }
+.funnel-table td.num { font-family: var(--mono);
+  font-variant-numeric: tabular-nums; text-align: right; }
+
+/* --- the hub around outcomes (hub critique 2026-10) ---------------------- */
+/* Waiting for your OK follows Ask your assistant now, so it needs the
+   section gap above it. */
+.hub-section + .waiting { margin-top: 32px; }
+/* What's new: only real arrivals, in the accent tint. */
+.whats-new .news-line { margin: 0 0 8px; padding: 12px 16px;
+  background: var(--accent-tint); border-radius: var(--radius); }
+.whats-new .switch-prompt { margin: 0; }
+/* Where you can reach me: one plain row per way in. */
+.reach-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.reach-list li { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 2px; }
+.reach-list b { font-size: 17px; }
+.reach-list span { color: var(--ink-soft); font-size: 16px;
+  overflow-wrap: anywhere; }
+.reach-list small { display: block; margin-top: 4px; font-size: 15px; }
+/* Sources: one compact row each. The name and its one status share the
+   first line; a long name wraps rather than running under the chip. */
+.source-list { grid-template-columns: 1fr; gap: 8px; }
+.source-list .conn-card { padding: 12px 16px; gap: 2px; }
+.source-head { display: flex; align-items: baseline;
+  justify-content: space-between; gap: 12px; }
+.source-head .hub-card-name { font-size: 17px; margin: 0; min-width: 0;
+  overflow-wrap: anywhere; }
+.source-list .conn-card .status { order: 0; flex: none; }
+.source-list .hub-card-sub:empty,
+.source-list .conn-facts:empty { display: none; }
+.source-list .conn-facts { font-size: 15px; color: var(--ink-soft); margin: 0; }
+.source-list .card-note { margin: 4px 0 0; font-size: 15px; }
+/* Refresh, Disconnect and Delete live in the row's menu: plain items, and
+   Delete is red words behind a tap, never a bare red button. */
+.source-menu { align-self: flex-start; margin-top: 4px; }
+.source-menu[open] { align-self: stretch; border-top: 1px solid var(--hairline);
+  padding-top: 4px; }
+.source-menu summary { padding: 0 4px; font-weight: 600; }
+.source-menu button { margin: 0; }
+.source-menu .conn-delete { color: var(--critical-ink); }
+.source-menu .conn-delete:hover { background: var(--critical-bg); }
+/* Made-up records, once your own are here: closed, quiet, still in reach. */
+.made-up-sources { margin-top: 12px; }
+.made-up-sources > summary { cursor: pointer; min-height: 44px;
+  display: flex; align-items: center; color: var(--ink-soft); font-size: 16px; }
+.made-up-sources[open] > summary { margin-bottom: 8px; }
+/* More and the made-up drawer look like the buttons they are (patient
+   tester on #944): an outline, and a chevron that turns when open. The
+   browser's own marker goes, so there is one arrow, not two. */
+.card-menu > summary, .made-up-sources > summary {
+  list-style: none; gap: 8px; border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm); background: var(--surface);
+  padding: 0 14px; color: var(--ink); font-weight: 600; }
+.card-menu > summary::-webkit-details-marker,
+.made-up-sources > summary::-webkit-details-marker { display: none; }
+.made-up-sources > summary { display: inline-flex; }
+.card-menu > summary::after, .made-up-sources > summary::after {
+  content: ""; width: 8px; height: 8px; flex: none;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg); transition: transform .12s ease; }
+.card-menu[open] > summary::after,
+.made-up-sources[open] > summary::after {
+  transform: translateY(2px) rotate(-135deg); }
+.card-menu > summary:hover, .made-up-sources > summary:hover {
+  border-color: var(--accent); color: var(--accent-ink); }
+/* The code sign-in under a tile: the next step, in the accent tint, not
+   the error colour (patient tester recheck on #944). */
+.inline-msg.is-next { color: var(--ink); background: var(--accent-tint);
+  border-radius: var(--radius-sm); padding: 10px 12px; }
+.inline-msg.is-next a { color: var(--accent-ink); font-weight: 600; }
+/* Empty for a moment while announce() reveals it: no tinted bar. */
+.inline-msg.is-next:empty { background: none; padding: 0; }

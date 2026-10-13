@@ -132,6 +132,24 @@ class Config:
         # Where a new /beta request is announced (careagents/beta_signup.py).
         # Unset = no announcement; the request is still saved.
         self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")
+        # Sign-ups one personal invite link admits (careagents/invites.py).
+        # The operator can set a different cap on one link.
+        try:
+            invite_cap = int(e.get("CARE_INVITE_LINK_CAP", "5"))
+        except ValueError:
+            logger.warning("CARE_INVITE_LINK_CAP is not a whole number; "
+                           "using 5")
+            invite_cap = 5
+        self.invite_link_cap = max(0, invite_cap)
+        # Who may open /admin/funnel (careagents/funnel.py): the owner's own
+        # account emails, comma-separated, case-insensitive. Unset = nobody.
+        # Deliberately not CARE_REAL_RECORDS_ALLOWLIST, which holds testers.
+        self.owner_emails = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_OWNER_EMAILS") or "").split(",")
+            if x.strip())
+        # Where the worker sends the once-a-day funnel digest. Unset = off.
+        self.digest_to = (e.get("CARE_DIGEST_TO") or "").strip()
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
@@ -188,7 +206,20 @@ class Config:
                 f"{self.canonical_host!r})")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
-        self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        # Trimmed, as the engine trims INTERNAL_TOKEN_MINT_SECRET: stray
+        # whitespace on one side only meant no signature ever matched, and
+        # testers silently got the developer connect page.
+        raw_mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        self.mint_secret = raw_mint_secret.strip()
+        if raw_mint_secret and not self.mint_secret:
+            # Never quietly unset (SEC941-F2): refuse to start.
+            raise ConfigError(
+                "HEALTHCLAW_MINT_SECRET is set but contains only whitespace; "
+                "set a real secret or unset it")
+        if raw_mint_secret != self.mint_secret:
+            logger.warning(
+                "HEALTHCLAW_MINT_SECRET has leading or trailing whitespace; "
+                "it is trimmed before use. Remove it from the environment.")
 
         # LLM provider: Anthropic preferred; OpenAI-compatible fallback so the
         # product works before an Anthropic key is provisioned.
@@ -212,6 +243,11 @@ class Config:
         self.anthropic_effort = (effort if effort in ("low", "medium", "high")
                                  else "medium")
         self.anthropic_max_tokens = 8000
+        # CARE_ROUTING=on answers small talk and app questions on Haiku and
+        # everything else on Sonnet with an Opus advisor (careagents/
+        # routing.py). Off, CARE_MODEL answers every turn as before.
+        self.routing = e.get("CARE_ROUTING", "off") == "on"
+        self.advisor = self.routing and e.get("CARE_ADVISOR", "on") != "off"
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
         # With real records open, chat turns carry redacted-but-real health
         # data to the model host, so that host must be vetted: one of the

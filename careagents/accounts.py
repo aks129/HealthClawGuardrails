@@ -26,8 +26,9 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-# Also puts the beta tables in Base.metadata before any engine is built.
-from careagents import beta_signup
+# Also puts the beta, invite and funnel tables in Base.metadata before any
+# engine is built.
+from careagents import beta_signup, funnel, invites
 from careagents.models import (Account, ActivityDay, Agent, Connection,
                                EmailToken, Grant, ImessageHandleState,
                                ImessageLink, Passkey, RealRecordInvite,
@@ -162,6 +163,7 @@ class AccountService:
         # outcome, let the session commit, then raise afterwards.
         error: str | None = None
         result: _Row | None = None
+        made = False
         with self.session() as s:
             # Fetch the single live code by email (not by hash) so a wrong
             # guess is counted against it and the code can be burned.
@@ -185,6 +187,7 @@ class AccountService:
                 if acct is None:
                     acct = Account(email=email, email_verified_at=now())
                     s.add(acct)
+                    made = True
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
@@ -192,6 +195,8 @@ class AccountService:
                 result = _detach(acct)
         if error:
             raise AuthError(error)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
         return result
 
     def has_connections(self, account_id: str) -> bool:
@@ -221,6 +226,7 @@ class AccountService:
             if acct is not None and s.query(Connection).filter_by(
                     account_id=acct.id).first() is not None:
                 return None
+            made = acct is None
             if acct is None:
                 acct = Account(email=email, email_verified_at=now())
                 s.add(acct)
@@ -228,7 +234,10 @@ class AccountService:
                 acct.email_verified_at = now()
             acct.last_login_at = now()
             s.flush()
-            return _detach(acct)
+            result = _detach(acct)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
+        return result
 
     def ping(self) -> bool:
         """True if the account store answers. Used by /healthz readiness."""
@@ -331,37 +340,83 @@ class AccountService:
             raise AuthError("Enter a valid email address.")
         return email
 
+    #: Postgres advisory-lock key that serialises stage 1 invite writes, so
+    #: the count of live invites and the write that depends on it are one
+    #: step. Distinct from the migration keys in models.py.
+    _INVITE_LOCK_KEY = 9_280_001
+
+    def _write_invite(self, email: str, invited_by: str,
+                      reopen: bool) -> str:
+        """Create (or, with `reopen`, reopen) an invite only while fewer than
+        STAGE1_INVITE_CAP are live, as one atomic step (#928 F1). Returns
+        "created", "reopened", "live" (already live, unchanged), "revoked"
+        (revoked and left so) or "full".
+
+        The cap sits inside the writing statement. SQLite takes its write
+        lock when that statement starts, so the count it reads cannot move
+        under it; Postgres first takes an advisory lock for the
+        transaction, and each statement after it reads committed rows.
+        This is the path for the operator's command and for a link join."""
+        from careagents.beta import STAGE1_INVITE_CAP
+        live = ("(SELECT COUNT(*) FROM ca_real_record_invites "
+                "WHERE revoked_at IS NULL)")
+        args = {"e": email, "t": now(), "b": invited_by,
+                "cap": STAGE1_INVITE_CAP}
+        with self.engine.begin() as conn:
+            if self.engine.dialect.name == "postgresql":
+                conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                             {"k": self._INVITE_LOCK_KEY})
+            if conn.execute(text(
+                    "INSERT INTO ca_real_record_invites "
+                    "(email, invited_at, invited_by) "
+                    "SELECT :e, :t, :b WHERE NOT EXISTS ("
+                    "SELECT 1 FROM ca_real_record_invites WHERE email = :e) "
+                    f"AND {live} < :cap"), args).rowcount:
+                return "created"
+            if reopen and conn.execute(text(
+                    "UPDATE ca_real_record_invites SET revoked_at = NULL, "
+                    "invited_at = :t, invited_by = :b "
+                    "WHERE email = :e AND revoked_at IS NOT NULL "
+                    f"AND {live} < :cap"), args).rowcount:
+                return "reopened"
+            row = conn.execute(text(
+                "SELECT revoked_at FROM ca_real_record_invites "
+                "WHERE email = :e"), {"e": email}).first()
+        if row is not None and row[0] is None:
+            return "live"
+        if row is not None and not reopen:
+            return "revoked"
+        return "full"
+
     def invite_real_records(self, email: str, invited_by: str) -> bool:
-        """Invite an email to connect real records. Inviting a revoked email
-        again reopens it. Returns False when it was already invited.
+        """Invite an email to connect real records (the operator's command).
+        Inviting a revoked email again reopens it. Returns False when it was
+        already invited.
 
         Stage 1 holds at most STAGE1_INVITE_CAP active invites; a new or
-        reopened one past that raises ValueError. Two operators racing on
-        the last place can both get in: a hand-run command, not worth a lock.
+        reopened one past that raises ValueError. Atomic: racing callers
+        cannot pass the cap (#928 F1).
         """
         from careagents.beta import STAGE1_INVITE_CAP
         email = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
-        with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            if row is not None and row.revoked_at is None:
-                return False
-            active = (s.query(RealRecordInvite)
-                      .filter(RealRecordInvite.revoked_at.is_(None)).count())
-            if active >= STAGE1_INVITE_CAP:
-                raise ValueError(
-                    f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
-                    "Revoke one first.")
-            if row is None:
-                s.add(RealRecordInvite(email=email, invited_at=now(),
-                                       invited_by=invited_by))
-                return True
-            row.revoked_at = None
-            row.invited_at = now()
-            row.invited_by = invited_by
-            return True
+        outcome = self._write_invite(email, invited_by, reopen=True)
+        if outcome == "full":
+            raise ValueError(
+                f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
+                "Revoke one first.")
+        return outcome != "live"
+
+    def grant_join_invite(self, email: str, invited_by: str) -> str:
+        """A fresh invite for someone who joined through a link, or nothing
+        (#928 F2): an invite that exists in any state, live or revoked by
+        the operator, is left exactly as it is, `invited_by` included.
+        Returns "created", "live", "revoked" or "full"."""
+        email = self._invite_email(email)
+        return self._write_invite(email, (invited_by or "")[:255],
+                                  reopen=False)
 
     def revoke_real_records_invite(self, email: str) -> bool:
         """Revoke an invite. New real connections are refused from now on;
@@ -635,6 +690,9 @@ class AccountService:
             for model in (Surface, Agent, Grant, Connection, Passkey,
                           UsageDay, ActivityDay):
                 s.query(model).filter_by(account_id=account_id).delete()
+            # Its invite link (a foreign key here) and funnel row go too.
+            invites.delete_for_account(s, acct)
+            funnel.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.

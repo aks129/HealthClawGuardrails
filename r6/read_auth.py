@@ -46,6 +46,31 @@ def _oauth_authorizes(token: str, tenant_id: str) -> bool:
     return bool(set(info.get("scopes") or ()) & _OAUTH_READ_SCOPES)
 
 
+def disconnected_patient_connect_token(tenant_id: str) -> bool:
+    """True when the step-up token just accepted is a patient connect token
+    and the tenant has since been disconnected (SEC940-F2).
+
+    Disconnect (POST /r6/fhir/internal/fasten-revoke) writes the tenant
+    tombstone; the 30-day token agent-access handed a browser must stop
+    reading then, not when it expires. CareAgents' own server-minted tokens
+    carry another subject and keep reading the records Disconnect keeps
+    (#847). Asked only after has_grant validated the token, so an
+    unauthenticated caller learns nothing about which tenants are closed.
+    The token is read from the sources has_grant reads, in its order.
+    """
+    from r6.stepup import PATIENT_CONNECT_SUBJECT, token_subject
+
+    token = (request.headers.get("X-Step-Up-Token") or "").strip()
+    if not token:
+        auth = (request.headers.get("Authorization") or "").strip()
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if token_subject(token) != PATIENT_CONNECT_SUBJECT:
+        return False
+    # Lazy: r6.fasten imports the access kernel, which imports this module.
+    from r6.fasten.models import tenant_closed
+    return tenant_closed(tenant_id)
+
+
 def authorize_tenant_read(
     tenant_id: str,
     *,
@@ -84,9 +109,10 @@ def authorize_tenant_read(
     # because r6.access imports TENANT_SESSION_KEY from this module.
     from r6.access import Scope, Tenant, TenantSource, has_grant
 
-    if has_grant(scope=Scope.TENANT_BOUND,
-                 tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT),
-                 also_bearer=True) is not None:
+    if (has_grant(scope=Scope.TENANT_BOUND,
+                  tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT),
+                  also_bearer=True) is not None
+            and not disconnected_patient_connect_token(tenant_id)):
         return tenant_id
     auth = (request.headers.get("Authorization") or "").strip()
     bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""

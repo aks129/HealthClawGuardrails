@@ -391,6 +391,11 @@
           state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
+          // An answer came: the next step, if the page offers one.
+          if (ev.status === "completed") {
+            const next = document.getElementById("connect-next");
+            if (next) next.hidden = false;
+          }
         }
       }
     }
@@ -404,7 +409,12 @@
     suggestions.forEach((n) => { n.hidden = true; });
   }
   function showSuggestions() {
-    suggestions.forEach((n) => { n.hidden = false; log.appendChild(n); });
+    // The greeting's answer goes back to the end of the log; the starters
+    // live above the message box and stay there.
+    suggestions.forEach((n) => {
+      n.hidden = false;
+      if (n !== starters) log.appendChild(n);
+    });
     scroll();
   }
 

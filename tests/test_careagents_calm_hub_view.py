@@ -81,7 +81,11 @@ def test_the_switch_prompt_needs_an_agent_on_the_sample_and_a_real_source():
     assert hub.switch_prompt(only_sample) is None
     both = {"connections": [sample, real], "agents": [_agent("g", "s")]}
     assert hub.switch_prompt(both) == {"agent_id": "g", "agent_name": "Juniper",
-                                       "connection_id": "f", "label": "L-f"}
+                                       "connection_id": "f", "label": "L-f",
+                                       "count_line": ""}
+    counted = {"connections": [sample, {**real, "last_count": 12}],
+               "agents": [_agent("g", "s")]}
+    assert hub.switch_prompt(counted)["count_line"] == "12 records"
     on_real = {"connections": [sample, real], "agents": [_agent("g", "f")]}
     assert hub.switch_prompt(on_real) is None
     pending = {"connections": [sample, _conn("f", "fasten", "pending")],

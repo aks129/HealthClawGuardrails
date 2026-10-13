@@ -8,6 +8,8 @@ browser never sees (the mint secret and tenant-bound step-up tokens).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -648,8 +650,20 @@ class HealthClawClient:
         HMAC-verified `patient.connection_success` webhook then registers the
         org_connection_id back to this tenant and ingests the records. We do
         NOT build a Fasten-hosted URL ourselves — the provider domain differs
-        by TEFCA/mode and only the HealthClaw page has the verified key."""
-        return f"{self.public_base}/connect/{tenant}"
+        by TEFCA/mode and only the HealthClaw page has the verified key.
+
+        The link carries a tag over the tenant, keyed from the secret both
+        sides hold (app.py, connect_view_tag), so the engine shows its
+        patient view: no HealthClaw nav, no tenant id, no assistant token,
+        and a way back to the hub (#937). Without a secret, no tag, and the
+        engine shows its developer page."""
+        url = f"{self.public_base}/connect/{tenant}"
+        if not self.mint_secret:
+            return url
+        key = hashlib.sha256(b"healthclaw-connect-view:"
+                             + self.mint_secret.encode("utf-8")).digest()
+        tag = hmac.new(key, tenant.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{url}?src=careagents&sig={tag}"
 
     def wearables_connect_url(self, tenant: str, provider: str) -> str:
         """Route to HealthClaw's wearables OAuth kickoff for this tenant +
@@ -671,6 +685,54 @@ class HealthClawClient:
         """
         bundle = self.search(tenant, "Patient", {"_summary": "count"})
         return int(bundle.get("total") or 0) > 0
+
+    # A Fasten job in none of these is still writing records (the engine's
+    # r6/fasten/reaper.py TERMINAL_STATUSES; this app does not import r6).
+    FASTEN_JOB_DONE = ("complete", "completed", "failed")
+
+    def fasten_import_running(self, tenant: str) -> bool:
+        """Whether a Fasten export is still being written into `tenant`.
+
+        The engine ingests in a background thread and commits every ten
+        resources, and a Patient lands first, so records exist long before
+        the import is done. A count taken in between is a fraction of the
+        record, shown as the whole (QA940-F1). Only `status` is read: the
+        job rows carry no patient data, and failure detail is not needed.
+
+        A job with no recognisable status counts as running, so the doubt
+        withholds a number rather than showing one. Raises HealthClawError
+        when the engine could not be asked, which is not the same answer as
+        "nothing is importing".
+        """
+        return self.fasten_import_state(tenant) == "running"
+
+    def fasten_import_state(self, tenant: str) -> str:
+        """"running", "failed", "done" or "none" for `tenant`'s Fasten jobs.
+
+        "failed" only when nothing runs and the newest job (the engine lists
+        newest first) failed, so a retry that later succeeded is not shown
+        as a failure. Raises HealthClawError on a failed or malformed
+        answer, never "none".
+        """
+        r = self._send("GET", f"{self.base}/fasten/jobs",
+                       headers=self._headers(tenant), what="import status")
+        if r.status_code != 200:
+            raise HealthClawError(f"import status failed ({r.status_code})",
+                                  r.status_code)
+        jobs = self._json_object(r, "import status").get("jobs")
+        if not isinstance(jobs, list):
+            raise HealthClawError("import status returned invalid data",
+                                  r.status_code)
+        return self._import_state(jobs)
+
+    def _import_state(self, jobs: list) -> str:
+        if any(not isinstance(j, dict)
+               or j.get("status") not in self.FASTEN_JOB_DONE
+               for j in jobs):
+            return "running"
+        if not jobs:
+            return "none"
+        return "failed" if jobs[0].get("status") == "failed" else "done"
 
     # Counted on refresh to report growth. Deliberately a fixed, clinically
     # meaningful set rather than every supported type — this is a progress

@@ -48,7 +48,11 @@
     {% endif %}
     {% if intake and intake.state in ("arriving", "overdue") %}
     <div class="chat-notice">
-      {% if intake.state == "arriving" %}
+      {% if importing %}
+      {# Some records are here and the assistant reads them (QA940 round 2). #}
+      Your records are still arriving. Answers may miss some until they
+      finish.
+      {% elif intake.state == "arriving" %}
       Your records{% if intake.provider %} from {{ intake.provider }}{% endif %}
       haven't arrived yet — imports take 5–45 minutes. Nothing below reflects
       them.
@@ -101,23 +105,32 @@
       {#- -#}<p>What would you like to know?</p>
       {#- -#}</div>
     {% endif %}
-    {# One block for every first visit. Intake comes first: that path ends
-       in an approval, which is what the product is for (spec section 5).
-       A returning visit has it hidden: chat.js shows it after an error, so
-       the next try is one tap. #}
-    <div class="starters" id="starters"{% if past %} hidden{% endif %}>
-      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
-      <button type="button" class="starter">What do my labs say?</button>
-      <button type="button" class="starter">Any screenings I'm due for?</button>
-      <button type="button" class="starter">What medications am I on?</button>
-    </div>
   </div>
 
+  {# One block for every first visit. Intake comes first: that path ends
+     in an approval, which is what the product is for (spec section 5).
+     Then the taps the records can answer (app.py chat: labs only when some
+     are known to be there). Just above the message box, outside the
+     scrolling log, so all of them show on a short phone screen (patient
+     tester recheck on #944). A returning visit has it hidden: chat.js
+     shows it after an error, so the next try is one tap. #}
+  <div class="starters" id="starters"{% if past %} hidden{% endif %}>
+    <button type="button" class="starter">Fill out my intake form for a new doctor</button>
+    {% for s in starters %}
+    <button type="button" class="starter">{{ s }}</button>
+    {% endfor %}
+  </div>
   <form class="chat-input" id="composer">
     <input id="box" autocomplete="off" maxlength="2000"
            placeholder="Ask {{ me.name }} anything about the records…">
     <button class="btn-primary" id="send" type="submit">Send</button>
   </form>
+  {# Made-up records answered; this account may connect its own (app.py
+     _chat_connect_next). "after": chat.js shows it once an answer is done. #}
+  {% if connect_next %}
+  <p class="chat-next" id="connect-next"{% if connect_next == "after" %} hidden{% endif %}>Ready for your own records?
+    {% if link_session %}<a href="/auth?connect=1">Sign in again to connect your records</a>{% else %}<a href="/home#connect-records">Connect your records</a>{% endif %}</p>
+  {% endif %}
   <p class="chat-feedback">Something confusing? <a href="/feedback">Tell us</a>.</p>
 </main>
 <script>
