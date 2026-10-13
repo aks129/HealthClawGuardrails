@@ -6,6 +6,8 @@
   <div class="hub-head">
     <div>
       <h1>Waiting for you</h1>
+      {# Named when they are someone the holder cares for (spec 5 and 9). #}
+      {% if whose %}<p class="hub-sub approvals-whose">{{ whose }}</p>{% endif %}
       <p class="hub-sub">Requests proposed on {{ me.name }}'s records. Nothing on
         this list has happened yet; each one waits for your answer.</p>
     </div>

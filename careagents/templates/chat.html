@@ -6,7 +6,12 @@
   <div class="chat-head">
     <div class="chat-id">
       <span class="chat-emoji" aria-hidden="true">{{ persona.emoji }}</span>
-      <div class="chat-name">{{ me.name }}</div>
+      <div>
+        <div class="chat-name">{{ me.name }}</div>
+        {# Someone the holder cares for is always named here (one assistant
+           per person spec, section 5). The holder's own chat says nothing. #}
+        {% if whose %}<div class="chat-whose">{{ whose }}</div>{% endif %}
+      </div>
     </div>
     {# One quiet menu, not three pills and a persona label: a first-timer
        at 375px read five things before the first question (2026-10

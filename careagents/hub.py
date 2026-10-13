@@ -279,6 +279,51 @@ def switch_prompt(home: dict) -> dict | None:
     return None
 
 
+#: How a card names someone you care for who has no nickname. Keyed by the
+#: relationship enum (models.RELATIONSHIPS); anything else reads as
+#: _ANYONE, never as the raw value, and "other" is never "your other".
+_FOR_RELATION = {"parent": "your parent", "child": "your child",
+                 "partner": "your partner"}
+_ANYONE = "someone you care for"
+
+
+def for_line(person: dict, several: bool) -> str:
+    """The line under a card's name: whose assistant it is.
+
+    The account holder's has none, unless someone they care for is on the
+    account too: then "For you", so the cards are told apart. Someone they
+    care for is their nickname (the holder's own words, escaped by the
+    template) or their relationship. Labels only (spec section 2.1)."""
+    if person.get("kind") != "other":
+        return "For you" if several else ""
+    return "For " + (person.get("nickname")
+                     or _FOR_RELATION.get(person.get("relationship"),
+                                          _ANYONE))
+
+
+def whose_records(person: dict) -> str:
+    """"Mom's records", for the chat header, the approvals page and the
+    waiting band (spec section 5). Empty for the account holder: their own
+    records need no name."""
+    if person.get("kind") != "other":
+        return ""
+    nick = person.get("nickname")
+    if nick:
+        return f"{nick}'s records"
+    rel = _FOR_RELATION.get(person.get("relationship"))
+    if rel:
+        return f"{rel[0].upper()}{rel[1:]}'s records"
+    return "Records of " + _ANYONE
+
+
+def person_of(home: dict, person_id: str | None) -> dict:
+    """The person with this id, or the account holder when none matches: a
+    row from before people existed is the holder's (spec section 4)."""
+    return next((p for p in home.get("people", []) if p["id"] == person_id),
+                {"id": person_id, "kind": "self", "relationship": None,
+                 "nickname": None})
+
+
 def assistants(home: dict) -> dict:
     """Each assistant with whose it is, its tone and its routines, for the
     hub card (one assistant per person spec, sections 4 and 8).
@@ -300,11 +345,21 @@ def assistants(home: dict) -> dict:
     for a in sorted(home["agents"], key=lambda a: (
             a.get("connection_id") not in active, a.get("created_at") or 0)):
         by_person.setdefault(a.get("person_id"), []).append(a)
+    several = any(p["kind"] == "other" for p in people.values())
+    # The holder's assistants first (the primary leads, its extras under
+    # it), then each person they care for in the order they were added.
+    # An unknown person id is the holder's, as person_of reads it.
+    added = list(people)
+
+    def _rank(person_id):
+        p = people.get(person_id)
+        if p is None or p["kind"] != "other":
+            return (0, 0)
+        return (1, added.index(person_id))
     out = []
-    for person_id, agents in by_person.items():
-        person = people.get(person_id) or {
-            "id": person_id, "kind": "self", "relationship": None,
-            "nickname": None}
+    for person_id, agents in sorted(by_person.items(),
+                                    key=lambda kv: _rank(kv[0])):
+        person = person_of(home, person_id)
         for i, a in enumerate(agents):
             ids = routines_for(a)
             tone = PERSONAS.get(a.get("persona"), PERSONAS[DEFAULT_PERSONA])
@@ -312,6 +367,7 @@ def assistants(home: dict) -> dict:
                         "reads": labels.get(a.get("connection_id"), ""),
                         "routines": [ROUTINES[r]["name"] for r in ids],
                         "focuses_on": focuses_on(ids),
+                        "for_line": for_line(person, several),
                         "is_primary": i == 0, "legacy_extra": i > 0})
     return {"assistants": out, "people": list(people.values()),
             "legacy_multi": any(a["legacy_extra"] for a in out)}

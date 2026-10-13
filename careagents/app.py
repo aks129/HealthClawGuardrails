@@ -546,6 +546,9 @@ def create_app(config: Config | None = None,
             # account kept several (one assistant per person spec, 4 and
             # 8), for the hub card to render.
             people_view=hub_view.assistants(data),
+            # "Add someone you care for", made-up records only (owner
+            # decision D1), behind CARE_PEOPLE as /api/people is.
+            people_enabled=cfg.people_enabled,
             text_tile=beta_signup.text_tile(
                 cfg, view, svc.session, acct.email),
             # "Connected" only once a real connection is active; has_real
@@ -2036,7 +2039,18 @@ def create_app(config: Config | None = None,
                                connect_next=_chat_connect_next(acct, sample),
                                link_session=bool(session.get(_VIA_LINK)),
                                sample_line=(beta.SAMPLE_FRAME
-                                            if sample else None))
+                                            if sample else None),
+                               # "Mom's records" when they are not the
+                               # holder's own (spec section 5).
+                               whose=_whose(acct, ctx["agent"]))
+
+    def _whose(acct, agent) -> str:
+        """Whose records this assistant reads, as the chat header and the
+        approvals page name them; empty for the holder's own. Rendered by
+        the template only: the nickname is never passed to the model, a
+        log line or the engine."""
+        return hub_view.whose_records(hub_view.person_of(
+            svc.list_home(acct.id), agent.get("person_id")))
 
     @app.get("/brief")
     @login_required
@@ -2424,7 +2438,8 @@ def create_app(config: Config | None = None,
                                    message=_APPROVALS_UNCHECKABLE), 503
         return render_template("approvals.html", me=ctx["agent"],
                                agent_id=agent_id, pending=pending,
-                               kind_labels=_KIND_LABELS)
+                               kind_labels=_KIND_LABELS,
+                               whose=_whose(acct, ctx["agent"]))
 
     @app.get("/api/approvals/count")
     @login_required
@@ -2463,16 +2478,22 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
+            # Each queue says whose records it is when they are not the
+            # holder's own (spec section 5): the connection's person, the
+            # same person its assistant is for.
+            whose = hub_view.whose_records(
+                hub_view.person_of(data, conn.get("person_id")))
+            named = {"whose": whose} if whose else {}
             if n and agent:
                 queues.append({"agent_id": agent["id"], "name": agent["name"],
-                               "count": n,
+                               "count": n, **named,
                                "href": url_for("approvals",
                                                agent_id=agent["id"])})
             elif n:
                 # Whether any assistant exists decides the next step: with
                 # one, it is switched to these records ("Change records");
                 # with none, the hub's Start a chat is the way in (#847).
-                queues.append({"name": conn["label"], "count": n,
+                queues.append({"name": conn["label"], "count": n, **named,
                                "needs_assistant": True,
                                "has_assistant": bool(data["agents"])})
         out = {"count": total}
