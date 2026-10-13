@@ -54,6 +54,22 @@
     return false;
   }
 
+  // A confirm-link session (#920 F1): #940's code-is-coming copy, and a
+  // link to the code sign-in that comes back to the hub.
+  const addSection = $("connect-section");
+  const linkSession = !!(addSection && addSection.dataset.linkSession);
+  const CODE_FIRST = "To connect your own records, sign in again first. " +
+    "We'll email you a code to sign in. Then you'll come back here.";
+  const CODE_SIGN_IN = { href: "/auth?connect=1",
+                         text: "Sign in again to connect your records",
+                         sameTab: true };
+  // The normal way forward, so it reads in the next-step teal, not as an
+  // error (patient tester recheck on #944).
+  function sayNext(tile) {
+    $("connect-msg").classList.add("is-next");
+    say(tile, $("connect-msg"), CODE_FIRST, CODE_SIGN_IN);
+  }
+
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
@@ -63,6 +79,25 @@
       const opensPage = id === "fasten";
       let page = null;
       $("connect-msg").hidden = true;
+      // Only the code sign-in reads as a next step; anything else said
+      // under a tile keeps the message colour.
+      $("connect-msg").classList.remove("is-next");
+      // An upload row still waiting for its file is where this tap belongs
+      // (QA #944 F1, as #860's startFileUpload): its consent was given when
+      // it was made, and its picker opens inside this tap.
+      if (id === "direct") {
+        const waiting = document.querySelector(
+          '.conn-card[data-kind="direct"][data-status="empty"] .conn-upload');
+        if (waiting) {
+          waiting.closest(".conn-card").scrollIntoView({ block: "center" });
+          return waiting.click();
+        }
+      }
+      // Opened from the confirm link: real records wait on a code sign-in
+      // (#920 F1). Say so on the tap, before any terms, with the way there.
+      if (tile.dataset.consent && linkSession) {
+        return sayNext(tile);
+      }
       if (tile.dataset.providers) {
         const provider = await pickProvider(JSON.parse(tile.dataset.providers));
         if (!provider) return;
@@ -86,6 +121,10 @@
       tile.disabled = false;
       if (!res.ok || !res.d.connect_url) dropBlank(page);
       if (body.consent && termsChanged(res)) { location.reload(); return; }
+      if (!res.ok && res.d.error === "sign_in_again") {
+        // A page from before the session changed: the same way forward.
+        return sayNext(tile);
+      }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
         // needs dismissing, and the page stays usable.
@@ -272,8 +311,11 @@
       if (link) {
         const a = document.createElement("a");
         a.href = link.href;
-        a.target = "_blank";
-        a.rel = "noopener";
+        // A sign-in continues in this tab; a provider's page opens beside it.
+        if (!link.sameTab) {
+          a.target = "_blank";
+          a.rel = "noopener";
+        }
         a.className = "open-connect-page";
         a.textContent = link.text;
         el.append(" ", a);
@@ -666,8 +708,10 @@
 
       btn.disabled = true;
       announce(msg, "Deleting…");
-      const r = await fetch(`/api/connections/${btn.dataset.conn}`,
-                            { method: "DELETE" });
+      // The typed word goes with the request: the server checks it too.
+      const r = await fetch(`/api/connections/${btn.dataset.conn}`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE" }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         btn.disabled = false;

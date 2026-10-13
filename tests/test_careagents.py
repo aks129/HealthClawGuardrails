@@ -3771,7 +3771,8 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     created = c.post("/api/connections/sample").get_json()
     conn = created["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 200
     d = r.get_json()
     assert d["deleted"] is True and d["rows_deleted"] == 42
@@ -3871,7 +3872,8 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 502
     body = r.get_json()
     # #586: the purge raises on any non-200 and on a lost answer, so the
@@ -6106,7 +6108,8 @@ def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
         {"resourceType": "Bundle", "type": "collection", "entry": []}),
         content_type="application/fhir+json")
     assert r.status_code == 200
-    assert c.delete(f"/api/connections/{fasten['id']}").status_code == 200
+    assert c.delete(f"/api/connections/{fasten['id']}",
+                 json={"confirm": "DELETE"}).status_code == 200
 
 
 def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,

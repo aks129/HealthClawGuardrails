@@ -130,10 +130,10 @@ def test_a_paused_hub_offers_no_made_up_records(monkeypatch):
     assert 'id="hub-paused"' in page
     assert "Explore with made-up records" not in page
     assert 'data-connector="sample"' not in page
-    # Nothing is listed under "Add records", so no heading over nothing.
-    assert 'id="connect-section"' in before and "Add records" in before
+    # Nothing is listed under "Add a source", so no heading over nothing.
+    assert 'id="connect-section"' in before and "Add a source" in before
     assert 'id="connect-section"' not in page
-    assert "Add records" not in page
+    assert "Add a source" not in page
     # And no line pointing at the section that is not there.
     assert "Add some below" in before
     assert "Add some below" not in page and "No records yet." in page
