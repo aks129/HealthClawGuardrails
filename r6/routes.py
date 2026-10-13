@@ -53,7 +53,7 @@ from r6.read_auth import (
     read_auth_enabled as _read_auth_enabled,
     read_auth_required as _read_auth_required,
 )
-from r6.runtime_config import resolve_app_env
+from r6.runtime_config import internal_mint_secret, resolve_app_env
 from r6.version import __version__
 from r6.body_guard import (INGEST_MAX_JSON_DEPTH as _INGEST_MAX_JSON_DEPTH,
                            json_body_within_depth,
@@ -1812,7 +1812,7 @@ def _internal_mint_authorized(tenant_id):
     from r6.command_center.access import is_public
     if is_public(tenant_id):
         return True
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    mint_secret = internal_mint_secret()
     if mint_secret:
         provided = request.headers.get('X-Internal-Secret', '')
         return constant_time.equal(provided, mint_secret)

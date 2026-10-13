@@ -13,7 +13,8 @@ def healthy(env=None) -> bool:
     timeout = 4
     if role == "worker":
         base = (env.get("HEALTHCLAW_BASE") or "").rstrip("/")
-        secret = env.get("HEALTHCLAW_MINT_SECRET") or ""
+        # Trimmed as careagents/config.py trims it.
+        secret = (env.get("HEALTHCLAW_MINT_SECRET") or "").strip()
         stale = env.get("CARE_RUN_WORKER_STALE_SECONDS", "30")
         if not base or not secret:
             return False
