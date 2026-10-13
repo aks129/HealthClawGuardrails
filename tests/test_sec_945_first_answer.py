@@ -133,9 +133,11 @@ def test_status_and_real_allergies_with_canaries_leak_nothing(
     model, sse, events = _turn_capturing(chain, monkeypatch)
     _no_canary(model, sse, events, caplog.text, _audit_details(chain))
     # a4 is a recorded penicillin allergy, so the status records must not
-    # say the records are silent on allergies (F2): they are reworded.
+    # say the records are silent on allergies (F2). They are not sent at
+    # all: a "do not mention" note was mentioned and disclosed (#949 QA).
     assert "Your records don't say whether you have allergies." not in model
-    assert "records that allergy information was not collected" in model
+    assert "allergy information was not collected" not in model
+    assert "do not mention" not in model.lower()
 
 
 # --- (1) V1: engine error bodies never reach the model ------------------------

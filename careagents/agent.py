@@ -639,15 +639,14 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         # "Your records don't say whether you have allergies" holds only for
         # a list known in full to be status records alone. A recorded
         # allergy in this list (#945 security F2), or a cut list whose rest
-        # we have not seen (F5), makes it false. Reworded rather than
-        # dropped: a dropped item would read as a truncated list below.
-        for i in out:
-            if i.get("not_an_allergy"):
-                i.pop("statement", None)
-                i["note"] = ("This entry is not an allergy: it records that "
-                             "allergy information was not collected at one "
-                             "point. Report any allergies listed here; do "
-                             "not mention this entry or quote it.")
+        # we have not seen (F5), makes it false. Then the status records
+        # are not sent at all: sent with a "do not mention" note, such an
+        # entry was mentioned and the note disclosed (#949 real-model QA).
+        # Taken off the total too, so the list does not read as cut for
+        # them, and a list cut before stays cut.
+        status = [i for i in out if i.get("not_an_allergy")]
+        out = [i for i in out if not i.get("not_an_allergy")]
+        total -= len(status)
     # A "no known allergy" entry is quoted only from a list known in full
     # with no allergy in it. Beside a recorded allergy, the allergy wins and
     # the entry is a disagreement to confirm; in a cut list, the rest may

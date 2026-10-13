@@ -359,10 +359,60 @@ def test_a_status_record_does_not_make_a_conflict():
     out = _summarize_bundle(_bundle(_nka(recordedDate="2020-01-02"), status))
     [item] = _nka_items(out)
     assert "lists no known allergies" in item["statement"]
-    # The status record no longer says the records are silent: one of them
-    # says something.
-    [st] = [i for i in out if i.get("not_an_allergy")]
-    assert "statement" not in st
+    # "The records are silent" is false when one of them says something,
+    # so the status record is not sent at all.
+    assert not [i for i in out if i.get("not_an_allergy")]
+    assert len(out) == 1
+
+
+# --- a status record that would need hiding is not sent (#949 QA) ----------
+
+@pytest.mark.parametrize("beside", ["real", "uncoded", "cut"])
+def test_a_status_record_beside_an_allergy_or_in_a_cut_list_is_not_sent(
+        beside):
+    status = _allergy("s1", (SNOMED, STATUS))
+    if beside == "real":
+        out = _summarize_bundle(_bundle(status, _real()))
+        assert len(out) == 1 and out[0]["name"] == "Penicillin"
+    elif beside == "uncoded":
+        uncoded = {"resourceType": "AllergyIntolerance", "id": "u",
+                   "code": {"coding": [{"system": "urn:x", "code": "Z"}]}}
+        out = _summarize_bundle(_bundle(status, uncoded))
+        assert len(out) == 1 and out[0]["unreadable"] is True
+    else:
+        out = _summarize_bundle(_bundle(status, status, total=5))
+        # Two status records dropped from five: three unseen, still cut.
+        assert [i.get("truncated") for i in out] == [True]
+    blob = json.dumps(out).lower()
+    assert "not_an_allergy" not in blob
+    assert "do not mention" not in blob and "not collected" not in blob
+
+
+def test_dropped_status_records_are_not_counted():
+    status = _allergy("s1", (SNOMED, STATUS))
+    out = _summarize_bundle(_bundle(status, status, _real(), total=3))
+    assert not any(i.get("truncated") for i in out)
+    assert [i["name"] for i in out] == ["Penicillin"]
+
+
+def test_a_status_only_list_keeps_its_plain_statement():
+    status = _allergy("s1", (SNOMED, STATUS))
+    out = _summarize_bundle(_bundle(status, status, total=2))
+    assert [i["statement"] for i in out] == [
+        "Your records don't say whether you have allergies."] * 2
+
+
+@pytest.mark.parametrize("records", [
+    lambda: [_allergy("s1", (SNOMED, STATUS)), _real()],
+    lambda: [_nka(recordedDate="2020-01-02"), _real()],
+    lambda: [_nka(verificationStatus="refuted")],
+    lambda: [_allergy("s1", (SNOMED, STATUS)), _nka(recordedDate="2020-01-02")],
+])
+def test_no_note_in_any_allergy_answer_hides_anything(records):
+    """Nothing is sent with an instruction to keep it from the person."""
+    for total in (None, 9):
+        blob = json.dumps(_summarize_bundle(_bundle(*records(), total=total)))
+        assert "do not mention" not in blob.lower()
 
 
 # --- a cut list never carries the statement as complete --------------------
