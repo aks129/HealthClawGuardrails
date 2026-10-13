@@ -491,6 +491,38 @@ describe("Tool Execution Tests", () => {
     }
   });
 
+  it("mint sends the trimmed INTERNAL_TOKEN_MINT_SECRET and warns by name only", async () => {
+    const prevAutomint = process.env.READ_TOKEN_AUTOMINT;
+    const prevSecret = process.env.INTERNAL_TOKEN_MINT_SECRET;
+    process.env.READ_TOKEN_AUTOMINT = "true";
+    process.env.INTERNAL_TOKEN_MINT_SECRET = "  padded-mint-secret\n";
+    const tenant = `automint-padded-${Date.now()}`;
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    mockFetch
+      .mockResolvedValueOnce(fakeResponse({ token: "minted-read-tok" }))
+      .mockResolvedValueOnce(fakeResponse({ resourceType: "Patient", id: "pt-1" }));
+
+    try {
+      await tools.executeTool(
+        "fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" },
+        { "x-tenant-id": tenant }
+      );
+      const [, mintOpts] = mockFetch.mock.calls[0];
+      expect(mintOpts.headers["X-Internal-Secret"]).toBe("padded-mint-secret");
+      const warned = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(warned).toContain("INTERNAL_TOKEN_MINT_SECRET");
+      expect(warned).not.toContain("padded-mint-secret");
+    } finally {
+      warn.mockRestore();
+      if (prevAutomint === undefined) delete process.env.READ_TOKEN_AUTOMINT;
+      else process.env.READ_TOKEN_AUTOMINT = prevAutomint;
+      if (prevSecret === undefined) delete process.env.INTERNAL_TOKEN_MINT_SECRET;
+      else process.env.INTERNAL_TOKEN_MINT_SECRET = prevSecret;
+    }
+  });
+
   it("read tool with caller-provided step-up token does NOT mint (token left untouched)", async () => {
     const prevAutomint = process.env.READ_TOKEN_AUTOMINT;
     process.env.READ_TOKEN_AUTOMINT = "true";

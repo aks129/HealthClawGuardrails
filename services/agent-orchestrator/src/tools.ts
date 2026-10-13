@@ -157,6 +157,24 @@ function parseGrantMarker(raw: string | undefined): OAuthGrantMarker | null {
 export function resetGrantReadTokenCacheForTests(): void {
   GRANT_READ_TOKEN_CACHE.clear();
 }
+
+// The engine trims INTERNAL_TOKEN_MINT_SECRET before comparing
+// (r6/runtime_config.py internal_mint_secret), so this side sends the trimmed
+// value too: a padded copy here would otherwise never match. Warns once, by
+// variable name only, never the value.
+let warnedPaddedMintSecret = false;
+export function internalMintSecret(): string {
+  const raw = process.env.INTERNAL_TOKEN_MINT_SECRET || "";
+  const secret = raw.trim();
+  if (raw !== secret && !warnedPaddedMintSecret) {
+    warnedPaddedMintSecret = true;
+    console.warn(
+      "INTERNAL_TOKEN_MINT_SECRET has leading or trailing whitespace; " +
+        "it is trimmed before use. Remove it from the environment."
+    );
+  }
+  return secret;
+}
 const PRIVILEGED_TOOL_NAMES = new Set(["fhir_get_token", "fhir_seed"]);
 
 export interface FHIRToolsOptions {
@@ -209,7 +227,7 @@ export class FHIRTools {
         headers: {
           "Content-Type": "application/json",
           "X-Tenant-Id": tenant,
-          "X-Internal-Secret": process.env.INTERNAL_TOKEN_MINT_SECRET || "",
+          "X-Internal-Secret": internalMintSecret(),
         },
         body: JSON.stringify({ tenant_id: tenant }),
       });
@@ -903,8 +921,7 @@ export class FHIRTools {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                "X-Internal-Secret":
-                  process.env.INTERNAL_TOKEN_MINT_SECRET || "",
+                "X-Internal-Secret": internalMintSecret(),
                 ...headers,
               },
               body: JSON.stringify({ tenant_id: tokenTenant }),
@@ -1319,7 +1336,7 @@ export class FHIRTools {
     const cached = GRANT_READ_TOKEN_CACHE.get(cacheKey);
     if (cached && cached.expiresAtMs - READ_TOKEN_SKEW_MS > now) return cached.token;
     GRANT_READ_TOKEN_CACHE.delete(cacheKey);
-    const secret = process.env.INTERNAL_TOKEN_MINT_SECRET || "";
+    const secret = internalMintSecret();
     if (!secret) return null;
     try {
       const resp = await fetchWithTimeout(`${this.serverRoot()}/r6/fhir/internal/step-up-token`, {
