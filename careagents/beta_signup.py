@@ -686,11 +686,21 @@ def steps_html(feedback_url: str = FEEDBACK_URL) -> list:
     return out
 
 
+#: Said up front, so the second sign-in reads as expected (#937): the
+#: confirm link signs in only the browser it opened in, and a code is how
+#: every other browser, and connecting real records, signs in (#920 F1).
+CODE_IS_COMING = ("The confirm link signs you in only in the browser it "
+                  "opened in. On another phone or browser, and before you "
+                  "connect your own records, we'll email you a code to "
+                  "sign in.")
+
+
 def youre_in_lines(cfg, first_name: str) -> list:
     return [f"Hi {first_name}, thanks for helping test CareAgents. Here is "
             "how to sign in, now or any time. Trying it takes about 15 "
             "minutes.",
             _STEPS,
+            CODE_IS_COMING,
             "You'll use made-up records, not your own. CareAgents is not a "
             "doctor."]
 

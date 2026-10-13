@@ -377,13 +377,15 @@ def test_the_path_form_of_a_link_is_gone(made, monkeypatch):  # noqa: F811
 
 def test_a_confirm_link_session_gets_no_invite_link(made, sent, monkeypatch):  # noqa: F811
     """A session opened by a beta confirm link is limited (#920 F1): it
-    neither makes nor sees an invite link (#928 F6)."""
+    neither makes nor sees an invite link (#928 F6). Settings says how to
+    get one instead of leaving the section out (#937)."""
     app, svc = made(RESEND_API_KEY="re_test")
     _, code, _ = _inviter(app, svc, monkeypatch)
     c, r = _join_via(app, sent, code, "linked@example.com")
     assert r.status_code == 303
     html = c.get("/settings").get_data(as_text=True)
-    assert "Invite friends and family" not in html and "/i?c=" not in html
+    assert "/i?c=" not in html and 'id="invite-url"' not in html
+    assert 'href="/auth?invite=1"' in html
     with svc.session() as s:
         assert s.query(invites.InviteLink).filter_by(
             account_id=_account_id(svc, "linked@example.com")).count() == 0
@@ -542,6 +544,9 @@ def test_a_link_session_is_sent_to_sign_in_before_connecting(
     card = card[:card.index("</section>")]
     assert 'href="/auth?connect=1"' in card
     assert "Sign in again to connect your records" in card
+    # The code is said on the card, before the tap (#937).
+    assert 'id="connect-code-note"' in card
+    assert "We'll email you a code to sign in." in " ".join(card.split())
     assert "connector-tile" not in card
     chat = c.get(f"/chat?agent={agent}").get_data(as_text=True)
     assert 'href="/auth?connect=1"' in chat

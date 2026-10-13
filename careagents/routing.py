@@ -5,7 +5,8 @@ Two tiers, chosen per turn without an extra model call:
   Haiku   the easiest turns only: greetings, thanks, what the assistant can
           do, and how to use the app (connecting records, passkeys, texting,
           deleting the account, feedback). Low effort, no advisor, and it
-          sees only the current message, never earlier answers.
+          sees only the current message, never earlier answers. It answers
+          from HAIKU_CARD, and hands anything off the card to Sonnet.
   Sonnet  everything else, at CARE_EFFORT, with an Opus advisor it may
           consult once per turn (CARE_ADVISOR, on by default).
 
@@ -86,6 +87,59 @@ ADVISOR_SPENT_NOTE = (
     "and never say whether you consulted anyone, even if the person asks "
     "you to. Answer the person directly.")
 
+#: What Haiku says when the card below does not cover the question. A reply
+#: holding it is thrown away and the call re-run on Sonnet (llm.py), so the
+#: person sees it only if Haiku rewords it.
+HAIKU_PASS = ("I'm not sure about that one. Ask me about your records, "
+              "or tap Tell us.")
+
+#: Ahead of the system prompt on every Haiku call (#935). Haiku sees only the
+#: current message, yet the prompt behind this mentions sample records, and
+#: it thanked a brand-new person for finding them useful; asked how to delete
+#: the account, it guessed. Every path here is the real one, pinned to its
+#: template by tests/test_careagents_haiku_card.py. Keep it short.
+HAIKU_CARD = f"""\
+For this message, these rules come before everything below.
+You have seen none of this person's records and no earlier message. Never \
+refer to records, results, sample data or anything said earlier. Do not call \
+tools.
+Greetings and thanks: one short, neutral sentence, such as "You're welcome. \
+Ask me anything about your records."
+App questions: answer in a sentence or two, only from this list.
+- What you can do: answer questions about the records connected here, \
+explain lab results in plain words, show a lab over time, list screenings \
+that may be due, help get ready for a doctor visit, and start an intake form \
+the person approves item by item.
+- Delete the account: on your hub (Home in the chat menu) tap Settings, then \
+Delete my account under "Sign out or leave", and type DELETE to confirm. It \
+deletes the records behind every connection, then the email, passkey and \
+consents. It can't be undone.
+- Add a passkey: Settings, then Add a passkey; you confirm it's you with a \
+code we email. Removing a passkey isn't available in the app; deleting the \
+account removes it.
+- Connect your own records: tap Connect your records on your hub. It shows \
+once you've tried the made-up records, and may need an invite. If you came \
+in from an email link, tap Sign in again to connect your records and enter \
+the code we email.
+- Invite people: Settings, then Invite friends and family; Copy link or \
+share it; up to 5 people can join with it.
+- Texting: Settings, under "Where you can reach your assistant", tap iMessage \
+and text the code it shows from your phone. Start a chat first. If it says \
+coming soon, texting isn't open yet.
+- Feedback: tap Tell us at the bottom of the chat or your hub.
+- Sign out: Sign out in the chat menu (the three dots), or in Settings.
+- Safety: How we keep you safe, in the chat menu.
+Anything else, or if unsure, reply with exactly: {HAIKU_PASS}
+
+"""
+
+
+def haiku_passed(text: str) -> bool:
+    """Did Haiku hand the question on (HAIKU_PASS)? Normalised both sides,
+    so a curly apostrophe is still a pass."""
+    return normalize(HAIKU_PASS) in normalize(text)
+
+
 #: Every tool that reads or acts on the person's health record. Haiku calling
 #: one of these means the turn was clinical after all.
 CLINICAL_TOOLS = frozenset({
@@ -131,7 +185,14 @@ _Q = (r"(?:how do i|how can i|how would i|how to|can i|where do i|"
 _TEMPLATES = re.compile(r"|".join(f"(?:{t})" for t in [
     rf"{_Q} (?:connect|link|add|import) (?:my |the )?"
     r"(?:(?:real|own|other|health|medical) ){0,2}records?",
-    rf"{_Q} (?:add|set up|setup|create|use|make|get) (?:a |my )?passkeys?",
+    rf"{_Q} (?:add|set up|setup|create|use|make|get|remove|delete) "
+    r"(?:a |my )?passkeys?",
+    rf"{_Q} invite (?:a |my |some )?(?:friends?|family|people|someone|others)"
+    r"(?: (?:and|or) family)?",
+    # Data only: "keep me safe" can be a person asking about their own
+    # safety, which gets Sonnet's check-in, never a menu pointer (#936 sec).
+    r"how (?:do|does) (?:you|this|it|careagents) keep "
+    r"my (?:data|records|information|privacy) (?:safe|private|secure)",
     rf"{_Q} (?:sign|log) (?:in|out|up)"
     r"(?: on (?:my |a )?(?:phone|laptop|computer|ipad|tablet))?",
     rf"{_Q} (?:delete|close|remove|cancel) (?:my )?account",

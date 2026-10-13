@@ -247,11 +247,14 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
         turn = _anthropic_call(
             anthropic, _anthropic_client(anthropic, cfg, **_budget).messages,
             model=routing.HAIKU_MODEL, max_tokens=max_tokens,
-            output_config={"effort": "low"}, system=system,
+            output_config={"effort": "low"},
+            system=routing.HAIKU_CARD + system,
             messages=_to_anthropic_messages(messages[start:]), tools=a_tools)
-        if any(c.name in routing.CLINICAL_TOOLS for c in turn.tool_calls):
-            # The turn was clinical after all. Haiku's reply is discarded
-            # unexecuted, so its tool call never reaches the history.
+        if (any(c.name in routing.CLINICAL_TOOLS for c in turn.tool_calls)
+                or routing.haiku_passed(turn.text)):
+            # The turn was clinical after all, or not on Haiku's card (#935).
+            # Haiku's reply is discarded unexecuted, so its tool call never
+            # reaches the history.
             tier, escalated = routing.TIER_SONNET, True
         _log_call("haiku", turn, t0, "discarded" if escalated else "ok")
     if tier == routing.TIER_SONNET:

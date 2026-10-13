@@ -51,8 +51,11 @@
   <section class="switch-prompt" id="switch-prompt"
            data-agent="{{ switch_prompt.agent_id }}"
            data-conn="{{ switch_prompt.connection_id }}">
-    <p>Switch {{ switch_prompt.agent_name }} to your records?</p>
-    <button type="button" class="btn-primary" id="switch-yes">Switch</button>
+    {# The next step once records land (#937): say they arrived, with the
+       count when there is one, and make switching the one primary button. #}
+    <p><b>Your records are here.</b>{% if switch_prompt.count_line %} {{ switch_prompt.count_line }} arrived.{% endif %}
+      {{ switch_prompt.agent_name }} still reads the made-up records. Switch to yours?</p>
+    <button type="button" class="btn-primary" id="switch-yes">Switch {{ switch_prompt.agent_name }} to your records</button>
     <button type="button" class="linkish" id="switch-later">Not now</button>
     <span class="inline-msg" id="switch-msg" role="status" aria-live="polite" hidden></span>
   </section>
@@ -72,6 +75,9 @@
       {# Opened by the confirm link: a code first, then back here. #}
       <a class="btn-primary btn-block" id="connect-signin"
          href="/auth?connect=1">Sign in again to connect your records</a>
+      {# Said before the tap, not after it (#937): the code is the step. #}
+      <p class="card-note" id="connect-code-note">We'll email you a code to
+        sign in. Then you'll come back here.</p>
       {% else %}
       <button type="button" class="btn-primary btn-block connector-tile"
               data-connector="fasten" data-consent="1">Connect your records</button>
@@ -87,7 +93,9 @@
       {% for a in hub.agents %}
       <div class="hub-card agent-card" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
-        <div class="hub-card-sub">{% if a.reads %}Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}{% endif %}</div>
+        {# A label that starts with a plain noun reads mid-sentence in lower
+           case: "Reads records from your doctor", not "Reads Records". #}
+        <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads[:1]|lower ~ a.reads[1:] if a.reads.split()[0] in ("Sample", "Records", "Uploaded") else a.reads }}{% endif %}</div>
         <p class="card-note">Visit brief: a one-page summary of {{ "these made-up records, to show how it works" if a.reads == "Sample records" else "your records to bring to an appointment" }}.</p>
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
@@ -142,19 +150,38 @@
       <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}"
            data-conn="{{ c.id }}" data-kind="{{ c.kind }}" data-status="{{ c.status }}">
         <div class="hub-card-name">{{ c.label }}</div>
-        <div class="hub-card-sub">{{ c.provider or '' }}</div>
+        {# Not a provider the title already names ("Records from your
+           doctor" over "your doctor", patient tester on #940). #}
+        <div class="hub-card-sub">{% if c.provider and c.provider|lower not in c.label|lower %}{{ c.provider }}{% endif %}</div>
         {% if c.is_sample %}<span class="badge-sample">Made-up records</span>{% endif %}
+        {% set page = connect_pages.get(c.id) %}
         {% if paused %}
         <span class="status status-paused">Paused</span>
         {% else %}
-        <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
+        {# A failed import is not "Connecting…": the chip agrees with the
+           note below (patient tester on #940). The class stays, so the
+           pending poller still sees a retry land. #}
+        <span class="status status-{{ c.status }}">{{ "Didn't finish" if page and page.state == 'failed' else c.status_word }}</span>
         {% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
+        {% if page and page.state == 'running' %}
+        {# Static: no number and no progress claim (QA940 round 3). #}
+        <p class="card-note">Your records are on their way. This can take up to 45 minutes.</p>
+        {% elif page and page.state == 'failed' %}
+        <p class="card-note">Bringing in your records didn't work. <a class="open-connect-page" href="{{ page.url }}"
+             target="_blank" rel="noopener">Try connecting again</a></p>
+        {% elif page %}
+        <p class="card-note">Not finished? <a class="open-connect-page" href="{{ page.url }}"
+             target="_blank" rel="noopener">Open the connect page</a></p>
+        {% endif %}
         {% if paused %}
         {# Paused: nothing new can be added, so no button that would fail. #}
         {% elif c.kind == 'direct' %}
         <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
-        {% elif not c.is_sample %}
+        {% elif not c.is_sample and not (c.kind == 'fasten' and c.status == 'pending') %}
+        {# Not on a Fasten card still connecting: a Refresh there stored a
+           mid-import count (QA940-F1b), and the connect link above is that
+           card's way forward. #}
         <button type="button" class="conn-refresh" data-conn="{{ c.id }}">Refresh</button>
         {% endif %}
         {% if not c.is_sample %}

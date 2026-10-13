@@ -89,13 +89,18 @@ def test_a_single_reading_on_text_has_no_direction():
     assert "direction" not in series and "first" not in series
 
 
-def test_on_the_web_the_timeline_tool_is_unchanged():
+def test_on_the_web_the_timeline_tool_shows_the_chart_and_the_same_words():
+    """The web chart is drawn, and the model gets the same first, latest and
+    direction a text gets: given only the chart's shape, it would not say
+    how a result changed (#937)."""
     events: list = []
     out = json.loads(_execute_tool(_LabsHC(), "t", "show_lab_timeline",
                                    {"topic": "cholesterol"}, events))
     assert out["chart_shown"] is True
     assert "chart is now visible" in out["note"]
-    assert "244" not in json.dumps(out)
+    [series] = out["series"]
+    assert series["latest"]["value"] == 244
+    assert series["direction"] == "higher"
 
 
 def test_a_timeline_card_becomes_a_link_to_the_chart():

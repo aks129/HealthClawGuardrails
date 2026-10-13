@@ -48,7 +48,11 @@
     {% endif %}
     {% if intake and intake.state in ("arriving", "overdue") %}
     <div class="chat-notice">
-      {% if intake.state == "arriving" %}
+      {% if importing %}
+      {# Some records are here and the assistant reads them (QA940 round 2). #}
+      Your records are still arriving. Answers may miss some until they
+      finish.
+      {% elif intake.state == "arriving" %}
       Your records{% if intake.provider %} from {{ intake.provider }}{% endif %}
       haven't arrived yet — imports take 5–45 minutes. Nothing below reflects
       them.
