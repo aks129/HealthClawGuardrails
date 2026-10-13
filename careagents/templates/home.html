@@ -164,7 +164,10 @@
         {# Paused: nothing new can be added, so no button that would fail. #}
         {% elif c.kind == 'direct' %}
         <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
-        {% elif not c.is_sample %}
+        {% elif not c.is_sample and not (c.kind == 'fasten' and c.status == 'pending') %}
+        {# Not on a Fasten card still connecting: a Refresh there stored a
+           mid-import count (QA940-F1b), and the connect link above is that
+           card's way forward. #}
         <button type="button" class="conn-refresh" data-conn="{{ c.id }}">Refresh</button>
         {% endif %}
         {% if not c.is_sample %}

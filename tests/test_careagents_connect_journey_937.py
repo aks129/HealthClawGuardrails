@@ -164,7 +164,7 @@ def test_the_chat_page_shows_no_count_until_the_import_is_done(cfg, svc,
         assert _stored(svc, conn) == ("pending", None)
         # Nor in the greeting: no count while the import runs.
         assert "I found" not in page
-        assert "imports take 5" in page
+        assert "still arriving" in page
     fake.importing = False
     fake.counted = 150
     page = c.get(f"/chat?agent={own}").get_data(as_text=True)
@@ -474,3 +474,130 @@ def test_the_confirm_page_and_welcome_email_say_a_code_is_coming(
     assert welcome, [m[1] for m in sent]
     text = " ".join(welcome[-1][3].split())
     assert beta_signup.CODE_IS_COMING in text
+
+
+# --- QA940 round 2: Refresh mid-import, the banner, the connect link ---------
+
+def test_a_refresh_during_the_first_import_stores_no_baseline(cfg, svc,
+                                                              monkeypatch):
+    """QA940-F1b. MUTATION: drop the import check in refresh_connection ->
+    49 is stored, the poll never stores again, the card reads 49 for good."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    fake.importing = True
+    fake.counted = 49
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    assert _stored(svc, conn) == ("pending", None)
+    fake.importing = False
+    fake.counted = 150
+    assert c.get(f"/api/connections/{tenant}/poll").get_json()[
+        "status"] == "active"
+    assert _stored(svc, conn) == ("active", 150)
+    assert "150 records" in _card(c.get("/home").get_data(as_text=True), conn)
+
+
+def test_a_refresh_during_a_later_import_keeps_the_last_baseline(
+        cfg, svc, monkeypatch):
+    """A second import on an active connection: a mid-import baseline would
+    make "N new records" a figure about part of an import."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    fake.counted = 100
+    c.get(f"/api/connections/{tenant}/poll")
+    assert _stored(svc, conn) == ("active", 100)
+    fake.importing = True
+    fake.counted = 130
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    assert _stored(svc, conn) == ("active", 100)
+    fake.importing = False
+    fake.counted = 160
+    assert c.get(f"/api/connections/{tenant}/poll").get_json()[
+        "new_records"] == 60
+
+
+def test_a_refresh_that_cannot_ask_about_the_import_stores_nothing(
+        cfg, svc, monkeypatch):
+    from careagents.healthclaw import HealthClawError
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, _tenant = _start_fasten(c)
+
+    def down(tenant):
+        raise HealthClawError("down")
+    fake.fasten_import_running = down
+    r = c.post(f"/api/connections/{conn}/refresh")
+    assert r.status_code == 503
+    assert _stored(svc, conn) == ("pending", None)
+
+
+def test_a_connecting_fasten_card_has_no_refresh(cfg, svc, monkeypatch):
+    """Refresh on a card still connecting was the way into F1b, and the
+    connect link is that card's way forward."""
+    app, fake = _app(cfg, svc)
+    fake.tenant_has_records = lambda tenant: False
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    assert "conn-refresh" not in _card(c.get("/home").get_data(as_text=True),
+                                       conn)
+    fake.tenant_has_records = lambda tenant: True
+    c.get(f"/api/connections/{tenant}/poll")
+    assert 'class="conn-refresh"' in _card(
+        c.get("/home").get_data(as_text=True), conn)
+
+
+def test_the_connect_link_goes_once_an_import_is_running(cfg, svc,
+                                                         monkeypatch):
+    """The person has done their part; "Not finished?" then reads as a
+    mistake. A failed or unknown look keeps the link: it is the fallback."""
+    from careagents.healthclaw import HealthClawError
+    app, fake = _app(cfg, svc)
+    fake.tenant_has_records = lambda tenant: False
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, _tenant = _start_fasten(c)
+    fake.importing = True
+    assert "open-connect-page" not in _card(
+        c.get("/home").get_data(as_text=True), conn)
+    fake.importing = False
+    assert "open-connect-page" in _card(
+        c.get("/home").get_data(as_text=True), conn)
+
+    def down(tenant):
+        raise HealthClawError("down")
+    fake.fasten_import_running = down
+    assert "open-connect-page" in _card(
+        c.get("/home").get_data(as_text=True), conn)
+
+
+def test_the_chat_banner_says_records_are_still_arriving_mid_import(
+        cfg, svc, monkeypatch):
+    """The assistant answers from what has landed, so "Nothing below
+    reflects them" was untrue mid-import. Nothing-landed keeps its copy."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, _tenant = _start_fasten(c)
+    own = c.post("/api/agents", json={
+        "name": "Rowan", "persona": "calm",
+        "connection_id": conn}).get_json()["id"]
+    fake.search = lambda t, rt, params=None: {"total": {
+        "Observation": 5}.get(rt, 0)}
+    fake.importing = True
+    page = " ".join(c.get(f"/chat?agent={own}").get_data(
+        as_text=True).split())
+    assert ("Your records are still arriving. Answers may miss some until "
+            "they finish.") in page
+    assert "Nothing below reflects them" not in page
+    assert "haven't arrived yet" not in page
+    # Nothing landed at all: the existing sentence, unchanged.
+    fake.search = lambda t, rt, params=None: {"total": 0}
+    page = " ".join(c.get(f"/chat?agent={own}").get_data(
+        as_text=True).split())
+    assert "haven't arrived yet" in page
+    assert "still arriving" not in page

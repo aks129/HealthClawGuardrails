@@ -551,11 +551,13 @@ def create_app(config: Config | None = None,
             # A Fasten card still connecting links to its connect page
             # (#937). A link is never blocked as a popup is, so a person
             # whose browser blocked the first window is not left with only
-            # a Refresh that repeats it.
+            # a Refresh that repeats it. Gone once an import runs: the
+            # person has done their part (QA940 round 2).
             connect_pages=({} if paused else {
                 r["id"]: hc.fasten_connect_url(r["tenant_id"])
                 for r in view["records"]
-                if r["kind"] == "fasten" and r["status"] == "pending"}),
+                if r["kind"] == "fasten" and r["status"] == "pending"
+                and not _importing(r["tenant_id"])}),
             has_grants=bool(svc.list_grants(acct.id)),
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
@@ -577,6 +579,16 @@ def create_app(config: Config | None = None,
         try:
             return funnel.reached(svc.session, acct.id, "first_answer")
         except Exception:  # noqa: BLE001 - the card is left out, not the page
+            return False
+
+    def _importing(tenant: str) -> bool:
+        """Whether a Fasten import is writing into `tenant`, for the hub's
+        connect link. A failed look answers False: the link is the fallback
+        for a blocked popup, so doubt keeps it."""
+        try:
+            return hc.fasten_import_running(tenant)
+        except HealthClawError:
+            logger.warning("import status unavailable on the hub")
             return False
 
     def _connect_next(acct, view, menu, real_open, paused) -> bool:
@@ -1511,10 +1523,15 @@ def create_app(config: Config | None = None,
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
         # report what the refresh actually added — documents on the same
         # terms, so "notes arrived" is a measured delta rather than a restatement
-        # of "this tenant holds notes" (#226).
+        # of "this tenant holds notes" (#226). Not while a Fasten import is
+        # still writing: that count is part of an import, and storing it left
+        # the card at "49 records" for good (QA940-F1b). The last baseline
+        # stands, or none, and the poll stores the count once it is done.
         try:
-            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
-                            hc.uncounted_record_count(conn["tenant_id"]))
+            if not (conn["kind"] == "fasten"
+                    and hc.fasten_import_running(conn["tenant_id"])):
+                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                                hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
             return jsonify({"error": "records service unavailable"}), 503
 
@@ -1777,7 +1794,10 @@ def create_app(config: Config | None = None,
         # leaves it (QA940-F1). A failed look is treated the same way. Never
         # "overdue" either: a long import is not one that sent nothing.
         importing = False
-        if pending and totals and conn.get("kind") == "fasten":
+        # Asked only once something landed, so "still arriving" is the true
+        # sentence whether the import runs or could not be asked about.
+        if (pending and totals and any(totals.values())
+                and conn.get("kind") == "fasten"):
             try:
                 importing = hc.fasten_import_running(ctx["tenant"])
             except HealthClawError:
@@ -1828,6 +1848,9 @@ def create_app(config: Config | None = None,
                                past=past,
                                history_lost=history_lost,
                                intake=intake,
+                               # Records landed and more are coming: the
+                               # assistant reads the part that is here.
+                               importing=importing,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
                                # A link session reaches it through a code
