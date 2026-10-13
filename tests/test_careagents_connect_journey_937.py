@@ -103,6 +103,248 @@ def test_the_switch_prompt_says_the_records_arrived(cfg, svc, monkeypatch):
                      r'your records</button>', prompt), prompt
 
 
+# --- 4b. no number while the import is still writing (QA940-F1) --------------
+# The engine writes a Fasten export in a background thread, ten resources
+# per commit, and a Patient lands first. The first poll used to store the
+# count at that moment, and the card read "29 records" for good while the
+# engine went on to hold 150. A count is stored only once the import is done.
+
+def _stored(svc, conn):
+    from careagents.models import Connection
+    with svc.session() as s:
+        row = s.get(Connection, conn)
+        return row.status, row.last_count
+
+
+def test_the_poll_shows_no_count_until_the_import_is_done(cfg, svc,
+                                                          monkeypatch):
+    """MUTATION: drop the import check in poll_connection -> the first poll
+    stores 29 and the card reads "29 records" with the engine at 150."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    assert c.post("/api/connections/sample").status_code == 200
+    conn, tenant = _start_fasten(c)
+    fake.importing = True
+    for n in (29, 80):
+        fake.counted = n
+        d = c.get(f"/api/connections/{tenant}/poll").get_json()
+        assert d == {"status": "pending"}, d
+        assert _stored(svc, conn) == ("pending", None)
+        html = c.get("/home").get_data(as_text=True)
+        assert f"{n} records" not in html
+        assert 'id="switch-prompt"' not in html
+    fake.importing = False
+    fake.counted = 150
+    assert c.get(f"/api/connections/{tenant}/poll").get_json()[
+        "status"] == "active"
+    assert _stored(svc, conn) == ("active", 150)
+    html = c.get("/home").get_data(as_text=True)
+    assert "150 records" in _card(html, conn)
+    assert "150 records arrived." in html
+
+
+def test_the_chat_page_shows_no_count_until_the_import_is_done(cfg, svc,
+                                                               monkeypatch):
+    """MUTATION: drop the import check on the chat-settle path -> the first
+    chat load stores 29 for good."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    own = c.post("/api/agents", json={
+        "name": "Rowan", "persona": "calm",
+        "connection_id": conn}).get_json()["id"]
+    fake.search = lambda t, rt, params=None: {"total": {
+        "Condition": 2, "Observation": 5}.get(rt, 0)}
+    fake.importing = True
+    for n in (29, 80):
+        fake.counted = n
+        assert c.get(f"/chat?agent={own}").status_code == 200
+        assert _stored(svc, conn) == ("pending", None)
+    fake.importing = False
+    fake.counted = 150
+    assert c.get(f"/chat?agent={own}").status_code == 200
+    assert _stored(svc, conn) == ("active", 150)
+
+
+def test_a_refresh_reports_no_new_records_until_the_import_is_done(
+        cfg, svc, monkeypatch):
+    """The refresh watcher stops at the first "N new records", so a delta
+    taken mid-import froze on the page the same way."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    c.get(f"/api/connections/{tenant}/poll")
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.importing = True
+    fake.counted = 112
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d == {"status": "active"}, d
+    fake.importing = False
+    fake.counted = 150
+    assert c.get(f"/api/connections/{tenant}/poll").get_json()[
+        "new_records"] == 50
+
+
+def test_an_unknown_import_state_is_said_never_counted(cfg, svc, monkeypatch):
+    """Could not ask whether the import is done: the same "we couldn't
+    reach your records" as any other failed look (#403), never a count."""
+    from careagents.healthclaw import HealthClawError
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+
+    def down(tenant):
+        raise HealthClawError("down")
+    fake.fasten_import_running = down
+    r = c.get(f"/api/connections/{tenant}/poll")
+    assert r.status_code == 503
+    assert r.get_json()["status"] == "unavailable"
+    assert _stored(svc, conn) == ("pending", None)
+
+
+def test_only_a_fasten_connection_asks_about_an_import(cfg, svc,
+                                                       monkeypatch):
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    asked = []
+    fake.fasten_import_running = lambda t: asked.append(t) or False
+    sample = c.post("/api/connections/sample").get_json()["id"]
+    sample_tenant = {x["id"]: x for x in svc.list_home(
+        _account(svc))["connections"]}[sample]["tenant_id"]
+    c.get(f"/api/connections/{sample_tenant}/poll")
+    assert asked == []
+    _, tenant = _start_fasten(c)
+    c.get(f"/api/connections/{tenant}/poll")
+    assert asked == [tenant]
+
+
+def _account(svc, email="gene@example.com"):
+    from careagents.models import Account
+    with svc.session() as s:
+        return s.query(Account).filter_by(email=email).one().id
+
+
+# --- the client: what "still importing" means at the engine ------------------
+
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code = status
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+def _client_answering(status, body):
+    from careagents.healthclaw import HealthClawClient
+    seen = {}
+
+    class _Session:
+        def get(self, url, params=None, headers=None, timeout=None, **_):
+            seen.update(url=url, headers=headers)
+            return _Resp(status, body)
+
+        def post(self, url, json=None, headers=None, timeout=None, **_):
+            return _Resp(200, {"token": "tok"})
+
+    client = HealthClawClient(base="http://engine", mint_secret="s")
+    client.http = _Session()
+    client.mint_token = lambda tenant: "tok"
+    return client, seen
+
+
+def test_any_job_not_finished_is_an_import_running():
+    for statuses, running in ((["complete", "failed"], False),
+                              ([], False),
+                              (["complete", "ingesting"], True),
+                              (["pending"], True),
+                              (["downloading"], True),
+                              ([None], True)):
+        client, seen = _client_answering(
+            200, {"jobs": [{"status": s} for s in statuses]})
+        assert client.fasten_import_running("ca-1") is running, statuses
+    assert seen["url"] == "http://engine/fasten/jobs"
+    assert seen["headers"]["X-Tenant-Id"] == "ca-1"
+
+
+def test_a_failed_or_malformed_job_answer_raises():
+    import pytest
+
+    from careagents.healthclaw import HealthClawError
+    for status, body in ((401, {"error": "x"}), (503, {}),
+                         (200, {"jobs": "nope"}), (200, ["x"])):
+        client, _ = _client_answering(status, body)
+        with pytest.raises(HealthClawError):
+            client.fasten_import_running("ca-1")
+
+
+def test_cross_layer_the_engine_answers_the_import_question(monkeypatch):
+    """The real client on the real engine WSGI: the route, the tenant
+    credential and the job statuses line up."""
+    import requests as _requests
+
+    from careagents.healthclaw import HealthClawClient
+    from main import create_app as engine_create_app
+    from models import db
+
+    secret = "cross-layer-internal-secret"
+    tenant = "ca-xl-import"
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", secret)
+    # Production's read gate, so the tenant credential is really checked.
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    monkeypatch.setenv("SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    engine_app = engine_create_app({
+        "TESTING": True,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "LEGACY_BOOT_ON_CREATE": False,
+    })
+    with engine_app.app_context():
+        db.create_all()
+    engine = engine_app.test_client()
+
+    def _to_requests(resp):
+        r = _requests.Response()
+        r.status_code = resp.status_code
+        r._content = resp.get_data() or b""
+        r.headers.update(resp.headers.to_wsgi_list())
+        return r
+
+    class _RelaySession:
+        def post(self, url, json=None, headers=None, timeout=None, data=None):
+            return _to_requests(engine.post(url.replace("http://engine", ""),
+                                            json=json, data=data,
+                                            headers=headers or {}))
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            return _to_requests(engine.get(url.replace("http://engine", ""),
+                                           query_string=params or {},
+                                           headers=headers or {}))
+
+    real = HealthClawClient(base="http://engine", mint_secret=secret)
+    real.http = _RelaySession()
+    assert real.fasten_import_running(tenant) is False
+    # Without the credential the engine refuses, and that is not "idle".
+    assert engine.get("/fasten/jobs",
+                      headers={"X-Tenant-Id": tenant}).status_code == 401
+
+    from r6.fasten.models import FastenJob
+    with engine_app.app_context():
+        db.session.add(FastenJob(task_id="t-xl-1", org_connection_id="oc-1",
+                                 tenant_id=tenant, status="ingesting"))
+        db.session.commit()
+    assert real.fasten_import_running(tenant) is True
+    with engine_app.app_context():
+        FastenJob.query.filter_by(task_id="t-xl-1").update(
+            {"status": "complete"})
+        db.session.commit()
+    assert real.fasten_import_running(tenant) is False
+
+
 # --- 2. a blocked popup is never a dead end ----------------------------------
 
 def test_a_connecting_fasten_card_links_to_its_connect_page(cfg, svc,

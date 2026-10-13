@@ -75,6 +75,9 @@
       {# Opened by the confirm link: a code first, then back here. #}
       <a class="btn-primary btn-block" id="connect-signin"
          href="/auth?connect=1">Sign in again to connect your records</a>
+      {# Said before the tap, not after it (#937): the code is the step. #}
+      <p class="card-note" id="connect-code-note">We'll email you a code to
+        sign in. Then you'll come back here.</p>
       {% else %}
       <button type="button" class="btn-primary btn-block connector-tile"
               data-connector="fasten" data-consent="1">Connect your records</button>

@@ -544,6 +544,9 @@ def test_a_link_session_is_sent_to_sign_in_before_connecting(
     card = card[:card.index("</section>")]
     assert 'href="/auth?connect=1"' in card
     assert "Sign in again to connect your records" in card
+    # The code is said on the card, before the tap (#937).
+    assert 'id="connect-code-note"' in card
+    assert "We'll email you a code to sign in." in " ".join(card.split())
     assert "connector-tile" not in card
     chat = c.get(f"/chat?agent={agent}").get_data(as_text=True)
     assert 'href="/auth?connect=1"' in chat

@@ -686,6 +686,37 @@ class HealthClawClient:
         bundle = self.search(tenant, "Patient", {"_summary": "count"})
         return int(bundle.get("total") or 0) > 0
 
+    # A Fasten job in none of these is still writing records (the engine's
+    # r6/fasten/reaper.py TERMINAL_STATUSES; this app does not import r6).
+    FASTEN_JOB_DONE = ("complete", "completed", "failed")
+
+    def fasten_import_running(self, tenant: str) -> bool:
+        """Whether a Fasten export is still being written into `tenant`.
+
+        The engine ingests in a background thread and commits every ten
+        resources, and a Patient lands first, so records exist long before
+        the import is done. A count taken in between is a fraction of the
+        record, shown as the whole (QA940-F1). Only `status` is read: the
+        job rows carry no patient data, and failure detail is not needed.
+
+        A job with no recognisable status counts as running, so the doubt
+        withholds a number rather than showing one. Raises HealthClawError
+        when the engine could not be asked, which is not the same answer as
+        "nothing is importing".
+        """
+        r = self._send("GET", f"{self.base}/fasten/jobs",
+                       headers=self._headers(tenant), what="import status")
+        if r.status_code != 200:
+            raise HealthClawError(f"import status failed ({r.status_code})",
+                                  r.status_code)
+        jobs = self._json_object(r, "import status").get("jobs")
+        if not isinstance(jobs, list):
+            raise HealthClawError("import status returned invalid data",
+                                  r.status_code)
+        return any(not isinstance(j, dict)
+                   or j.get("status") not in self.FASTEN_JOB_DONE
+                   for j in jobs)
+
     # Counted on refresh to report growth. Deliberately a fixed, clinically
     # meaningful set rather than every supported type — this is a progress
     # signal for the patient, not an inventory.

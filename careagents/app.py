@@ -1538,6 +1538,13 @@ def create_app(config: Config | None = None,
             return jsonify({"status": "revoked"})
         try:
             landed = hc.tenant_has_records(conn_tenant)
+            # A Fasten export is written in the background, a Patient first,
+            # so records landing is not the import being done. Until it is,
+            # no count is stored or shown: a mid-import count was stored once
+            # and the card read "29 records" for good with 150 there
+            # (QA940-F1).
+            importing = (landed and conns[conn_tenant]["kind"] == "fasten"
+                         and hc.fasten_import_running(conn_tenant))
         except HealthClawError:
             # Not "pending". We did not fail to find records, we failed to
             # look, and the two are different answers. Rendering this as
@@ -1550,6 +1557,13 @@ def create_app(config: Config | None = None,
                 "message": "We couldn't reach your records right now. That's "
                            "a problem on our side — we'll keep checking.",
             }), 503
+        if importing:
+            # Still "Connecting…" on the card, so the pending poller keeps
+            # asking. A connection already active (a refresh) stays active,
+            # with no "new records" yet: the watcher stops at the first one.
+            return jsonify({"status": "active"
+                            if conns[conn_tenant]["status"] == "active"
+                            else "pending"})
         if landed:
             svc.activate_connection(conn_tenant)
             if conns[conn_tenant]["kind"] != "sample":
@@ -1764,7 +1778,17 @@ def create_app(config: Config | None = None,
             connected_at=conn.get("connected_at"),
             now=time.time(),
             provider=conn.get("provider") or conn.get("label"))
-        if pending and intake.state == intake_state.READY:
+        settle = pending and intake.state == intake_state.READY
+        # A Fasten export still being written stays pending, uncounted, as
+        # the poll leaves it (QA940-F1). A failed look settles nothing.
+        if settle and conn.get("kind") == "fasten":
+            try:
+                settle = not hc.fasten_import_running(ctx["tenant"])
+            except HealthClawError:
+                logger.warning("import status unavailable for agent %s",
+                               agent_id)
+                settle = False
+        if settle:
             # Records landed while nobody was polling /connect. Settle the
             # stored status here so the next visit costs no counts.
             svc.set_connection_status(ctx["tenant"], "active")

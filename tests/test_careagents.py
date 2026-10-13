@@ -2296,6 +2296,12 @@ class FakeClient:
     def tenant_has_records(self, tenant):
         return True
 
+    # Settable: whether a Fasten export is still being written (QA940-F1).
+    importing = False
+
+    def fasten_import_running(self, tenant):
+        return self.importing
+
     # Settable so a test can simulate a refresh pulling additional records.
     counted = 100
 
