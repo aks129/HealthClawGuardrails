@@ -247,15 +247,18 @@ def test_no_status_match_and_no_absence_outside_the_closed_set(system, code):
     assert "no allergies" not in out
 
 
-@pytest.mark.parametrize("system,code", [
-    (SNOMED, "1631000175102"), (NULLFLAVOR, "NI"), (NULLFLAVOR, "ASKU"),
-    (DAR, "asked-unknown"), (DAR, "asked-declined")])
-def test_status_statement_never_says_absence(system, code):
+@pytest.mark.parametrize("system,code,status", [
+    (SNOMED, "1631000175102", True), (NULLFLAVOR, "NI", False),
+    (NULLFLAVOR, "ASKU", False), (DAR, "asked-unknown", False),
+    (DAR, "asked-declined", False)])
+def test_status_statement_never_says_absence(system, code, status):
+    # Round two (F3): only explicit SNOMED status concepts are status; a
+    # null flavor or data-absent-reason reads as a real allergy record.
     out = json.dumps(_summarize_bundle({"resourceType": "Bundle", "entry": [
         {"resource": _allergy("x", (system, code))}]})).lower()
     assert "no known" not in out
     assert "you have no allergies" not in out
-    assert "don't say whether you have allergies" in out
+    assert ("don't say whether you have allergies" in out) is status
 
 
 def test_a_real_allergen_coding_is_never_hidden_by_a_status_coding():

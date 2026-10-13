@@ -193,10 +193,6 @@ def test_a_pending_connection_says_records_may_still_be_loading():
 
 @pytest.mark.parametrize("system,code", [
     ("http://snomed.info/sct", "1631000175102"),
-    ("http://terminology.hl7.org/CodeSystem/v3-NullFlavor", "NASK"),
-    ("http://terminology.hl7.org/CodeSystem/v3-NullFlavor", "UNK"),
-    ("http://terminology.hl7.org/CodeSystem/data-absent-reason",
-     "asked-unknown"),
 ])
 def test_an_allergy_status_code_reads_as_records_not_saying(system, code):
     # The label is the terminology service's, keyed by code: the resolver
@@ -434,3 +430,41 @@ def test_an_uncut_brief_section_says_nothing_about_more():
     out = json.loads(_execute_tool(_BriefHC(_brief_with("problems", 3)), "t",
                                    "appointment_brief", {}, []))
     assert "narrow" not in out["note"].lower()
+
+
+@pytest.mark.parametrize("system,code", [
+    ("http://terminology.hl7.org/CodeSystem/v3-NullFlavor", "NASK"),
+    ("http://terminology.hl7.org/CodeSystem/v3-NullFlavor", "UNK"),
+    ("http://terminology.hl7.org/CodeSystem/data-absent-reason",
+     "asked-unknown"),
+])
+def test_a_null_flavored_allergy_code_is_still_an_allergy_record(
+        system, code):
+    # C-CDA writes an uncoded allergen as nullFlavor UNK beside free text
+    # that redaction strips: a real allergy whose substance is not coded
+    # (#945 security F3). It reads as a record, never as "don't say".
+    res = {"resourceType": "AllergyIntolerance",
+           "code": {"coding": [{"system": system, "code": code}]}}
+    [item] = _summarize_bundle(_bundle(res))
+    assert "not_an_allergy" not in item
+    assert item["unreadable"] is True
+
+
+_NOT_ASKED = {"resourceType": "AllergyIntolerance",
+              "code": {"coding": [{"system": "http://snomed.info/sct",
+                                   "code": "1631000175102"}]}}
+_PENICILLIN = {"resourceType": "AllergyIntolerance",
+               "code": {"text": "Allergy to penicillin",
+                        "coding": [{"system": "http://snomed.info/sct",
+                                    "code": "91936005"}]}}
+
+
+@pytest.mark.parametrize("tail", [[_PENICILLIN], []],
+                         ids=["allergy-past-the-cut", "status-only-but-cut"])
+def test_a_cut_allergy_list_never_says_the_records_are_silent(tail):
+    # Decided on the full result, not the page (#945 security F5): what is
+    # past the cut may be a recorded allergy.
+    items = _summarize_bundle(_bundle(*([_NOT_ASKED] * 13), *tail))
+    assert any(i.get("truncated") for i in items)
+    assert not any("don't say whether" in json.dumps(i) for i in items)
+    assert all("statement" not in i for i in items)

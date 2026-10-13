@@ -36,13 +36,29 @@ def test_r2_any_real_coding_keeps_the_record_an_allergy(codings):
 
 
 @pytest.mark.parametrize("codings", [
-    [{"system": NULLFLAVOR, "code": "UNK"}, {"system": NULLFLAVOR, "code": "UNK"}],
-    [{"system": SNOMED, "code": "1631000175102"}, {"system": DAR, "code": "not-asked"}],
+    [{"system": SNOMED, "code": "1631000175102"}],
+    [{"system": SNOMED, "code": "1631000175102"},
+     {"system": SNOMED, "code": "1631000175102"}],
 ])
-def test_r2_duplicate_or_combined_status_codes_stay_status(codings):
+def test_r2_duplicate_status_codes_stay_status(codings):
     [item] = _items(_status(*codings))
     assert item.get("not_an_allergy")
     assert "no known" not in json.dumps(item).lower()
+
+
+# Round two narrowed the status set to explicit SNOMED status concepts: a
+# coding-level null flavor or data-absent-reason is a real allergy record
+# (C-CDA's uncoded allergen, F3), and so is any record with another coding.
+@pytest.mark.parametrize("codings", [
+    [{"system": NULLFLAVOR, "code": "UNK"}, {"system": NULLFLAVOR, "code": "UNK"}],
+    [{"system": SNOMED, "code": "1631000175102"}, {"system": DAR, "code": "not-asked"}],
+    [{"system": NULLFLAVOR, "code": "NASK"}],
+    [{"system": DAR, "code": "asked-unknown"}],
+])
+def test_r2_null_flavor_and_mixed_records_are_allergy_records(codings):
+    [item] = _items(_status(*codings))
+    assert not item.get("not_an_allergy"), item
+    assert item.get("unreadable") and item.get("name")
 
 
 @pytest.mark.parametrize("res", [
