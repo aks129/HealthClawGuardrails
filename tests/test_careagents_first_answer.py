@@ -359,3 +359,42 @@ def test_patient_not_asked_reaches_the_model_as_plain_words(
     assert allergy["statement"] == (
         "Your records don't say whether you have allergies.")
     assert "not asked" not in json.dumps(out).lower()
+
+
+def test_a_failed_tool_in_the_worker_reaches_the_model_as_a_read_failure(
+        cfg, svc, monkeypatch):  # noqa: F811
+    # The production path: the run worker, not run_turn.
+    chain = Chain(cfg, svc, monkeypatch)
+    real_post = chain.relay.post
+
+    def post(url, json=None, headers=None, timeout=None, data=None):
+        if "/Observation/$interpret" in url:
+            r = requests.Response()
+            r.status_code = 503
+            r._content = b"{}"
+            return r
+        return real_post(url, json=json, headers=headers, timeout=timeout,
+                         data=data)
+    monkeypatch.setattr(chain.relay, "post", post)
+
+    seen = []
+
+    def complete(_cfg, system, history, tools):
+        results = [m["content"] for m in history if m.get("role") == "tool"]
+        if not results:
+            return _Turn("", [_Call(0, "get_labs", {})])
+        seen.append(results[-1])
+        return _Turn("answered")
+    monkeypatch.setattr("careagents.worker.llm.complete", complete)
+
+    c = chain.app.test_client()
+    _login(c, svc, monkeypatch, email="acceptance@example.com")
+    from careagents.worker import RunWorker
+    RunWorker(cfg, chain.hc, svc, "test-worker").run_once()
+    r = _turn(c, chain.agent, "what do my labs say?")
+    assert r.status_code == 200
+    [content] = seen
+    out = json.loads(content)
+    assert out["error"] == "records_unavailable"
+    assert "not absent" in out["note"].lower()
+    assert "503" not in content and "$interpret" not in content
