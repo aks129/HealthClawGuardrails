@@ -264,28 +264,110 @@ ALLERGY_STATUS_STATEMENT = (
 #: and data-absent-reason codes are NOT here: C-CDA writes an uncoded
 #: allergen as nullFlavor UNK beside free text that redaction strips, so
 #: those are real allergy records (#945 security F3). "No known allergy"
-#: codes are absent too: never "no known allergies" inferred here.
+#: codes are not status either: they are _NKA_CODES below.
 _ALLERGY_STATUS_CODES = frozenset({
     ("http://snomed.info/sct", "1631000175102"),  # Patient not asked
 })
+
+#: "No known allergy" concepts: SNOMED 716186003 and every descendant
+#: (tx.fhir.org, isa/716186003, 2026-10-13), each with our own words for
+#: it. The words are keyed by code, never taken from the record: the
+#: terminology label ("No known allergy") reached the model as an allergy's
+#: name, a bare fact about the person (#946).
+_NKA_CODES = {
+    ("http://snomed.info/sct", "716186003"): "no known allergies",
+    ("http://snomed.info/sct", "409137002"): "no known drug allergies",
+    ("http://snomed.info/sct", "428197003"): "no known insect allergies",
+    ("http://snomed.info/sct", "428607008"):
+        "no known environmental allergies",
+    ("http://snomed.info/sct", "429625007"): "no known food allergies",
+    ("http://snomed.info/sct", "716220001"): "no known animal allergies",
+    ("http://snomed.info/sct", "1003774007"): "no known latex allergies",
+}
+
+
+def _coding_keys(res: dict) -> list | None:
+    """(system, code) for every coding, or None when there is none or any
+    one is not a coding we can key on. A coding we cannot key on is still a
+    coding, never a reason to read the record as anything but an allergy
+    (F4). Strings only: a list in `code` is unhashable, and ingest stores
+    whatever arrived (#885)."""
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    if not isinstance(codings, list) or not codings:
+        return None
+    if not all(isinstance(c, dict) and isinstance(c.get("system"), str)
+               and isinstance(c.get("code"), str) for c in codings):
+        return None
+    return [(c["system"], c["code"]) for c in codings]
 
 
 def _is_allergy_status(res: dict) -> bool:
     """True only when the record carries at least one explicit status
     concept and NO other coding of any kind, well formed or not. Penicillin
-    beside a status code is a penicillin allergy (F1); a coding we cannot
-    key on is still a coding, never a reason to read the record as status
-    (F4)."""
-    code = res.get("code")
-    codings = code.get("coding") if isinstance(code, dict) else None
-    if not isinstance(codings, list) or not codings:
-        return False
-    # Strings only: a list in `code` is unhashable, and ingest stores
-    # whatever arrived (#885).
-    return all(isinstance(c, dict) and isinstance(c.get("system"), str)
-               and isinstance(c.get("code"), str)
-               and (c["system"], c["code"]) in _ALLERGY_STATUS_CODES
-               for c in codings)
+    beside a status code is a penicillin allergy (F1). A "no known allergy"
+    coding beside a status code reads as status: a record that also says
+    "not asked" does not say there are none (#946)."""
+    keys = _coding_keys(res)
+    return (bool(keys) and any(k in _ALLERGY_STATUS_CODES for k in keys)
+            and all(k in _ALLERGY_STATUS_CODES or k in _NKA_CODES
+                    for k in keys))
+
+
+def _nka_kinds(res: dict) -> list[str]:
+    """Our words for a "no known allergy" record, or [] when it is not one.
+    Every coding must be in _NKA_CODES, as for status: any other coding
+    makes it an allergy record."""
+    keys = _coding_keys(res)
+    if not keys or not all(k in _NKA_CODES for k in keys):
+        return []
+    return list(dict.fromkeys(_NKA_CODES[k] for k in keys))
+
+
+def _nka_when(item: dict) -> str:
+    """The date clause for an entry: what kind of date it is, said as that."""
+    return {"recorded": f", recorded on {item.get('date')},",
+            "onset": f", dated {item.get('date')},",
+            "last_updated": (", last updated in your records on "
+                             f"{item.get('date')},"),
+            }.get(item.get("date_kind"), "")
+
+
+def _nka_item(res: dict, kinds: list[str]) -> dict:
+    """A "no known allergy" record as what it is: an entry in the records,
+    dated and quoted, never a fact about the person. Never "no known
+    allergies" inferred: this repeats what someone recorded and says when,
+    so a stale entry reads as one (#946)."""
+    item = {"type": "AllergyIntolerance", "no_known_allergy_record": True}
+    # The clinic's dates first. meta.lastUpdated is the engine's own write
+    # time (r6/models.py), when the entry arrived here: said as that, never
+    # as when it was recorded. onsetDateTime only, never onsetString.
+    meta = res.get("meta")
+    for kind, raw in (("recorded", res.get("recordedDate")),
+                      ("onset", res.get("onsetDateTime")),
+                      ("last_updated", meta.get("lastUpdated")
+                       if isinstance(meta, dict) else None)):
+        date = labs_timeline.parse_date(raw)
+        if date:
+            item.update({"date": date, "date_kind": kind})
+            break
+    lists = " and ".join(kinds)
+    if item.get("date_kind") == "last_updated":
+        tail = "; the records don't show when it was first recorded"
+    elif "date" in item:
+        tail = ""
+    else:
+        tail = "; the records don't show when it was recorded"
+    item["statement"] = (f"Your records include an entry{_nka_when(item)} "
+                         f"that lists {lists}{tail}. Please confirm with your "
+                         "doctor or pharmacist.")
+    item["note"] = (
+        "This is an entry in the person's records, not a fact about them: "
+        "someone recorded it, and it may be out of date. Give the statement "
+        "in these plain words, as a dated record. Never say they have no "
+        "allergies, and always tell them to confirm with their doctor or "
+        "pharmacist.")
+    return item
 
 
 #: Records per list the tools hand the model: the engine's search page (50,
@@ -336,6 +418,12 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                          "whether they have allergies. Do not quote the "
                          "record, and never say they have no allergies.")})
             out.append(item)
+            continue
+        nka = _nka_kinds(res) if rt == "AllergyIntolerance" else []
+        if nka:
+            # Before the name below: that is where the resolver's label
+            # "No known allergy" became an allergy's name (#946).
+            out.append(_nka_item(res, nka))
             continue
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
@@ -446,6 +534,39 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                              "allergy information was not collected at one "
                              "point. Report any allergies listed here; do "
                              "not mention this entry or quote it.")
+    # A "no known allergy" entry is quoted only from a list known in full
+    # with no allergy in it. Beside a recorded allergy, the allergy wins and
+    # the entry is a disagreement to confirm; in a cut list, the rest may
+    # hold an allergy. Either way it never says "no known" (#946).
+    conflict = any(i.get("type") == "AllergyIntolerance"
+                   and not i.get("not_an_allergy")
+                   and not i.get("no_known_allergy_record") for i in out)
+    for i in out:
+        if not i.get("no_known_allergy_record"):
+            continue
+        if conflict:
+            i["statement"] = (
+                f"Your records also include an entry{_nka_when(i)} that "
+                "disagrees with the allergies listed. Please confirm your "
+                "allergies with your doctor or pharmacist.")
+            i["note"] = (
+                "The records disagree: they list an allergy, and this entry "
+                "says otherwise. The allergy listed wins: never say the "
+                "person has no known allergies. Say plainly that their "
+                "records disagree, name the allergies listed, and tell them "
+                "to confirm with their doctor or pharmacist.")
+        elif total > len(out):
+            i["statement"] = (
+                "Your allergy list is longer than can be shown here, so it "
+                "can't be read as complete. Please confirm your allergies "
+                "with your doctor or pharmacist.")
+            i["note"] = (
+                "More allergy records are on file than are listed, and any "
+                "of them may be an allergy. Never say the person has no "
+                "known allergies and do not quote this entry. Say their "
+                "allergy list is longer than you can show in this chat, that "
+                "the full list is in their patient portal, and tell them to "
+                "confirm with their doctor or pharmacist.")
     if total > len(out):
         # Deliberately shaped so it cannot be mistaken for a record: no
         # "type", no "name". The instruction is carried in the payload rather

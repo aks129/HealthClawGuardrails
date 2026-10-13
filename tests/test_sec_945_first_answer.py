@@ -225,11 +225,10 @@ def test_other_tool_failures_hand_over_no_exception_text(
 
 # --- (2) NKA is never inferred; status matching is keyed by system+code ------
 
+#: The "no known allergy" codes left this list when #946 was decided: they
+#: are quoted as dated entries, never as status or absence, and
+#: tests/test_careagents_nka_946.py pins how.
 @pytest.mark.parametrize("system,code", [
-    (SNOMED, "716186003"),     # No known allergy
-    (SNOMED, "409137002"),     # No known drug allergy
-    (SNOMED, "428607008"),     # No known environmental allergy
-    (SNOMED, "429625007"),     # No known food allergy
     (SNOMED, "1150001000175102"),
     ("http://loinc.org", "UNK"),                 # status code, wrong system
     ("http://snomed.info/sct/", "1631000175102"),  # near-miss system
