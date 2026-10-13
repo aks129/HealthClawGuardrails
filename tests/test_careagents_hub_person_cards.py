@@ -293,8 +293,10 @@ def test_f1_each_source_says_whose_records_once_someone_is_added(
                                       "nickname": "Mom"}).get_json()
     rows = _source_rows(c.get("/home").get_data(as_text=True))
     assert set(rows) == {mine, mom["connection_id"]}
-    assert "Your records" in rows[mine]
-    assert "Mom&#39;s records" in rows[mom["connection_id"]]
+    assert ('class="agent-for source-whose">Your records</div>'
+            in rows[mine])
+    assert ('class="agent-for source-whose">Mom&#39;s records</div>'
+            in rows[mom["connection_id"]])
     # The person line tells the two "Sample records" apart: no "(2)".
     assert "(2)" not in rows[mine] + rows[mom["connection_id"]]
     # Delete names whose records it deletes.
@@ -323,8 +325,10 @@ def test_f1_twins_of_one_person_are_still_numbered():
 
 
 def test_f1_the_delete_dialog_is_given_whose_records():
-    body = _HOME_JS.split('document.querySelectorAll(".conn-delete")')[1][:500]
-    assert "btn.dataset.whose" in body
+    body = _HOME_JS.split('document.querySelectorAll(".conn-delete")')[1][:600]
+    assert ('btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" '
+            ': label') in body
+    # The browser check (375px run) reads the dialog's own text too.
 
 
 def test_f4_someone_you_care_for_gets_a_different_default_name(
