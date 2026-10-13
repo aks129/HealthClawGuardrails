@@ -56,15 +56,11 @@ def test_a_record_with_anything_else_is_never_dropped(codings):
     assert engine.build_problems([_cond("c", *codings)]), codings
 
 
-_CRASH = pytest.mark.xfail(
-    raises=AttributeError, strict=True,
-    reason="pre-existing on main (careagents/agent.py name lookup): a "
-           "string code or string coding raises; availability, not a leak")
-
-
+# A string code or string coding used to raise AttributeError here and
+# fail the turn; fixed in #949, so these run as ordinary cases.
 @pytest.mark.parametrize("code", [
-    None, pytest.param({"coding": "x"}, marks=_CRASH), {"coding": {}},
-    {"text": "x"}, [], pytest.param("716186003", marks=_CRASH)])
+    None, {"coding": "x"}, {"coding": {}},
+    {"text": "x"}, [], "716186003"])
 def test_malformed_code_elements_are_never_dropped(code):
     res = {"resourceType": "Condition", "id": "c", "clinicalStatus": ACTIVE,
            "code": code}

@@ -217,18 +217,57 @@ def test_an_absence_code_is_never_a_name_whatever_sits_beside_it(
     {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/"
                  "allergyintolerance-verification", "code": "refuted"}]},
     {"coding": [{"code": " entered-in-error"}]}, "entered-in-error"])
-def test_a_withdrawn_nka_entry_is_neither_quoted_nor_absence(vs):
+def test_a_withdrawn_nka_entry_is_never_sent(vs):
+    """Real-model QA on #949: handed a withdrawn entry with a "do not
+    mention it" note, the model mentioned it and disclosed the note. What
+    must not reach the person is not sent at all."""
     out = _summarize_bundle(_bundle(_nka(recordedDate="2024-03-05",
                                          verificationStatus=vs)))
-    [item] = out
-    assert item["withdrawn_entry"] is True
-    assert "statement" not in item
-    # Real-model QA: the model once told the person a withdrawn entry
-    # exists. The note now forbids mentioning it at all.
-    assert "do not mention it, its existence" in item["note"].lower()
-    assert "never read it as the person having no allergies" in (
-        item["note"].lower())
+    blob = json.dumps(out).lower()
+    for word in ("withdrawn", "entered in error", "entered-in-error",
+                 "refuted", "2024-03-05", "no known", "do not mention"):
+        assert word not in blob
+    # An empty allergy list is never absence: the one item left says so.
+    [marker] = out
+    assert "type" not in marker
+    assert "does not mean they have no allergies" in marker["note"]
     assert not _nka_items(out)
+
+
+def test_a_withdrawn_nka_entry_is_not_counted_as_more_records():
+    withdrawn = _nka(verificationStatus="refuted")
+    live = _nka("n2", code=NKDA, recordedDate="2024-01-02")
+    out = _summarize_bundle(_bundle(withdrawn, live, total=2))
+    assert [i.get("statement") for i in out] == [
+        "Your records include an entry, recorded on 2024-01-02, that lists "
+        f"no known drug allergies. {CONFIRM}"]
+
+
+def test_a_withdrawn_real_allergy_still_blocks_the_nka_statement():
+    """Chosen: a withdrawn REAL allergy is kept, as before. Dropping it
+    would let a "no known allergies" entry beside it be quoted, the
+    unsafe direction."""
+    real = dict(_real(), verificationStatus="entered-in-error")
+    out = _summarize_bundle(_bundle(_nka(recordedDate="2024-01-02"), real))
+    [item] = _nka_items(out)
+    assert "no known" not in item["statement"].lower()
+    assert any(i.get("name") for i in out)
+
+
+def test_real_engine_withdrawn_nka_never_reaches_the_model(
+        cfg, svc, monkeypatch):  # noqa: F811
+    chain = Chain(cfg, svc, monkeypatch)
+    _resolver(monkeypatch)
+    _plant(chain, {**_nka("nka-946-w"), "recordedDate": "2021-05-06",
+                   "verificationStatus": {"coding": [
+                       {"code": "entered-in-error"}]},
+                   "patient": {"reference": "Patient/demo-patient-rivera"}})
+    out, _system = _first_turn(chain, monkeypatch)
+    blob = json.dumps(out).lower()
+    for word in ("withdrawn", "entered", "refuted", "2021-05-06",
+                 "no known allerg", "do not mention"):
+        assert word not in blob
+    assert "does not mean they have no allergies" in blob
 
 
 def test_a_withdrawn_nka_entry_leaves_the_status_statement_alone():

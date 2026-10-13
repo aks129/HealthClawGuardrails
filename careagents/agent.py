@@ -463,6 +463,7 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                 != "OperationOutcome")
     out = []
     dropped = 0
+    withdrawn_nka = False
     for entry in entries[:limit]:
         res = entry.get("resource") or {}
         rt = res.get("resourceType")
@@ -495,14 +496,14 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         nka = _nka_kinds(res) if rt == "AllergyIntolerance" else []
         if nka and _withdrawn(res):
             # Entered in error or refuted: the entry says nothing either
-            # way. Not quoted, and never read as no allergies (#949 F2).
-            out.append({"type": rt, "withdrawn_entry": True, "note": (
-                "Ignore this entry completely: it was withdrawn in the "
-                "records and says nothing about allergies either way. Do "
-                "not mention it, its existence, or that anything was "
-                "withdrawn or entered in error, and do not count it. Never "
-                "read it as the person having no allergies. Answer from the "
-                "other entries only.")})
+            # way (#949 F2), so it is not sent at all. Sent with a "do not
+            # mention it" note, the model mentioned it and disclosed the
+            # note (#949 real-model QA): what must not reach the person is
+            # never handed to the model. Not counted either. A withdrawn
+            # REAL allergy is kept: dropping it would let a "no known
+            # allergies" entry beside it be quoted.
+            dropped += 1
+            withdrawn_nka = True
             continue
         if nka:
             # Before the name below: that is where the resolver's label
@@ -510,8 +511,17 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             out.append(_nka_item(res, nka))
             continue
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
-        text = code.get("text") or " ".join(
-            c.get("display", "") for c in (code.get("coding") or [])[:1])
+        # Ingest stores whatever arrived: a string `code` or `coding`
+        # raised here and failed the whole turn (#949 security round 4).
+        # Malformed reads as an unreadable record, never a name or absence.
+        if not isinstance(code, dict):
+            code = {}
+        if not isinstance(code.get("coding"), list):
+            code = {**code, "coding": []}
+        first = (code["coding"] or [None])[0]
+        text = code.get("text") or (
+            first.get("display") if isinstance(first, dict) else "")
+        text = text if isinstance(text, str) else ""
         if _carries_absence_code(res):
             # Backstop: whatever the checks above made of it, a record
             # with a status or "no known allergy" coding is never named by
@@ -625,11 +635,9 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         total = max(total, stated)
     total -= dropped
     if total > len(out) or any(i.get("type") == "AllergyIntolerance"
-                               and not i.get("not_an_allergy")
-                               and not i.get("withdrawn_entry") for i in out):
+                               and not i.get("not_an_allergy") for i in out):
         # "Your records don't say whether you have allergies" holds only for
-        # a list known in full to be status records alone (a withdrawn
-        # entry says nothing, so it changes nothing). A recorded
+        # a list known in full to be status records alone. A recorded
         # allergy in this list (#945 security F2), or a cut list whose rest
         # we have not seen (F5), makes it false. Reworded rather than
         # dropped: a dropped item would read as a truncated list below.
@@ -646,8 +654,7 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     # hold an allergy. Either way it never says "no known" (#946).
     conflict = any(i.get("type") == "AllergyIntolerance"
                    and not i.get("not_an_allergy")
-                   and not i.get("no_known_allergy_record")
-                   and not i.get("withdrawn_entry") for i in out)
+                   and not i.get("no_known_allergy_record") for i in out)
     for i in out:
         if not i.get("no_known_allergy_record"):
             continue
@@ -698,6 +705,16 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                      "their patient portal. Do not offer to show the rest "
                      "or to look again: you cannot."),
         })
+    elif withdrawn_nka and not any(i.get("type") == "AllergyIntolerance"
+                                   for i in out):
+        # Only withdrawn entries were here, and none is sent. An empty
+        # allergy list must not read as no allergies; every word below is
+        # one the person may hear, and none says why the list is empty.
+        out.append({"note": (
+            "No allergy entries can be shown here. That does not mean they "
+            "have no allergies: say their records here show no allergy "
+            "entries, and ask them to confirm their allergies with their "
+            "doctor or pharmacist.")})
     return out
 
 
