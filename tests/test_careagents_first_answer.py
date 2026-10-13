@@ -110,8 +110,10 @@ def test_every_search_failing_is_still_an_answer_with_a_note():
 def test_empty_lists_with_records_on_file_say_records_exist():
     out = _summary(_HC(count=263))
     note = out["note"].lower()
-    assert "records are on file" in note
+    assert "some records are on file" in note
     assert "never say" in note and "no records" in note
+    # The count spans labs AND immunizations: no claim about which kind.
+    assert "on file for this person, such as" not in note
 
 
 def test_empty_lists_with_nothing_landed_say_still_loading():

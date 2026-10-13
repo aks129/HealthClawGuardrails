@@ -789,10 +789,10 @@ def _empty_summary_note(hc: HealthClawClient, tenant: str) -> str:
                 "just now and offer to try again.")
     if total > 0:
         return ("No conditions, medications or allergies came back, but "
-                "records are on file for this person, such as lab results. "
-                "Never say they have no records or that nothing is "
-                "connected. Say these lists are empty in what you can read, "
-                "and offer to look at their lab results.")
+                "some records are on file for this person. Never say they "
+                "have no records or that nothing is connected. Say these "
+                "lists are empty in what you can read, and offer to look at "
+                "their other records, such as lab results or vaccines.")
     return ("No records have arrived here yet. Say plainly that their records "
             "are not here yet: if they connected them recently, they are "
             "still loading, which can take up to 45 minutes, and they can "
