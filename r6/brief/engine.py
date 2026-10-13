@@ -108,6 +108,32 @@ RESULT_NOT_LISTED = "Result not listed in your records"
 SAMPLE_RESULT_NOT_LISTED = "Result not listed in these made-up records"
 
 
+#: SNOMED "no known allergy" (716186003 and its descendants) and "patient
+#: not asked" (1631000175102). Their labels are statements about allergies,
+#: not names: an active Condition coded 716186003 read "No known allergy:
+#: Active" on the brief, a fact about the person no one attested (#949 F3).
+#: Mirrored in careagents/agent.py; a test holds the two equal.
+_ABSENCE_CONCEPTS = frozenset(
+    (terminology.SNOMED, c) for c in (
+        "716186003", "409137002", "428197003", "428607008", "429625007",
+        "716220001", "1003774007", "1631000175102"))
+
+
+def _names_an_absence(concept: dict) -> bool:
+    """Any coding keyed, as terminology.lookup keys it, to one of those."""
+    for coding in concept.get("coding") or []:
+        if not isinstance(coding, dict):
+            continue
+        code = coding.get("code")
+        if isinstance(code, bool) or not isinstance(code, (str, int)):
+            continue
+        key = (terminology.canonical_system(coding.get("system")),
+               str(code).strip())
+        if key in _ABSENCE_CONCEPTS:
+            return True
+    return False
+
+
 def _concept_label(concept) -> str | None:
     """The server's name for a CodeableConcept, looked up by code in
     r6/terminology.py, or None.
@@ -118,6 +144,8 @@ def _concept_label(concept) -> str | None:
     engine does not lean on that (#884 QA F3), so it reads only the codes.
     """
     if not isinstance(concept, dict):
+        return None
+    if _names_an_absence(concept):
         return None
     for coding in concept.get("coding") or []:
         if isinstance(coding, dict):

@@ -418,3 +418,57 @@ def test_the_prompt_lets_a_dated_entry_be_quoted_and_nothing_more():
     assert "as a dated entry in their records, never as a fact about them" in (
         core)
     assert "confirm with their doctor or pharmacist" in core
+
+
+# --- #949 F3: the concept outside AllergyIntolerance ------------------------
+
+@pytest.mark.parametrize("rt", ["Condition", "Observation", "Procedure"])
+@pytest.mark.parametrize("code", [NKA, NKDA, STATUS])
+def test_an_absence_concept_on_any_type_is_never_its_name(rt, code):
+    res = {"resourceType": rt, "id": "x",
+           "code": {"coding": [{"system": SNOMED, "code": code,
+                                "display": "No known allergy"}],
+                    "text": "No known allergy"}}
+    [item] = _summarize_bundle(_bundle(res))
+    assert item["name"] == "unlabeled record (SNOMED CT code)"
+    assert "no known" not in json.dumps(item).lower()
+
+
+@pytest.mark.parametrize("code", [NKA, "1003774007", STATUS])
+@pytest.mark.parametrize("system", [SNOMED, "urn:oid:2.16.840.1.113883.6.96",
+                                    " " + SNOMED])
+def test_the_brief_never_names_a_record_by_an_absence_concept(
+        monkeypatch, code, system):
+    from r6.brief import engine
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: "No known allergy")
+    cond = {"resourceType": "Condition", "id": "c",
+            "clinicalStatus": {"coding": [{"code": "active"}]},
+            "code": {"coding": [{"system": system, "code": code}]}}
+    [field] = engine.build_problems([cond])
+    assert field.label == engine.UNLABELLED
+
+
+def test_the_brief_absence_set_matches_careagents():
+    """The engine and CareAgents share no code, so each holds the set; this
+    holds them equal."""
+    from careagents.agent import _ALLERGY_STATUS_CODES, _NKA_CODES
+    from r6.brief import engine
+    assert engine._ABSENCE_CONCEPTS == set(_NKA_CODES) | _ALLERGY_STATUS_CODES
+
+
+def test_real_engine_brief_does_not_list_no_known_allergy_as_a_problem(
+        cfg, svc, monkeypatch):  # noqa: F811
+    from careagents.agent import _execute_tool
+    from tests.test_beta_acceptance_rows import TENANT
+    chain = Chain(cfg, svc, monkeypatch)
+    _resolver(monkeypatch)
+    _plant(chain, {"resourceType": "Condition", "id": "nka-946-brief",
+                   "subject": {"reference": "Patient/demo-patient-rivera"},
+                   "clinicalStatus": {"coding": [{"code": "active"}]},
+                   "code": {"coding": [{"system": SNOMED, "code": NKA}]}})
+    out = _execute_tool(chain.hc, TENANT, "appointment_brief", {}, [])
+    assert "no known allergy" not in out.lower()
+    problems = json.loads(out)["sections"]["problems"]
+    assert {"label": "Recorded, name unavailable", "value": "Active"} in (
+        problems)

@@ -492,10 +492,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
             c.get("display", "") for c in (code.get("coding") or [])[:1])
-        if rt == "AllergyIntolerance" and _carries_absence_code(res):
+        if _carries_absence_code(res):
             # Backstop: whatever the checks above made of it, a record
             # with a status or "no known allergy" coding is never named by
-            # its text, which holds that concept's label (#949 F1).
+            # its text, which holds that concept's label (#949 F1). Every
+            # type, not allergies alone: feeds put "No known allergy" on
+            # the problem list too, and it read as a fact beside an empty
+            # allergy list (#949 F3). It stays an unlabeled record.
             text = ""
         lookup_reason = None
         if not text and resolve_ref is not None:
