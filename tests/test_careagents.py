@@ -2302,6 +2302,14 @@ class FakeClient:
     def fasten_import_running(self, tenant):
         return self.importing
 
+    # Settable: the newest Fasten job failed (QA940 round 3).
+    import_failed = False
+
+    def fasten_import_state(self, tenant):
+        if self.importing:
+            return "running"
+        return "failed" if self.import_failed else "none"
+
     # Settable so a test can simulate a refresh pulling additional records.
     counted = 100
 

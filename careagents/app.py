@@ -551,13 +551,14 @@ def create_app(config: Config | None = None,
             # A Fasten card still connecting links to its connect page
             # (#937). A link is never blocked as a popup is, so a person
             # whose browser blocked the first window is not left with only
-            # a Refresh that repeats it. Gone once an import runs: the
-            # person has done their part (QA940 round 2).
+            # a Refresh that repeats it. While an import runs the card says
+            # the records are on their way instead, and after a failed one
+            # it says so and offers the page again (QA940 rounds 2 and 3).
             connect_pages=({} if paused else {
-                r["id"]: hc.fasten_connect_url(r["tenant_id"])
+                r["id"]: {"url": hc.fasten_connect_url(r["tenant_id"]),
+                          "state": _import_state(r["tenant_id"])}
                 for r in view["records"]
-                if r["kind"] == "fasten" and r["status"] == "pending"
-                and not _importing(r["tenant_id"])}),
+                if r["kind"] == "fasten" and r["status"] == "pending"}),
             has_grants=bool(svc.list_grants(acct.id)),
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
@@ -581,15 +582,16 @@ def create_app(config: Config | None = None,
         except Exception:  # noqa: BLE001 - the card is left out, not the page
             return False
 
-    def _importing(tenant: str) -> bool:
-        """Whether a Fasten import is writing into `tenant`, for the hub's
-        connect link. A failed look answers False: the link is the fallback
-        for a blocked popup, so doubt keeps it."""
+    def _import_state(tenant: str) -> str:
+        """What a connecting Fasten card says (QA940 rounds 2 and 3):
+        "running", "failed", or anything else for the plain connect link.
+        A failed look answers "unknown": the link is the fallback for a
+        blocked popup, so doubt keeps it."""
         try:
-            return hc.fasten_import_running(tenant)
+            return hc.fasten_import_state(tenant)
         except HealthClawError:
             logger.warning("import status unavailable on the hub")
-            return False
+            return "unknown"
 
     def _connect_next(acct, view, menu, real_open, paused) -> bool:
         """Is "Connect your records" the hub's next step? Once made-up

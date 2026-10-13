@@ -156,8 +156,15 @@
         <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
         {% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
-        {% if connect_pages.get(c.id) %}
-        <p class="card-note">Not finished? <a class="open-connect-page" href="{{ connect_pages[c.id] }}"
+        {% set page = connect_pages.get(c.id) %}
+        {% if page and page.state == 'running' %}
+        {# Static: no number and no progress claim (QA940 round 3). #}
+        <p class="card-note">Your records are on their way. This can take up to 45 minutes.</p>
+        {% elif page and page.state == 'failed' %}
+        <p class="card-note">Bringing in your records didn't work. <a class="open-connect-page" href="{{ page.url }}"
+             target="_blank" rel="noopener">Try connecting again</a></p>
+        {% elif page %}
+        <p class="card-note">Not finished? <a class="open-connect-page" href="{{ page.url }}"
              target="_blank" rel="noopener">Open the connect page</a></p>
         {% endif %}
         {% if paused %}

@@ -704,6 +704,16 @@ class HealthClawClient:
         when the engine could not be asked, which is not the same answer as
         "nothing is importing".
         """
+        return self.fasten_import_state(tenant) == "running"
+
+    def fasten_import_state(self, tenant: str) -> str:
+        """"running", "failed", "done" or "none" for `tenant`'s Fasten jobs.
+
+        "failed" only when nothing runs and the newest job (the engine lists
+        newest first) failed, so a retry that later succeeded is not shown
+        as a failure. Raises HealthClawError on a failed or malformed
+        answer, never "none".
+        """
         r = self._send("GET", f"{self.base}/fasten/jobs",
                        headers=self._headers(tenant), what="import status")
         if r.status_code != 200:
@@ -713,9 +723,16 @@ class HealthClawClient:
         if not isinstance(jobs, list):
             raise HealthClawError("import status returned invalid data",
                                   r.status_code)
-        return any(not isinstance(j, dict)
-                   or j.get("status") not in self.FASTEN_JOB_DONE
-                   for j in jobs)
+        return self._import_state(jobs)
+
+    def _import_state(self, jobs: list) -> str:
+        if any(not isinstance(j, dict)
+               or j.get("status") not in self.FASTEN_JOB_DONE
+               for j in jobs):
+            return "running"
+        if not jobs:
+            return "none"
+        return "failed" if jobs[0].get("status") == "failed" else "done"
 
     # Counted on refresh to report growth. Deliberately a fixed, clinically
     # meaningful set rather than every supported type — this is a progress

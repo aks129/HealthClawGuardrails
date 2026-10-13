@@ -570,9 +570,9 @@ def test_the_connect_link_goes_once_an_import_is_running(cfg, svc,
 
     def down(tenant):
         raise HealthClawError("down")
-    fake.fasten_import_running = down
-    assert "open-connect-page" in _card(
-        c.get("/home").get_data(as_text=True), conn)
+    fake.fasten_import_state = down
+    card = _card(c.get("/home").get_data(as_text=True), conn)
+    assert "Not finished?" in card and "open-connect-page" in card
 
 
 def test_the_chat_banner_says_records_are_still_arriving_mid_import(
@@ -601,3 +601,59 @@ def test_the_chat_banner_says_records_are_still_arriving_mid_import(
         as_text=True).split())
     assert "haven't arrived yet" in page
     assert "still arriving" not in page
+
+
+# --- QA940 round 3: what a connecting card says ------------------------------
+
+def test_a_connecting_card_says_the_records_are_on_their_way(cfg, svc,
+                                                             monkeypatch):
+    """A static line while the import runs: no number, no progress."""
+    app, fake = _app(cfg, svc)
+    fake.tenant_has_records = lambda tenant: False
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, _tenant = _start_fasten(c)
+    line = ("Your records are on their way. This can take up to 45 "
+            "minutes.")
+    fake.importing = True
+    card = " ".join(_card(c.get("/home").get_data(as_text=True),
+                          conn).split())
+    assert line in card
+    assert "didn't work" not in card
+    fake.importing = False
+    card = " ".join(_card(c.get("/home").get_data(as_text=True),
+                          conn).split())
+    assert line not in card
+
+
+def test_a_failed_import_says_so_and_offers_the_connect_page(cfg, svc,
+                                                             monkeypatch):
+    """The person finished their part; "Not finished?" blamed them for a
+    failure on our side or the provider's (QA940 round 3)."""
+    app, fake = _app(cfg, svc)
+    fake.tenant_has_records = lambda tenant: False
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    fake.import_failed = True
+    card = " ".join(_card(c.get("/home").get_data(as_text=True),
+                          conn).split())
+    assert "Bringing in your records didn't work." in card
+    assert (f'class="open-connect-page" href="{fake.base}/connect/{tenant}"'
+            in card)
+    assert "Try connecting again" in card
+    assert "Not finished?" not in card
+    assert "on their way" not in card
+
+
+def test_the_import_state_reads_the_newest_job():
+    for statuses, state in ((["failed"], "failed"),
+                            (["failed", "complete"], "failed"),
+                            (["complete", "failed"], "done"),
+                            (["ingesting", "failed"], "running"),
+                            (["failed", "pending"], "running"),
+                            ([], "none")):
+        client, _ = _client_answering(
+            200, {"jobs": [{"status": x} for x in statuses]})
+        assert client.fasten_import_state("ca-1") == state, statuses
+        assert client.fasten_import_running("ca-1") is (state == "running")
