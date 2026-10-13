@@ -119,19 +119,29 @@ _ABSENCE_CONCEPTS = frozenset(
         "716220001", "1003774007", "1631000175102"))
 
 
+def _is_absence(coding) -> bool:
+    """A coding keyed, as terminology.lookup keys it, to one of those."""
+    if not isinstance(coding, dict):
+        return False
+    code = coding.get("code")
+    if isinstance(code, bool) or not isinstance(code, (str, int)):
+        return False
+    return (terminology.canonical_system(coding.get("system")),
+            str(code).strip()) in _ABSENCE_CONCEPTS
+
+
 def _names_an_absence(concept: dict) -> bool:
-    """Any coding keyed, as terminology.lookup keys it, to one of those."""
-    for coding in concept.get("coding") or []:
-        if not isinstance(coding, dict):
-            continue
-        code = coding.get("code")
-        if isinstance(code, bool) or not isinstance(code, (str, int)):
-            continue
-        key = (terminology.canonical_system(coding.get("system")),
-               str(code).strip())
-        if key in _ABSENCE_CONCEPTS:
-            return True
-    return False
+    return any(_is_absence(c) for c in concept.get("coding") or [])
+
+
+def _only_absences(resource: dict) -> bool:
+    """Coded as an absence and nothing else: no clinical finding, so not a
+    condition or a result. Shown as "Recorded, name unavailable · Active"
+    it read as a mystery illness (#949 patient tester). Any other coding,
+    odd or not, keeps the row, unlabeled."""
+    codings = as_dict(resource.get("code")).get("coding")
+    return (isinstance(codings, list) and bool(codings)
+            and all(_is_absence(c) for c in codings))
 
 
 def _concept_label(concept) -> str | None:
@@ -395,7 +405,7 @@ def build_problems(conditions: list[dict]) -> list[BriefField]:
         status = (c.get("clinicalStatus") or {}).get("coding", [{}])[0].get(
             "code", ""
         )
-        if status not in _ACTIVE_CONDITION_STATUSES:
+        if status not in _ACTIVE_CONDITION_STATUSES or _only_absences(c):
             continue
         label = _code_text(c)
         onset = _onset_display(c)
@@ -446,7 +456,8 @@ def build_labs(observations: list[dict],
             or ""
         )
 
-    sorted_obs = sorted(observations, key=_sort_key, reverse=True)
+    sorted_obs = sorted((o for o in observations if not _only_absences(o)),
+                        key=_sort_key, reverse=True)
     out = []
     for obs in sorted_obs[:_MAX_LABS]:
         label = _code_text(obs)

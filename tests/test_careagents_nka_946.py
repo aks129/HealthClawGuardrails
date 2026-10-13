@@ -429,13 +429,60 @@ def test_the_prompt_lets_a_dated_entry_be_quoted_and_nothing_more():
 @pytest.mark.parametrize("rt", ["Condition", "Observation", "Procedure"])
 @pytest.mark.parametrize("code", [NKA, NKDA, STATUS])
 def test_an_absence_concept_on_any_type_is_never_its_name(rt, code):
+    """Beside a real code, the record stays, unlabeled (fail-safe)."""
     res = {"resourceType": rt, "id": "x",
            "code": {"coding": [{"system": SNOMED, "code": code,
-                                "display": "No known allergy"}],
+                                "display": "No known allergy"},
+                               {"system": SNOMED, "code": "44054006"}],
                     "text": "No known allergy"}}
     [item] = _summarize_bundle(_bundle(res))
     assert item["name"] == "unlabeled record (SNOMED CT code)"
     assert "no known" not in json.dumps(item).lower()
+
+
+@pytest.mark.parametrize("rt", ["Condition", "Observation", "Procedure"])
+@pytest.mark.parametrize("codings", [
+    [{"system": SNOMED, "code": NKA}],
+    [{"system": "urn:oid:2.16.840.1.113883.6.96", "code": " " + NKDA}],
+    [{"system": SNOMED, "code": NKA}, {"system": SNOMED, "code": STATUS}]])
+def test_a_record_coded_only_as_an_absence_is_left_out(rt, codings):
+    """No clinical finding: a "No known allergy" Condition read to people
+    as a mystery illness (#949 patient tester). Left out of the list, and
+    the list is not called longer for it."""
+    res = {"resourceType": rt, "id": "x",
+           "code": {"coding": codings, "text": "No known allergy"}}
+    assert _summarize_bundle(_bundle(res)) == []
+    assert _summarize_bundle(_bundle(res, total=1)) == []
+    kept = {"resourceType": rt, "id": "y",
+            "code": {"coding": [{"system": SNOMED, "code": "44054006"}]}}
+    out = _summarize_bundle(_bundle(res, kept, total=2))
+    assert [i.get("truncated") for i in out] == [None]
+
+
+@pytest.mark.parametrize("other", [
+    "junk", {"display": "x"}, {"system": SNOMED, "code": True}])
+def test_an_absence_beside_anything_odd_is_kept_unlabeled(other):
+    res = {"resourceType": "Condition", "id": "x",
+           "code": {"coding": [{"system": SNOMED, "code": NKA}, other],
+                    "text": "No known allergy"}}
+    [item] = _summarize_bundle(_bundle(res))
+    assert item["unreadable"] is True
+    assert "no known" not in json.dumps(item).lower()
+
+
+def test_an_unreadable_record_is_one_entry_to_ask_about_not_a_mystery():
+    res = {"resourceType": "Observation", "id": "x",
+           "effectiveDateTime": "2024-06-03",
+           "code": {"coding": [{"system": SNOMED, "code": "999999999"}]}}
+    [item] = _summarize_bundle(_bundle(res))
+    note = item["note"].lower()
+    assert "one entry from 2024-06-03 has no readable name" in note
+    assert "their doctor can say what it is" in note
+    assert "rule anything out" in note and "never say" in note
+    undated = {"resourceType": "Condition", "id": "y",
+               "code": {"coding": [{"system": "urn:x", "code": "Z"}]}}
+    [item] = _summarize_bundle(_bundle(undated))
+    assert "one entry has no readable name" in item["note"].lower()
 
 
 @pytest.mark.parametrize("code", [NKA, "1003774007", STATUS])
@@ -449,7 +496,18 @@ def test_the_brief_never_names_a_record_by_an_absence_concept(
     cond = {"resourceType": "Condition", "id": "c",
             "clinicalStatus": {"coding": [{"code": "active"}]},
             "code": {"coding": [{"system": system, "code": code}]}}
-    [field] = engine.build_problems([cond])
+    # Coded only as an absence: no finding, so not a condition at all.
+    assert engine.build_problems([cond]) == []
+    lab = {"resourceType": "Observation", "id": "o", "status": "final",
+           "effectiveDateTime": "2024-01-02", "code": cond["code"]}
+    assert engine.build_labs([lab]) == []
+    # Beside a real code: kept, and never named by the absence label.
+    mixed = dict(cond, code={"coding": [
+        {"system": system, "code": code},
+        {"system": SNOMED, "code": "44054006"}]})
+    [field] = engine.build_problems([mixed])
+    assert field.label == engine.UNLABELLED
+    [field] = engine.build_labs([dict(lab, code=mixed["code"])])
     assert field.label == engine.UNLABELLED
 
 
@@ -495,6 +553,24 @@ def test_real_engine_brief_does_not_list_no_known_allergy_as_a_problem(
                    "code": {"coding": [{"system": SNOMED, "code": NKA}]}})
     out = _execute_tool(chain.hc, TENANT, "appointment_brief", {}, [])
     assert "no known allergy" not in out.lower()
+    # Left out, not a "Recorded, name unavailable" mystery condition
+    # (#949 patient tester).
+    assert "name unavailable" not in out.lower()
     problems = json.loads(out)["sections"]["problems"]
-    assert {"label": "Recorded, name unavailable", "value": "Active"} in (
+    assert {"label": "Type 2 diabetes mellitus", "value": "Active"} in (
         problems)
+
+
+def test_real_engine_summary_leaves_out_a_no_known_allergy_condition(
+        cfg, svc, monkeypatch):  # noqa: F811
+    chain = Chain(cfg, svc, monkeypatch)
+    _resolver(monkeypatch)
+    _plant(chain, {"resourceType": "Condition", "id": "nka-946-cond",
+                   "subject": {"reference": "Patient/demo-patient-rivera"},
+                   "code": {"coding": [{"system": SNOMED, "code": NKA}]}})
+    out, _system = _first_turn(chain, monkeypatch)
+    blob = json.dumps(out).lower()
+    assert "no known" not in blob
+    assert "unlabeled" not in blob and "unreadable" not in blob
+    assert not any(i.get("truncated") for i in out["conditions"])
+    assert out["allergies"] == []

@@ -341,6 +341,15 @@ def _carries_absence_code(res: dict) -> bool:
         for k in map(_coding_key, codings) if k)
 
 
+def _only_absence_codes(res: dict) -> bool:
+    """Every coding keys to a status or "no known allergy" concept, and
+    there is at least one. Any other coding, odd or not, makes it false:
+    such a record stays, unlabeled (the backstop above)."""
+    keys = _coding_keys(res)
+    return bool(keys) and all(
+        k in _ALLERGY_STATUS_CODES or k in _NKA_CODES for k in keys)
+
+
 #: verificationStatus codes that withdraw an entry (FHIR
 #: allergyintolerance-verification). Read from any coding, system or not:
 #: a wrong match here only stops a "no known allergy" entry being quoted.
@@ -453,12 +462,21 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                 if (e.get("resource") or {}).get("resourceType")
                 != "OperationOutcome")
     out = []
+    dropped = 0
     for entry in entries[:limit]:
         res = entry.get("resource") or {}
         rt = res.get("resourceType")
         if rt == "OperationOutcome":
             continue
         item = {"type": rt}
+        if rt != "AllergyIntolerance" and _only_absence_codes(res):
+            # Coded only as "no known allergy" or "not asked", on a list
+            # that is not allergies: no clinical finding, so not a record of
+            # this kind. Left out, and not counted, so the list does not
+            # read as longer than shown. Never an allergy statement either:
+            # that is AllergyIntolerance's alone (#949 patient tester).
+            dropped += 1
+            continue
         if rt == "AllergyIntolerance" and _is_allergy_status(res):
             # Not an allergy: a note that none were recorded. Its label
             # ("Patient not asked", the terminology service's for SNOMED
@@ -587,6 +605,17 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         date = labs_timeline.parse_date(res.get("effectiveDateTime"))
         if date:
             item["date"] = date
+        if item.get("unreadable") and "note" not in item:
+            # A coded record we cannot name. "I couldn't read it... I can't
+            # rule anything out" read to people as a mystery illness (#949
+            # patient tester): it is one entry to ask about, no more.
+            entry = f"one entry from {date}" if date else "one entry"
+            item["note"] = (
+                f"Say plainly that {entry} has no readable name here, and "
+                "that their doctor can say what it is. It is still a real "
+                "record, never absent. Do not guess what it is or suggest it "
+                "could be serious, and never say you can't rule anything "
+                "out.")
         out.append(item)
 
     # The bundle's total, when the engine gives one: the entries are one page
@@ -594,6 +623,7 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     stated = bundle.get("total")
     if isinstance(stated, int) and not isinstance(stated, bool):
         total = max(total, stated)
+    total -= dropped
     if total > len(out) or any(i.get("type") == "AllergyIntolerance"
                                and not i.get("not_an_allergy")
                                and not i.get("withdrawn_entry") for i in out):
