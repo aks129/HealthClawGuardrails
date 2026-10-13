@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,17 @@ def read_auth_enabled() -> bool:
     return os.environ.get("READ_AUTH_ENABLED", "").strip().lower() in TRUE_VALUES
 
 
+# Stands in for a set-but-blank secret: random per process, so nobody can
+# present it, and non-empty, so no reader takes the unset (dev-open) branch.
+_BLANK_SECRET_STANDIN = "blank-secret:" + secrets.token_hex(32)
+
+
+def internal_mint_secret_blank() -> bool:
+    """INTERNAL_TOKEN_MINT_SECRET is set, but to whitespace only."""
+    raw = os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "")
+    return bool(raw) and not raw.strip()
+
+
 def internal_mint_secret() -> str:
     """The shared CareAgents/engine secret, trimmed; '' when unset.
 
@@ -36,7 +48,15 @@ def internal_mint_secret() -> str:
     silent: the connect page fell back to the developer view and handoff
     tags never verified. CareAgents trims its copy the same way
     (careagents/config.py), so the two sides agree on the bytes.
+
+    A whitespace-only value is NOT unset (SEC941-F2): unset opens the
+    internal mint outside production, and before trimming nobody could
+    match a blank secret. It answers an unguessable stand-in instead, so
+    every gate stays closed; startup refuses it outright
+    (validate_runtime_environment).
     """
+    if internal_mint_secret_blank():
+        return _BLANK_SECRET_STANDIN
     return os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "").strip()
 
 
@@ -45,10 +65,11 @@ def warn_on_padded_secrets() -> None:
 
     It still works (internal_mint_secret trims it); the warning is so an
     operator fixes the variable rather than learning about it from the
-    other service. Names the variable, never the value.
+    other service. Names the variable, never the value. A whitespace-only
+    value never gets here: validate_runtime_environment refuses it first.
     """
     raw = os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "")
-    if raw and raw != raw.strip():
+    if raw.strip() and raw != raw.strip():
         logger.warning(
             "INTERNAL_TOKEN_MINT_SECRET has leading or trailing whitespace; "
             "it is trimmed before use. Remove it from the environment.")
@@ -127,6 +148,14 @@ def validate_runtime_environment(
     # call is made, so this costs nothing when the config is right.
     from r6.upstream_connectors import resolve_upstream_config
     resolve_upstream_config(environ=env)
+
+    # Every environment: whitespace-only would trim to unset, and unset
+    # opens the internal mint outside production (SEC941-F2).
+    raw_mint = env.get("INTERNAL_TOKEN_MINT_SECRET", "")
+    if raw_mint and not raw_mint.strip():
+        raise RuntimeError(
+            "INTERNAL_TOKEN_MINT_SECRET is set but contains only whitespace; "
+            "set a real secret or unset it")
 
     if app_env != "production":
         return app_env

@@ -169,10 +169,14 @@ export function internalMintSecret(): string {
   if (raw !== secret && !warnedPaddedMintSecret) {
     warnedPaddedMintSecret = true;
     console.warn(
-      "INTERNAL_TOKEN_MINT_SECRET has leading or trailing whitespace; " +
-        "it is trimmed before use. Remove it from the environment."
+      secret
+        ? "INTERNAL_TOKEN_MINT_SECRET has leading or trailing whitespace; " +
+            "it is trimmed before use. Remove it from the environment."
+        : "INTERNAL_TOKEN_MINT_SECRET contains only whitespace; no internal " +
+            "secret is sent, so every internal mint is refused. Set a real secret."
     );
   }
+  // Whitespace-only sends no credential: the engine refuses, never opens.
   return secret;
 }
 const PRIVILEGED_TOOL_NAMES = new Set(["fhir_get_token", "fhir_seed"]);

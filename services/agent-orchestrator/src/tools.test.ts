@@ -3104,3 +3104,25 @@ describe("Express App Tests", () => {
     });
   });
 });
+
+describe("internalMintSecret: a whitespace-only secret (SEC941-F2)", () => {
+  it("sends no credential and says so, by name only", () => {
+    const prev = process.env.INTERNAL_TOKEN_MINT_SECRET;
+    process.env.INTERNAL_TOKEN_MINT_SECRET = " \t\n";
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      jest.isolateModules(() => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fresh = require("./tools") as typeof import("./tools");
+        expect(fresh.internalMintSecret()).toBe("");
+      });
+      const warned = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(warned).toContain("INTERNAL_TOKEN_MINT_SECRET contains only whitespace");
+      expect(warned).not.toContain("trimmed before use");
+    } finally {
+      warn.mockRestore();
+      if (prev === undefined) delete process.env.INTERNAL_TOKEN_MINT_SECRET;
+      else process.env.INTERNAL_TOKEN_MINT_SECRET = prev;
+    }
+  });
+});

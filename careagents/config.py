@@ -211,6 +211,11 @@ class Config:
         # testers silently got the developer connect page.
         raw_mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
         self.mint_secret = raw_mint_secret.strip()
+        if raw_mint_secret and not self.mint_secret:
+            # Never quietly unset (SEC941-F2): refuse to start.
+            raise ConfigError(
+                "HEALTHCLAW_MINT_SECRET is set but contains only whitespace; "
+                "set a real secret or unset it")
         if raw_mint_secret != self.mint_secret:
             logger.warning(
                 "HEALTHCLAW_MINT_SECRET has leading or trailing whitespace; "

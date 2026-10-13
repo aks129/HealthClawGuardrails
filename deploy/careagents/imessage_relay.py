@@ -46,7 +46,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BASE = os.environ.get("CAREAGENTS_BASE", "https://careagents.cloud").rstrip("/")
-SECRET = os.environ.get("CAREAGENTS_MINT_SECRET", "")
+# Trimmed, as CareAgents trims HEALTHCLAW_MINT_SECRET (careagents/config.py).
+SECRET = os.environ.get("CAREAGENTS_MINT_SECRET", "").strip()
 POLL = float(os.environ.get("IMESSAGE_POLL_SECONDS", "3"))
 STATE_FILE = Path(os.environ.get(
     "IMESSAGE_STATE_FILE",

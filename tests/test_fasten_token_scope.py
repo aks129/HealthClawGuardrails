@@ -248,3 +248,66 @@ def test_worker_probe_sends_the_trimmed_secret(monkeypatch):
         "CARE_ROLE": "worker", "HEALTHCLAW_BASE": "http://healthclaw",
         "HEALTHCLAW_MINT_SECRET": f" {SECRET}\n"}) is True
     assert sent["secret"] == SECRET
+
+
+# --- SEC941-F2: a whitespace-only secret is never "unset" ---------------------
+
+def test_engine_refuses_to_start_on_a_whitespace_only_secret():
+    from r6.runtime_config import validate_runtime_environment
+
+    with pytest.raises(RuntimeError, match="INTERNAL_TOKEN_MINT_SECRET"):
+        validate_runtime_environment(
+            {"APP_ENV": "development", "INTERNAL_TOKEN_MINT_SECRET": " \n"})
+
+
+def test_whitespace_only_secret_keeps_every_internal_gate_closed(
+        client, monkeypatch):
+    """The internal secret gate refuses too, not only the mint."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", "\t ")
+    assert client.post("/r6/fhir/internal/fasten-revoke",
+                       json={"tenant_id": CA_TENANT}).status_code == 403
+    assert client.post("/r6/fhir/internal/fasten-revoke",
+                       json={"tenant_id": CA_TENANT},
+                       headers={"X-Internal-Secret": ""}).status_code == 403
+
+
+def test_careagents_refuses_a_whitespace_only_mint_secret():
+    from careagents.config import Config, ConfigError
+
+    with pytest.raises(ConfigError, match="HEALTHCLAW_MINT_SECRET"):
+        Config({"HEALTHCLAW_MINT_SECRET": "  \n"})
+
+
+# --- other senders of the shared secret ---------------------------------------
+
+def test_relay_trims_the_careagents_secret(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    monkeypatch.setenv("CAREAGENTS_MINT_SECRET", f"{SECRET}\n")
+    path = (Path(__file__).resolve().parents[1]
+            / "deploy" / "careagents" / "imessage_relay.py")
+    spec = importlib.util.spec_from_file_location("imessage_relay_scope", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.SECRET == SECRET
+
+
+def test_bot_sends_the_trimmed_secret(monkeypatch):
+    import sys
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token-for-token-scope")
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "openclaw"))
+    bot = sys.modules.get("bot")
+    if bot is None:
+        import bot
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", f" {SECRET}\n")
+    resp = MagicMock()
+    resp.json.return_value = {"token": "t"}
+    post = MagicMock(return_value=resp)
+    monkeypatch.setattr(bot.requests, "post", post)
+    assert bot._get_step_up_token() == "t"
+    assert post.call_args.kwargs["headers"]["X-Internal-Secret"] == SECRET

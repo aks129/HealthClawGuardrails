@@ -48,7 +48,8 @@ from r6.command_center.agents import load_agents, load_agent_templates, get_agen
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
                        decide_grant, has_grant, public_step_up_reason,
                        tenant_from_request)
-from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
+from r6.read_auth import (TENANT_SESSION_KEY, authorize_tenant_read,
+                          disconnected_patient_connect_token)
 
 logger = logging.getLogger(__name__)
 
@@ -277,8 +278,14 @@ def _require_session_or_stepup():
                 default=DEFAULT_TENANT, query_keys=("tenant",))
         except TenantRejected:
             tenant = None
-        if tenant is not None and has_grant(
-                scope=Scope.TENANT_BOUND, tenant=tenant) is not None:
+        # Not authorize_tenant_read: that lets a public tenant through with
+        # no credential at all, and these endpoints need one. It does take
+        # that check's Disconnect refusal, so a patient-connect token on a
+        # closed tenant is dead here too (SEC941-F1).
+        if (tenant is not None
+                and has_grant(scope=Scope.TENANT_BOUND,
+                              tenant=tenant) is not None
+                and not disconnected_patient_connect_token(tenant.id)):
             return None
     return jsonify({"error": "authentication required"}), 401
 

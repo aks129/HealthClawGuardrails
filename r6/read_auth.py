@@ -46,7 +46,7 @@ def _oauth_authorizes(token: str, tenant_id: str) -> bool:
     return bool(set(info.get("scopes") or ()) & _OAUTH_READ_SCOPES)
 
 
-def _disconnected_patient_connect_token(tenant_id: str) -> bool:
+def disconnected_patient_connect_token(tenant_id: str) -> bool:
     """True when the step-up token just accepted is a patient connect token
     and the tenant has since been disconnected (SEC940-F2).
 
@@ -112,7 +112,7 @@ def authorize_tenant_read(
     if (has_grant(scope=Scope.TENANT_BOUND,
                   tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT),
                   also_bearer=True) is not None
-            and not _disconnected_patient_connect_token(tenant_id)):
+            and not disconnected_patient_connect_token(tenant_id)):
         return tenant_id
     auth = (request.headers.get("Authorization") or "").strip()
     bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
