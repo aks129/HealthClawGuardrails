@@ -108,6 +108,39 @@
     {% endif %}
   </section>
 
+  {# Tone and routines, one form per assistant (one assistant per person
+     spec, section 7). "Focuses on", not "Watching": nothing runs unprompted
+     (owner decision D3). assistant_settings.js posts each form. #}
+  {% if assistants %}
+  <section class="hub-section" id="assistant-settings">
+    <div class="section-head"><h2>Your assistant</h2></div>
+    {% for a in assistants %}
+    <form class="assistant-settings" data-agent="{{ a.id }}">
+      <div class="hub-card-name">{{ a.name }}{% if a.person.kind == 'other' %}
+        <span class="hub-card-sub">for {{ a.person.nickname or ('your ' ~ a.person.relationship) }}</span>{% endif %}</div>
+      <fieldset class="assistant-tone">
+        <legend>Tone</legend>
+        {% for key, p in tones %}
+        <label><input type="radio" name="tone-{{ a.id }}" value="{{ key }}"
+          {% if a.persona == key %}checked{% endif %}> {{ p.name }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="assistant-routines">
+        <legend>Focuses on</legend>
+        {% for r in routine_catalog %}
+        <label><input type="checkbox" value="{{ r.id }}"
+          {% if r.name in a.routines %}checked{% endif %}> {{ r.name }}</label>
+        {% endfor %}
+      </fieldset>
+      <p class="card-note">These change what your assistant pays attention
+        to, not what it can read.</p>
+      <button type="submit" class="pill">Save</button>
+      <p class="inline-msg" role="status" aria-live="polite" hidden></p>
+    </form>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   <section class="leaving">
     <h2>Sign out or leave</h2>
     <form method="post" action="/logout"><button class="pill">Sign out</button></form>
@@ -140,4 +173,5 @@
    and every handler is guarded by the element it binds. #}
 <script src="{{ url_for('static', filename='home.js') }}"></script>
 <script src="{{ url_for('static', filename='invite.js') }}"></script>
+<script src="{{ url_for('static', filename='assistant_settings.js') }}"></script>
 {% endblock %}

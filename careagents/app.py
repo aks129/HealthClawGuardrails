@@ -44,7 +44,7 @@ from careagents import beta_signup, feedback, funnel, invites
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
-                                   HealthClawUnconfirmed)
+                                   HealthClawUnconfirmed, acting_for)
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
@@ -403,7 +403,10 @@ def create_app(config: Config | None = None,
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
                 return redirect(url_for("auth"))
-            return fn(*a, **k)
+            # The engine's audit trail names the account that asked
+            # (one assistant per person spec, section 6.2).
+            with acting_for(session.get("account_id")):
+                return fn(*a, **k)
         return wrapper
 
     def full_sign_in_required(fn):
@@ -530,7 +533,12 @@ def create_app(config: Config | None = None,
             stale_consent=stale_consent,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
             invited=invited,
-            hub=view, text_tile=beta_signup.text_tile(
+            hub=view,
+            # Person, tone and routines per assistant, and whether the
+            # account kept several (one assistant per person spec, 4 and
+            # 8), for the hub card to render.
+            people_view=hub_view.assistants(data),
+            text_tile=beta_signup.text_tile(
                 cfg, view, svc.session, acct.email),
             # "Connected" only once a real connection is active; has_real
             # also counts one still connecting. "Made-up", as on /beta.
@@ -625,6 +633,9 @@ def create_app(config: Config | None = None,
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
             first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
+            assistants=hub_view.assistants(data)["assistants"],
+            tones=list(PERSONAS.items()),
+            routine_catalog=advisors.routine_catalog(),
             imessage_handle=cfg.imessage_handle,
             # Every connected phone, masked, each with its own Disconnect.
             imessage_connected=[
@@ -763,8 +774,11 @@ def create_app(config: Config | None = None,
     def _offered_connections(acct):
         real_open = _real_records_open(acct)
         conns = svc.list_home(acct.id)["connections"]
+        # Someone the holder cares for is never offered to a third-party
+        # app in the beta (one assistant per person spec, 6.3).
+        others = svc.other_person_connection_ids(acct.id)
         return [c for c in conns
-                if c["status"] != "revoked"
+                if c["status"] != "revoked" and c["id"] not in others
                 and (c["kind"] == "sample" or real_open)], real_open
 
     @app.get("/authorize")
@@ -838,7 +852,8 @@ def create_app(config: Config | None = None,
 
         acct = current_account()
         conn = svc.get_connection(acct.id, str(body.get("connection_id") or ""))
-        if conn is None or conn["status"] == "revoked":
+        if (conn is None or conn["status"] == "revoked"
+                or conn["id"] in svc.other_person_connection_ids(acct.id)):
             return jsonify({"error": "unknown connection"}), 404
         if conn["kind"] != "sample" and not _real_records_open(acct):
             return jsonify({"error": "Sharing real records is not open for "
@@ -1088,7 +1103,8 @@ def create_app(config: Config | None = None,
             session[_VIA_LINK] = True
         # Already signed in here as this address: that session, full or
         # link, stays as it is; never downgraded (#920 QA Low 1).
-        answer = app.make_response(_sample_tap(acct, {}))
+        with acting_for(acct.id):
+            answer = app.make_response(_sample_tap(acct, {}))
         landing = (answer.get_json(silent=True) or {}).get("redirect")
         if answer.status_code == 200 and landing:
             return landing
@@ -1583,6 +1599,9 @@ def create_app(config: Config | None = None,
     @app.post("/api/agents")
     @login_required
     def create_agent():
+        """The assistant for the person whose records `connection_id` holds.
+        One per person (spec section 3): when they already have one, that
+        one is the answer, `existing` set, and nothing is made."""
         acct = current_account()
         body = request.get_json(silent=True) or {}
         name = (body.get("name") or "Juniper").strip()[:48] or "Juniper"
@@ -1598,13 +1617,99 @@ def create_app(config: Config | None = None,
             if not spec["available"]:
                 return jsonify({"error": "advisor_not_available",
                                 "note": spec.get("note", "")}), 400
+        conn_id = str(body.get("connection_id") or "")
+        had = svc.agent_for_person_of(acct.id, conn_id)
+        if had:
+            return jsonify({"id": had, "existing": True})
         try:
-            aid = svc.create_agent(acct.id, name, persona,
-                                   body.get("connection_id", ""),
+            aid = svc.create_agent(acct.id, name, persona, conn_id,
                                    advisor=advisor)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
+        if aid and advisor:
+            svc.set_agent_settings(
+                acct.id, aid, persona,
+                advisors.routines_for({"routines": None, "advisor": advisor}))
         return jsonify({"id": aid})
+
+    @app.post("/api/agents/<agent_id>/settings")
+    @login_required
+    def agent_settings(agent_id):
+        """Tone and routines (spec section 7). Both are checked against the
+        fixed sets here; neither changes what the assistant can read."""
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        ctx = svc.get_agent_context(acct.id, agent_id)
+        if ctx is None:
+            return jsonify({"error": "unknown agent"}), 404
+        if "persona" not in body and "routines" not in body:
+            return jsonify({"error": "nothing to change"}), 400
+        persona = body.get("persona", ctx["agent"]["persona"])
+        if persona not in PERSONAS:
+            return jsonify({"error": "unknown tone"}), 400
+        if "routines" in body:
+            asked = body["routines"]
+            if (not isinstance(asked, list)
+                    or not all(isinstance(r, str) and r in advisors.ROUTINES
+                               for r in asked)):
+                return jsonify({"error": "unknown routine"}), 400
+            # Stored in the catalog's order, once each.
+            routines = [r for r in advisors.ROUTINES if r in asked]
+        else:
+            routines = advisors.routines_for(ctx["agent"])
+        svc.set_agent_settings(acct.id, agent_id, persona, routines)
+        return jsonify({"id": agent_id, "persona": persona,
+                        "routines": routines})
+
+    @app.post("/api/people")
+    @login_required
+    @full_sign_in_required
+    def add_person():
+        """"Add someone you care for", on made-up records only (spec 6,
+        owner decision D1). A relationship and an optional nickname; the
+        body is read for nothing else, so there is no path here to real
+        records. Their own sample tenant, their own assistant."""
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
+        # The sample tap's lease: one tenant mint at a time per account.
+        if not svc.claim_sample_start(acct.id):
+            return jsonify({"status": "connecting",
+                            "error": "Made-up records are on their way. "
+                                     "Try again in a moment."}), 409
+        try:
+            try:
+                person = svc.add_person(acct.id, body.get("relationship"),
+                                        body.get("nickname"))
+            except ValueError:
+                return jsonify({"error": "Choose who they are to you, and "
+                                         "a nickname of up to 24 "
+                                         "characters if you like."}), 400
+            except AuthError as exc:
+                return jsonify({"error": str(exc)}), 409
+            plan = connectors.start("sample", None, cfg, hc)
+            try:
+                hc.seed(plan["tenant"])
+            except HealthClawError:
+                svc.remove_empty_person(acct.id, person)
+                return jsonify({"error": "records service unavailable"}), 503
+            cid = svc.add_connection(acct.id, "sample", plan["tenant"],
+                                     plan["label"], status="active",
+                                     provider=plan.get("provider"),
+                                     person_id=person)
+            try:
+                svc.mark_synced(cid, hc.record_count(plan["tenant"]))
+            except HealthClawError:
+                logger.warning("record count after sample seed failed for %s",
+                               cid)
+            aid = svc.create_agent(acct.id, "Juniper", DEFAULT_PERSONA, cid)
+            return jsonify({"person_id": person, "connection_id": cid,
+                            "agent_id": aid,
+                            "redirect": url_for("chat", agent=aid)})
+        finally:
+            svc.release_sample_start(acct.id)
 
     @app.post("/api/agents/<agent_id>/rename")
     @login_required

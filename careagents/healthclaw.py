@@ -12,6 +12,8 @@ import json
 import re
 import secrets
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from urllib.parse import quote
 
 import logging
@@ -28,6 +30,44 @@ _FHIR_ID = re.compile(r"[A-Za-z0-9\-.]{1,128}")
 
 #: How long a tenant's resolved `Patient/<id>` is reused (#867).
 PATIENT_SUBJECT_TTL_SECONDS = 300.0
+
+#: Which account a tenant-scoped call is made for (one assistant per person
+#: spec, section 6.2). Set around a signed-in request and around a worker's
+#: turn, and read only to label the engine's audit trail. Per thread and
+#: always reset, so one request's account never labels the next one's call.
+_ACTOR: ContextVar[str | None] = ContextVar("careagents_actor", default=None)
+
+#: An account id as CareAgents mints it (`acct_<hex>`), the only thing that
+#: becomes part of the header. Inside the engine's own id charset.
+_ACCOUNT_ID = re.compile(r"acct_[A-Za-z0-9]{1,64}")
+
+
+@contextmanager
+def acting_for(account_id: str | None):
+    """Label the tenant-scoped engine calls made inside this block with
+    the account that asked for them."""
+    token = _ACTOR.set(account_id)
+    try:
+        yield
+    finally:
+        _ACTOR.reset(token)
+
+
+def act_as(account_id: str | None) -> None:
+    """Name the acting account part-way through an `acting_for` block, once
+    it is known (the worker learns it from the run). The block's exit
+    still restores what was there before it."""
+    _ACTOR.set(account_id)
+
+
+def agent_header() -> str:
+    """The `X-Agent-Id` for a tenant-scoped call: `careagents:<account id>`
+    when an account is acting, else `careagents`. An opaque pointer, no
+    PHI; the engine stores it as the audit row's agent id."""
+    actor = _ACTOR.get()
+    if isinstance(actor, str) and _ACCOUNT_ID.fullmatch(actor):
+        return f"careagents:{actor}"
+    return "careagents"
 
 
 class HealthClawError(RuntimeError):
@@ -267,7 +307,7 @@ class HealthClawClient:
     def _headers(self, tenant: str) -> dict:
         return {"X-Tenant-Id": tenant,
                 "X-Step-Up-Token": self.mint_token(tenant),
-                "X-Agent-Id": "careagents"}
+                "X-Agent-Id": agent_header()}
 
     def _internal_headers(self) -> dict:
         return {"X-Internal-Secret": self.mint_secret,
@@ -531,7 +571,7 @@ class HealthClawClient:
         r = self._send("POST", f"{self.actions}/{action_id}/confirm",
                        headers={"X-Tenant-Id": tenant,
                                 "X-Step-Up-Token": token,
-                                "X-Agent-Id": "careagents"},
+                                "X-Agent-Id": agent_header()},
                        json={"approved_via": "review-page"},
                        what="confirm", error=HealthClawUnconfirmed)
         if not r.ok:
@@ -576,7 +616,7 @@ class HealthClawClient:
         r = self._send("POST", f"{self.actions}/{action_id}/decline",
                        headers={"X-Tenant-Id": tenant,
                                 "X-Step-Up-Token": token,
-                                "X-Agent-Id": "careagents"},
+                                "X-Agent-Id": agent_header()},
                        json={"declined_via": "review-page"},
                        what="decline")
         try:

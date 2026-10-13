@@ -137,9 +137,50 @@ def switch_prompt(home: dict) -> dict | None:
             if c["kind"] != "sample" and c["status"] == "active"]
     if not real:
         return None
+    # Only the holder's own assistant: someone they care for keeps their
+    # own records (one assistant per person spec, section 9).
+    others = {p["id"] for p in home.get("people", []) if p["kind"] != "self"}
     for a in home["agents"]:
+        if a.get("person_id") in others:
+            continue
         c = by_id.get(a["connection_id"])
         if c and c["kind"] == "sample":
             return {"agent_id": a["id"], "agent_name": a["name"],
                     "connection_id": real[0]["id"], "label": real[0]["label"]}
     return None
+
+
+def assistants(home: dict) -> dict:
+    """Each assistant with whose it is, its tone and its routines, for the
+    hub card (one assistant per person spec, sections 4 and 8).
+
+    `is_primary` is the person's oldest assistant on an active connection
+    (their oldest one, if none is active). Any other assistant the same
+    person has is `legacy_extra`: an account from before kept it, and the
+    card shows its tone and routines with Remove, never Add (owner decision
+    D5). `legacy_multi` says the account holds such an assistant at all.
+    Labels only: a nickname, an enum, fixed names. No PHI.
+    """
+    from careagents.advisors import ROUTINES, focuses_on, routines_for
+    from careagents.personas import DEFAULT_PERSONA, PERSONAS
+    people = {p["id"]: p for p in home.get("people", [])}
+    active = {c["id"] for c in home["connections"]
+              if c["status"] == "active"}
+    by_person: dict = {}
+    for a in sorted(home["agents"], key=lambda a: (
+            a.get("connection_id") not in active, a.get("created_at") or 0)):
+        by_person.setdefault(a.get("person_id"), []).append(a)
+    out = []
+    for person_id, agents in by_person.items():
+        person = people.get(person_id) or {
+            "id": person_id, "kind": "self", "relationship": None,
+            "nickname": None}
+        for i, a in enumerate(agents):
+            ids = routines_for(a)
+            tone = PERSONAS.get(a.get("persona"), PERSONAS[DEFAULT_PERSONA])
+            out.append({**a, "person": person, "tone": tone["name"],
+                        "routines": [ROUTINES[r]["name"] for r in ids],
+                        "focuses_on": focuses_on(ids),
+                        "is_primary": i == 0, "legacy_extra": i > 0})
+    return {"assistants": out, "people": list(people.values()),
+            "legacy_multi": any(a["legacy_extra"] for a in out)}

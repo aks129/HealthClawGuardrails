@@ -103,8 +103,10 @@ SAMPLE_STYLE = (
 
 def system_prompt(agent_name: str, persona_key: str,
                   advisor_key: str | None = None, surface: str = "",
-                  sample: bool = False) -> str:
-    from careagents.advisors import prompt_block
+                  sample: bool = False, routines: str | None = None) -> str:
+    """`routines` is the assistant's stored routine list; when it is None
+    the legacy `advisor_key` stands in for it (advisors.routines_for)."""
+    from careagents.advisors import routine_blocks, routines_for
     from careagents.agent import TEXT_SURFACES
     p = PERSONAS.get(persona_key, PERSONAS[DEFAULT_PERSONA])
     style = (TEXT_STYLE if surface in TEXT_SURFACES else
@@ -117,6 +119,7 @@ def system_prompt(agent_name: str, persona_key: str,
         f"{p['voice']}\n\n{SAFETY_CORE}\n"
         "Use your tools to ground every answer in the person's actual "
         "records — never guess at their data. " + style
-        + prompt_block(advisor_key)
+        + routine_blocks(routines_for({"routines": routines,
+                                       "advisor": advisor_key}))
         + (SAMPLE_STYLE if sample else "")
     )

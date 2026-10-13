@@ -7,6 +7,7 @@ import re
 
 from careagents import connectors
 from careagents import hub as hub_view
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import _beta_app, _login, _make_account
 from tests.test_careagents import app as _app_fixture
@@ -212,7 +213,7 @@ def test_a_crowded_legacy_account_renders_every_row(app, svc, monkeypatch):
                                  status="pending")
     names = ["Juniper", "Ada", "Coach", "Scout"]
     for i, name in enumerate(names):
-        svc.create_agent(aid, name, "calm", samples[i % 2])
+        legacy_agent(svc, samples[i % 2], name)
     r = c.get("/home")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
