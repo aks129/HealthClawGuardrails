@@ -618,6 +618,7 @@ def create_app(config: Config | None = None,
     def settings():
         acct = current_account()
         data = svc.list_home(acct.id)
+        assistants = hub_view.assistants(data)["assistants"]
         # A link is a lasting power to sign people up, so it is made and
         # shown only after a full sign-in (#928 F6), as full_sign_in_required
         # holds for the routes that widen an account.
@@ -632,8 +633,12 @@ def create_app(config: Config | None = None,
             passkeys=svc.list_passkeys(acct.id),
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
-            first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
-            assistants=hub_view.assistants(data)["assistants"],
+            # Pairing a phone binds the holder's own assistant, never the
+            # one for someone they care for (spec section 5).
+            first_agent=next(
+                (a["id"] for a in assistants
+                 if a["is_primary"] and a["person"]["kind"] == "self"), ""),
+            assistants=assistants,
             tones=list(PERSONAS.items()),
             routine_catalog=advisors.routine_catalog(),
             imessage_handle=cfg.imessage_handle,

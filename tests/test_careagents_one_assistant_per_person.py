@@ -394,6 +394,18 @@ def test_someone_you_care_for_is_not_offered_to_a_third_party_app(
     assert len(svc.other_person_connection_ids(aid)) == 1
 
 
+def test_settings_pairs_a_phone_to_your_own_assistant(
+        cfg, svc, monkeypatch):
+    """Mom added first: the iMessage tile still pairs the holder's own."""
+    cfg.imessage_handle = "+15555550100"
+    _, c, aid = _signed_in(cfg, svc, monkeypatch)
+    mom = c.post("/api/people", json={"relationship": "parent"}).get_json()
+    mine = c.post("/api/connections/sample").get_json()
+    html = c.get("/settings").get_data(as_text=True)
+    assert f'id="im-surface" data-agent="{mine["agent_id"]}"' in html
+    assert f'id="im-surface" data-agent="{mom["agent_id"]}"' not in html
+
+
 def test_a_paused_account_adds_nobody(cfg, svc, monkeypatch):  # noqa: F811
     _, c, aid = _signed_in(cfg, svc, monkeypatch)
     svc.set_paused("pat@example.com", True)
