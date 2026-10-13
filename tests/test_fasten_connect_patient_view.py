@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
+from html import unescape
+from urllib.parse import parse_qs, urlsplit
 
 SECRET = "connect-view-test-secret"
 TENANT = "ca-0123456789"
@@ -56,7 +59,14 @@ def test_signed_link_renders_the_patient_page(client, monkeypatch):
     assert "Nothing notifies you" not in html
     # The widget still registers the connection.
     assert "/fasten/connections" in html
-    assert "embed.connect.fastenhealth.com" in html
+    # The widget iframe loads from Fasten's embed host itself: the src is
+    # parsed and its scheme and host compared exactly, never as a substring.
+    srcs = [urlsplit(unescape(m)) for m in
+            re.findall(r'src="(https://[^"]+)"', html)]
+    assert any(u.scheme == "https"
+               and u.hostname == "embed.connect.fastenhealth.com"
+               and parse_qs(u.query).get("external-id") == [TENANT]
+               for u in srcs), srcs
 
 
 def test_developer_page_is_unchanged_without_a_valid_tag(client, monkeypatch):

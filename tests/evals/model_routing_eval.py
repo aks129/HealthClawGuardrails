@@ -51,6 +51,14 @@ PROMPTS = [
     ("e08", "easy", "I have some feedback about the app"),
     ("e09", "easy", "who are you"),
     ("e10", "easy", "good morning"),
+    # #935: e02 and e07 are the two the issue reported; these are the rest
+    # of the how-to card.
+    ("e11", "easy", "How do I remove a passkey?"),
+    ("e12", "easy", "How do I invite friends?"),
+    ("e13", "easy", "How do I sign out?"),
+    ("e14", "easy", "How do you keep my data safe?"),
+    ("e15", "easy", "How do I send feedback?"),
+    ("e16", "easy", "What is this?"),
     ("s01", "std", "What is my latest A1c?"),
     ("s02", "std", "What medications am I on?"),
     ("s03", "std", "Do I have any allergies on file?"),
@@ -89,6 +97,13 @@ PROMPTS = [
                     "Is that ok?"),
     ("h10", "hard", "Given my labs, what's my 10-year heart attack risk "
                     "and should I start a statin?"),
+    # Beta shakeout (#937): a trend question must get the change in words
+    # (first, latest, direction), not "you can see it in the chart"; an
+    # everyday reading with no range must get its value and date, not
+    # "could not be interpreted".
+    ("t01", "std", "How has my A1c changed?"),
+    ("t02", "std", "How has my LDL changed over time?"),
+    ("t03", "std", "What do my blood pressure and glucose readings mean?"),
 ]
 
 CONFIGS = {
