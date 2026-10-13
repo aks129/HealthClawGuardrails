@@ -1082,3 +1082,48 @@ textarea:focus-visible {
   border-top: 1px solid var(--hairline); font-size: 15px; }
 .funnel-table td.num { font-family: var(--mono);
   font-variant-numeric: tabular-nums; text-align: right; }
+
+/* --- the hub around outcomes (hub critique 2026-10) ---------------------- */
+/* Waiting for your OK follows Ask your assistant now, so it needs the
+   section gap above it. */
+.hub-section + .waiting { margin-top: 32px; }
+/* What's new: only real arrivals, in the accent tint. */
+.whats-new .news-line { margin: 0 0 8px; padding: 12px 16px;
+  background: var(--accent-tint); border-radius: var(--radius); }
+.whats-new .switch-prompt { margin: 0; }
+/* Where you can reach me: one plain row per way in. */
+.reach-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.reach-list li { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 2px; }
+.reach-list b { font-size: 17px; }
+.reach-list span { color: var(--ink-soft); font-size: 16px;
+  overflow-wrap: anywhere; }
+.reach-list small { display: block; margin-top: 4px; font-size: 15px; }
+/* Sources: one compact row each. The name and its one status share the
+   first line; a long name wraps rather than running under the chip. */
+.source-list { grid-template-columns: 1fr; gap: 8px; }
+.source-list .conn-card { padding: 12px 16px; gap: 2px; }
+.source-head { display: flex; align-items: baseline;
+  justify-content: space-between; gap: 12px; }
+.source-head .hub-card-name { font-size: 17px; margin: 0; min-width: 0;
+  overflow-wrap: anywhere; }
+.source-list .conn-card .status { order: 0; flex: none; }
+.source-list .hub-card-sub:empty,
+.source-list .conn-facts:empty { display: none; }
+.source-list .conn-facts { font-size: 15px; color: var(--ink-soft); margin: 0; }
+.source-list .card-note { margin: 4px 0 0; font-size: 15px; }
+/* Refresh, Disconnect and Delete live in the row's menu: plain items, and
+   Delete is red words behind a tap, never a bare red button. */
+.source-menu { align-self: flex-start; margin-top: 4px; }
+.source-menu[open] { align-self: stretch; border-top: 1px solid var(--hairline);
+  padding-top: 4px; }
+.source-menu summary { padding: 0 4px; font-weight: 600; }
+.source-menu button { margin: 0; }
+.source-menu .conn-delete { color: var(--critical-ink); }
+.source-menu .conn-delete:hover { background: var(--critical-bg); }
+/* Made-up records, once your own are here: closed, quiet, still in reach. */
+.made-up-sources { margin-top: 12px; }
+.made-up-sources > summary { cursor: pointer; min-height: 44px;
+  display: flex; align-items: center; color: var(--ink-soft); font-size: 16px; }
+.made-up-sources[open] > summary { margin-bottom: 8px; }

@@ -560,6 +560,15 @@ def create_app(config: Config | None = None,
                 for r in view["records"]
                 if r["kind"] == "fasten" and r["status"] == "pending"}),
             has_grants=bool(svc.list_grants(acct.id)),
+            # One status per source row, chosen in one place (hub critique).
+            chip=hub_view.status_chip,
+            # "Where you can reach me": connected phones, masked as Settings
+            # shows them. Setting one up stays on Settings.
+            reach_phones=[imessage.masked_display(x["handle"])
+                          for x in data["surfaces"]
+                          if x["kind"] == "imessage"
+                          and x["status"] == "active"],
+            imessage_handle=cfg.imessage_handle,
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
@@ -1823,6 +1832,23 @@ def create_app(config: Config | None = None,
                                     hc.uncounted_record_count(ctx["tenant"]))
                 except HealthClawError:
                     logger.warning("record count unavailable on activation")
+        # Starter taps tuned to what the records can answer (hub critique
+        # 2026-10). Labs only when some are known to be there: an unknown
+        # count hides the tap, never offers it. A returning visit was not
+        # counted above, so it asks for the one number it needs.
+        labs = totals["labs"] if totals else None
+        if totals is None and past:
+            try:
+                labs = int(hc.search(ctx["tenant"], "Observation",
+                                     {"_summary": "count"}).get("total") or 0)
+            except (HealthClawError, TypeError, ValueError):
+                labs = None
+        has_records = (any(totals.values()) if totals is not None
+                       else bool(conn.get("last_count")))
+        starters = [s for s, ok in (
+            ("What changed since my last visit?", has_records),
+            ("Make my visit brief", has_records),
+            ("Explain my latest labs", bool(labs))) if ok]
         # The "Open the review" card is a turn event, and history keeps only
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.
@@ -1855,6 +1881,7 @@ def create_app(config: Config | None = None,
                                importing=importing,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               starters=starters,
                                # A link session reaches it through a code
                                # sign-in first (/auth, #920 F1).
                                offer_passkey=not svc.has_passkey(acct.id),

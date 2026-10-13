@@ -107,13 +107,14 @@
     {% endif %}
     {# One block for every first visit. Intake comes first: that path ends
        in an approval, which is what the product is for (spec section 5).
-       A returning visit has it hidden: chat.js shows it after an error, so
-       the next try is one tap. #}
+       Then the taps the records can answer (app.py chat: labs only when
+       some are known to be there). A returning visit has it hidden:
+       chat.js shows it after an error, so the next try is one tap. #}
     <div class="starters" id="starters"{% if past %} hidden{% endif %}>
       <button type="button" class="starter">Fill out my intake form for a new doctor</button>
-      <button type="button" class="starter">What do my labs say?</button>
-      <button type="button" class="starter">Any screenings I'm due for?</button>
-      <button type="button" class="starter">What medications am I on?</button>
+      {% for s in starters %}
+      <button type="button" class="starter">{{ s }}</button>
+      {% endfor %}
     </div>
   </div>
 
