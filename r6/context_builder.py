@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from models import db
 from r6.audit import add_audit_event
 from r6.models import R6Resource, ContextEnvelope, ContextItem
+from r6.safe_read import subject_reference
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,16 @@ class ContextBuilder:
         entries = bundle.get('entry', [])
         if not entries:
             raise ValueError('Bundle contains no entries')
+        # An entry or resource that is not a JSON object is refused with the
+        # entry's index, never its value, rather than raising AttributeError
+        # into a 500 (#879).
+        if not isinstance(entries, list):
+            raise ValueError('Bundle.entry must be an array')
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not isinstance(
+                    entry.get('resource', {}), dict):
+                raise ValueError(
+                    f'entry {index}: not a Bundle entry with a resource object')
 
         # Find the patient anchor
         patient_ref = self._find_patient_ref(entries)
@@ -195,12 +206,11 @@ class ContextBuilder:
             if resource.get('resourceType') == 'Patient':
                 rid = resource.get('id', '')
                 return f'Patient/{rid}' if rid else None
-            # Check subject references in other resources
-            subject = resource.get('subject', {})
-            if isinstance(subject, dict) and 'reference' in subject:
-                ref = subject['reference']
-                if ref.startswith('Patient/'):
-                    return ref
+            # Check subject references in other resources. A reference that
+            # is not a string names no Patient (#879).
+            ref = subject_reference(resource)
+            if ref is not None and ref.startswith('Patient/'):
+                return ref
         return None
 
     def _find_encounter_ref(self, entries):

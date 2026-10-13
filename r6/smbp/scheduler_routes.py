@@ -19,6 +19,7 @@ from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.smbp.models import SMBPSession
 from r6.smbp.scheduler import due_reminders, contact_phone
+from r6.safe_read import subject_reference
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def register_scheduler_routes(blueprint, deps):
                 resource_type="Observation", tenant_id=tenant_id,
                 is_deleted=False).all():
             obs = row.to_fhir_json()
-            ref = obs.get("subject", {}).get("reference")
+            ref = subject_reference(obs)  # str or None (#879)
             if not ref:
                 continue
             counts[ref] = counts.get(ref, 0) + 1

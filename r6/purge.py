@@ -16,6 +16,8 @@ obvious for a guardrailed system:
     on request would let a deletion erase evidence of the access that
     preceded it. Deletion itself is audited, so the trail gains an entry
     rather than losing one.
+  * WRITTEN — a TenantClosure tombstone (tenant id and time only),
+    so nothing Fasten delivers later can refill the emptied tenant.
 
 The engine is Flask-free so it can be unit-tested directly; routes wire it.
 """
@@ -97,6 +99,19 @@ def purge_tenant(tenant_id):
             continue
         deleted[label] = model.query.filter_by(
             tenant_id=tenant_id).delete(synchronize_session=False)
+
+    # The Fasten rows are gone, but a late connection_success, an old
+    # connect link or the boot reaper could start a new import into the
+    # emptied tenant. The tombstone is what they check; it holds no PHI and
+    # is retained, like the audit trail.
+    # Not for a public tenant: purging one is open by design (the demo
+    # resets), and a permanent tombstone would close it for good.
+    from models import db
+    from r6.command_center.access import is_public
+    from r6.fasten.models import TenantClosure
+    if (not is_public(tenant_id)
+            and db.session.get(TenantClosure, tenant_id) is None):
+        db.session.add(TenantClosure(tenant_id=tenant_id))
 
     return deleted
 

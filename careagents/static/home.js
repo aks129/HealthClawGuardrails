@@ -10,6 +10,23 @@
     return { ok: r.ok, d: await r.json().catch(() => ({})) };
   }
 
+  // The terms version the consent cards on this page show, as rendered.
+  // Every consent sends it back so the server records the wording the
+  // person read. A 428 to a consent that carried it means the terms changed
+  // after this page loaded: reload to show the current card. Never resend
+  // the version the 428 names; that would accept wording nobody saw.
+  const versioned = document.querySelector("[data-consent-version]");
+  const shownConsentVersion = versioned ? versioned.dataset.consentVersion : "";
+  const termsChanged = (res) =>
+    !res.ok && res.d.error === "consent_required";
+  // What a refusal says to a person: its `message`, or an `error` that is a
+  // sentence. A bare code (sign_in_again, records_paused) is never shown
+  // (#934 QA F1); the fallback is said instead.
+  const refusal = (d, fallback) =>
+    (d && typeof d.message === "string" && d.message) ||
+    (d && typeof d.error === "string" && d.error.includes(" ") && d.error) ||
+    fallback;
+
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
@@ -27,15 +44,17 @@
         const agreed = await showConsentCard();
         if (!agreed) return;
         body.consent = true;
+        body.consent_version = shownConsentVersion;
       }
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
+      if (body.consent && termsChanged(res)) { location.reload(); return; }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
         // needs dismissing, and the page stays usable.
         return say(tile, $("connect-msg"),
-                   res.d.error || "Couldn't connect that source.");
+                   refusal(res.d, "Couldn't connect that source."));
       }
       if (res.d.redirect) { location.assign(res.d.redirect); return; }
       if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
@@ -55,6 +74,36 @@
       modal.hidden = false;
     });
   }
+
+  // Accept the current terms for real connections made under older ones
+  // (beta spec 4.3). Its own card, not the first-connect one; the server
+  // refuses (428) without an explicit `consent: true`.
+  function showReconsentCard() {
+    return new Promise((resolve) => {
+      const modal = $("reconsent-modal");
+      const done = (v) => { modal.hidden = true; resolve(v); };
+      $("reconsent-agree").onclick = () => done(true);
+      $("reconsent-cancel").onclick = () => done(false);
+      modal.hidden = false;
+    });
+  }
+  document.querySelectorAll("[data-reconsent]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const agreed = await showReconsentCard();
+      if (!agreed) return;
+      btn.disabled = true;
+      const res = await post(
+        `/api/connections/${btn.dataset.reconsent}/consent`,
+        { consent: true, consent_version: shownConsentVersion });
+      if (termsChanged(res)) { location.reload(); return; }
+      if (!res.ok) {
+        btn.disabled = false;
+        return announce(btn.parentElement.querySelector(".inline-msg"),
+                        "That didn't work. Try again.");
+      }
+      location.reload();
+    });
+  });
 
   // One shared primitive for the dialogs below: unhide a static modal, resolve
   // once when it closes. ESC and a backdrop tap both abandon it — every one of
@@ -116,10 +165,28 @@
   // text. Delete arms "Deleting…" and then awaits the request; a failure that
   // lands inside the wait would otherwise be papered over by the stale
   // "Deleting…" arriving on top of "Your records were not deleted."
+  // After a write: make the contact address a mailto link, from nodes.
+  const CONTACT = "contactus@healthclaw.io";
+  function linkContact(el) {
+    const text = el.textContent;
+    if (text.indexOf(CONTACT) < 0) return;
+    el.textContent = "";
+    text.split(CONTACT).forEach((part, i) => {
+      if (i) {
+        const a = document.createElement("a");
+        a.href = "mailto:" + CONTACT;
+        a.textContent = CONTACT;
+        el.appendChild(a);
+      }
+      if (part) el.appendChild(document.createTextNode(part));
+    });
+  }
+
   function announce(el, text, after) {
     const pending = announceTimers.get(el);
     if (pending) clearTimeout(pending);
-    const write = () => { el.textContent = text; if (after) after(); };
+    const write = () => {
+      el.textContent = text; linkContact(el); if (after) after(); };
     if (!el.hidden && !pending) return write();
     el.textContent = "";
     el.hidden = false;
@@ -283,7 +350,10 @@
       // Only clear what this poller wrote — the refresh flow shares this
       // element and its message must survive.
       if (saidUnavailable) { msg.hidden = true; saidUnavailable = false; }
-      if (d.status === "active") { clearInterval(iv); location.reload(); }
+      // Disconnected (perhaps in another tab): stop and show the real state.
+      if (d.status === "active" || d.status === "revoked") {
+        clearInterval(iv); location.reload();
+      }
     }, 5000);
   });
 
@@ -305,10 +375,14 @@
         const agreed = await showConsentCard();
         if (!agreed) { btn.disabled = false; msg.hidden = true; return; }
         res = await post(`/api/connections/${btn.dataset.conn}/refresh`,
-                         { consent: true });
+                         { consent: true, consent_version: shownConsentVersion });
+        if (termsChanged(res)) { location.reload(); return; }
       }
       btn.disabled = false;
-      if (!res.ok) return report(res.d.error || "Couldn't refresh right now.");
+      // `message` first: a coded refusal (records_paused) carries its
+      // sentence there, and the code itself is never shown (#856 review).
+      if (!res.ok) return report(refusal(res.d,
+                                         "Couldn't refresh right now."));
       if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
         window.open(res.d.reauth_url, "_blank", "noopener");
@@ -350,17 +424,24 @@
     legacy_body_selector:
       "Upload was rejected. Please retry — if it repeats, refresh this page.",
     commit_failed:
-      "Something went wrong saving the records. Quote the code below to " +
-      "support if you need to reach us.",
+      "Something went wrong saving the records. Try again in a moment.",
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
-      "moment or contact support with the code below.",
+      "moment.",
+    records_paused:
+      "Your records are paused, so new records can't be added right now. " +
+      "If you didn't expect this, write to contactus@healthclaw.io.",
   };
-  function messageForError(code) {
-    return UPLOAD_MSG[code] || (
-      "The upload didn't go through. If this keeps happening, quote the " +
-      "code below to support.");
-  }
+  // Failures that may repeat get a way to reach us, and a support code only
+  // when the server sent one: a sentence never promises a code it lacks.
+  const UPLOAD_SUPPORT = { commit_failed: 1, ingest_failed: 1 };
+  const uploadErrorLine = (code, supportCode) =>
+    (UPLOAD_MSG[code] || "The upload didn't go through. Try again in a moment.")
+    + ((UPLOAD_SUPPORT[code] || !UPLOAD_MSG[code])
+      ? (" If it keeps happening, write to contactus@healthclaw.io" +
+         (supportCode ? " and quote this code: " + supportCode + "." : "."))
+      : "");
+  function messageForError(code) { return uploadErrorLine(code, ""); }
 
   // Reused file input — the current owner card is tracked here.
   const fileInput = $("upload-file");
@@ -419,9 +500,8 @@
       }
       btn.disabled = false;
       if (!r.ok) {
-        let line = messageForError(d.error);
-        if (d.correlation_id) line += " Support code: " + d.correlation_id + ".";
-        return sayUpload(msg, line, "form-error");
+        return sayUpload(msg, uploadErrorLine(d.error, d.correlation_id),
+                         "form-error");
       }
       // Success or partial success — show a plain-language summary of
       // what actually landed. When entries failed, surface the unique
@@ -510,7 +590,7 @@
       const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
       if (!res.ok) {
         btn.disabled = false;
-        announce(msg, res.d.error || "Couldn't disconnect.");
+        announce(msg, refusal(res.d, "Couldn't disconnect."));
         return;
       }
       carryNotice(res.d.message || "Disconnected.");
@@ -568,7 +648,9 @@
       announce(msg, d.message || "We couldn't confirm your records were deleted.");
       return;
     }
-    location.assign("/?deleted=1");
+    // replace, not assign: Back must not return to the settings of an
+    // account that is gone (#884 G7).
+    location.replace("/?deleted=1");
   });
 
   // The word, in any case, with the whitespace trimmed: phones capitalise
@@ -656,12 +738,13 @@
   // approval that finished left the band at "Nothing yet" with no way to the
   // result, and one that failed vanished. Each line says what happened and,
   // where there is one, the next step. Labels and names go in as text.
-  const SUPPORT = "Email support@healthclaw.io to check.";
+  // The one contact address (#856), linked by showRecent.
+  const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
     const what = r.label + (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
-    if (r.state === "done") return { text: what + (r.link ? "ready." : "Done."),
+    if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
       link: r.link ? { href: r.link, text: "Open the PDF", away: true } : null };
     if (r.state === "failed") return { text: what + "Didn't finish.",
       link: r.chat ? { href: r.chat, text: "Ask " + r.agent_name + " to try again" } : null,
@@ -696,6 +779,7 @@
       if (!line) return;
       const li = document.createElement("li");
       li.textContent = line.text;
+      linkContact(li);   // before any link below: it rewrites the text
       if (line.link && /^(https?:\/\/|\/)/.test(line.link.href)) {
         const a = document.createElement("a");
         a.href = line.link.href;
@@ -804,7 +888,7 @@
       const name = await askForName(btn.dataset.name);
       if (!name) return;
       const res = await post(`/api/agents/${btn.dataset.agent}/rename`, { name });
-      if (!res.ok) return announce(agentMsg(btn), res.d.error || "Couldn't rename.");
+      if (!res.ok) return announce(agentMsg(btn), refusal(res.d, "Couldn't rename."));
       location.reload();
     });
   });
@@ -865,16 +949,40 @@
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
     $("surfaces-msg").hidden = true;
+    $("surfaces-msg").classList.remove("is-ok");
     const agentId = im.dataset.agent;
     if (!agentId) {
       return say(im, $("surfaces-msg"),
         "Start a chat with your assistant first, then connect iMessage.");
     }
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
-    if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
+    if (!res.ok) return say(im, $("surfaces-msg"), refusal(res.d, "That didn't work."));
     $("im-state").textContent = "pending — text to finish";
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
+  });
+  // Disconnect, one phone per tile: its texts stop reaching the assistant.
+  // Texting again later sends a fresh sign-in link. Success is said in the
+  // calm style; only a failure uses the error colour.
+  document.querySelectorAll(".im-disconnect").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const tile = btn.closest(".surface");
+      const msg = $("surfaces-msg");
+      btn.disabled = true;
+      const res = await post("/api/surfaces/imessage/disconnect",
+                             { surface_id: btn.dataset.surface });
+      if (!res.ok) {
+        btn.disabled = false;
+        msg.classList.remove("is-ok");
+        return say(tile, msg, "Couldn't disconnect. Try again.");
+      }
+      btn.remove();
+      tile.classList.remove("on");
+      tile.querySelector(".im-state").textContent = "disconnected";
+      msg.classList.add("is-ok");
+      say(tile, msg,
+        "Disconnected. Texts from that phone won't reach your assistant.");
+    });
   });
   // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
   // HealthClaw is asked first; the card changes only on its yes, and a
@@ -891,7 +999,7 @@
         if (status) { status.textContent = "revoked"; status.className = "status status-revoked"; }
       } else {
         btn.disabled = false;
-        if (msg) announce(msg, res.d.message || res.d.error || "That didn't work.");
+        if (msg) announce(msg, refusal(res.d, "That didn't work."));
       }
     });
   });

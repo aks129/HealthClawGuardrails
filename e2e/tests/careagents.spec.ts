@@ -40,7 +40,7 @@ test.describe('CareAgents landing', () => {
     await page.goto('/');
     await expect(page).toHaveTitle(/CareAgents/);
     await expect(page.locator('main.hero h1')).toContainText(
-      'knows your health');
+      'Understand your health records');
     // Signed out, the primary CTA is "Get started". Click it rather than
     // assert its href — a link that renders but does not route is the
     // failure a browser test exists to catch.
@@ -93,19 +93,15 @@ test.describe('CareAgents auth', () => {
     await page.locator('#code').fill(code);
     await page.locator('#verify-btn').click();
 
-    // On a WebAuthn-capable browser the first verified sign-in offers passkey
-    // enrolment (auth.js:72); elsewhere it goes straight to the hub. Assert
-    // whichever this browser is, then skip — creating a passkey is out of
-    // scope and needs a virtual authenticator.
-    const canPasskey = await page.evaluate(() => !!window.PublicKeyCredential);
-    if (canPasskey) {
-      await expect(page.locator('#step-passkey')).toBeVisible();
-      await page.locator('#skip-passkey-btn').click();
-    }
-
+    // A brand-new account has nothing connected, so it is not offered a
+    // passkey before its records (first_run; the chat's ⋯ menu has "Add a
+    // passkey"). It goes straight to the hub on every browser.
     await expect(page).toHaveURL(/\/home$/);
+    await expect(page.locator('#step-passkey')).toBeHidden();
     await expect(page).toHaveTitle(/Your hub — CareAgents/);
-    await expect(page.locator('main.hub h1')).toHaveText('Welcome back');
+    // "Your hub", not "Welcome back": a brand-new account lands here too
+    // (#847, shipped in #853).
+    await expect(page.locator('main.hub h1')).toHaveText('Your hub');
     await expect(page.locator('.hub-sub')).toContainText(email);
     // NOT asserted: connection/agent/surface dialogs (#224 rebuild).
   });

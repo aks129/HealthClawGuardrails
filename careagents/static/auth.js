@@ -27,7 +27,12 @@
   }
 
   // --- passkey sign-in ---
-  $("passkey-btn").addEventListener("click", async () => {
+  // Where adding (or skipping) a passkey returns to: the chat it was
+  // asked from, set by the server only for this account's own chat.
+  const back = $("auth-card").dataset.back || "";
+
+  // Not drawn on the way to adding a first passkey (auth.html).
+  if ($("passkey-btn")) $("passkey-btn").addEventListener("click", async () => {
     clear();
     if (!window.PublicKeyCredential) return fail("This browser doesn't support passkeys — use email.");
     try {
@@ -91,7 +96,12 @@
     clear();
     const res = await post("/api/auth/verify", { email: pendingEmail, code: $("code").value.trim() });
     if (!res.ok) return fail(res.d.error || "Wrong code.");
-    if (res.d.has_passkey || !window.PublicKeyCredential) { location.href = "/home"; return; }
+    // `first_run`: nothing connected yet. The records come first; the
+    // passkey waits in the chat's menu rather than standing in the way.
+    if (res.d.has_passkey || res.d.first_run === true ||
+        !window.PublicKeyCredential) {
+      location.href = back || "/home"; return;
+    }
     show("step-passkey");
   });
   $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verify-btn").click(); });
@@ -114,12 +124,13 @@
         },
       };
       const res = await post("/webauthn/register/verify", payload);
-      if (res.ok) location.href = "/home";
+      if (res.ok) location.href = back ? back + "&passkey=added" : "/home";
       else fail(res.d.error || "Couldn't save the passkey.");
     } catch (e) { fail("Passkey setup was cancelled."); }
   }
   $("add-passkey-btn").addEventListener("click", enroll);
-  $("skip-passkey-btn").addEventListener("click", () => (location.href = "/home"));
+  $("skip-passkey-btn").addEventListener("click", () =>
+    (location.href = back || "/home"));
 
   $("email").addEventListener("keydown", (e) => { if (e.key === "Enter") $("email-btn").click(); });
 })();

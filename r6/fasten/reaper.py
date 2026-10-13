@@ -17,7 +17,9 @@ failure can NEVER block boot. Guards:
 - skipped entirely (with a loud log) when FASTEN_PUBLIC_KEY/
   FASTEN_PRIVATE_KEY are unset — dev boxes must boot cleanly;
 - a trigger failure marks the job 'failed' with a clear note instead of
-  leaving it wedged non-terminal.
+  leaving it wedged non-terminal;
+- a job on a tenant the account holder disconnected is marked 'failed'
+  ('disconnected') and never re-triggered.
 """
 import logging
 import os
@@ -26,7 +28,8 @@ from datetime import datetime, timedelta, timezone
 from models import db
 from r6.audit import add_audit_event
 from r6.fasten.api import trigger_ehi_export
-from r6.fasten.models import FastenJob
+from r6.fasten.models import (FastenJob, connection_revoked,
+                              tenant_closed)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,23 @@ def reap_zombie_jobs() -> int:
 
     reaped = 0
     for job in zombies:
+        # The account holder disconnected or deleted, or Fasten reported
+        # this connection revoked: no fresh export, and the job is closed so
+        # it is never swept again.
+        if (tenant_closed(job.tenant_id)
+                or connection_revoked(job.org_connection_id)):
+            job.status = 'failed'
+            job.failure_reason = 'disconnected'
+            job.completed_at = datetime.now(timezone.utc)
+            add_audit_event(
+                event_type='fasten_import_refused',
+                agent_id='fasten-boot-reaper',
+                tenant_id=job.tenant_id,
+                outcome='failure',
+                detail=f'job={job.task_id} disconnected',
+            )
+            db.session.commit()
+            continue
         try:
             result = trigger_ehi_export(job.org_connection_id)
         except Exception as exc:  # noqa: BLE001 — one bad job must not stop the sweep

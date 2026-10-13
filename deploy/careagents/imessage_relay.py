@@ -8,10 +8,13 @@ which resolves the sender's handle to a bound agent and durably queues the
 turn. This relay polls the run projection; inference never runs in the web
 request that accepted the message.
 
-Flow per inbound message:
-  - "care <code>"  → POST /api/surfaces/imessage/bind   {code, handle}
-  - anything else  → POST /api/surfaces/imessage/inbound {handle, text}
-                   → GET /api/surfaces/imessage/runs/<id> → reply
+Flow per inbound message (keywords, pairing codes and sign-in links are
+decided on the server, so this stays a transport):
+  POST /api/surfaces/imessage/inbound {handle, text, request_id}
+    → {reply?, run_id?}: send `reply` now if present, then
+  GET /api/surfaces/imessage/runs/<id> until it answers → send its reply.
+A run that never answers gets TIMEOUT_TEXT, not silence. Messages are worked
+on a small thread pool, one sender at a time in arrival order.
 
 Requires macOS **Full Disk Access** for the interpreter (to read
 ~/Library/Messages/chat.db) and Automation permission for Messages.
@@ -33,10 +36,13 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 import urllib.parse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BASE = os.environ.get("CAREAGENTS_BASE", "https://careagents.cloud").rstrip("/")
@@ -48,9 +54,23 @@ STATE_FILE = Path(os.environ.get(
 CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 HTTP_TIMEOUT = 20
 RUN_TIMEOUT = 180
+WORKERS = 4
+_HOST = urllib.parse.urlparse(BASE).netloc or "careagents.cloud"
+TIMEOUT_TEXT = (f"Sorry, I couldn't answer in time. Please try again, or "
+                f"open {_HOST}.")
+
+
+def _mask(handle: str) -> str:
+    """Never print a full phone number or Apple ID."""
+    if "@" in handle:
+        name, _, domain = handle.partition("@")
+        return f"{name[:1]}***@{domain}"
+    return f"***{handle[-2:]}" if len(handle) > 2 else "***"
 
 
 def _post(path: str, payload: dict) -> dict:
+    """The JSON answer, including an error's: a 503 can carry the `reply`
+    the texter should read."""
     req = urllib.request.Request(
         f"{BASE}{path}", method="POST",
         data=json.dumps(payload).encode(),
@@ -60,27 +80,41 @@ def _post(path: str, payload: dict) -> dict:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode(errors="replace")[:200]
-        print(f"[relay] {path} HTTP {exc.code}: {body}", file=sys.stderr)
+        print(f"[relay] {path} HTTP {exc.code}", file=sys.stderr)
+        try:
+            body = json.loads(exc.read() or b"{}")
+        except Exception:
+            return {}
+        return body if isinstance(body, dict) else {}
     except Exception as exc:  # network, timeout, JSON
         print(f"[relay] {path} failed: {type(exc).__name__}", file=sys.stderr)
     return {}
 
 
 def _get(path: str, params: dict) -> tuple[int, dict]:
+    """GET a run. The sender's handle goes in a header, never the URL: a
+    URL is what access logs and proxies write down."""
+    params = dict(params)
+    headers = {"X-Internal-Secret": SECRET}
+    handle = params.pop("handle", None)
+    if handle:
+        headers["X-Imessage-Handle"] = handle
     query = urllib.parse.urlencode(params)
     req = urllib.request.Request(
-        f"{BASE}{path}?{query}", method="GET",
-        headers={"X-Internal-Secret": SECRET})
+        f"{BASE}{path}" + (f"?{query}" if query else ""), method="GET",
+        headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode(errors="replace")[:200]
-        print(f"[relay] {path} HTTP {exc.code}: {body}", file=sys.stderr)
+        print(f"[relay] runs HTTP {exc.code}", file=sys.stderr)
+        return exc.code, {}
     except Exception as exc:
-        print(f"[relay] {path} failed: {type(exc).__name__}", file=sys.stderr)
+        print(f"[relay] runs failed: {type(exc).__name__}", file=sys.stderr)
     return 0, {}
+
+
+_send_lock = threading.Lock()
 
 
 def _send_imessage(handle: str, text: str) -> None:
@@ -93,11 +127,13 @@ def _send_imessage(handle: str, text: str) -> None:
         '  end tell\n'
         'end run')
     try:
-        subprocess.run(["osascript", "-e", script, handle, text],
-                       check=True, capture_output=True, timeout=30)
+        # One AppleScript send at a time: Messages is not driven in parallel.
+        with _send_lock:
+            subprocess.run(["osascript", "-e", script, handle, text],
+                           check=True, capture_output=True, timeout=30)
     except subprocess.CalledProcessError as exc:
-        print(f"[relay] send to {handle} failed: "
-              f"{exc.stderr.decode(errors='replace')[:200]}", file=sys.stderr)
+        print(f"[relay] send to {_mask(handle)} failed: exit "
+              f"{exc.returncode}", file=sys.stderr)
     except Exception as exc:
         print(f"[relay] send error: {type(exc).__name__}", file=sys.stderr)
 
@@ -138,39 +174,62 @@ def _new_inbound(last_rowid: int) -> list[tuple[int, str, str]]:
     return [(r[0], r[1], r[2]) for r in rows if r[1] and r[2]]
 
 
-def _handle_message(handle: str, text: str) -> None:
-    stripped = text.strip()
-    low = stripped.lower()
-    if low.startswith("care ") or low.startswith("care_"):
-        code = stripped[5:].strip()
-        res = _post("/api/surfaces/imessage/bind",
-                    {"code": code, "handle": handle})
-        if res.get("ok"):
-            _send_imessage(handle, "You're connected — I'm your CareAgent. "
-                                   "Ask me anything about your records.")
-        else:
-            _send_imessage(handle, "That code didn't match. Generate a fresh "
-                                   "one in the CareAgents app and try again.")
-        return
-    res = _post("/api/surfaces/imessage/inbound",
-                {"handle": handle, "text": stripped})
+def _handle_message(handle: str, text: str, rowid: int = 0) -> None:
+    payload = {"handle": handle, "text": text.strip()}
+    if rowid:
+        payload["request_id"] = f"imessage-{rowid}"
+    res = _post("/api/surfaces/imessage/inbound", payload)
+    if res.get("reply"):
+        _send_imessage(handle, res["reply"])
     run_id = res.get("run_id")
-    if run_id:
-        deadline = time.monotonic() + RUN_TIMEOUT
-        while time.monotonic() < deadline:
-            status, result = _get(
-                f"/api/surfaces/imessage/runs/{run_id}", {"handle": handle})
-            if status == 200:
-                reply = result.get("reply")
-                if reply:
-                    _send_imessage(handle, reply)
+    if not run_id:
+        return  # nothing queued: a keyword, a link, or a stranger to ignore
+    deadline = time.monotonic() + RUN_TIMEOUT
+    while time.monotonic() < deadline:
+        status, result = _get(
+            f"/api/surfaces/imessage/runs/{run_id}", {"handle": handle})
+        if status == 200:
+            if result.get("reply"):
+                _send_imessage(handle, result["reply"])
+            return
+        if status in (403, 404):
+            return  # unbound since (STOP), no such run, or a bad secret
+        time.sleep(1)  # 202 still running; 0 or 5xx retried (#410)
+    print(f"[relay] run {run_id} timed out", file=sys.stderr)
+    _send_imessage(handle, TIMEOUT_TEXT)
+
+
+class _Dispatcher:
+    """A small pool, so one slow answer does not hold up everyone else,
+    while each sender's messages are still handled one at a time, in order."""
+
+    def __init__(self, workers: int = WORKERS):
+        self._pool = ThreadPoolExecutor(max_workers=workers)
+        self._lock = threading.Lock()
+        self._queues: dict[str, deque] = {}
+
+    def submit(self, handle: str, text: str, rowid: int = 0) -> None:
+        with self._lock:
+            queue = self._queues.get(handle)
+            if queue is not None:
+                queue.append((text, rowid))
                 return
-            if status not in (0, 202):
-                return
-            time.sleep(1)
-        print(f"[relay] run {run_id} timed out", file=sys.stderr)
-    # No reply + no error → handle isn't bound; stay silent (don't spam
-    # strangers who text the number).
+            self._queues[handle] = deque([(text, rowid)])
+        self._pool.submit(self._drain, handle)
+
+    def _drain(self, handle: str) -> None:
+        while True:
+            with self._lock:
+                queue = self._queues[handle]
+                if not queue:
+                    del self._queues[handle]
+                    return
+                text, rowid = queue.popleft()
+            try:
+                _handle_message(handle, text, rowid)
+            except Exception as exc:  # keep this sender's queue moving
+                print(f"[relay] message error: {type(exc).__name__}",
+                      file=sys.stderr)
 
 
 def main() -> int:
@@ -190,10 +249,13 @@ def main() -> int:
         con.close()
         _save_last_rowid(last)
     print(f"[relay] watching {CHAT_DB} from ROWID {last}; base {BASE}")
+    dispatcher = _Dispatcher()
     while True:
         try:
             for rowid, handle, text in _new_inbound(last):
-                _handle_message(handle, text)
+                # Advanced on dispatch: a crash mid-answer loses that answer
+                # rather than replaying the message on restart.
+                dispatcher.submit(handle, text, rowid)
                 last = rowid
                 _save_last_rowid(last)
         except Exception as exc:  # keep the loop alive

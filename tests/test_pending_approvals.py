@@ -297,7 +297,10 @@ def test_a_correction_proposed_the_way_the_mcp_tool_sends_it_is_found_reviewed_a
     assert got["clinicalStatus"]["coding"][0]["code"] == "resolved"
     assert got["meta"]["versionId"] == "2"
     assert "Nothing is waiting" in c.get(f"/agents/{agent}/approvals").get_data(as_text=True)
-    assert c.get(f"/review/{agent}/{action_id}").status_code == 404
+    # Reopened, it says the request is done (#875: a dead end no more).
+    done = c.get(f"/review/{agent}/{action_id}")
+    assert done.status_code == 200
+    assert "This request is already done." in done.get_data(as_text=True)
 
     # 6. CareAgents stored none of it.
     # Dialect-neutral table list: svc follows CARE_TEST_DATABASE_URL, so on

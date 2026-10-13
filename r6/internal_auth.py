@@ -31,3 +31,20 @@ def internal_secret_authorized():
         provided = request.headers.get('X-Internal-Secret', '')
         return constant_time.equal(provided, mint_secret)
     return resolve_app_env() != 'production'
+
+
+def internal_secret_presented():
+    """True only when the internal secret is configured AND presented.
+
+    The same secret and the same constant-time match as
+    `internal_secret_authorized`, without its open-outside-production
+    fallback. For a request that asks the engine to say something it would
+    otherwise never say, such as the brief's sample voice, which words a
+    result as "the sample person's" (#908 security review): with no secret
+    configured, nobody can prove they are CareAgents, so nobody gets it.
+    """
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    if not mint_secret:
+        return False
+    provided = request.headers.get('X-Internal-Secret', '')
+    return constant_time.equal(provided, mint_secret)

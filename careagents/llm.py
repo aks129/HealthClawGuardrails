@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 
 import requests
 
+from careagents import routing
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,10 +45,34 @@ class LLMTurn:
     # Some OpenAI-compatible backends (Gemini) require echoing opaque fields
     # like thought_signature that a reconstructed call would drop.
     raw_tool_calls: list = field(default_factory=list)
+    # Anthropic only: for routing, the log line and the daily counts.
+    model: str = ""
+    tier: int = 0
+    escalated: bool = False
+    advisor_calls: int = 0
+    advisor_errors: int = 0
+    advisor_timed_out: bool = False
+    # The advised attempt failed (timeout, 5xx, connection) and the call was
+    # answered without it. advisor_calls is then 1: the turn's consultation
+    # is spent.
+    advisor_failed: bool = False
+    stop_reason: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    advisor_output_tokens: int = 0
 
 
 class LLMError(RuntimeError):
     pass
+
+
+class LLMTransient(LLMError):
+    """A failure the same request may not repeat: 5xx, 529 overloaded, or
+    a dropped connection, after whatever retries the call was given."""
+
+
+class LLMTimeout(LLMTransient):
+    """The provider did not answer within this call's budget."""
 
 
 class LLMRateLimited(LLMError):
@@ -192,25 +218,156 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
     # retry an Anthropic call, but they now fit inside the deadline.
     _budget = {"timeout": _attempt_timeout(cfg, 1 + _ANTHROPIC_MAX_RETRIES),
                "max_retries": _ANTHROPIC_MAX_RETRIES}
+    a_tools = [{"name": t["name"], "description": t["description"],
+                "input_schema": t["parameters"]} for t in tools]
+    a_messages = _to_anthropic_messages(messages)
+    max_tokens = getattr(cfg, "anthropic_max_tokens", 8000)
+    effort = getattr(cfg, "anthropic_effort", "medium")
 
+    if not getattr(cfg, "routing", False):
+        # CARE_MODEL for every turn, exactly as before routing existed: no
+        # betas, no advisor, no log line and no counts (#931 F4).
+        return _anthropic_call(
+            anthropic, _anthropic_client(anthropic, cfg, **_budget).messages,
+            model=cfg.anthropic_model, max_tokens=max_tokens,
+            output_config={"effort": effort},
+            system=system, messages=a_messages, tools=a_tools)
+
+    # CARE_ROUTING=on (careagents/routing.py).
+    started = _time_mod.monotonic()
+    tier = routing.tier_for(messages)
+    escalated = advisor_timed_out = advisor_failed = False
+    if tier == routing.TIER_HAIKU:
+        # Haiku sees the current turn only. An earlier answer may hold the
+        # person's results, and small talk does not need them (#931 F2).
+        start = routing.turn_start(messages) or 0
+        # No fallbacks: Haiku 5.5 has no server-side fallback, and a list of
+        # fallback models is a 400 there.
+        t0 = _time_mod.monotonic()
+        turn = _anthropic_call(
+            anthropic, _anthropic_client(anthropic, cfg, **_budget).messages,
+            model=routing.HAIKU_MODEL, max_tokens=max_tokens,
+            output_config={"effort": "low"}, system=system,
+            messages=_to_anthropic_messages(messages[start:]), tools=a_tools)
+        if any(c.name in routing.CLINICAL_TOOLS for c in turn.tool_calls):
+            # The turn was clinical after all. Haiku's reply is discarded
+            # unexecuted, so its tool call never reaches the history.
+            tier, escalated = routing.TIER_SONNET, True
+        _log_call("haiku", turn, t0, "discarded" if escalated else "ok")
+    if tier == routing.TIER_SONNET:
+        sonnet = {"model": routing.SONNET_MODEL, "max_tokens": max_tokens,
+                  "output_config": {"effort": effort},
+                  "messages": a_messages,
+                  "extra_body": {"fallbacks": "default"}}
+        # A per-request anthropic-beta header REPLACES the client's default
+        # one in the SDK, so the OAuth beta has to be in the list (#931 F3).
+        oauth = ([cfg.anthropic_oauth_beta]
+                 if getattr(cfg, "anthropic_oauth_token", "") else [])
+        turn = None
+        if (getattr(cfg, "advisor", False)
+                and not routing.advisor_used(messages)):
+            # Offered until the turn has consulted once, the no-tools final
+            # call included. The history we send never carries advisor blocks
+            # (it is rebuilt provider-neutrally), which the API accepts with
+            # the advisor still offered (live, 2026-10-12).
+            #
+            # One attempt with most of the deadline, no SDK retries: a
+            # consultation runs well past the ordinary per-attempt budget,
+            # and a retry would buy the Opus consultation again (#931 F6).
+            client = _anthropic_client(anthropic, cfg,
+                                       timeout=_advised_timeout(cfg),
+                                       max_retries=0)
+            t0 = _time_mod.monotonic()
+            try:
+                turn = _anthropic_call(
+                    anthropic, client.beta.messages,
+                    system=system + routing.ADVISOR_NOTE,
+                    tools=[*a_tools, routing.ADVISOR_TOOL],
+                    betas=[*oauth, routing.ADVISOR_BETA,
+                           routing.FALLBACK_BETA], **sonnet)
+                _log_call("advised", turn, t0, "ok")
+            except LLMTransient as exc:
+                # A timeout, a 5xx/529 or a dropped connection: with no SDK
+                # retries on this call, answer without the advisor rather
+                # than fail the turn (#931 round two R2), in the share of
+                # the deadline kept back for it.
+                advisor_failed = True
+                advisor_timed_out = isinstance(exc, LLMTimeout)
+                _log_call("advised", None, t0, type(exc.__cause__).__name__)
+        if turn is None:
+            budget = _fallback_budget(cfg) if advisor_failed else _budget
+            spent = (getattr(cfg, "advisor", False)
+                     and (advisor_failed or routing.advisor_used(messages)))
+            t0 = _time_mod.monotonic()
+            turn = _anthropic_call(
+                anthropic,
+                _anthropic_client(anthropic, cfg, **budget).beta.messages,
+                system=system + (routing.ADVISOR_SPENT_NOTE if spent else ""),
+                tools=a_tools,
+                betas=[*oauth, routing.FALLBACK_BETA], **sonnet)
+            _log_call("fallback" if advisor_failed else "sonnet", turn, t0,
+                      "ok")
+    turn.tier, turn.escalated = tier, escalated
+    turn.advisor_timed_out = advisor_timed_out
+    turn.advisor_failed = advisor_failed
+    if advisor_failed:
+        # The failed attempt is the turn's one consultation: later rounds
+        # are not offered the advisor again, with a fresh budget, after this
+        # round already spent most of its share (#931 round two R3). The
+        # callers record advisor_calls in the history and checkpoints.
+        turn.advisor_calls = max(turn.advisor_calls, 1)
+    _observe(turn, tier, started)
+    return turn
+
+
+def _anthropic_client(anthropic, cfg, *, timeout: float, max_retries: int):
     # An OAuth access token (Claude subscription / OpenClaw) authenticates as a
     # Bearer token with the oauth beta header, instead of an x-api-key. The
     # token is short-lived — refresh it out of band when it expires.
     if getattr(cfg, "anthropic_oauth_token", ""):
-        client = anthropic.Anthropic(
+        return anthropic.Anthropic(
             auth_token=cfg.anthropic_oauth_token,
             default_headers={"anthropic-beta": cfg.anthropic_oauth_beta},
-            **_budget)
-    else:
-        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key, **_budget)
-    a_tools = [{"name": t["name"], "description": t["description"],
-                "input_schema": t["parameters"]} for t in tools]
-    a_messages = _to_anthropic_messages(messages)
+            timeout=timeout, max_retries=max_retries)
+    return anthropic.Anthropic(api_key=cfg.anthropic_api_key,
+                               timeout=timeout, max_retries=max_retries)
+
+
+def _deadline(cfg) -> float:
+    return float(getattr(cfg, "run_deadline_seconds", 0)
+                 or _FALLBACK_DEADLINE_SECONDS)
+
+
+#: Of a call's share of the deadline (90s at the default 120s), what the
+#: advised attempt may take: 54s. The other 36s are kept for answering
+#: without the advisor if it fails, as two attempts of 18s, so a failed
+#: advised call, its fallback and one ordinary tool round (24.7s) still
+#: fit inside 120s (#931 round two R3). A one-consult call measured
+#: 13-29s live (#931 F6 probes); max_uses is 1.
+_ADVISED_SHARE = 0.6
+_FALLBACK_RETRIES = 1
+
+
+def _advised_timeout(cfg) -> float:
+    return max(5.0, _deadline(cfg) * _DEADLINE_SHARE * _ADVISED_SHARE)
+
+
+def _fallback_budget(cfg) -> dict:
+    """The kept-back share for answering without a failed advisor, split
+    over the attempts the SDK may make (it retries 5xx, 529, connection
+    errors and timeouts)."""
+    reserve = _deadline(cfg) * _DEADLINE_SHARE - _advised_timeout(cfg)
+    return {"timeout": max(5.0, reserve / (1 + _FALLBACK_RETRIES)),
+            "max_retries": _FALLBACK_RETRIES}
+
+
+def _anthropic_call(anthropic, endpoint, **kw) -> LLMTurn:
     try:
-        resp = client.messages.create(
-            model=cfg.anthropic_model, max_tokens=1200, system=system,
-            messages=a_messages, tools=a_tools)
+        resp = endpoint.create(**kw)
     except anthropic.APIError as exc:  # surface a category, not internals
+        timeout_cls = getattr(anthropic, "APITimeoutError", None)
+        if timeout_cls is not None and isinstance(exc, timeout_cls):
+            raise LLMTimeout("model call timed out") from exc
         # No retry loop here on purpose: the Anthropic SDK already retries
         # 429 and 5xx internally (max_retries), so wrapping it in another
         # would multiply the delay while the run holds its lease. What was
@@ -220,16 +377,90 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
             raise LLMOutOfCredit("model call refused on billing") from exc
         if getattr(exc, "status_code", None) == 429:
             raise LLMRateLimited("model call rate limited (HTTP 429)") from exc
+        conn_cls = getattr(anthropic, "APIConnectionError", None)
+        if ((getattr(exc, "status_code", None) or 0) >= 500
+                or (conn_cls is not None and isinstance(exc, conn_cls))):
+            raise LLMTransient(
+                f"model call failed ({type(exc).__name__})") from exc
         raise LLMError(f"model call failed ({type(exc).__name__})") from exc
 
-    turn = LLMTurn()
+    turn = LLMTurn(model=kw["model"])
     for block in resp.content:
         if block.type == "text":
             turn.text += block.text
         elif block.type == "tool_use":
             turn.tool_calls.append(ToolCall(
                 id=block.id, name=block.name, arguments=dict(block.input)))
+        elif block.type == "advisor_tool_result":
+            # Opus advice is encrypted (advisor_redacted_result) and is
+            # never read. Text before it is the executor announcing that it
+            # will consult someone, which the person should not see.
+            content = getattr(block, "content", None)
+            kind = (content.get("type") if isinstance(content, dict)
+                    else getattr(content, "type", None))
+            if kind == "advisor_tool_result_error":
+                turn.advisor_errors += 1
+            else:
+                turn.advisor_calls += 1
+            turn.text = ""
+    stop = getattr(resp, "stop_reason", None)
+    turn.stop_reason = stop or ""
+    usage = getattr(resp, "usage", None)
+    turn.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    turn.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    for it in getattr(usage, "iterations", None) or []:
+        get = it.get if isinstance(it, dict) else (
+            lambda k, _it=it: getattr(_it, k, None))
+        if get("type") == "advisor_message":
+            turn.advisor_output_tokens += int(get("output_tokens") or 0)
+    if stop == "refusal" and not turn.text.strip():
+        # A safety decline arrives as HTTP 200 with no text; an empty
+        # bubble reads as a broken app.
+        turn.text = REFUSAL_TEXT
+    elif stop == "max_tokens" and not turn.tool_calls:
+        # Cut off mid-answer: say so instead of ending mid-sentence.
+        turn.text = turn.text.rstrip() + "\n\n" + CUT_OFF_TEXT
     return turn
+
+
+def _log_call(kind: str, turn: LLMTurn | None, t0: float,
+              outcome: str) -> None:
+    """One line per API call, the discarded Haiku call and a failed advised
+    attempt included, so escalation and fallback cost can be read from the
+    logs (QA #931 Q3). Never content: kind, model, outcome, stop reason,
+    seconds and token counts only."""
+    logger.info(
+        "model call kind=%s model=%s outcome=%s stop=%s secs=%.1f in=%d "
+        "out=%d advisor=%d advisor_out=%d", kind,
+        turn.model if turn else "-", outcome,
+        (turn.stop_reason if turn else "") or "-",
+        _time_mod.monotonic() - t0, turn.input_tokens if turn else 0,
+        turn.output_tokens if turn else 0, turn.advisor_calls if turn else 0,
+        turn.advisor_output_tokens if turn else 0)
+
+
+def _observe(turn: LLMTurn, tier, started: float) -> None:
+    """The day's counts, once per routed llm.complete. Never content."""
+    name = "haiku" if tier == routing.TIER_HAIKU else "sonnet"
+    # A call that answers (no tool calls) ends the turn: count it once there.
+    answered = not turn.tool_calls
+    routing.count({
+        f"turns_{name}": answered,
+        "escalations": turn.escalated,
+        # A failed advised attempt spends the turn's consultation without
+        # being one; it is counted as an error (or a timeout) instead.
+        "advisor_consults": 0 if turn.advisor_failed else turn.advisor_calls,
+        "advisor_errors": turn.advisor_errors + (
+            turn.advisor_failed and not turn.advisor_timed_out),
+        "advisor_timeouts": turn.advisor_timed_out,
+        "refusals": turn.stop_reason == "refusal",
+        "cut_offs": turn.stop_reason == "max_tokens",
+    })
+
+
+REFUSAL_TEXT = ("I can't help with that one. Try asking it another way, "
+                "or ask your doctor.")
+CUT_OFF_TEXT = "(That ran long and was cut off. Ask me to continue.)"
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:

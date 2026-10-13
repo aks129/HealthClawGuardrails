@@ -1,0 +1,2 @@
+# Synthetic test secret in a security probe (replaced by a plain fake value in the next commit).
+cd2e7f908a7d59340960f23fbe575fe9964beb0e:tests/test_sec913_revoke_probes.py:generic-api-key:26

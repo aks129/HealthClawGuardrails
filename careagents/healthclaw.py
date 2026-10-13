@@ -9,14 +9,25 @@ browser never sees (the mint secret and tenant-bound step-up tokens).
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
+from urllib.parse import quote
 
 import logging
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+#: A resource id: the FHIR charset, up to 128 characters, as the engine's
+#: subject matcher reads it (r6/caregaps/routes.py). Live Epic Patient ids
+#: reach 109 (#878), past FHIR's nominal 64. A Patient id from an upstream
+#: feed is checked against it, in full, before it goes into a query string.
+_FHIR_ID = re.compile(r"[A-Za-z0-9\-.]{1,128}")
+
+#: How long a tenant's resolved `Patient/<id>` is reused (#867).
+PATIENT_SUBJECT_TTL_SECONDS = 300.0
 
 
 class HealthClawError(RuntimeError):
@@ -68,6 +79,9 @@ class HealthClawClient:
         # the layer; refresh comfortably before expiry.
         self._tokens: dict[str, tuple[str, float]] = {}
         self._token_ttl = 240.0
+        # patient-subject cache: tenant -> (subject, expires_at), monotonic.
+        # A pointer, not PHI; held in memory only, never in a table.
+        self._subjects: dict[str, tuple[str, float]] = {}
 
     # --- transport ------------------------------------------------------------
     #
@@ -321,9 +335,77 @@ class HealthClawClient:
                 r.status_code)
         return self._json_object(r, f"read {resource_type}")
 
+    def _patient_subject(self, tenant: str) -> str | None:
+        """`Patient/<id>` for the tenant's one Patient, else None.
+
+        CareAgents stores no patient id: a connection holds a tenant and
+        nothing inside it. The id lives in the tenant — `demo-patient-rivera`
+        for the sample records (r6/seed.py), the upstream Patient's own id
+        for Fasten. So the tenant is asked, and only one answer counts.
+
+        Two rows are enough to know the match is not unique, and with no
+        Patient or more than one there is no subject: one person's trend
+        must not be computed over two people's results (#865). The id comes
+        from a feed, so it must have the FHIR id shape before it goes into a
+        query string. The search is redacted and audited like any other read;
+        only the id is kept.
+
+        Kept in memory per tenant for PATIENT_SUBJECT_TTL_SECONDS, so a chat
+        turn that reads labs twice searches once. Only a found subject is
+        kept: a tenant whose records are still arriving must get its subject
+        as soon as its Patient lands, not minutes later.
+        """
+        now = time.monotonic()
+        hit = self._subjects.get(tenant)
+        if hit and hit[1] > now:
+            return hit[0]
+        try:
+            subject = self._find_patient_subject(tenant)
+        except HealthClawError as exc:
+            # The search is an addition to a read that worked without it.
+            # Losing it costs the trend, never the labs (#878 QA): post with
+            # no subject, as before #867, and try again next time.
+            logger.warning("patient lookup failed for labs (%s); "
+                           "interpreting without a subject", exc.status)
+            subject = None
+        if subject:
+            if len(self._subjects) >= 4096:
+                self._subjects = {t: v for t, v in self._subjects.items()
+                                  if v[1] > now}
+            self._subjects[tenant] = (subject, now + PATIENT_SUBJECT_TTL_SECONDS)
+        else:
+            self._subjects.pop(tenant, None)
+        return subject
+
+    def _find_patient_subject(self, tenant: str) -> str | None:
+        bundle = self.search(tenant, "Patient", {"_count": "2"})
+        entries = bundle.get("entry")
+        if not isinstance(entries, list) or len(entries) != 1:
+            return None
+        res = entries[0].get("resource") if isinstance(entries[0], dict) \
+            else None
+        if not isinstance(res, dict) or res.get("resourceType") != "Patient":
+            return None
+        pid = res.get("id")
+        if not isinstance(pid, str) or not _FHIR_ID.fullmatch(pid) \
+                or pid in (".", ".."):
+            return None
+        return f"Patient/{pid}"
+
     def interpret_labs(self, tenant: str) -> dict:
-        """POST $interpret; returns {'summary','consumer','disclaimer'}."""
-        r = self._send("POST", f"{self.fhir}/Observation/$interpret", json={},
+        """POST $interpret; returns {'summary','consumer','disclaimer'}.
+
+        With the tenant's one Patient as `subject` when there is exactly one
+        (`_patient_subject`), which is what lets the engine run its trend
+        checks (#867). Every caller goes through here — the chat's get_labs,
+        the timeline tool and the chart endpoint — so they read the same set
+        of results and cannot disagree about a value.
+        """
+        subject = self._patient_subject(tenant)
+        url = f"{self.fhir}/Observation/$interpret"
+        if subject:
+            url += "?subject=" + quote(subject, safe="/")
+        r = self._send("POST", url, json={},
                        headers=self._headers(tenant), what="$interpret")
         if r.status_code != 200:
             raise HealthClawError(f"$interpret failed ({r.status_code})",
@@ -505,9 +587,19 @@ class HealthClawClient:
 
     # --- review-page relay (credential-injecting proxy) ----------------------
 
-    def fetch_review_page(self, tenant: str, action_id: str) -> tuple[int, str]:
-        r = self._send("GET", f"{self.actions}/{action_id}/review",
-                       headers=self._headers(tenant), what="review fetch")
+    def fetch_review_page(self, tenant: str, action_id: str,
+                          voice: str | None = None) -> tuple[int, str]:
+        """`voice="sample"` asks the engine to word the intake review about
+        the made-up sample person (r6/voice.py), with the internal secret it
+        requires, as `fetch_appointment_brief` does. Without it the request
+        is exactly what it was."""
+        sample = voice == "sample"
+        headers = self._headers(tenant)
+        if sample:
+            headers["X-Internal-Secret"] = self.mint_secret
+        r = self._send("GET", f"{self.actions}/{action_id}/review"
+                       + ("?voice=sample" if sample else ""),
+                       headers=headers, what="review fetch")
         return r.status_code, r.text
 
     def submit_review(self, tenant: str, action_id: str,
@@ -632,7 +724,8 @@ class HealthClawClient:
             total += int(bundle.get("total") or 0)
         return total
 
-    def fetch_appointment_brief(self, tenant: str) -> dict | None:
+    def fetch_appointment_brief(self, tenant: str,
+                                voice: str | None = None) -> dict | None:
         """The brief, or None when the engine answered and there is none.
 
         Raises HealthClawError when we could not find out. The two were the
@@ -644,10 +737,20 @@ class HealthClawClient:
 
         A malformed 200 raises too: it means we did not learn whether a brief
         exists, which is the same fact as an unreachable engine.
+
+        `voice="sample"` asks the engine to word its sentences about the
+        made-up sample person (r6/voice.py), with the internal secret the
+        engine requires before it will. Without it the request is exactly
+        what it was.
         """
+        sample = voice == "sample"
+        headers = self._headers(tenant)
+        if sample:
+            headers["X-Internal-Secret"] = self.mint_secret
         r = self._send(
-            "GET", f"{self.fhir}/AppointmentBrief",
-            headers=self._headers(tenant),
+            "GET", f"{self.fhir}/AppointmentBrief"
+            + ("?voice=sample" if sample else ""),
+            headers=headers,
             what="appointment brief")
         if r.status_code == 200:
             # dict-or-None is what the brief renderer is written against.
@@ -666,6 +769,8 @@ class HealthClawClient:
         Deliberately not best-effort: "deleted" is only reported to the
         patient when the engine confirms it, never fire-and-forget.
         """
+        # The Patient goes with the records; so does our pointer to it.
+        self._subjects.pop(tenant, None)
         r = self._send(
             "POST", f"{self.fhir}/internal/purge-tenant",
             json={"tenant_id": tenant},
@@ -677,6 +782,31 @@ class HealthClawClient:
             raise HealthClawError(f"purge failed ({r.status_code})",
                                   r.status_code)
         return self._json_object(r, "purge")
+
+    def revoke_fasten(self, tenant: str) -> dict:
+        """Stop Fasten bringing records into this tenant. Raises on failure.
+
+        The engine half of Disconnect: it tombstones the tenant, revokes
+        its Fasten connections and stops unfinished jobs. Not best-effort,
+        for the same reason as purge_tenant: "disconnected" is only shown
+        once the engine confirms it. The engine gates this on the internal
+        secret alone, so no step-up token is minted for it.
+        """
+        r = self._send(
+            "POST", f"{self.fhir}/internal/fasten-revoke",
+            json={"tenant_id": tenant},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            what="fasten revoke")
+        if r.status_code != 200:
+            raise HealthClawError(f"fasten revoke failed ({r.status_code})",
+                                  r.status_code)
+        body = self._json_object(r, "fasten revoke")
+        # A 200 that does not say revoked (a proxy page, an older engine) is
+        # not a confirmation, so Disconnect stays fail-closed (review F2).
+        if body.get("revoked") is not True:
+            raise HealthClawError("fasten revoke not confirmed", r.status_code)
+        return body
 
     # --- conversation history -------------------------------------------------
     #
@@ -965,10 +1095,15 @@ class HealthClawClient:
 
     # --- trust panel ----------------------------------------------------------
 
+    #: The badge feeds public pages (/safety, /api/trust). A slow engine
+    #: must not hold them for the client-wide timeout (#884 security).
+    BADGE_TIMEOUT = 3
+
     def conformance_badge(self) -> dict:
         r = self._send("GET", f"{self.fhir}/$conformance",
                        params={"format": "shields"},
-                       what="conformance badge")
+                       what="conformance badge",
+                       timeout=min(self.timeout, self.BADGE_TIMEOUT))
         if not r.ok:
             return {"message": "unavailable"}
         return self._json_object(r, "conformance badge")

@@ -11,15 +11,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import threading
 import uuid
 from datetime import datetime, timezone
 
-from careagents import llm
+from careagents import beta, funnel, llm, routing, tester_terms
 from careagents.accounts import AccountService
-from careagents.agent import (MAX_TOOL_ROUNDS,
+from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
                               failure_text as agent_failure_text,
                               _execute_tool, _trim_history)
@@ -28,6 +29,74 @@ from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import system_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _plain(text: str) -> str:
+    """A sentence reduced for comparison: no markdown emphasis, quotes or
+    apostrophes, one case, single spaces, no end punctuation."""
+    text = re.sub(r"[*_`~>\"'\u2018\u2019\u201c\u201d]", "", text).lower()
+    return " ".join(text.split()).strip(" .!:;,-")
+
+
+#: A sentence that says the records are made up: one of these words ...
+_MADE_UP = ("made-up", "made up", "sample", "fictional", "fake")
+#: ... and one of these phrases, matched as whole words ("not young" is
+#: not "not you").
+_NOT_YOURS = (("not", "yours"), ("arent", "yours"), ("isnt", "yours"),
+              ("not", "about", "you"), ("isnt", "about", "you"),
+              ("not", "your"), ("arent", "your"), ("not", "you"))
+#: The only words a disclaimer is made of. A sentence is dropped only when
+#: every word in it is one of these, so anything it says about the sample,
+#: a condition, a medicine, a number or advice, keeps it (#908 QA and
+#: security): "The sample person takes metformin, which is not yours" stays.
+_DISCLAIMER_WORDS = frozenset("""
+    these this those they them it its are is were be been all just only
+    the a an and or of for to in on as so from with that which here there
+    records record data chart file person persons patient people someone
+    anyone else nobody nothing anything about you your yours not arent
+    isnt dont doesnt made up made-up sample fictional fake example demo
+    real belong belongs reminder note remember please again quick
+    know own fyi mind keep worth noting heads by way
+    """.split())
+#: A disclaimer is short. Anything longer is treated as content.
+_DISCLAIMER_MAX_WORDS = 16
+
+
+def _has_phrase(words: list[str], phrase: tuple[str, ...]) -> bool:
+    n = len(phrase)
+    return any(tuple(words[i:i + n]) == phrase
+               for i in range(len(words) - n + 1))
+
+
+def _disclaimer_only(s: str) -> bool:
+    """A plain sentence that only says the records are made up and not the
+    reader's: short, and every word one a disclaimer is made of."""
+    words = re.findall(r"[a-z0-9-]+", s.replace("'", ""))
+    return (0 < len(words) <= _DISCLAIMER_MAX_WORDS
+            and all(w in _DISCLAIMER_WORDS for w in words)
+            and any(m in s for m in _MADE_UP)
+            and any(_has_phrase(words, p) for p in _NOT_YOURS))
+
+
+def _drop_echo(text: str, lead: str) -> str:
+    """`text` without the model's own copy of `lead` at its start.
+
+    The line is in the stored history, so a model may open with it, bold,
+    quoted or reworded, and the answer would say it twice (#908 QA). Only
+    leading sentences of the first paragraph are dropped, and only when one
+    is the line itself or is a disclaimer and nothing else (no number, no
+    advice, no clinical word, short). The rest of the answer is untouched."""
+    lead_sentences = {_plain(s) for s in re.split(r"(?<=[.!?])\s+", lead)}
+    first, sep, rest = text.partition("\n\n")
+    sentences = re.split(r"(?<=[.!?])\s+", first.strip())
+    while sentences:
+        s = _plain(sentences[0])
+        if not s or s in lead_sentences or _disclaimer_only(s):
+            sentences.pop(0)
+            continue
+        break
+    first = " ".join(sentences)
+    return (first + sep + rest if first else rest).strip()
 
 
 class RunCancelled(RuntimeError):
@@ -65,6 +134,10 @@ def _error_class(exc: Exception) -> str:
 # tests reach it by this path.
 _failure_text = agent_failure_text
 
+
+#: The run event that says this run's daily turn is already charged. Empty
+#: payload; the browser projection drops event types it does not know.
+CHARGED_EVENT = "agent.charged"
 
 #: Consecutive heartbeat failures before the lease is given up. The interval
 #: is a third of the lease, so two misses still leave a third of it to
@@ -169,12 +242,18 @@ class RunWorker:
                 payload={"status": "cancelled"})
         except RunDeadlineExceeded:
             heartbeat.stop()
+            funnel.safely(funnel.count_issue, self.accounts.session,
+                          "chat_error")
             try:
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.deadline_exceeded",
                     payload={"status": "failed"},
                     error_class="RunDeadlineExceeded")
+                # This worker failed it, so this worker answers. When the
+                # engine got there first it wrote the answer itself.
+                self._answer_failed_turn(run, _failure_text(
+                    RunDeadlineExceeded()))
             except HealthClawError:
                 # The authoritative heartbeat may already have committed the
                 # same terminal deadline transition and revoked this lease.
@@ -194,6 +273,8 @@ class RunWorker:
         except Exception as exc:  # noqa: BLE001 - boundary records safe class
             heartbeat.stop()
             logger.exception("CareAgents run %s failed", run_id)
+            funnel.safely(funnel.count_issue, self.accounts.session,
+                          "chat_error")
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
@@ -203,10 +284,38 @@ class RunWorker:
                     event_type="run.failed",
                     payload={"status": "failed"},
                     error_class=_error_class(exc))
+                # Only once the engine took this worker's failure: a worker
+                # that lost its lease lands here too, and the run may yet
+                # finish elsewhere with a real answer.
+                self._answer_failed_turn(run, _failure_text(exc))
             except HealthClawError:
                 logger.exception("could not record failure for run %s", run_id)
         else:
             heartbeat.stop()
+
+    def _mark(self, account_id: str, milestone: str) -> None:
+        """A funnel milestone (careagents/funnel.py). Never fails a turn."""
+        funnel.safely(funnel.mark, self.accounts.session, account_id,
+                      milestone)
+
+    def _answer_failed_turn(self, run: dict, text: str) -> None:
+        """Put the failure sentence in the transcript as the turn's answer.
+
+        A completed run's answer is written by finalize; a failed run wrote
+        nothing, so on reload the question stood alone and asking again put
+        it twice in a row (#876). The text is one of agent.py's fixed
+        sentences, never the exception. One request id per run, so a
+        replayed failure writes it once. Losing it costs only the line."""
+        tenant = str(run.get("tenant_id") or "")
+        if not tenant:
+            return
+        self.hc.log_message(
+            tenant, "assistant", text,
+            agent_id=str(run.get("agent_id") or "") or None,
+            conversation_id=run.get("conversation_id"),
+            surface=str(run.get("surface") or "web"),
+            reply_to=run.get("message_id"),
+            request_id=f"run:{run['id']}:failed")
 
     def _execute(self, run: dict, heartbeat: LeaseHeartbeat) -> None:
         run_id = str(run["id"])
@@ -220,9 +329,31 @@ class RunWorker:
         context = self.accounts.get_worker_agent_context(agent_id)
         if context is None or context["tenant"] != tenant:
             raise ValueError("claimed run does not match a CareAgents tenant")
+        blocked = beta.turn_block(context["connection"], context["paused"],
+                                  tester_terms.CONSENT_VERSION)
+        if blocked:
+            # Before any record read and before any model call (beta spec
+            # 4.3 and 4.6). The run still ends normally, with this sentence.
+            self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
+                         set(), heartbeat)
+            return
+        if context["connection"].get("kind") != "sample":
+            # The weekly number (beta spec 4.5): integers only. A retried run
+            # can count twice; the weekly figure counts accounts, so that
+            # does not move it.
+            try:
+                self.accounts.count_activity(context["account_id"], "asked")
+            except Exception:  # noqa: BLE001 - a count never fails a turn
+                logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
+        # Made-up records answer as made-up, on every surface: the prompt
+        # says whose they are, and the answer opens with beta.SAMPLE_FRAME.
+        sample = context["connection"].get("kind") == "sample"
+        # The engine tags each run with the surface its message arrived on;
+        # a text thread gets the texting style (careagents/personas.py).
         prompt = system_prompt(
-            agent["name"], agent["persona"], agent.get("advisor"))
+            agent["name"], agent["persona"], agent.get("advisor"),
+            surface=str(run.get("surface") or ""), sample=sample)
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -262,6 +393,7 @@ class RunWorker:
                 "content": payload.get("text") or "",
                 "tool_calls": calls,
                 "_openai_tool_calls": payload.get("raw_tool_calls") or [],
+                "advisor_calls": payload.get("advisor_calls") or 0,
             })
             for call in calls:
                 result = tool_results.get(str(call.get("id")))
@@ -280,8 +412,32 @@ class RunWorker:
             if not calls:
                 final_checkpoint = payload
 
+        charged = any(event.get("type") == CHARGED_EVENT for event in events)
+        if not checkpoints and not charged:
+            # The day's allowance is charged here, where the model is called
+            # and after turn_block passed (#856 sign-off F4): a turn admitted
+            # while refused, then unblocked before it was claimed, is
+            # charged like any other. The charge leaves a marker on the run,
+            # so a run recovered after its worker died in the model call is
+            # not charged again (#862 QA). A run with a checkpoint and no
+            # marker was charged before markers existed. A worker that dies
+            # between the charge and the marker still charges twice: the
+            # error is toward the cap, never past it.
+            allowed, _used = self.accounts.claim_daily_turn(
+                context["account_id"], self.cfg.chat_turns_per_day)
+            if not allowed:
+                self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
+                                   "checkpoint_id": "daily_limit"},
+                             emitted, heartbeat)
+                return
+            self.hc.append_agent_run_event(
+                run_id, self.worker_id, CHARGED_EVENT, {})
+
+        lead = beta.SAMPLE_FRAME if sample else ""
+        labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
         if final_checkpoint is not None:
-            self._finish(run, final_checkpoint, emitted, heartbeat)
+            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
+            self._mark(context["account_id"], "first_answer")
             return
 
         while True:
@@ -312,6 +468,9 @@ class RunWorker:
                          "arguments": call.arguments}
                         for call in turn.tool_calls],
                     "raw_tool_calls": turn.raw_tool_calls,
+                    # Caps the advisor per turn across a recovered run too
+                    # (careagents/routing.py advisor_used).
+                    "advisor_calls": getattr(turn, "advisor_calls", 0),
                 }
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.checkpoint",
@@ -322,11 +481,14 @@ class RunWorker:
                     "role": "assistant", "content": turn.text,
                     "tool_calls": pending_checkpoint["tool_calls"],
                     "_openai_tool_calls": turn.raw_tool_calls,
+                    "advisor_calls": pending_checkpoint["advisor_calls"],
                 })
 
             calls = pending_checkpoint.get("tool_calls") or []
             if not calls:
-                self._finish(run, pending_checkpoint, emitted, heartbeat)
+                self._finish(run, pending_checkpoint, emitted, heartbeat,
+                             lead=lead)
+                self._mark(context["account_id"], "first_answer")
                 return
 
             for call in calls:
@@ -336,7 +498,7 @@ class RunWorker:
                 result_event = tool_results.get(call_id)
                 if result_event is None:
                     result_event = self._execute_durable_tool(
-                        run, call, emitted)
+                        run, call, emitted, labels)
                     tool_results[call_id] = result_event
                 history.append({"role": "tool", "tool_call_id": call_id,
                                 "content": result_event.get("content") or "{}"})
@@ -344,7 +506,8 @@ class RunWorker:
             # the next model call; the completed tools remain replayable.
 
     def _execute_durable_tool(self, run: dict, call: dict,
-                              emitted: set[tuple[str, str]]) -> dict:
+                              emitted: set[tuple[str, str]],
+                              labels: dict = TOOL_LABELS) -> dict:
         run_id = str(run["id"])
         tenant = str(run["tenant_id"])
         provider_call_id = str(call["id"])
@@ -359,7 +522,7 @@ class RunWorker:
                 run_id, self.worker_id, "agent.tool",
                 {"provider_call_id": provider_call_id,
                  "name": tool_name,
-                 "label": TOOL_LABELS.get(tool_name, tool_name)})
+                 "label": labels.get(tool_name, tool_name)})
             emitted.add(marker)
 
         if durable.get("status") == "completed":
@@ -381,7 +544,9 @@ class RunWorker:
             try:
                 content = _execute_tool(
                     self.hc, tenant, tool_name, arguments, side_events,
-                    agent_id=str(run.get("agent_id") or ""))
+                    agent_id=str(run.get("agent_id") or ""),
+                    surface=str(run.get("surface") or ""),
+                    origin=self.cfg.origin)
             except HealthClawError as exc:
                 content = json.dumps({"error": str(exc)})
             envelope = {"content": content, "ui_events": side_events}
@@ -391,6 +556,11 @@ class RunWorker:
             self.hc.transition_agent_tool_call(
                 run_id, durable["id"], self.worker_id, "completed",
                 result=envelope, outcome_ref=outcome_ref)
+            if outcome_ref:
+                # An action was proposed for the person to approve.
+                funnel.safely(funnel.mark_for_agent, self.accounts.session,
+                              str(run.get("agent_id") or ""),
+                              "action_proposed")
 
         result_payload = {
             "provider_call_id": provider_call_id,
@@ -422,11 +592,20 @@ class RunWorker:
             emitted.add(marker)
 
     def _finish(self, run: dict, checkpoint: dict,
-                emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat) -> None:
+                emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat,
+                lead: str = "") -> None:
+        """`lead` opens a model's answer on its own line (the sample's
+        SAMPLE_FRAME). The checkpoint keeps the model's text alone, so a
+        replayed run adds it once, here."""
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
         text = str(checkpoint.get("text") or "").strip() or "…"
+        if lead:
+            # The line is in the stored history, so a model may already
+            # open with it on a later turn. Say it once. A real answer
+            # (no lead) is never touched.
+            text = f"{lead}\n\n{_drop_echo(text, lead) or '…'}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
         # HealthClaw owns the final fencing transaction. A client-side
@@ -493,6 +672,9 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
+    # The routing counts (careagents/routing.py) write through this pool
+    # rather than opening one of their own.
+    routing.use_session_scope(getattr(accounts, "session", None))
     base_id = _worker_base_id()
     backoff = _IdleBackoff(cfg.run_worker_concurrency, cfg.run_poll_seconds,
                            cfg.run_poll_max_seconds)
@@ -517,6 +699,23 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     threads = [threading.Thread(target=loop, args=(slot,), daemon=False,
                                 name=f"careagents-worker-{slot}")
                for slot in range(cfg.run_worker_concurrency)]
+    if cfg.sendblue_enabled:
+        # The worker, not the web, owns texting an answer back: the owed
+        # answers are rows in the account store, so a web restart loses none.
+        from careagents import sendblue, sendblue_surface
+        deliverer = sendblue_surface.Deliverer(
+            cfg, HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
+                                  public_base=cfg.healthclaw_public_base),
+            accounts, sendblue.Client(cfg))
+        threads.append(threading.Thread(
+            target=deliverer.run, args=(stop,), daemon=False,
+            name="careagents-sendblue"))
+    if cfg.digest_to:
+        # The owner's once-a-day funnel digest (careagents/funnel.py). Off
+        # unless CARE_DIGEST_TO is set; a day is sent once across workers.
+        threads.append(threading.Thread(
+            target=funnel.run_digest, args=(accounts.session, cfg, stop),
+            daemon=False, name="careagents-digest"))
     for thread in threads:
         thread.start()
     for thread in threads:
