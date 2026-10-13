@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import re
 
-from tests.test_careagents import FakeClient
+import pytest
+
+from tests.test_careagents import FakeClient, _login, consented
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
@@ -69,3 +71,17 @@ def test_drawer_rows_keep_delete_behind_the_menu(app, svc, monkeypatch):
                        drawer, flags=re.S)
     assert sum(m.count('class="conn-delete"') for m in menus) == \
         drawer.count('class="conn-delete"') == 1
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "QA #944 F1: a second Upload tap mints an empty upload the hub then "
+    "hides, so the tap shows nothing new. Remove this mark when fixed."))
+def test_tapping_upload_again_shows_where_to_upload(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    first = c.post("/api/connections/direct", json=consented()).get_json()
+    second = c.post("/api/connections/direct", json=consented()).get_json()
+    sec = _section(c.get("/home").get_data(as_text=True), "records-section")
+    # Either the tap reuses the empty upload already shown, or the row it
+    # made is the one on screen. A row nobody can see is neither.
+    assert second["id"] == first["id"] or f'data-conn="{second["id"]}"' in sec
