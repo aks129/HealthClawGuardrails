@@ -174,3 +174,5 @@ def test_canaries_with_search_records_and_nka_leak_nothing(
     model = "\n".join(seen)
     assert "lists no known allergies" in model
     _no_canary(model, body, caplog.text, _audit_details(chain))
+    # V2: the read left an audit row for the type.
+    assert "AllergyIntolerance" in _audit_details(chain)
