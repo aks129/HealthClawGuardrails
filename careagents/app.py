@@ -128,6 +128,12 @@ _care_gaps_marker = brief_mod.care_gaps_marker
 _CARE_GAPS_OK = brief_mod.CARE_GAPS_OK
 
 
+#: Default names for the assistant of someone the holder cares for, in
+#: order; the first one no assistant on the account already has. Fixed
+#: words only: an assistant's name is part of the model's prompt, so a
+#: nickname is never used (#951 F4).
+_CARE_NAMES = ("Rowan", "Hazel", "Linden", "Willow", "Aspen", "Cedar")
+
 #: What a pending request is called on the approvals page, by engine kind.
 _KIND_LABELS = {
     "phone-call": "Phone call", "sms": "Text message",
@@ -1807,7 +1813,13 @@ def create_app(config: Config | None = None,
             except HealthClawError:
                 logger.warning("record count after sample seed failed for %s",
                                cid)
-            aid = svc.create_agent(acct.id, "Juniper", DEFAULT_PERSONA, cid)
+            # A name of their own, so two cards are not both "Juniper"
+            # (#951 F4). From a fixed list, never the nickname: the name
+            # goes into the model's prompt ("You are ...").
+            taken = {a["name"] for a in svc.list_home(acct.id)["agents"]}
+            name = next((n for n in _CARE_NAMES if n not in taken),
+                        _CARE_NAMES[0])
+            aid = svc.create_agent(acct.id, name, DEFAULT_PERSONA, cid)
             return jsonify({"person_id": person, "connection_id": cid,
                             "agent_id": aid,
                             "redirect": url_for("chat", agent=aid)})
@@ -2044,13 +2056,13 @@ def create_app(config: Config | None = None,
                                # holder's own (spec section 5).
                                whose=_whose(acct, ctx["agent"]))
 
-    def _whose(acct, agent) -> str:
+    def _whose(acct, agent, mid: bool = False) -> str:
         """Whose records this assistant reads, as the chat header and the
         approvals page name them; empty for the holder's own. Rendered by
         the template only: the nickname is never passed to the model, a
         log line or the engine."""
         return hub_view.whose_records(hub_view.person_of(
-            svc.list_home(acct.id), agent.get("person_id")))
+            svc.list_home(acct.id), agent.get("person_id")), mid=mid)
 
     @app.get("/brief")
     @login_required
@@ -2439,7 +2451,8 @@ def create_app(config: Config | None = None,
         return render_template("approvals.html", me=ctx["agent"],
                                agent_id=agent_id, pending=pending,
                                kind_labels=_KIND_LABELS,
-                               whose=_whose(acct, ctx["agent"]))
+                               # "Requests for Mom's records" (#951 F3).
+                               whose=_whose(acct, ctx["agent"], mid=True))
 
     @app.get("/api/approvals/count")
     @login_required

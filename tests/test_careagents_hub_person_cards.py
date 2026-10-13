@@ -98,7 +98,8 @@ def test_a_new_account_card_shows_tone_and_no_person_label(
     cards = _cards(c.get("/home").get_data(as_text=True))
     assert list(cards) == [agent]
     card = cards[agent]
-    assert "Calm Guide" in card
+    # Plain words, not the persona's label (patient tester on #951, F2).
+    assert "Tone: calm" in card and "Calm Guide" not in card
     assert "For you" not in card and "For " not in card
     assert "Focuses on" not in card
     assert 'href="/settings#assistant-settings"' in card
@@ -112,7 +113,7 @@ def test_a_card_says_what_it_focuses_on_once_routines_are_set(
            json={"persona": "direct", "routines": ["refills", "care-gaps"]})
     card = _cards(c.get("/home").get_data(as_text=True))[agent]
     assert "Focuses on: care gaps, refills" in card
-    assert "Straight Shooter" in card
+    assert "Tone: direct" in card and "Straight Shooter" not in card
     assert "Watching" not in card          # owner decision D3
 
 
@@ -207,7 +208,14 @@ def test_the_approvals_page_names_someone_you_care_for(cfg, svc,
     kid = c.post("/api/people", json={"relationship": "child"}).get_json()
     page = c.get(f"/agents/{kid['agent_id']}/approvals").get_data(
         as_text=True)
-    assert "Your child&#39;s records" in page
+    # Whose records, not the assistant's name (patient tester on #951, F3).
+    page = " ".join(page.split())
+    assert "Requests for your child&#39;s records." in page
+    assert "Requests proposed on" not in page
+    own = c.post("/api/connections/sample").get_json()["agent_id"]
+    mine = " ".join(c.get(f"/agents/{own}/approvals").get_data(
+        as_text=True).split())
+    assert "Requests for your records." in mine
 
 
 def test_each_waiting_queue_says_whose_records_it_is(cfg, svc, monkeypatch):
@@ -250,10 +258,99 @@ def test_the_add_someone_entry_is_on_the_hub_with_the_flag_on(
         ask.split('id="add-person"')[1].split())
 
 
+def test_add_someone_waits_until_you_have_your_own_assistant(
+        cfg, svc, monkeypatch):
+    """Patient tester on #951: offered first, it came before the holder had
+    seen their own assistant."""
+    c, _, _ = _client(cfg, svc, monkeypatch, people=True)
+    assert 'id="add-person"' not in c.get("/home").get_data(as_text=True)
+    c.post("/api/connections/sample")
+    assert 'id="add-person"' in c.get("/home").get_data(as_text=True)
+
+
+# --- patient tester on #951 ------------------------------------------------------
+
+def _source_rows(body: str) -> dict:
+    """Each source row's markup in Your sources, by connection id."""
+    start = body.index('id="records-section"')
+    sec = body[start:body.index("</section>", start)]
+    out = {}
+    for m in re.finditer(r'<div class="hub-card conn-card" data-tenant="[^"]*"'
+                         r'\s+data-conn="([^"]+)"', sec):
+        out[m.group(1)] = sec[m.start():sec.find("conn-refresh-msg",
+                                                 m.end())]
+    return out
+
+
+def test_f1_each_source_says_whose_records_once_someone_is_added(
+        cfg, svc, monkeypatch):
+    c, _, _ = _client(cfg, svc, monkeypatch, people=True)
+    mine = c.post("/api/connections/sample").get_json()["id"]
+    rows = _source_rows(c.get("/home").get_data(as_text=True))
+    # One person: nothing new on the row.
+    assert "Your records" not in rows[mine]
+    mom = c.post("/api/people", json={"relationship": "parent",
+                                      "nickname": "Mom"}).get_json()
+    rows = _source_rows(c.get("/home").get_data(as_text=True))
+    assert set(rows) == {mine, mom["connection_id"]}
+    assert "Your records" in rows[mine]
+    assert "Mom&#39;s records" in rows[mom["connection_id"]]
+    # The person line tells the two "Sample records" apart: no "(2)".
+    assert "(2)" not in rows[mine] + rows[mom["connection_id"]]
+    # Delete names whose records it deletes.
+    assert 'data-whose="Mom&#39;s records"' in rows[mom["connection_id"]]
+    assert 'data-whose="Your records"' in rows[mine]
+
+
+def test_f1_twins_of_one_person_are_still_numbered():
+    """Two of the holder's own same-day samples still need "(2)"."""
+    home = {"people": [{"id": "me", "kind": "self", "relationship": None,
+                        "nickname": None},
+                       {"id": "mom", "kind": "other",
+                        "relationship": "parent", "nickname": "Mom"}],
+            "agents": [],
+            "connections": [
+                {"id": f"c{i}", "kind": "sample", "label": "Sample records",
+                 "status": "active", "provider": "CareAgents sample",
+                 "connected_at": 1000.0 + i, "last_synced_at": None,
+                 "last_count": 100, "tenant_id": f"t{i}", "person_id": pid}
+                for i, pid in enumerate(("me", "me", "mom"))]}
+    rows = {r["id"]: r for r in hub_view.build(home, 2000.0)["sources"]}
+    assert rows["c1"]["sub"].endswith("(2)")
+    assert "(2)" not in rows["c2"]["sub"] and "Added" not in rows["c2"]["sub"]
+    assert rows["c2"]["whose"] == "Mom's records"
+    assert rows["c0"]["whose"] == "Your records"
+
+
+def test_f1_the_delete_dialog_is_given_whose_records():
+    body = _HOME_JS.split('document.querySelectorAll(".conn-delete")')[1][:500]
+    assert "btn.dataset.whose" in body
+
+
+def test_f4_someone_you_care_for_gets_a_different_default_name(
+        cfg, svc, monkeypatch):
+    """Never the nickname: the name goes into the model's prompt."""
+    from careagents.models import Agent
+    c, aid, _ = _client(cfg, svc, monkeypatch, people=True)
+    c.post("/api/connections/sample")
+    a = c.post("/api/people", json={"relationship": "parent",
+                                    "nickname": "Zorblax"}).get_json()
+    b = c.post("/api/people", json={"relationship": "child"}).get_json()
+    with svc.session() as s:
+        names = {x.id: x.name for x in s.query(Agent).filter_by(
+            account_id=aid)}
+    assert names[a["agent_id"]] != "Juniper"
+    assert "Zorblax" not in names[a["agent_id"]]
+    assert len(set(names.values())) == 3
+    assert names[b["agent_id"]] not in ("Juniper", names[a["agent_id"]])
+
+
 def test_a_paused_account_is_not_offered_to_add_someone(
         cfg, svc, monkeypatch):
     c, _, _ = _client(cfg, svc, monkeypatch, people=True,
                       email="paused@example.com")
+    c.post("/api/connections/sample")
+    assert 'id="add-person"' in c.get("/home").get_data(as_text=True)
     svc.set_paused("paused@example.com", True)
     assert 'id="add-person"' not in c.get("/home").get_data(as_text=True)
 

@@ -81,7 +81,18 @@ def build(home: dict, now: float) -> dict:
     readers: dict = {}
     for a in home["agents"]:
         readers.setdefault(a["connection_id"], []).append(a["name"])
-    records = [{**_record(c, now), "readers": ", ".join(readers.get(c["id"], []))}
+    # Whose records each source is, once someone the holder cares for is on
+    # the account: two "Sample records" rows are otherwise twins (patient
+    # tester on #951). One person: nothing new on the row.
+    several = any(p["kind"] == "other" for p in home.get("people", []))
+
+    def _whose(c):
+        if not several:
+            return ""
+        return (whose_records(person_of(home, c.get("person_id")))
+                or "Your records")
+    records = [{**_record(c, now), "whose": _whose(c),
+                "readers": ", ".join(readers.get(c["id"], []))}
                for c in conns if c["status"] != "revoked"]
     active = [r for r in records if r["status"] == "active"]
     # Change records offers only the same person's records: an assistant
@@ -103,7 +114,7 @@ def build(home: dict, now: float) -> dict:
                          [{"id": r["id"], "label": r["label"]}
                           for r in active]),
         "move_choices_by_person": by_person,
-        "past": [{**_record(c, now),
+        "past": [{**_record(c, now), "whose": _whose(c),
                   "readers": ", ".join(readers.get(c["id"], []))}
                  for c in conns if c["status"] == "revoked"],
         "connected_kinds": sorted({r["kind"] for r in active}),
@@ -153,8 +164,10 @@ def _tell_apart(rows: list[dict]) -> list[dict]:
     "Added", never "Connected": under a "Connecting…" chip that word is the
     very contradiction the chip exists to prevent."""
     by_label: dict = {}
+    # Rows whose person line already differs are told apart by it, so
+    # only one person's same-named rows are dated and numbered (#951).
     for r in rows:
-        by_label.setdefault(r["label"], []).append(r)
+        by_label.setdefault((r["label"], r.get("whose", "")), []).append(r)
     notes = {}
     for same in by_label.values():
         if len(same) < 2:
@@ -301,10 +314,11 @@ def for_line(person: dict, several: bool) -> str:
                                           _ANYONE))
 
 
-def whose_records(person: dict) -> str:
-    """"Mom's records", for the chat header, the approvals page and the
-    waiting band (spec section 5). Empty for the account holder: their own
-    records need no name."""
+def whose_records(person: dict, mid: bool = False) -> str:
+    """"Mom's records", for the chat header, the approvals page, the
+    waiting band and the source rows (spec section 5). Empty for the
+    account holder: their own records need no name. `mid` is the
+    mid-sentence form ("Requests for your child's records")."""
     if person.get("kind") != "other":
         return ""
     nick = person.get("nickname")
@@ -312,8 +326,13 @@ def whose_records(person: dict) -> str:
         return f"{nick}'s records"
     rel = _FOR_RELATION.get(person.get("relationship"))
     if rel:
-        return f"{rel[0].upper()}{rel[1:]}'s records"
-    return "Records of " + _ANYONE
+        return f"{rel if mid else rel[0].upper() + rel[1:]}'s records"
+    return ("the records of " if mid else "Records of ") + _ANYONE
+
+
+#: The tone a card shows, in plain words, by persona key (patient tester
+#: on #951): "Tone: calm", not the persona's label.
+TONE_WORDS = {"calm": "calm", "direct": "direct", "sunny": "cheerful"}
 
 
 def person_of(home: dict, person_id: str | None) -> dict:
@@ -364,10 +383,15 @@ def assistants(home: dict) -> dict:
             ids = routines_for(a)
             tone = PERSONAS.get(a.get("persona"), PERSONAS[DEFAULT_PERSONA])
             out.append({**a, "person": person, "tone": tone["name"],
+                        "tone_word": TONE_WORDS.get(
+                            a.get("persona"), TONE_WORDS[DEFAULT_PERSONA]),
                         "reads": labels.get(a.get("connection_id"), ""),
                         "routines": [ROUTINES[r]["name"] for r in ids],
                         "focuses_on": focuses_on(ids),
                         "for_line": for_line(person, several),
                         "is_primary": i == 0, "legacy_extra": i > 0})
     return {"assistants": out, "people": list(people.values()),
-            "legacy_multi": any(a["legacy_extra"] for a in out)}
+            "legacy_multi": any(a["legacy_extra"] for a in out),
+            # The holder has an assistant of their own: "Add someone you
+            # care for" waits for it (patient tester on #951).
+            "has_own": any(a["person"]["kind"] != "other" for a in out)}

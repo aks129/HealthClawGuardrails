@@ -60,7 +60,7 @@
            case: "Reads records from your doctor", not "Reads Records". #}
         <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads[:1]|lower ~ a.reads[1:] if a.reads.split()[0] in ("Sample", "Records", "Uploaded") else a.reads }}{% endif %}</div>
         {# "Focuses on", never "Watching": nothing runs unprompted (D3). #}
-        <p class="agent-traits"><span>{{ a.tone }}</span>{% if a.focuses_on %}<span>{{ a.focuses_on }}</span>{% endif %}
+        <p class="agent-traits"><span>Tone: {{ a.tone_word }}</span>{% if a.focuses_on %}<span>{{ a.focuses_on }}</span>{% endif %}
           <a href="/settings#assistant-settings">Change in Settings</a></p>
         {% if a.legacy_extra %}
         <p class="card-note">An extra assistant from before. You can keep it or remove it.</p>
@@ -112,7 +112,8 @@
        counsel answers (owner decision D1), behind CARE_PEOPLE. Paused:
        nothing can be added, so it is left out. The server checks the
        relationship and the nickname; this form only offers them. #}
-    {% if people_enabled and not paused %}
+    {# Only once the holder has an assistant of their own (#951). #}
+    {% if people_enabled and not paused and people_view.has_own %}
     <details class="add-person" id="add-person">
       <summary>Add someone you care for</summary>
       <form class="add-person-form" id="add-person-form" novalidate>
@@ -231,6 +232,8 @@
           <span class="status status-{{ st.cls }}">{{ st.word }}</span>
         </div>
         {# hub.subtitle: the provider, never a status word. #}
+        {# Whose records, once someone the holder cares for is here (#951). #}
+        {% if c.whose %}<div class="agent-for source-whose">{{ c.whose }}</div>{% endif %}
         <div class="hub-card-sub">{{ c.sub }}</div>
         {% if c.is_sample %}<span class="badge-sample">Made-up records</span>{% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
@@ -263,7 +266,8 @@
                   title="Stop new records arriving; keep what's already here">Disconnect</button>
           {% endif %}
           <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                  data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
+                  data-label="{{ c.label }}" data-whose="{{ c.whose }}"
+                  data-readers="{{ c.readers }}">Delete</button>
         </details>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>

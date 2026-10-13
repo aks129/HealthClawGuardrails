@@ -702,8 +702,12 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const agreed = await askToDelete(btn.dataset.label || "these records",
-                                       btn.dataset.readers || "");
+      // Whose records go, once someone the holder cares for is here (#951):
+      // "Sample records (Mom's records)". Text only, never markup.
+      const label = btn.dataset.label || "these records";
+      const agreed = await askToDelete(
+        btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
+        btn.dataset.readers || "");
       if (!agreed) return;
 
       btn.disabled = true;
