@@ -1029,9 +1029,15 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 {"label": f.get("label"), "value": f.get("value")}
                 for f in fields[:MAX_BRIEF_FIELDS] if isinstance(f, dict)]
             if len(fields) > MAX_BRIEF_FIELDS:
-                notes.append(f"Only {MAX_BRIEF_FIELDS} of {len(fields)} "
-                             f"{section} items are shown; do not describe "
-                             "that list as complete.")
+                # No counts, as in _summarize_bundle's marker: a model
+                # handed "6 of 9" reads it to the person (#939).
+                notes.append(
+                    f"The {section.replace('-', ' ')} list is not complete: "
+                    "more items are on file. Do not describe it as "
+                    "complete, do not count it, and do not say how many "
+                    "you were shown. Say in plain words that there are "
+                    "more, that the full list is on their Visit brief "
+                    "page, and that they can ask you to narrow it down.")
         if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
             notes.append("The screening review did not complete. Do not say "
                          "no screenings are due.")

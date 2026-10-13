@@ -398,3 +398,39 @@ def test_a_failed_tool_in_the_worker_reaches_the_model_as_a_read_failure(
     assert out["error"] == "records_unavailable"
     assert "not absent" in out["note"].lower()
     assert "503" not in content and "$interpret" not in content
+
+
+# --- 8. the visit brief: a cut section says so, without counts ---------------
+
+def _brief_with(section, n):
+    from careagents import brief as brief_mod
+    return {"resourceType": "Basic", "extension": [{
+        "url": brief_mod.SECTION_PREFIX + section,
+        "extension": [{"valueString": json.dumps(
+            {"label": f"Item {chr(65 + i)}", "value": "on file"})}
+            for i in range(n)]}]}
+
+
+class _BriefHC:
+    def __init__(self, resource):
+        self.resource = resource
+
+    def fetch_appointment_brief(self, tenant):
+        return self.resource
+
+
+def test_a_cut_brief_section_carries_no_counts_for_the_model_to_quote():
+    out = json.loads(_execute_tool(_BriefHC(_brief_with("problems", 9)), "t",
+                                   "appointment_brief", {}, []))
+    assert len(out["sections"]["problems"]) == 6
+    note = out["note"]
+    assert not re.search(r"\d", note), note
+    lowered = note.lower()
+    assert "problems" in lowered and "more" in lowered
+    assert "narrow" in lowered and "complete" in lowered
+
+
+def test_an_uncut_brief_section_says_nothing_about_more():
+    out = json.loads(_execute_tool(_BriefHC(_brief_with("problems", 3)), "t",
+                                   "appointment_brief", {}, []))
+    assert "narrow" not in out["note"].lower()
