@@ -5756,12 +5756,14 @@ def test_the_timeline_endpoint_degrades_rather_than_500ing(
     assert c.get(f"/api/labs/timeline?agent={agent_id}").status_code == 502
 
 
-def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
+def test_show_lab_timeline_emits_a_card_and_gives_first_latest_direction(
         cfg, svc, monkeypatch):
-    """The chart carries the values. Handing them to the model too invites it
-    to restate every number and to narrate a direction from a single point.
+    """The chart carries every value. The model gets the first and latest
+    reading and the direction, worked out here: given only the chart's
+    shape, it would not say how a result changed (#937). Not every value,
+    and never a direction from a single point.
 
-    MUTATION: return the readings in the tool result -> red.
+    MUTATION: return every reading in the tool result -> red.
     """
     import json as _json
 
@@ -5777,9 +5779,13 @@ def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
     assert events == [{"type": "card", "kind": "lab-timeline",
                        "topic": "cholesterol"}]
     assert out["chart_shown"] is True
-    assert out["series"] == [{"name": "Total cholesterol", "readings": 2,
-                              "trend_plottable": True}]
-    assert "244" not in _json.dumps(out), "the tool handed the model raw values"
+    assert out["series"] == [{
+        "name": "Total cholesterol", "readings": 2, "trend_plottable": True,
+        "first": {"date": "2025-01-01", "value": 210, "unit": "mg/dL"},
+        "latest": {"date": "2026-03-01", "value": 244, "unit": "mg/dL"},
+        "direction": "higher"}]
+    assert "readings\": [" not in _json.dumps(out), \
+        "the tool handed the model every reading"
 
 
 def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
