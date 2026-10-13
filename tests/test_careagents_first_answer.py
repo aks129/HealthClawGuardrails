@@ -241,8 +241,11 @@ def test_a_truncated_list_carries_no_numbers_for_the_model_to_quote():
     [marker] = [i for i in items if i.get("truncated")]
     assert not re.search(r"\d", json.dumps(marker)), marker
     note = marker["note"].lower()
-    assert "more" in note and "narrow" in note
+    assert "longer than" in note and "patient portal" in note
     assert "complete" in note
+    # It cannot narrow or page, so it must not offer to (#945 tester).
+    assert "narrow" not in note and "show the rest" not in note.replace(
+        "do not offer to show the rest", "")
 
 
 def test_truncation_uses_the_bundle_total_not_the_page():
@@ -427,7 +430,8 @@ def test_a_cut_brief_section_carries_no_counts_for_the_model_to_quote():
     assert not re.search(r"\d", note), note
     lowered = note.lower()
     assert "problems" in lowered and "more" in lowered
-    assert "narrow" in lowered and "complete" in lowered
+    assert "complete" in lowered and "visit brief page" in lowered
+    assert "narrow" not in lowered
 
 
 def test_an_uncut_brief_section_says_nothing_about_more():
@@ -594,3 +598,84 @@ def test_an_unanswered_import_look_fails_closed_on_the_real_engine(
     assert looked
     assert personas.ARRIVING_STYLE in system
     assert "still loading" in out["note"].lower()
+
+
+# --- 10. a real problem list fits (#945 patient tester) ----------------------
+#
+# 19 conditions came back as 12, and diabetes, hypertension, CAD, AFib,
+# hypothyroidism and obesity were among the seven cut. "Show me the rest"
+# and "look at my heart conditions" returned the same 12: the tool cannot
+# narrow, and the engine has no offset to page with.
+
+def _conditions(n):
+    return [{"resourceType": "Condition",
+             "code": {"text": f"Condition {i:02d}"}} for i in range(n)]
+
+
+def test_nineteen_conditions_all_reach_the_model():
+    hc = _HC({"Condition": _bundle(*_conditions(19))})
+    out = _summary(hc)
+    assert len(out["conditions"]) == 19
+    assert not any(i.get("truncated") for i in out["conditions"])
+
+
+def test_sixty_conditions_show_the_engine_page_and_say_the_list_is_longer():
+    from careagents.agent import SUMMARY_LIMIT
+    assert SUMMARY_LIMIT == 50
+    bundle = _bundle(*_conditions(50))
+    bundle["total"] = 60
+    out = _summary(_HC({"Condition": bundle}))
+    items = out["conditions"]
+    [marker] = [i for i in items if i.get("truncated")]
+    assert len(items) == 51
+    note = marker["note"].lower()
+    assert "patient portal" in note and "narrow" not in note
+
+
+def test_search_records_returns_the_engine_page_too():
+    hc = _HC({"Condition": _bundle(*_conditions(19))})
+    out = json.loads(_execute_tool(hc, "t", "search_records",
+                                   {"resource_type": "Condition"}, []))
+    assert len(out) == 19
+
+
+def test_the_records_on_file_notes_name_no_kind_they_cannot_vouch_for():
+    for arriving in (False, True):
+        out = json.loads(_execute_tool(_HC(count=39), "t",
+                                       "get_health_summary", {},
+                                       [], arriving=arriving))
+        note = out["note"].lower()
+        assert "vaccines" not in note and "lab results" not in note
+
+
+def test_the_prompt_says_not_to_narrate_tool_steps():
+    prompt = " ".join(personas.system_prompt("A", "calm").lower().split())
+    assert "never narrate your searches" in prompt
+
+
+def _plant_conditions(chain, n):
+    from models import db
+    from r6.models import R6Resource
+    with chain.engine_app.app_context():
+        R6Resource.query.filter_by(tenant_id=TENANT,
+                                   resource_type="Condition").delete()
+        for i in range(n):
+            res = {"resourceType": "Condition", "id": f"fa-cond-{i}",
+                   "subject": {"reference": "Patient/demo-patient-rivera"},
+                   "code": {"coding": [{"system": "http://snomed.info/sct",
+                                        "code": "44054006"}]}}
+            db.session.add(R6Resource("Condition", json.dumps(res),
+                                      resource_id=res["id"],
+                                      tenant_id=TENANT))
+        db.session.commit()
+
+
+@pytest.mark.parametrize("n,shown,cut", [(19, 19, False), (60, 50, True)])
+def test_a_long_problem_list_on_the_real_engine(
+        cfg, svc, monkeypatch, n, shown, cut):  # noqa: F811
+    chain = Chain(cfg, svc, monkeypatch)
+    _plant_conditions(chain, n)
+    out, _system = _first_turn(chain, monkeypatch)
+    records = [i for i in out["conditions"] if not i.get("truncated")]
+    assert len(records) == shown
+    assert any(i.get("truncated") for i in out["conditions"]) is cut

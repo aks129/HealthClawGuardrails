@@ -131,7 +131,9 @@ def system_prompt(agent_name: str, persona_key: str,
         f"built on the HealthClaw guardrail layer.\n\n"
         f"{p['voice']}\n\n{SAFETY_CORE}\n"
         "Use your tools to ground every answer in the person's actual "
-        "records — never guess at their data. " + style
+        "records — never guess at their data. Never narrate your searches "
+        "or tool steps to the person (\"let me search\", \"I'll look "
+        "that up\"): just answer. " + style
         + prompt_block(advisor_key)
         + (SAMPLE_STYLE if sample else "")
         + (ARRIVING_STYLE if arriving else "")

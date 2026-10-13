@@ -288,6 +288,13 @@ def _is_allergy_status(res: dict) -> bool:
                for c in codings)
 
 
+#: Records per list the tools hand the model: the engine's search page (50,
+#: r6/routes.py), so a list one search can return is never cut here. At 12,
+#: a 19-condition record lost diabetes, hypertension and atrial
+#: fibrillation, and no follow-up could reach them (#945 patient tester).
+SUMMARY_LIMIT = 50
+
+
 def _summarize_bundle(bundle: dict, limit: int = 12,
                       resolve_ref=None) -> list[dict]:
     """Compact, model-friendly view of a searchset bundle (already redacted).
@@ -450,13 +457,18 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         # being blocked from their own records (#939).
         out.append({
             "truncated": True,
-            "note": ("This is not the whole list: more records of this kind "
-                     "are on file. Do not describe it as complete, do not "
-                     "count it, and do not say how many you were shown or "
-                     "that you could only see part. Answer from what is "
-                     "here, then say in plain words that there are more and "
-                     "that they can ask you to narrow it down, for example "
-                     "to one test or one condition."),
+            #
+            # And no offer to narrow it or show the rest: no tool can, and
+            # the engine has no offset to page with. "Show me the rest"
+            # returned the same list (#945 patient tester).
+            "note": ("This list is longer than you can show here: more "
+                     "records of this kind are on file than are listed. Do "
+                     "not describe it as complete, do not count it, and do "
+                     "not say how many you were shown. Answer from what is "
+                     "here, then say plainly that their list is longer than "
+                     "you can show in this chat and that the full list is in "
+                     "their patient portal. Do not offer to show the rest "
+                     "or to look again: you cannot."),
         })
     return out
 
@@ -817,13 +829,13 @@ def _empty_summary_note(hc: HealthClawClient, tenant: str,
                 "loading and they can ask again shortly. Never say they "
                 "have no records, no conditions, medications or allergies, "
                 "or that nothing is connected. Offer to look at what has "
-                "arrived, such as lab results or vaccines.")
+                "arrived.")
     if total > 0:
         return ("No conditions, medications or allergies came back, but "
                 "some records are on file for this person. Never say they "
                 "have no records or that nothing is connected. Say these "
                 "lists are empty in what you can read, and offer to look at "
-                "their other records, such as lab results or vaccines.")
+                "their other records.")
     return ("No records have arrived here yet. Say plainly that their records "
             "are not here yet: if they connected them recently, they are "
             "still loading, which can take up to 45 minutes, and they can "
@@ -852,7 +864,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # three that worked went with it.
             try:
                 parts[key] = _summarize_bundle(
-                    hc.search(tenant, rt),
+                    hc.search(tenant, rt), limit=SUMMARY_LIMIT,
                     resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
                                  else None))
             except HealthClawError:
@@ -1041,7 +1053,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
         return json.dumps(_summarize_bundle(
-            hc.search(tenant, rt),
+            hc.search(tenant, rt), limit=SUMMARY_LIMIT,
             resolve_ref=(_medication_resolver(hc, tenant)
                          if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
@@ -1086,8 +1098,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                     "more items are on file. Do not describe it as "
                     "complete, do not count it, and do not say how many "
                     "you were shown. Say in plain words that there are "
-                    "more, that the full list is on their Visit brief "
-                    "page, and that they can ask you to narrow it down.")
+                    "more and that the full list is on their Visit brief "
+                    "page. Do not offer to show the rest here: you cannot.")
         if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
             notes.append("The screening review did not complete. Do not say "
                          "no screenings are due.")
