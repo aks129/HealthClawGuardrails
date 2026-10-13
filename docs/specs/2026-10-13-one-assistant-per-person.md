@@ -285,19 +285,21 @@ MCP grants for other people's records; kids and research routines.
 
 ## 10. Owner decisions
 
-- **D1. Who can be added with real records in the beta.** Recommendation:
-  adults who gave the caregiver portal proxy access, and children under 12
-  through a parent's proxy. Exclude 12 to 17. This needs counsel, not
-  engineering. Until it is decided, "someone you care for" is sample-only.
-- **D2. Several sources per assistant.** Recommendation: defer past the
-  beta, then option 2 in section 2.4.
-- **D3. Routine copy.** Recommendation: "Focuses on" until something runs
-  unprompted. "Watching" waits for proactive routines and a BAA-covered
-  outbound channel.
-- **D4. Person label.** Recommendation: relationship enum plus an optional
-  nickname of up to 24 characters. The alternative is relationship only
-  ("Your parent"), which carries less risk and is clunkier when a person
-  cares for two parents.
-- **D5. Legacy assistants.** Recommendation: keep them, show them with tone
-  and routines, offer Remove, and never auto-merge.
-- **D6. Merge `diet-exercise` into Habits and vitals.** Recommendation: yes.
+Decided by the owner on 2026-10-13. Each line keeps the recommendation it
+answers.
+
+- **D1. Who can be added with real records in the beta.** Decided: ask
+  counsel first. Until counsel answers, "someone you care for" uses
+  made-up sample records only, and no real-records path for
+  `kind="other"` is built. (Recommendation was: adults who gave the
+  caregiver portal proxy access, and children under 12 through a parent's
+  proxy, excluding 12 to 17.)
+- **D2. Several sources per assistant.** Decided: defer past the beta.
+  Option 2 in section 2.4 stays the recommendation for after it.
+- **D3. Routine copy.** Decided: "Focuses on". "Watching" waits for
+  proactive routines and a BAA-covered outbound channel.
+- **D4. Person label.** Decided: relationship enum plus an optional
+  nickname of up to 24 characters.
+- **D5. Legacy assistants.** Decided: keep them, show them with tone and
+  routines, offer Remove, never auto-merge.
+- **D6. Merge `diet-exercise` into Habits and vitals.** Decided: yes.
