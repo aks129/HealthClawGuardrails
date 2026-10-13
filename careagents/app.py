@@ -1856,6 +1856,14 @@ def create_app(config: Config | None = None,
     @login_required
     def delete_agent(agent_id):
         acct = current_account()
+        # A person's primary assistant is not removed, here as on the card
+        # (owner decision D5, SEC951-L1): only an older account's extras
+        # are. Deleting the account, or the records it reads, still goes.
+        primary = {a["id"] for a in hub_view.assistants(
+            svc.list_home(acct.id))["assistants"] if a["is_primary"]}
+        if agent_id in primary:
+            return jsonify({"error": "This is your assistant, so it "
+                                     "can't be removed."}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})

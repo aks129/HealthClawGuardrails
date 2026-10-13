@@ -231,15 +231,29 @@ def test_a_chat_turn_for_someone_you_care_for_never_sends_the_nickname(
     assert CANARY not in caplog.text
 
 
-# --- the primary has no Remove: a UI rule, not a server one -------------------
+# --- the primary has no Remove: the server refuses it too (SEC951-L1) ---------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#951 removes the primary's Delete button only; DELETE /api/agents/<id> "
-    "still removes the primary (owner decision D5 is UI-only). Within the "
-    "account, so not a V6 break."))
 def test_the_primary_assistant_cannot_be_removed_by_a_direct_delete(
         cfg, svc, monkeypatch):
+    from tests.careagents_legacy_helpers import legacy_agent
     app, _ = _app(cfg, svc)
     c = _signed_in(app, svc, monkeypatch, "primary@example.com")
     mine = c.post("/api/connections/sample").get_json()
-    assert c.delete(f"/api/agents/{mine['agent_id']}").status_code >= 400
+    r = c.delete(f"/api/agents/{mine['agent_id']}")
+    assert r.status_code == 409
+    assert " " in r.get_json()["error"]          # a sentence, not a code
+    assert c.get(f"/chat?agent={mine['agent_id']}").status_code == 200
+    # A legacy extra is still removable.
+    extra = legacy_agent(svc, mine["id"])
+    assert c.delete(f"/api/agents/{extra}").status_code == 200
+    # Someone you care for's one assistant is their primary too.
+    mom = c.post("/api/people", json={"relationship": "parent"}).get_json()
+    assert c.delete(f"/api/agents/{mom['agent_id']}").status_code == 409
+    # Deleting the account still removes everything.
+    assert svc.delete_account(svc_account_id(svc, "primary@example.com"))
+
+
+def svc_account_id(svc, email):
+    from careagents.models import Account
+    with svc.session() as s:
+        return s.query(Account).filter_by(email=email).one().id

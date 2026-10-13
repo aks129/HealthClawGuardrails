@@ -132,7 +132,9 @@ def test_an_account_with_records_and_no_assistant_can_start_one(
     fires again, so the hub offers the one way back (QA, calm hub PR 2)."""
     c, aid = _signed_in(app, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()
-    c.delete(f"/api/agents/{conn['agent_id']}")
+    # The hub no longer removes a primary (SEC951-L1); an account from
+    # before could still be left without one, so the service does it here.
+    assert svc.delete_agent(aid, conn["agent_id"])
     body = c.get("/home").get_data(as_text=True)
     assert f'id="start-chat" data-conn="{conn["id"]}"' in body
     # The button's request, as home.js sends it, lands in a chat.

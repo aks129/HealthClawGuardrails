@@ -113,15 +113,17 @@ def test_rename_is_owner_only_and_refuses_a_blank_name(app, svc, monkeypatch):
 
 def test_delete_removes_the_agent_only(app, svc, fake, monkeypatch):
     c, aid, conn, agent = _person(app, svc, monkeypatch, "ann@example.com")
-    keep = legacy_agent(svc, conn, "Coach")
-    svc.add_surface(aid, agent, "imessage", "code-1")
+    # The extra goes; the primary is not removable (SEC951-L1) and stays.
+    extra = legacy_agent(svc, conn, "Coach")
+    svc.add_surface(aid, extra, "imessage", "code-1")
     bob, _, _, _ = _person(app, svc, monkeypatch, "bob@example.com")
-    assert bob.delete(f"/api/agents/{agent}").status_code == 404
-    assert c.delete(f"/api/agents/{agent}").status_code == 200
+    assert bob.delete(f"/api/agents/{extra}").status_code == 404
+    assert c.delete(f"/api/agents/{agent}").status_code == 409
+    assert c.delete(f"/api/agents/{extra}").status_code == 200
     with svc.session() as s:
-        assert s.get(Agent, agent) is None
-        assert s.get(Agent, keep) is not None
-        assert s.query(Surface).filter_by(agent_id=agent).count() == 0
+        assert s.get(Agent, extra) is None
+        assert s.get(Agent, agent) is not None
+        assert s.query(Surface).filter_by(agent_id=extra).count() == 0
     # The conversation stays in HealthClaw with the connection.
     assert fake.purged == []
     assert svc.get_connection(aid, conn) is not None
