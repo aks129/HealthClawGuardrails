@@ -128,6 +128,12 @@ _care_gaps_marker = brief_mod.care_gaps_marker
 _CARE_GAPS_OK = brief_mod.CARE_GAPS_OK
 
 
+#: Default names for the assistant of someone the holder cares for, in
+#: order; the first one no assistant on the account already has. Fixed
+#: words only: an assistant's name is part of the model's prompt, so a
+#: nickname is never used (#951 F4).
+_CARE_NAMES = ("Rowan", "Hazel", "Linden", "Willow", "Aspen", "Cedar")
+
 #: What a pending request is called on the approvals page, by engine kind.
 _KIND_LABELS = {
     "phone-call": "Phone call", "sms": "Text message",
@@ -546,6 +552,9 @@ def create_app(config: Config | None = None,
             # account kept several (one assistant per person spec, 4 and
             # 8), for the hub card to render.
             people_view=hub_view.assistants(data),
+            # "Add someone you care for", made-up records only (owner
+            # decision D1), behind CARE_PEOPLE as /api/people is.
+            people_enabled=cfg.people_enabled,
             text_tile=beta_signup.text_tile(
                 cfg, view, svc.session, acct.email),
             # "Connected" only once a real connection is active; has_real
@@ -1804,7 +1813,13 @@ def create_app(config: Config | None = None,
             except HealthClawError:
                 logger.warning("record count after sample seed failed for %s",
                                cid)
-            aid = svc.create_agent(acct.id, "Juniper", DEFAULT_PERSONA, cid)
+            # A name of their own, so two cards are not both "Juniper"
+            # (#951 F4). From a fixed list, never the nickname: the name
+            # goes into the model's prompt ("You are ...").
+            taken = {a["name"] for a in svc.list_home(acct.id)["agents"]}
+            name = next((n for n in _CARE_NAMES if n not in taken),
+                        _CARE_NAMES[0])
+            aid = svc.create_agent(acct.id, name, DEFAULT_PERSONA, cid)
             return jsonify({"person_id": person, "connection_id": cid,
                             "agent_id": aid,
                             "redirect": url_for("chat", agent=aid)})
@@ -1841,6 +1856,14 @@ def create_app(config: Config | None = None,
     @login_required
     def delete_agent(agent_id):
         acct = current_account()
+        # A person's primary assistant is not removed, here as on the card
+        # (owner decision D5, SEC951-L1): only an older account's extras
+        # are. Deleting the account, or the records it reads, still goes.
+        primary = {a["id"] for a in hub_view.assistants(
+            svc.list_home(acct.id))["assistants"] if a["is_primary"]}
+        if agent_id in primary:
+            return jsonify({"error": "This is your assistant, so it "
+                                     "can't be removed."}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})
@@ -2036,7 +2059,18 @@ def create_app(config: Config | None = None,
                                connect_next=_chat_connect_next(acct, sample),
                                link_session=bool(session.get(_VIA_LINK)),
                                sample_line=(beta.SAMPLE_FRAME
-                                            if sample else None))
+                                            if sample else None),
+                               # "Mom's records" when they are not the
+                               # holder's own (spec section 5).
+                               whose=_whose(acct, ctx["agent"]))
+
+    def _whose(acct, agent, mid: bool = False) -> str:
+        """Whose records this assistant reads, as the chat header and the
+        approvals page name them; empty for the holder's own. Rendered by
+        the template only: the nickname is never passed to the model, a
+        log line or the engine."""
+        return hub_view.whose_records(hub_view.person_of(
+            svc.list_home(acct.id), agent.get("person_id")), mid=mid)
 
     @app.get("/brief")
     @login_required
@@ -2424,7 +2458,9 @@ def create_app(config: Config | None = None,
                                    message=_APPROVALS_UNCHECKABLE), 503
         return render_template("approvals.html", me=ctx["agent"],
                                agent_id=agent_id, pending=pending,
-                               kind_labels=_KIND_LABELS)
+                               kind_labels=_KIND_LABELS,
+                               # "Requests for Mom's records" (#951 F3).
+                               whose=_whose(acct, ctx["agent"], mid=True))
 
     @app.get("/api/approvals/count")
     @login_required
@@ -2463,16 +2499,22 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
+            # Each queue says whose records it is when they are not the
+            # holder's own (spec section 5): the connection's person, the
+            # same person its assistant is for.
+            whose = hub_view.whose_records(
+                hub_view.person_of(data, conn.get("person_id")))
+            named = {"whose": whose} if whose else {}
             if n and agent:
                 queues.append({"agent_id": agent["id"], "name": agent["name"],
-                               "count": n,
+                               "count": n, **named,
                                "href": url_for("approvals",
                                                agent_id=agent["id"])})
             elif n:
                 # Whether any assistant exists decides the next step: with
                 # one, it is switched to these records ("Change records");
                 # with none, the hub's Start a chat is the way in (#847).
-                queues.append({"name": conn["label"], "count": n,
+                queues.append({"name": conn["label"], "count": n, **named,
                                "needs_assistant": True,
                                "has_assistant": bool(data["agents"])})
         out = {"count": total}

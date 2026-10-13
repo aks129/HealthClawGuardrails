@@ -263,7 +263,8 @@ def test_removing_the_assistant_lets_the_person_have_one_again(
         cfg, svc, monkeypatch):  # noqa: F811
     _, c, aid = _signed_in(cfg, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()
-    assert c.delete(f"/api/agents/{conn['agent_id']}").status_code == 200
+    # Removed through the service: the route refuses a primary (SEC951-L1).
+    assert svc.delete_agent(aid, conn["agent_id"])
     r = c.post("/api/agents", json={"name": "Juniper",
                                     "connection_id": conn["id"]})
     assert r.status_code == 200

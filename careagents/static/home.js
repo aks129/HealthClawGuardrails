@@ -702,8 +702,12 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const agreed = await askToDelete(btn.dataset.label || "these records",
-                                       btn.dataset.readers || "");
+      // Whose records go, once someone the holder cares for is here (#951):
+      // "Sample records (Mom's records)". Text only, never markup.
+      const label = btn.dataset.label || "these records";
+      const agreed = await askToDelete(
+        btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
+        btn.dataset.readers || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -828,7 +832,10 @@
   // words, so they go in as text, never markup.
   // With an assistant on other records, the one Chat button opens a chat
   // that cannot see these requests: the step is to switch it (#847).
-  const orphanLine = (q) => requests(q.count) + " waiting on " + q.name + ". " +
+  // A queue says whose records it is when they are not the holder's own
+  // (spec section 5): "Juniper (Mom's records)". Text only, like every name.
+  const orphanLine = (q) => requests(q.count) + " waiting on " + q.name +
+    (q.whose ? " (" + q.whose + ")" : "") + ". " +
     (q.has_assistant
       ? "To review " + (q.count === 1 ? "it" : "them") + ", switch your " +
         "assistant to " + q.name + ": More, then Change records."
@@ -915,7 +922,8 @@
       if (!queues[0].href) { line.textContent = orphanLine(queues[0]); return; }
       const a = document.createElement("a");
       a.href = queues[0].href;
-      a.textContent = requests(d.count) + " waiting for your approval";
+      a.textContent = requests(d.count) + " waiting for your approval" +
+        (queues[0].whose ? " on " + queues[0].whose : "");
       line.replaceChildren(a);
       return;
     }
@@ -927,7 +935,8 @@
       if (q.href) {
         const a = document.createElement("a");
         a.href = q.href;
-        a.textContent = q.name + ": " + requests(q.count);
+        a.textContent = q.name + (q.whose ? " (" + q.whose + ")" : "") +
+          ": " + requests(q.count);
         li.appendChild(a);
       } else {
         li.textContent = orphanLine(q);
@@ -996,11 +1005,15 @@
   let moveChoices = [];
   try { moveChoices = JSON.parse(($("agents") && $("agents").dataset.records) || "[]"); }
   catch (e) { moveChoices = []; }
-  function pickRecords(currentId) {
+  // A card carries its own person's records (spec section 9); the list on
+  // #agents is the holder's, for a card that carries none.
+  function pickRecords(currentId, own) {
+    let choices = moveChoices;
+    try { if (own) choices = JSON.parse(own); } catch (e) { choices = moveChoices; }
     const rows = $("records-rows");
     rows.textContent = "";
     const dlg = openDialog($("records-picker"));
-    moveChoices.filter((c) => c.id !== currentId).forEach((c) => {
+    choices.filter((c) => c.id !== currentId).forEach((c) => {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "picker-row";
@@ -1015,7 +1028,7 @@
   }
   document.querySelectorAll(".agent-move").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const conn = await pickRecords(btn.dataset.conn);
+      const conn = await pickRecords(btn.dataset.conn, btn.dataset.records);
       if (!conn) return;
       const res = await post(`/api/agents/${btn.dataset.agent}/connection`,
                              { connection_id: conn });
@@ -1034,13 +1047,37 @@
     $("agent-delete-cancel").focus();
     return dlg.result;
   }
-  document.querySelectorAll(".agent-delete").forEach((btn) => {
+  // Remove: an older account's extra assistant only (owner decision D5).
+  // The primary's card has no button.
+  document.querySelectorAll(".agent-remove").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!(await askToRemoveAgent(btn.dataset.name))) return;
       const r = await fetch(`/api/agents/${btn.dataset.agent}`, { method: "DELETE" });
-      if (!r.ok) return announce(agentMsg(btn), "Couldn't delete. Try again.");
+      if (!r.ok) return announce(agentMsg(btn), "Couldn't remove. Try again.");
       location.reload();
     });
+  });
+
+  // --- someone you care for (spec section 6), made-up records only ---
+  // The server checks the relationship and the 24-character nickname; this
+  // only stops an empty choice before the round trip.
+  const addPerson = $("add-person-form");
+  // A pick answers "Choose who they are to you.", so the line goes now.
+  if (addPerson) addPerson.addEventListener("change", (e) => {
+    if (e.target.name === "relationship") $("add-person-msg").hidden = true;
+  });
+  if (addPerson) addPerson.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const picked = addPerson.querySelector('input[name="relationship"]:checked');
+    if (!picked) return announce($("add-person-msg"), "Choose who they are to you.");
+    const nickname = $("add-person-nickname").value.trim();
+    const submit = addPerson.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    const res = await post("/api/people", nickname
+      ? { relationship: picked.value, nickname } : { relationship: picked.value });
+    if (res.ok) { location.reload(); return; }
+    submit.disabled = false;
+    announce($("add-person-msg"), refusal(res.d, "Couldn't add them. Try again."));
   });
 
   // --- iMessage surface (settings page) ---

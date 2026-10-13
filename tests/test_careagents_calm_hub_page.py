@@ -106,7 +106,11 @@ def test_the_assistant_card_has_chat_brief_and_a_menu(app, svc, monkeypatch):
     assert f'href="/chat?agent={agent}">Chat</a>' in body
     assert f'href="/brief?agent={agent}">Visit brief</a>' in body
     assert "Reads sample records" in body
-    assert 'class="agent-rename"' in body and 'class="agent-delete"' in body
+    assert 'class="agent-rename"' in body
+    # The one assistant a person has is not removed from its card; only an
+    # older account's extras offer Remove (owner decision D5, #943).
+    assert 'class="agent-delete"' not in body
+    assert 'class="agent-remove"' not in body
     # One active connection: nothing to change records to.
     assert 'class="agent-move"' not in body
     svc.add_connection(aid, "direct", "ca-two", "Upload", status="active")
@@ -128,7 +132,9 @@ def test_an_account_with_records_and_no_assistant_can_start_one(
     fires again, so the hub offers the one way back (QA, calm hub PR 2)."""
     c, aid = _signed_in(app, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()
-    c.delete(f"/api/agents/{conn['agent_id']}")
+    # The hub no longer removes a primary (SEC951-L1); an account from
+    # before could still be left without one, so the service does it here.
+    assert svc.delete_agent(aid, conn["agent_id"])
     body = c.get("/home").get_data(as_text=True)
     assert f'id="start-chat" data-conn="{conn["id"]}"' in body
     # The button's request, as home.js sends it, lands in a chat.
