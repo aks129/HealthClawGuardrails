@@ -1772,23 +1772,25 @@ def create_app(config: Config | None = None,
                 }
             except (HealthClawError, TypeError, ValueError):
                 totals = None   # unknown, which is never the same as zero
-        intake = intake_state.classify(
-            totals=totals,
-            connection_status=conn.get("status"),
-            connected_at=conn.get("connected_at"),
-            now=time.time(),
-            provider=conn.get("provider") or conn.get("label"))
-        settle = pending and intake.state == intake_state.READY
-        # A Fasten export still being written stays pending, uncounted, as
-        # the poll leaves it (QA940-F1). A failed look settles nothing.
-        if settle and conn.get("kind") == "fasten":
+        # A Fasten export still being written is a fraction of the record:
+        # no greeting counts, no settle and no stored count, as the poll
+        # leaves it (QA940-F1). A failed look is treated the same way. Never
+        # "overdue" either: a long import is not one that sent nothing.
+        importing = False
+        if pending and totals and conn.get("kind") == "fasten":
             try:
-                settle = not hc.fasten_import_running(ctx["tenant"])
+                importing = hc.fasten_import_running(ctx["tenant"])
             except HealthClawError:
                 logger.warning("import status unavailable for agent %s",
                                agent_id)
-                settle = False
-        if settle:
+                importing = True
+        intake = intake_state.classify(
+            totals=None if importing else totals,
+            connection_status=conn.get("status"),
+            connected_at=None if importing else conn.get("connected_at"),
+            now=time.time(),
+            provider=conn.get("provider") or conn.get("label"))
+        if pending and intake.state == intake_state.READY:
             # Records landed while nobody was polling /connect. Settle the
             # stored status here so the next visit costs no counts.
             svc.set_connection_status(ctx["tenant"], "active")

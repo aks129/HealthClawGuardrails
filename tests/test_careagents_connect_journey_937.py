@@ -160,12 +160,16 @@ def test_the_chat_page_shows_no_count_until_the_import_is_done(cfg, svc,
     fake.importing = True
     for n in (29, 80):
         fake.counted = n
-        assert c.get(f"/chat?agent={own}").status_code == 200
+        page = c.get(f"/chat?agent={own}").get_data(as_text=True)
         assert _stored(svc, conn) == ("pending", None)
+        # Nor in the greeting: no count while the import runs.
+        assert "I found" not in page
+        assert "imports take 5" in page
     fake.importing = False
     fake.counted = 150
-    assert c.get(f"/chat?agent={own}").status_code == 200
+    page = c.get(f"/chat?agent={own}").get_data(as_text=True)
     assert _stored(svc, conn) == ("active", 150)
+    assert "I found <strong>2 conditions</strong>" in page
 
 
 def test_the_chat_page_settles_nothing_when_it_cannot_ask(cfg, svc,
@@ -186,8 +190,9 @@ def test_the_chat_page_settles_nothing_when_it_cannot_ask(cfg, svc,
     def down(tenant):
         raise HealthClawError("down")
     fake.fasten_import_running = down
-    assert c.get(f"/chat?agent={own}").status_code == 200
+    page = c.get(f"/chat?agent={own}").get_data(as_text=True)
     assert _stored(svc, conn) == ("pending", None)
+    assert "I found" not in page
 
 
 def test_a_refresh_reports_no_new_records_until_the_import_is_done(
