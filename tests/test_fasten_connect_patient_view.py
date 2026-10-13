@@ -132,3 +132,11 @@ def test_the_link_careagents_builds_opens_the_patient_page(client,
     bare = HealthClawClient("https://engine.example", "").fasten_connect_url(
         TENANT)
     assert bare == f"https://engine.example/connect/{TENANT}"
+
+
+def test_the_patient_page_says_tap_not_click(client, monkeypatch):
+    """It opens on a phone (patient tester on #940)."""
+    _setup(monkeypatch)
+    html = _get(client, src="careagents", sig=_tag(TENANT))
+    assert "Tap the button below." in html
+    assert "Click the button below" not in html

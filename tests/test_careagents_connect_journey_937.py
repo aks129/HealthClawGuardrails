@@ -657,3 +657,45 @@ def test_the_import_state_reads_the_newest_job():
             200, {"jobs": [{"status": x} for x in statuses]})
         assert client.fasten_import_state("ca-1") == state, statuses
         assert client.fasten_import_running("ca-1") is (state == "running")
+
+
+# --- patient tester on #940 ---------------------------------------------------
+
+def _chip(card):
+    import html
+    return html.unescape(re.search(r'<span class="status[^"]*">([^<]*)</span>',
+                                   card).group(1))
+
+
+def test_a_failed_import_chip_agrees_with_its_note(cfg, svc, monkeypatch):
+    """The chip said "Connecting…" under "didn't work": wait, or try again?
+    MUTATION: render status_word on a failed import -> "Connecting…"."""
+    app, fake = _app(cfg, svc)
+    fake.tenant_has_records = lambda tenant: False
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, _tenant = _start_fasten(c)
+    assert _chip(_card(c.get("/home").get_data(as_text=True),
+                       conn)) == "Connecting…"
+    fake.import_failed = True
+    card = _card(c.get("/home").get_data(as_text=True), conn)
+    assert _chip(card) == "Didn't finish"
+    assert "Connecting" not in card
+
+
+def test_the_doctor_card_reads_plainly(cfg, svc, monkeypatch):
+    """"Reads Records from your doctor", and a subtitle repeating the title
+    ("Records from your doctor" / "your doctor")."""
+    app, fake = _app(cfg, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn, tenant = _start_fasten(c)
+    c.post("/api/agents", json={"name": "Rowan", "persona": "calm",
+                                "connection_id": conn})
+    c.get(f"/api/connections/{tenant}/poll")
+    html = c.get("/home").get_data(as_text=True)
+    assert "Reads records from your doctor" in html
+    assert "Reads Records" not in html
+    card = html[html.index(f'data-conn="{conn}"'):]
+    card = card[:card.index("</div>", card.index("hub-card-sub")) + 6]
+    assert '<div class="hub-card-sub"></div>' in card

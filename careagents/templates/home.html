@@ -93,7 +93,9 @@
       {% for a in hub.agents %}
       <div class="hub-card agent-card" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
-        <div class="hub-card-sub">{% if a.reads %}Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}{% endif %}</div>
+        {# A label that starts with a plain noun reads mid-sentence in lower
+           case: "Reads records from your doctor", not "Reads Records". #}
+        <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads[:1]|lower ~ a.reads[1:] if a.reads.split()[0] in ("Sample", "Records", "Uploaded") else a.reads }}{% endif %}</div>
         <p class="card-note">Visit brief: a one-page summary of {{ "these made-up records, to show how it works" if a.reads == "Sample records" else "your records to bring to an appointment" }}.</p>
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
@@ -148,15 +150,20 @@
       <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}"
            data-conn="{{ c.id }}" data-kind="{{ c.kind }}" data-status="{{ c.status }}">
         <div class="hub-card-name">{{ c.label }}</div>
-        <div class="hub-card-sub">{{ c.provider or '' }}</div>
+        {# Not a provider the title already names ("Records from your
+           doctor" over "your doctor", patient tester on #940). #}
+        <div class="hub-card-sub">{% if c.provider and c.provider|lower not in c.label|lower %}{{ c.provider }}{% endif %}</div>
         {% if c.is_sample %}<span class="badge-sample">Made-up records</span>{% endif %}
+        {% set page = connect_pages.get(c.id) %}
         {% if paused %}
         <span class="status status-paused">Paused</span>
         {% else %}
-        <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
+        {# A failed import is not "Connecting…": the chip agrees with the
+           note below (patient tester on #940). The class stays, so the
+           pending poller still sees a retry land. #}
+        <span class="status status-{{ c.status }}">{{ "Didn't finish" if page and page.state == 'failed' else c.status_word }}</span>
         {% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
-        {% set page = connect_pages.get(c.id) %}
         {% if page and page.state == 'running' %}
         {# Static: no number and no progress claim (QA940 round 3). #}
         <p class="card-note">Your records are on their way. This can take up to 45 minutes.</p>

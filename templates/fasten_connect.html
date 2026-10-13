@@ -257,10 +257,10 @@
   <div class="stitch-card">
 {% if tefca_mode %}
     <h3>Step 1 — Verify your identity</h3>
-    <p>Click the button below. A window will open where you confirm who you are with CLEAR or ID.me.</p>
+    <p>{{ 'Tap' if patient_view else 'Click' }} the button below. A window will open where you confirm who you are with CLEAR or ID.me.</p>
 {% else %}
     <h3>Step 1 — Find your health system</h3>
-    <p>Click the button below. A window will open where you search for your health system and sign in.</p>
+    <p>{{ 'Tap' if patient_view else 'Click' }} the button below. A window will open where you search for your health system and sign in.</p>
 {% endif %}
 
     {% if fasten_public_key %}
