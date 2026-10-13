@@ -15,6 +15,8 @@
     {% endif %}
     {% if code_for_passkey %}
     <p class="setup-sub">To add a passkey, confirm it's you with a code we email.</p>
+    {% elif code_for_invite %}
+    <p class="setup-sub" id="invite-why">To get your invite link, confirm it's you with a code we email. Then you'll go back to Settings.</p>
     {% elif code_for_connect %}
     <p class="setup-sub" id="connect-why">To connect your own records, confirm it's you with a code we email. Then you'll go back to your hub.</p>
     {% elif prefill %}

@@ -639,13 +639,15 @@ class AccountService:
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 
-    def pending_connection(self, account_id: str, kind: str) -> dict | None:
+    def pending_connection(self, account_id: str, kind: str,
+                           status: str = "pending") -> dict | None:
         """The account's oldest connection of this kind still waiting for
-        records, if any. The holder's own."""
+        records, if any. `direct` waits as "empty" rather than "pending".
+        The holder's own."""
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(account_id=account_id, kind=kind,
-                            status="pending",
+                            status=status,
                             person_id=self._self_person_id(s, account_id))
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None

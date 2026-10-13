@@ -32,6 +32,11 @@ DEFAULT_TOKEN_TTL_SECONDS = 300
 # reconnect. Read-scoped tokens can never authorize writes (H4 stays intact).
 READ_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 
+# The `sub` of exactly those patient connect tokens. A Disconnect ends them
+# at the read gate (r6/read_auth.py, SEC940-F2); tokens CareAgents mints
+# server-side carry another subject and keep reading.
+PATIENT_CONNECT_SUBJECT = 'patient-connect'
+
 # ---------------------------------------------------------------------------
 # Replay guard (opt-in).
 #
@@ -181,6 +186,21 @@ def generate_step_up_token(tenant_id, agent_id=None,
         secret.encode(), payload_b64.encode(), hashlib.sha256
     ).hexdigest()
     return f'{payload_b64}.{sig}'
+
+
+def token_subject(token):
+    """The `sub` claim of a token that has ALREADY been validated, or None.
+
+    Checks no signature, expiry or tenant: it only reads the payload half.
+    Call it after validate_step_up_token (or the kernel) accepted the same
+    token, never as a decision of its own.
+    """
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(token.rsplit('.', 1)[0]))
+    except Exception:
+        return None
+    sub = payload.get('sub') if isinstance(payload, dict) else None
+    return sub if isinstance(sub, str) else None
 
 
 def validate_step_up_token(token, tenant_id, consume_nonce=False,

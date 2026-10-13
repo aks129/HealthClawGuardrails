@@ -477,6 +477,13 @@ def create_app(config: Config | None = None,
                             and via_link and me is not None)
         if code_for_connect:
             back = url_for("home") + "#connect-records"
+        # The same step for Settings' invite link (#937): a code, then back
+        # to the card that now shows the link.
+        code_for_invite = (request.args.get("invite") == "1"
+                           and via_link and me is not None
+                           and not code_for_connect)
+        if code_for_invite:
+            back = url_for("settings") + "#invite-section"
         if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
         # Set by a beta confirm that could not sign in (beta_signup): the
@@ -490,6 +497,7 @@ def create_app(config: Config | None = None,
                                # why a code comes first (patient walk F1).
                                code_for_passkey=asked_enroll and via_link,
                                code_for_connect=code_for_connect,
+                               code_for_invite=code_for_invite,
                                prefill=(prefill if isinstance(prefill, str)
                                         else ""),
                                imessage_pending=bool(
@@ -548,7 +556,27 @@ def create_app(config: Config | None = None,
                             else "made-up records"),
             switch_prompt=(None if svc.switch_prompted_at(acct.id)
                            else hub_view.switch_prompt(data)),
+            # A Fasten card still connecting links to its connect page
+            # (#937). A link is never blocked as a popup is, so a person
+            # whose browser blocked the first window is not left with only
+            # a Refresh that repeats it. While an import runs the card says
+            # the records are on their way instead, and after a failed one
+            # it says so and offers the page again (QA940 rounds 2 and 3).
+            connect_pages=({} if paused else {
+                r["id"]: {"url": hc.fasten_connect_url(r["tenant_id"]),
+                          "state": _import_state(r["tenant_id"])}
+                for r in view["records"]
+                if r["kind"] == "fasten" and r["status"] == "pending"}),
             has_grants=bool(svc.list_grants(acct.id)),
+            # One status per source row, chosen in one place (hub critique).
+            chip=hub_view.status_chip,
+            # "Where you can reach me": connected phones, masked as Settings
+            # shows them. Setting one up stays on Settings.
+            reach_phones=[imessage.masked_display(x["handle"])
+                          for x in data["surfaces"]
+                          if x["kind"] == "imessage"
+                          and x["status"] == "active"],
+            imessage_handle=cfg.imessage_handle,
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
@@ -570,6 +598,17 @@ def create_app(config: Config | None = None,
             return funnel.reached(svc.session, acct.id, "first_answer")
         except Exception:  # noqa: BLE001 - the card is left out, not the page
             return False
+
+    def _import_state(tenant: str) -> str:
+        """What a connecting Fasten card says (QA940 rounds 2 and 3):
+        "running", "failed", or anything else for the plain connect link.
+        A failed look answers "unknown": the link is the fallback for a
+        blocked popup, so doubt keeps it."""
+        try:
+            return hc.fasten_import_state(tenant)
+        except HealthClawError:
+            logger.warning("import status unavailable on the hub")
+            return "unknown"
 
     def _connect_next(acct, view, menu, real_open, paused) -> bool:
         """Is "Connect your records" the hub's next step? Once made-up
@@ -630,6 +669,9 @@ def create_app(config: Config | None = None,
                 logger.warning("invite link not shown")
         return render_template(
             "settings.html", me=acct, invite=invite,
+            # Says where the link is instead of leaving the section out
+            # (#937): one code sign-in away.
+            link_session=bool(session.get(_VIA_LINK)),
             passkeys=svc.list_passkeys(acct.id),
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
@@ -980,7 +1022,7 @@ def create_app(config: Config | None = None,
             if refused:
                 return refused
             consent_version = tester_terms.CONSENT_VERSION
-        if connector_id != "fasten":
+        if connector_id not in ("fasten", "direct"):
             return _persist_connection(connector_id, acct, plan,
                                        consent_version)
         # Two tabs or devices connecting at once (#847): both passed the
@@ -997,6 +1039,17 @@ def create_app(config: Config | None = None,
             # two taps made two identical rows, both stuck connecting. Only
             # a pending row is reused, and only after the gate and consent
             # above.
+            if connector_id == "direct":
+                # Same for a file: a connection still waiting for its first
+                # file takes the next one, so a second try never adds a
+                # second card.
+                waiting = svc.pending_connection(acct.id, "direct",
+                                                 status="empty")
+                if waiting:
+                    return jsonify({"id": waiting["id"], "status": "empty",
+                                    "existing": True})
+                return _persist_connection(connector_id, acct, plan,
+                                           consent_version)
             waiting = svc.pending_connection(acct.id, "fasten")
             if waiting:
                 return jsonify({
@@ -1321,6 +1374,13 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        # The typed DELETE, checked here as the account delete checks it
+        # (security review of #944): the modal alone is a client's promise.
+        # After the ownership check, so a stranger's id still reads 404.
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirm") != "DELETE":
+            return jsonify({"error": "confirm_required",
+                            "message": "Type DELETE to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
@@ -1513,10 +1573,15 @@ def create_app(config: Config | None = None,
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
         # report what the refresh actually added — documents on the same
         # terms, so "notes arrived" is a measured delta rather than a restatement
-        # of "this tenant holds notes" (#226).
+        # of "this tenant holds notes" (#226). Not while a Fasten import is
+        # still writing: that count is part of an import, and storing it left
+        # the card at "49 records" for good (QA940-F1b). The last baseline
+        # stands, or none, and the poll stores the count once it is done.
         try:
-            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
-                            hc.uncounted_record_count(conn["tenant_id"]))
+            if not (conn["kind"] == "fasten"
+                    and hc.fasten_import_running(conn["tenant_id"])):
+                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                                hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
             return jsonify({"error": "records service unavailable"}), 503
 
@@ -1540,6 +1605,13 @@ def create_app(config: Config | None = None,
             return jsonify({"status": "revoked"})
         try:
             landed = hc.tenant_has_records(conn_tenant)
+            # A Fasten export is written in the background, a Patient first,
+            # so records landing is not the import being done. Until it is,
+            # no count is stored or shown: a mid-import count was stored once
+            # and the card read "29 records" for good with 150 there
+            # (QA940-F1).
+            importing = (landed and conns[conn_tenant]["kind"] == "fasten"
+                         and hc.fasten_import_running(conn_tenant))
         except HealthClawError:
             # Not "pending". We did not fail to find records, we failed to
             # look, and the two are different answers. Rendering this as
@@ -1552,12 +1624,31 @@ def create_app(config: Config | None = None,
                 "message": "We couldn't reach your records right now. That's "
                            "a problem on our side — we'll keep checking.",
             }), 503
+        if importing:
+            # Still "Connecting…" on the card, so the pending poller keeps
+            # asking. A connection already active (a refresh) stays active,
+            # with no "new records" yet: the watcher stops at the first one.
+            return jsonify({"status": "active"
+                            if conns[conn_tenant]["status"] == "active"
+                            else "pending"})
         if landed:
             svc.activate_connection(conn_tenant)
             if conns[conn_tenant]["kind"] != "sample":
                 funnel.safely(funnel.mark, svc.session, acct.id,
                               "records_connected")
             out = {"status": "active"}
+            # First records ever on this connection: store the count the
+            # card shows ("N records", hub.py). Only when none is stored, so
+            # a refresh's baseline below is never overwritten (#937). A
+            # failed count leaves it unset, which the card shows as nothing,
+            # never as zero.
+            if conns[conn_tenant].get("last_count") is None:
+                try:
+                    svc.mark_synced(conns[conn_tenant]["id"],
+                                    hc.record_count(conn_tenant),
+                                    hc.uncounted_record_count(conn_tenant))
+                except HealthClawError:
+                    logger.warning("record count unavailable on activation")
             # After a refresh, report growth against the baseline that refresh
             # recorded. Read-only: the count is re-baselined by the next
             # refresh, so repeated polls keep showing the same number instead
@@ -1841,16 +1932,66 @@ def create_app(config: Config | None = None,
                 }
             except (HealthClawError, TypeError, ValueError):
                 totals = None   # unknown, which is never the same as zero
+        # A Fasten export still being written is a fraction of the record:
+        # no greeting counts, no settle and no stored count, as the poll
+        # leaves it (QA940-F1). A failed look is treated the same way. Never
+        # "overdue" either: a long import is not one that sent nothing.
+        importing = False
+        # Asked only once something landed, so "still arriving" is the true
+        # sentence whether the import runs or could not be asked about.
+        if (pending and totals and any(totals.values())
+                and conn.get("kind") == "fasten"):
+            try:
+                importing = hc.fasten_import_running(ctx["tenant"])
+            except HealthClawError:
+                logger.warning("import status unavailable for agent %s",
+                               agent_id)
+                importing = True
         intake = intake_state.classify(
-            totals=totals,
+            totals=None if importing else totals,
             connection_status=conn.get("status"),
-            connected_at=conn.get("connected_at"),
+            connected_at=None if importing else conn.get("connected_at"),
             now=time.time(),
             provider=conn.get("provider") or conn.get("label"))
         if pending and intake.state == intake_state.READY:
             # Records landed while nobody was polling /connect. Settle the
             # stored status here so the next visit costs no counts.
             svc.set_connection_status(ctx["tenant"], "active")
+            # And the hub card's "N records", as the poll stores it (#937).
+            if conn.get("id") and conn.get("last_count") is None:
+                try:
+                    svc.mark_synced(conn["id"], hc.record_count(ctx["tenant"]),
+                                    hc.uncounted_record_count(ctx["tenant"]))
+                except HealthClawError:
+                    logger.warning("record count unavailable on activation")
+        # Starter taps tuned to what the records can answer (hub critique
+        # 2026-10). Labs only when laboratory results are known to be there,
+        # not a heart rate (QA #944 F2). Only a total crosses, as for the
+        # greeting: the engine's `code` filter matches a category's code
+        # too, so `code=laboratory` counts Observations filed as labs
+        # (pinned on the real engine by test_hub_labs_count_real_engine).
+        # The made-up records are a fixed seed that holds lab results and
+        # files none by category. A failed count hides the tap, never
+        # offers it. "What changed since my last visit?" is not offered:
+        # records hold no visit to compare with (patient tester on #944).
+        has_labs = False
+        if totals and totals["labs"] == 0:
+            has_labs = False
+        elif sample:
+            has_labs = True
+        else:
+            try:
+                has_labs = int(hc.search(
+                    ctx["tenant"], "Observation",
+                    {"code": "laboratory", "_summary": "count"}
+                ).get("total") or 0) > 0
+            except (HealthClawError, TypeError, ValueError):
+                has_labs = False
+        has_records = (any(totals.values()) if totals is not None
+                       else bool(conn.get("last_count")))
+        starters = [s for s, ok in (
+            ("Make my visit brief", has_records),
+            ("Explain my latest labs", has_labs)) if ok]
         # The "Open the review" card is a turn event, and history keeps only
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.
@@ -1878,8 +2019,12 @@ def create_app(config: Config | None = None,
                                past=past,
                                history_lost=history_lost,
                                intake=intake,
+                               # Records landed and more are coming: the
+                               # assistant reads the part that is here.
+                               importing=importing,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               starters=starters,
                                # A link session reaches it through a code
                                # sign-in first (/auth, #920 F1).
                                offer_passkey=not svc.has_passkey(acct.id),

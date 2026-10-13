@@ -69,6 +69,23 @@ def failure_text(exc: Exception) -> str:
     return GENERIC_FAILURE_TEXT
 
 
+#: For the model, when a read failed: what it means and what to say. The
+#: exception's own text never goes with it; "search Condition failed (503)"
+#: told the model nothing it could say, and a model with nothing else to go
+#: on told the person no records were connected (2026-10-12).
+READ_FAILED_NOTE = (
+    "These records could not be read just now, on our side. They are not "
+    "absent: never say the person has no records, that nothing is "
+    "connected, or that they have none of this kind. Say plainly that you "
+    "could not read their records this time and offer to try again.")
+
+
+def tool_error_result(exc: Exception) -> str:
+    """The tool result for a tool whose HealthClaw read failed."""
+    return json.dumps({"error": "records_unavailable",
+                       "note": READ_FAILED_NOTE})
+
+
 def _trim_history(history: list) -> None:
     """Drop the oldest turns in place, cutting only at a safe boundary.
 
@@ -238,6 +255,46 @@ def _medication_resolver(hc: HealthClawClient, tenant: str):
     return resolve
 
 
+ALLERGY_STATUS_STATEMENT = (
+    "Your records don't say whether you have allergies.")
+
+#: Explicit SNOMED allergy-status concepts: the record says allergy
+#: information was not collected, not which substance. Keyed by system and
+#: code, never by label, and kept tiny on purpose. Coding-level null flavors
+#: and data-absent-reason codes are NOT here: C-CDA writes an uncoded
+#: allergen as nullFlavor UNK beside free text that redaction strips, so
+#: those are real allergy records (#945 security F3). "No known allergy"
+#: codes are absent too: never "no known allergies" inferred here.
+_ALLERGY_STATUS_CODES = frozenset({
+    ("http://snomed.info/sct", "1631000175102"),  # Patient not asked
+})
+
+
+def _is_allergy_status(res: dict) -> bool:
+    """True only when the record carries at least one explicit status
+    concept and NO other coding of any kind, well formed or not. Penicillin
+    beside a status code is a penicillin allergy (F1); a coding we cannot
+    key on is still a coding, never a reason to read the record as status
+    (F4)."""
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    if not isinstance(codings, list) or not codings:
+        return False
+    # Strings only: a list in `code` is unhashable, and ingest stores
+    # whatever arrived (#885).
+    return all(isinstance(c, dict) and isinstance(c.get("system"), str)
+               and isinstance(c.get("code"), str)
+               and (c["system"], c["code"]) in _ALLERGY_STATUS_CODES
+               for c in codings)
+
+
+#: Records per list the tools hand the model: the engine's search page (50,
+#: r6/routes.py), so a list one search can return is never cut here. At 12,
+#: a 19-condition record lost diabetes, hypertension and atrial
+#: fibrillation, and no follow-up could reach them (#945 patient tester).
+SUMMARY_LIMIT = 50
+
+
 def _summarize_bundle(bundle: dict, limit: int = 12,
                       resolve_ref=None) -> list[dict]:
     """Compact, model-friendly view of a searchset bundle (already redacted).
@@ -265,6 +322,21 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         if rt == "OperationOutcome":
             continue
         item = {"type": rt}
+        if rt == "AllergyIntolerance" and _is_allergy_status(res):
+            # Not an allergy: a note that none were recorded. Its label
+            # ("Patient not asked", the terminology service's for SNOMED
+            # 1631000175102) reached a person verbatim as if it were one.
+            # Never read as "no known allergies" either: that is only ever
+            # the person's own attestation.
+            item.update({
+                "not_an_allergy": True,
+                "statement": ALLERGY_STATUS_STATEMENT,
+                "note": ("This record is not an allergy. Tell the person, in "
+                         "these plain words, that their records don't say "
+                         "whether they have allergies. Do not quote the "
+                         "record, and never say they have no allergies.")})
+            out.append(item)
+            continue
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
             c.get("display", "") for c in (code.get("coding") or [])[:1])
@@ -355,18 +427,48 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             item["date"] = date
         out.append(item)
 
+    # The bundle's total, when the engine gives one: the entries are one page
+    # (50 by default), so counting them calls a longer list complete.
+    stated = bundle.get("total")
+    if isinstance(stated, int) and not isinstance(stated, bool):
+        total = max(total, stated)
+    if total > len(out) or any(i.get("type") == "AllergyIntolerance"
+                               and not i.get("not_an_allergy") for i in out):
+        # "Your records don't say whether you have allergies" holds only for
+        # a list known in full to be status records alone. A recorded
+        # allergy in this list (#945 security F2), or a cut list whose rest
+        # we have not seen (F5), makes it false. Reworded rather than
+        # dropped: a dropped item would read as a truncated list below.
+        for i in out:
+            if i.get("not_an_allergy"):
+                i.pop("statement", None)
+                i["note"] = ("This entry is not an allergy: it records that "
+                             "allergy information was not collected at one "
+                             "point. Report any allergies listed here; do "
+                             "not mention this entry or quote it.")
     if total > len(out):
         # Deliberately shaped so it cannot be mistaken for a record: no
         # "type", no "name". The instruction is carried in the payload rather
         # than left to the system prompt alone, because this is the one place
         # the model can tell complete from partial.
+        #
+        # No counts in it: handed "12 of 19", the model told a patient "I
+        # could only see part of the records (12 of 19)", which reads as
+        # being blocked from their own records (#939).
         out.append({
             "truncated": True,
-            "shown": len(out),
-            "total": total,
-            "note": (f"Only {len(out)} of {total} records are shown. Do not "
-                     f"describe this list as complete or as all the person "
-                     f"has; say more exist and offer to narrow the search."),
+            #
+            # And no offer to narrow it or show the rest: no tool can, and
+            # the engine has no offset to page with. "Show me the rest"
+            # returned the same list (#945 patient tester).
+            "note": ("This list is longer than you can show here: more "
+                     "records of this kind are on file than are listed. Do "
+                     "not describe it as complete, do not count it, and do "
+                     "not say how many you were shown. Answer from what is "
+                     "here, then say plainly that their list is longer than "
+                     "you can show in this chat and that the full list is in "
+                     "their patient portal. Do not offer to show the rest "
+                     "or to look again: you cannot."),
         })
     return out
 
@@ -561,6 +663,83 @@ def _latest_per_analyte(consumer: dict, bundle: dict) -> list[dict] | None:
     return out
 
 
+#: The two parts of a blood pressure, by LOINC code. A reading made of
+#: parts is given a number only when it is exactly these two.
+_SYSTOLIC, _DIASTOLIC = "8480-6", "8462-4"
+
+
+def _plain_value(resource: dict) -> tuple[object, str]:
+    """(value, unit) for a reading the range check did not score, or
+    (None, "") when there is no number we can stand behind: no number, or a
+    unit we do not recognise (#884 QA F1). A blood pressure is its two parts,
+    as "138/88"."""
+    key = _ANALYTE_KEY.get(_obs_loinc(resource) or "")
+    vq = resource.get("valueQuantity")
+    if isinstance(vq, dict):
+        value = vq.get("value")
+        unit = labs_timeline.coded_unit(vq, key)
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and unit):
+            # A number with no unit at all, for a test whose usual unit we
+            # do not know, is a number the reader would put a unit beside.
+            return value, unit
+        return None, ""
+    parts = {}
+    for c in resource.get("component") or []:
+        if not isinstance(c, dict):
+            return None, ""
+        code = _obs_loinc(c)
+        cvq = c.get("valueQuantity") or {}
+        value = cvq.get("value") if isinstance(cvq, dict) else None
+        unit = (labs_timeline.coded_unit(cvq, None)
+                if isinstance(cvq, dict) else None)
+        if (code in parts or not isinstance(value, (int, float))
+                or isinstance(value, bool) or not unit):
+            return None, ""
+        parts[code] = (value, unit)
+    if set(parts) != {_SYSTOLIC, _DIASTOLIC} or \
+            parts[_SYSTOLIC][1] != parts[_DIASTOLIC][1]:
+        return None, ""
+    return (f"{parts[_SYSTOLIC][0]:g}/{parts[_DIASTOLIC][0]:g}",
+            parts[_SYSTOLIC][1])
+
+
+def _not_evaluated(consumer: dict, bundle: dict) -> list[dict] | None:
+    """Each reading the range check did not score: the engine's name for it,
+    its value and date, and whether the record itself carried a reference
+    range. None when the engine's answer cannot be read that way.
+
+    "Could not be interpreted" is what reached the person for a blood
+    pressure of 138/88 and a glucose of 180 (#937): true of the check, and no
+    use to them. The reading itself is. The pairing is the engine's own
+    order, checked code by code against `unevaluated_codes`; any mismatch
+    gives None and the engine's note stands alone. The label is the
+    engine's (r6/terminology.py by code), never the reading's own text.
+    """
+    names = consumer.get("unevaluated_analytes")
+    codes = consumer.get("unevaluated_codes")
+    if not isinstance(names, list) or not isinstance(codes, list) \
+            or len(names) != len(codes) or not names:
+        return None
+    unscored = [(e or {}).get("resource") or {}
+                for e in (bundle.get("entry") or [])]
+    unscored = [r for r in unscored if r.get("resourceType") == "Observation"
+                and not _obs_flag(r)]
+    if len(unscored) != len(names) or any(
+            not isinstance(name, str) or not code or _obs_loinc(r) != code
+            for name, code, r in zip(names, codes, unscored)):
+        return None
+    out = []
+    for name, r in zip(names, unscored):
+        value, unit = _plain_value(r)
+        rng = r.get("referenceRange")
+        out.append({"analyte": name, "date": _obs_date(r), "value": value,
+                    "unit": unit,
+                    "reference_range_in_records": bool(
+                        isinstance(rng, list) and rng)})
+    return out
+
+
 #: For a trend sentence from the engine's KDIGO creatinine check (#867),
 #: wherever the model meets one: get_labs' `trends` and the brief's
 #: lab-trends section. The sentence already says what to do and stops short
@@ -603,14 +782,77 @@ def _timeline_in_words(series: dict) -> dict:
     return out
 
 
+def records_arriving(hc: HealthClawClient, tenant: str,
+                     connection: dict) -> bool:
+    """Whether this connection's records may still be arriving.
+
+    The stored status cannot say: the chat page settles a connection to
+    `active` as soon as anything lands, so a first answer mid-import was
+    never told the rest was on its way (QA945-F1). The engine's Fasten job
+    list can (#940). A look that fails answers True: "may still be
+    loading" is true either way, and silence read as "that is all".
+    Made-up records never arrive, so they cost no look.
+    """
+    if connection.get("kind") == "sample":
+        return False
+    try:
+        state = hc.fasten_import_state(tenant)
+    except HealthClawError:
+        return True
+    # "none" with a pending connection: connected, and the job not yet made.
+    return state == "running" or (
+        state == "none" and connection.get("status") == "pending")
+
+
+def _empty_summary_note(hc: HealthClawClient, tenant: str,
+                        arriving: bool = False) -> str:
+    """Why four empty lists are empty, for the model.
+
+    Empty from "nothing here" and empty from "nothing here yet" are the same
+    four lists, and a model handed them told a person with records that none
+    were connected. The count is the one the hub uses (totals only, no
+    resources) and is taken only when every list came back empty. A count
+    that fails says nothing either way, as on the chat page
+    (careagents/intake_state.py): unknown is never zero.
+    """
+    try:
+        total = hc.record_count(tenant)
+    except HealthClawError:
+        return ("Nothing came back, and we could not check whether records "
+                "are on file. Never say the person has no records or that "
+                "nothing is connected: say you could not read their records "
+                "just now and offer to try again.")
+    if total > 0 and arriving:
+        return ("No conditions, medications or allergies came back yet, but "
+                "some records are on file for this person, and more are "
+                "still loading. Say plainly that their records are still "
+                "loading and they can ask again shortly. Never say they "
+                "have no records, no conditions, medications or allergies, "
+                "or that nothing is connected. Offer to look at what has "
+                "arrived.")
+    if total > 0:
+        return ("No conditions, medications or allergies came back, but "
+                "some records are on file for this person. Never say they "
+                "have no records or that nothing is connected. Say these "
+                "lists are empty in what you can read, and offer to look at "
+                "their other records.")
+    return ("No records have arrived here yet. Say plainly that their records "
+            "are not here yet: if they connected them recently, they are "
+            "still loading, which can take up to 45 minutes, and they can "
+            "ask again shortly. Never say they have no conditions, "
+            "medications or allergies.")
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
-                  surface: str = "", origin: str = "") -> str:
+                  surface: str = "", origin: str = "",
+                  arriving: bool = False) -> str:
     on_text = surface in TEXT_SURFACES
     origin = (origin or "").rstrip("/")
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
+        failed = False
         # Statements get their own key and are never folded into
         # "medications": a merged list needs a dedup rule that code cannot
         # supply (#377, docs/2026-08-05-medicationstatement-support-decision.md).
@@ -618,9 +860,25 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                         ("MedicationRequest", "medications"),
                         ("MedicationStatement", "medication_statements"),
                         ("AllergyIntolerance", "allergies")):
-            parts[key] = _summarize_bundle(
-                hc.search(tenant, rt),
-                resolve_ref=med_resolver if rt in _MEDICATION_TYPES else None)
+            # One failed search used to raise out of the whole tool, and the
+            # three that worked went with it.
+            try:
+                parts[key] = _summarize_bundle(
+                    hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                    resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
+                                 else None))
+            except HealthClawError:
+                parts[key] = {"could_not_read": True}
+                failed = True
+        if failed:
+            parts["note"] = (
+                "A list marked could_not_read could not be read just now, on "
+                "our side. It is not absent: never say the person has none "
+                "of that kind, or that nothing is connected. Give what the "
+                "other lists show, say plainly which part you could not read "
+                "this time, and offer to try again.")
+        elif not any(parts.values()):
+            parts["note"] = _empty_summary_note(hc, tenant, arriving)
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
@@ -647,7 +905,37 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 "earlier readings are counted, not listed. Describe the "
                 "latest as the person's current result, and an earlier high "
                 "or low only as history.")
-        if consumer.get("unevaluated"):
+        not_evaluated = (_not_evaluated(consumer, labs.get("bundle") or {})
+                         if consumer.get("unevaluated") else None)
+        if not_evaluated:
+            # The reading, plainly: its value, its date, and that there is
+            # nothing in the records to compare it to (#937). Never a range or
+            # a verdict of the model's own; "never inferred" holds here too.
+            out["not_evaluated"] = not_evaluated
+            # The engine's note gives the check's reason, and for a blood
+            # pressure that reason is "carried no number" beside a reading
+            # of 138/88: the readings above say it better.
+            out["consumer_summary"] = {
+                k: v for k, v in out["consumer_summary"].items()
+                if k != "unevaluated_note"}
+            out["note"] =((out["note"] + " ") if out.get("note") else "") + (
+                "This lab answer is INCOMPLETE: "
+                f"{len(not_evaluated)} reading(s) in not_evaluated were not "
+                "scored against a reference range. Zero flagged results here "
+                "means nothing was SCORED as abnormal, not that nothing is "
+                "abnormal. Report the "
+                + ("latest readings" if latest is not None else "lines")
+                + " you were given AND, for each not_evaluated reading, give "
+                "its value and date in plain words and say there is no "
+                "reference range in the records to compare it to (where "
+                "reference_range_in_records is true, say instead that the "
+                "check could not compare it to the range given). A reading "
+                "with value null is on file without a number you can give: "
+                "say so. Do not say it 'could not be interpreted'. Do not "
+                "call it normal, fine, high, low, or within range, and do not "
+                "supply a range or target of your own: the person's clinician "
+                "can say what it means for them.")
+        elif consumer.get("unevaluated"):
             # The marker arriving is necessary and not sufficient. Care gaps
             # learned that a model handed lines plus an unevaluated note leads
             # with the lines (#417); handed "high: 0, critical: 0" plus a note,
@@ -693,7 +981,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "link to the chart is included below your answer. A "
                          "series with trend_plottable false has a single "
                          "reading — say so, and never describe it as rising "
-                         "or falling. A series with readings_unit_unconfirmed "
+                         "or falling. A plottable series with no direction "
+                         "has readings whose units differ or could not be "
+                         "confirmed: give no numbers and no direction for "
+                         "it. A series with readings_unit_unconfirmed "
                          "has that many readings whose unit could not be "
                          "confirmed: say they are on file but give no "
                          "numbers for them."
@@ -703,25 +994,29 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "had this test — say so, and do not report it as "
                          "absent."),
             })
-        # The model gets SHAPE, not the readings: how many series, how many
-        # points, whether a trend is even plottable. The chart carries the
-        # numbers. Handing them over too would invite the model to restate
-        # every value and, worse, to narrate a direction from a single point.
+        # The chart carries every reading; the model gets the same first,
+        # latest and direction a text gets, worked out here. Given only the
+        # chart's shape, it answered "How has my A1c changed?" with "you can
+        # see the direction in the chart", every time (#937). Still not every
+        # value, and still no direction from a single reading or across units
+        # that differ or could not be confirmed (_timeline_in_words).
         return json.dumps({
             "chart_shown": any(s["readings"] for s in series),
-            "series": [{"name": s["name"], "readings": len(s["readings"]),
-                        "trend_plottable": s["trend_plottable"],
-                        **({"readings_unit_unconfirmed": s["withheld"]}
-                           if s.get("withheld") else {})}
-                       for s in series],
-            "note": ("A chart is now visible to the person. Describe what it "
-                     "shows in one or two sentences and invite a question; do "
-                     "not list every value. A series with trend_plottable "
+            "series": [_timeline_in_words(s) for s in series],
+            "note": ("A chart is now visible to the person. Answer the "
+                     "question in plain words in one or two sentences: for "
+                     "each series with a direction, say it went from its "
+                     "first reading to its latest, with dates, and whether "
+                     "that is higher, lower or unchanged; then invite a "
+                     "question. Do not list every value, and do not call the "
+                     "change good or bad. A series with trend_plottable "
                      "false has a single reading — say so, and never describe "
-                     "it as rising or falling. A series with "
-                     "readings_unit_unconfirmed has readings on file whose "
-                     "unit could not be confirmed, so they are not charted: "
-                     "say they exist, give no numbers."
+                     "it as rising or falling. A plottable series with no "
+                     "direction has readings whose units differ or could not "
+                     "be confirmed: give no numbers and no direction for it. "
+                     "A series with readings_unit_unconfirmed has readings on "
+                     "file whose unit could not be confirmed, so they are not "
+                     "charted: say they exist, give no numbers."
                      if series else
                      "No lab series matched in the CONNECTED records. That is "
                      "not the same as the person never having had this test — "
@@ -758,7 +1053,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
         return json.dumps(_summarize_bundle(
-            hc.search(tenant, rt),
+            hc.search(tenant, rt), limit=SUMMARY_LIMIT,
             resolve_ref=(_medication_resolver(hc, tenant)
                          if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
@@ -796,9 +1091,15 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 {"label": f.get("label"), "value": f.get("value")}
                 for f in fields[:MAX_BRIEF_FIELDS] if isinstance(f, dict)]
             if len(fields) > MAX_BRIEF_FIELDS:
-                notes.append(f"Only {MAX_BRIEF_FIELDS} of {len(fields)} "
-                             f"{section} items are shown; do not describe "
-                             "that list as complete.")
+                # No counts, as in _summarize_bundle's marker: a model
+                # handed "6 of 9" reads it to the person (#939).
+                notes.append(
+                    f"The {section.replace('-', ' ')} list is not complete: "
+                    "more items are on file. Do not describe it as "
+                    "complete, do not count it, and do not say how many "
+                    "you were shown. Say in plain words that there are "
+                    "more and that the full list is on their Visit brief "
+                    "page. Do not offer to show the rest here: you cannot.")
         if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
             notes.append("The screening review did not complete. Do not say "
                          "no screenings are due.")
@@ -874,7 +1175,7 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
                                        call.arguments, side_events,
                                        agent_id=agent_id)
             except HealthClawError as exc:
-                result = json.dumps({"error": str(exc)})
+                result = tool_error_result(exc)
             history.append({"role": "tool", "tool_call_id": call.id,
                             "content": result})
             for ev in side_events:

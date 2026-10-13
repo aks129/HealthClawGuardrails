@@ -33,7 +33,8 @@ from r6.fasten.models import FastenConnection, FastenJob, tenant_closed
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
 from r6.read_auth import authorize_tenant_read
-from r6.stepup import generate_step_up_token, READ_TOKEN_TTL_SECONDS
+from r6.stepup import (PATIENT_CONNECT_SUBJECT, READ_TOKEN_TTL_SECONDS,
+                       generate_step_up_token)
 from r6.fasten.api import trigger_ehi_export
 
 logger = logging.getLogger(__name__)
@@ -364,6 +365,26 @@ def _handle_connection_success(payload: dict) -> None:
 # Connection registry
 # ---------------------------------------------------------------------------
 
+#: CareAgents names every tenant it creates `ca-<hex>`
+#: (careagents/healthclaw.py new_tenant_id).
+CAREAGENTS_TENANT_PREFIX = 'ca-'
+
+
+def _careagents_tenant(tenant_id: str) -> bool:
+    """True for a tenant CareAgents created, judged by its id alone.
+
+    The engine keeps no record of which service created a tenant: CareAgents
+    picks the id and sends the patient to the connect page, often before it
+    has called the engine at all. So the prefix is the marker. That is safe
+    because the only thing it decides is to WITHHOLD a capability (the
+    browser enrollment proof, SEC940-F1): a developer who names a tenant
+    `ca-...` loses the one-time browser handoff of the read token and gains
+    nothing. CareAgents never uses that handoff; it reads with tokens it
+    mints server-side.
+    """
+    return tenant_id.startswith(CAREAGENTS_TENANT_PREFIX)
+
+
 def _tenant_for_read():
     """Resolve a tenant claim only after the shared read-auth gate.
 
@@ -471,14 +492,20 @@ def register_connection():
         except ValueError:
             pass  # ignore malformed timestamps
 
+    # A CareAgents tenant gets no enrollment proof: the browser on its
+    # connect page could otherwise mint a 30-day read token from
+    # agent-access (SEC940-F1). agent-access then asks the ordinary tenant
+    # read check, which that browser does not pass.
+    enroll = not _careagents_tenant(tenant_id)
     db.session.add(conn)
     try:
         db.session.flush()
-        proof_hash, proof_expires_at = establish_enrollment(
-            tenant_id, org_connection_id
-        )
-        conn.enrollment_proof_hash = proof_hash
-        conn.enrollment_expires_at = proof_expires_at
+        if enroll:
+            proof_hash, proof_expires_at = establish_enrollment(
+                tenant_id, org_connection_id
+            )
+            conn.enrollment_proof_hash = proof_hash
+            conn.enrollment_expires_at = proof_expires_at
         add_audit_event(
             event_type='fasten_connection_registered',
             agent_id='fasten-connect',
@@ -497,8 +524,9 @@ def register_connection():
         'status': 'registered',
         'org_connection_id': org_connection_id,
         # token is minted by GET .../agent-access AFTER the signed
-        # connection_success webhook verifies this org_connection_id
-        'agent_access_pending': True,
+        # connection_success webhook verifies this org_connection_id; this
+        # browser holds no proof for a CareAgents tenant
+        'agent_access_pending': enroll,
     }), 201
 
 
@@ -634,7 +662,7 @@ def agent_access(org_connection_id):
 
     try:
         token = generate_step_up_token(
-            tenant_id, agent_id='patient-connect',
+            tenant_id, agent_id=PATIENT_CONNECT_SUBJECT,
             ttl_seconds=READ_TOKEN_TTL_SECONDS, scope='read')
     except ValueError:
         return jsonify({'error': 'server not configured to mint'}), 503

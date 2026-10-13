@@ -212,7 +212,20 @@ class Config:
                 f"{self.canonical_host!r})")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
-        self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        # Trimmed, as the engine trims INTERNAL_TOKEN_MINT_SECRET: stray
+        # whitespace on one side only meant no signature ever matched, and
+        # testers silently got the developer connect page.
+        raw_mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        self.mint_secret = raw_mint_secret.strip()
+        if raw_mint_secret and not self.mint_secret:
+            # Never quietly unset (SEC941-F2): refuse to start.
+            raise ConfigError(
+                "HEALTHCLAW_MINT_SECRET is set but contains only whitespace; "
+                "set a real secret or unset it")
+        if raw_mint_secret != self.mint_secret:
+            logger.warning(
+                "HEALTHCLAW_MINT_SECRET has leading or trailing whitespace; "
+                "it is trimmed before use. Remove it from the environment.")
 
         # LLM provider: Anthropic preferred; OpenAI-compatible fallback so the
         # product works before an Anthropic key is provisioned.

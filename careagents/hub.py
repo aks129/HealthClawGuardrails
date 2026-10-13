@@ -6,6 +6,7 @@ PHI: labels, statuses, counts and timestamps only (calm hub spec 3 and 7).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 
 #: The one place a stored status becomes a word a person reads. `revoked`
@@ -50,7 +51,26 @@ def _record(c: dict, now: float) -> dict:
             "status_word": status_word(c.get("status")),
             "count_line": count_line(c.get("last_count")),
             "updated": updated_line(stamp, now),
+            "sub": subtitle(c),
             "is_sample": c.get("kind") == "sample"}
+
+
+def _plain(word: str) -> str:
+    # "Connecting...", "connecting…" and "Connecting…" are one word here.
+    return word.strip().lower().replace("...", "…")
+
+
+def subtitle(c: dict) -> str:
+    """The line under a source's name: its provider, unless the name
+    already says it ("Records from your doctor" over "your doctor", patient
+    tester on #940). Never a status word: the chip is the one place a row
+    says where it stands, so a "Connecting…" left in the provider field
+    can't sit under a "Connected" chip (hub critique 2026-10)."""
+    provider = (c.get("provider") or "").strip()
+    if (not provider or provider.lower() in (c.get("label") or "").lower()
+            or _plain(provider) in {_plain(w) for w in STATUS_WORDS.values()}):
+        return ""
+    return provider
 
 
 def build(home: dict, now: float) -> dict:
@@ -90,7 +110,94 @@ def build(home: dict, now: float) -> dict:
         # Any real connection not revoked: one still connecting, or with no
         # records yet, is real all the same (#856 sign-off F3).
         "has_real": any(not r["is_sample"] for r in records),
+        # The source list (hub critique 2026-10): made-up rows step aside
+        # once real records are here, and an empty upload shows once.
+        "sources": _tell_apart(_sources(records)),
+        "made_up_sources": _tell_apart(
+            [r for r in records if r["is_sample"]]
+            if _real_has_records(records) else []),
+        "news": _news(records, now),
     }
+
+
+def _real_has_records(records: list[dict]) -> bool:
+    """Has a real source brought records? Active, and not counted as zero.
+    An uncounted one (None) has records all the same: unknown is never
+    zero (#403). One still connecting has brought nothing yet."""
+    return any(not r["is_sample"] and r["status"] == "active"
+               and r.get("last_count") != 0 for r in records)
+
+
+def _sources(records: list[dict]) -> list[dict]:
+    """The rows "Your sources" lists. Samples leave once a real source has
+    records (they wait in a quiet drawer instead). Nothing else is hidden:
+    a hidden empty upload made Delete look like it did nothing (patient
+    tester on #944). A second Upload tap reuses the empty row instead
+    (_start_connection), and old twins are told apart by _tell_apart."""
+    hide_samples = _real_has_records(records)
+    return [r for r in records if not (r["is_sample"] and hide_samples)]
+
+
+def _day(ts: float | None) -> str:
+    if ts is None:
+        return ""
+    d = datetime.fromtimestamp(ts, timezone.utc)
+    return f"{d:%b} {d.day}"
+
+
+def _tell_apart(rows: list[dict]) -> list[dict]:
+    """Rows that share a name say when each was added, so three
+    "Records from your doctor" can be told apart (QA #944 F4). Two made the
+    same day are numbered as well. A connect date is account bookkeeping,
+    not a health detail. A name nobody else has keeps its line as it was.
+    "Added", never "Connected": under a "Connecting…" chip that word is the
+    very contradiction the chip exists to prevent."""
+    by_label: dict = {}
+    for r in rows:
+        by_label.setdefault(r["label"], []).append(r)
+    notes = {}
+    for same in by_label.values():
+        if len(same) < 2:
+            continue
+        seen: dict = {}
+        for r in sorted(same, key=lambda r: r.get("connected_at") or 0):
+            day = _day(r.get("connected_at"))
+            seen[day] = seen.get(day, 0) + 1
+            note = " ".join(x for x in (
+                "Added", day,
+                f"({seen[day]})" if seen[day] > 1 else "") if x)
+            notes[r["id"]] = f"{r['sub']} · {note}" if r["sub"] else note
+    return [{**r, "sub": notes.get(r["id"], r["sub"])} for r in rows]
+
+
+#: How long a new source's arrival is news.
+NEWS_DAYS = 7
+
+
+def _news(records: list[dict], now: float) -> list[dict]:
+    """What's new: a real source connected in the last week whose records
+    arrived. Only an arrival is a change we know of; a stamp that moved
+    ("Updated today") is not one, and made-up records are never news."""
+    return [{"id": r["id"], "label": r["label"],
+             "line": f"{r['label']}: {count_line(r['last_count'])} arrived."}
+            for r in records
+            if not r["is_sample"] and r["status"] == "active"
+            and (r.get("last_count") or 0) > 0
+            and now - (r.get("connected_at") or 0) < NEWS_DAYS * _DAY]
+
+
+def status_chip(c: dict, page: dict | None, paused: bool) -> dict:
+    """The one status a source row shows: its class and its word.
+
+    A row has one place for status, and this is what fills it, so the chip
+    and the note under it can never disagree. A failed import keeps the
+    pending class, so the pending poller still sees a retry land, but it
+    never reads "Connecting…" (patient tester on #940)."""
+    if paused:
+        return {"cls": "paused", "word": "Paused"}
+    if page and page.get("state") == "failed":
+        return {"cls": c["status"], "word": "Didn't finish"}
+    return {"cls": c["status"], "word": status_word(c["status"])}
 
 
 def menu_items(catalog: list[dict], real_open: bool) -> list[dict]:
@@ -144,10 +251,18 @@ def live_link(link, now: float) -> str | None:
 
 def switch_prompt(home: dict) -> dict | None:
     """The one "Switch Juniper to your records?" question, when it applies:
-    an assistant reads the sample and a real connection is active."""
+    an assistant reads the sample and a real connection is active.
+
+    Asked, never done for the person: what the assistant reads changes only
+    on their tap. The connect consent covers bringing records in, not which
+    records a conversation already under way reads (#937). The count says
+    that something arrived, so the question is worth answering."""
     by_id = {c["id"]: c for c in home["connections"]}
-    real = [c for c in home["connections"]
-            if c["kind"] != "sample" and c["status"] == "active"]
+    # The newest arrival first, so the question names one source every
+    # time, and the one What's new would otherwise say again (QA #944 F3).
+    real = sorted((c for c in home["connections"]
+                   if c["kind"] != "sample" and c["status"] == "active"),
+                  key=lambda c: c.get("connected_at") or 0, reverse=True)
     if not real:
         return None
     # Only the holder's own assistant: someone they care for keeps their
@@ -159,7 +274,8 @@ def switch_prompt(home: dict) -> dict | None:
         c = by_id.get(a["connection_id"])
         if c and c["kind"] == "sample":
             return {"agent_id": a["id"], "agent_name": a["name"],
-                    "connection_id": real[0]["id"], "label": real[0]["label"]}
+                    "connection_id": real[0]["id"], "label": real[0]["label"],
+                    "count_line": count_line(real[0].get("last_count"))}
     return None
 
 

@@ -10,12 +10,10 @@ drive an operator action across all tenants.
 Extracted so `/internal/*` ingestion (#267) and `/r6/ops/*` (#304) share one
 gate rather than each carrying its own copy. Tenant-independent by design.
 """
-import os
-
 from flask import request
 
 from r6 import constant_time
-from r6.runtime_config import resolve_app_env
+from r6.runtime_config import internal_mint_secret, resolve_app_env
 
 
 def internal_secret_authorized():
@@ -26,7 +24,7 @@ def internal_secret_authorized():
     refused in production. Takes no tenant argument: this authenticates the
     caller as infrastructure, not as any one tenant.
     """
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    mint_secret = internal_mint_secret()
     if mint_secret:
         provided = request.headers.get('X-Internal-Secret', '')
         return constant_time.equal(provided, mint_secret)
@@ -43,7 +41,7 @@ def internal_secret_presented():
     result as "the sample person's" (#908 security review): with no secret
     configured, nobody can prove they are CareAgents, so nobody gets it.
     """
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    mint_secret = internal_mint_secret()
     if not mint_secret:
         return False
     provided = request.headers.get('X-Internal-Secret', '')

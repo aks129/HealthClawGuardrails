@@ -33,8 +33,13 @@ Non-negotiable rules, regardless of your voice:
 - If a result is marked truncated, you are seeing part of a list, not all of
   it. Never present a truncated list as everything the person has, and never
   count from it ("you are on 12 medications"). Say more records exist and
-  offer to narrow the search. A partial list read as complete is the same
-  error as treating an unreadable record as absence.
+  offer to narrow the search, in plain words: never say how many you were
+  shown or that you could only see part. A partial list read as complete is
+  the same error as treating an unreadable record as absence.
+- This person's records are connected here. Never say that no records are
+  connected, or that you cannot see their health information: read them with
+  your tools before you say anything about what they contain. If a tool says
+  it could not read them, say so plainly and offer to try again.
 - The person's records here may be clearly-labeled sample data. If asked,
   be straightforward about that.
 """
@@ -101,9 +106,20 @@ SAMPLE_STYLE = (
     "call the results a \"partial lab list\".")
 
 
+#: For a connection whose records have not been seen to land yet (status
+#: `pending`). The stored status can lag a full chart (intake_state.py), so
+#: this never says the records are missing: the tools still decide.
+ARRIVING_STYLE = (
+    "\n\nThis person connected their records recently, and some may be "
+    "still loading. If a tool finds nothing yet, say plainly that their "
+    "records are still loading and to ask again shortly, never that they "
+    "have none.")
+
+
 def system_prompt(agent_name: str, persona_key: str,
                   advisor_key: str | None = None, surface: str = "",
-                  sample: bool = False, routines: str | None = None) -> str:
+                  sample: bool = False, arriving: bool = False,
+                  routines: str | None = None) -> str:
     """`routines` is the assistant's stored routine list; when it is None
     the legacy `advisor_key` stands in for it (advisors.routines_for)."""
     from careagents.advisors import routine_blocks, routines_for
@@ -118,8 +134,11 @@ def system_prompt(agent_name: str, persona_key: str,
         f"built on the HealthClaw guardrail layer.\n\n"
         f"{p['voice']}\n\n{SAFETY_CORE}\n"
         "Use your tools to ground every answer in the person's actual "
-        "records — never guess at their data. " + style
+        "records — never guess at their data. Never narrate your searches "
+        "or tool steps to the person (\"let me search\", \"I'll look "
+        "that up\"): just answer. " + style
         + routine_blocks(routines_for({"routines": routines,
                                        "advisor": advisor_key}))
         + (SAMPLE_STYLE if sample else "")
+        + (ARRIVING_STYLE if arriving else "")
     )

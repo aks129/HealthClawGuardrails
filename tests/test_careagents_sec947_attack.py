@@ -105,7 +105,8 @@ def test_another_accounts_person_ids_are_refused_everywhere(
                data=b"{}", content_type="application/fhir+json"),
         b.post(f"/api/connections/{mom_conn}/refresh", json={}),
         b.post(f"/api/connections/{mom_conn}/disconnect"),
-        b.delete(f"/api/connections/{mom_conn}"),
+        b.delete(f"/api/connections/{mom_conn}",
+                 json={"confirm": "DELETE"}),
         b.post("/api/surfaces/imessage", json={"agent_id": mom_agent}),
         b.post("/api/surfaces/telegram", json={"agent_id": mom_agent}),
     ]
@@ -255,7 +256,8 @@ def test_an_account_with_only_someone_elses_records_offers_nothing(
     fake = FakeClient()
     app, a, b, aid, bid, a_mine, b_mine, mom, b_agent = _two_accounts(
         cfg, svc, monkeypatch, client=fake)
-    assert a.delete(f"/api/connections/{a_mine['id']}").status_code == 200
+    assert a.delete(f"/api/connections/{a_mine['id']}",
+                    json={"confirm": "DELETE"}).status_code == 200
     monkeypatch.setattr(svc, "has_passkey", lambda account_id: True)
     html = a.get("/authorize", query_string={"req": _handle()}).get_data(
         as_text=True)
@@ -621,7 +623,7 @@ def test_info_the_people_cap_frees_a_slot_on_delete(cfg, svc, monkeypatch):
     assert all("connection_id" in m for m in made)
     assert a.post("/api/people",
                   json={"relationship": "other"}).status_code == 409
-    assert a.delete(f"/api/connections/{made[0]['connection_id']}"
-                    ).status_code == 200
+    assert a.delete(f"/api/connections/{made[0]['connection_id']}",
+                    json={"confirm": "DELETE"}).status_code == 200
     assert a.post("/api/people",
                   json={"relationship": "other"}).status_code == 200

@@ -52,9 +52,19 @@
     {% endif %}
     <p class="inline-msg" id="invite-msg" role="status" aria-live="polite" hidden></p>
   </section>
+  {% elif link_session %}
+  {# Opened by the confirm link: the link is made only after a full sign-in
+     (#928 F6), so say how to get it rather than leave the section out. #}
+  <section class="hub-section" id="invite-section">
+    <div class="section-head"><h2>Invite friends and family</h2></div>
+    <p class="card-note">Your invite link is one step away. We'll email you a
+      code to confirm it's you, then bring you back here.</p>
+    <a class="btn-primary btn-block" id="invite-signin"
+       href="/auth?invite=1">Sign in to get your invite link</a>
+  </section>
   {% endif %}
 
-  <section class="hub-section">
+  <section class="hub-section" id="reach">
     <div class="section-head"><h2>Where you can reach your assistant</h2></div>
     <div class="surface-row">
       <div class="surface on"><b>Web</b><span>always on</span></div>
