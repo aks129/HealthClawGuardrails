@@ -108,6 +108,42 @@ RESULT_NOT_LISTED = "Result not listed in your records"
 SAMPLE_RESULT_NOT_LISTED = "Result not listed in these made-up records"
 
 
+#: SNOMED "no known allergy" (716186003 and its descendants) and "patient
+#: not asked" (1631000175102). Their labels are statements about allergies,
+#: not names: an active Condition coded 716186003 read "No known allergy:
+#: Active" on the brief, a fact about the person no one attested (#949 F3).
+#: Mirrored in careagents/agent.py; a test holds the two equal.
+_ABSENCE_CONCEPTS = frozenset(
+    (terminology.SNOMED, c) for c in (
+        "716186003", "409137002", "428197003", "428607008", "429625007",
+        "716220001", "1003774007", "1631000175102"))
+
+
+def _is_absence(coding) -> bool:
+    """A coding keyed, as terminology.lookup keys it, to one of those."""
+    if not isinstance(coding, dict):
+        return False
+    code = coding.get("code")
+    if isinstance(code, bool) or not isinstance(code, (str, int)):
+        return False
+    return (terminology.canonical_system(coding.get("system")),
+            str(code).strip()) in _ABSENCE_CONCEPTS
+
+
+def _names_an_absence(concept: dict) -> bool:
+    return any(_is_absence(c) for c in concept.get("coding") or [])
+
+
+def _only_absences(resource: dict) -> bool:
+    """Coded as an absence and nothing else: no clinical finding, so not a
+    condition or a result. Shown as "Recorded, name unavailable · Active"
+    it read as a mystery illness (#949 patient tester). Any other coding,
+    odd or not, keeps the row, unlabeled."""
+    codings = as_dict(resource.get("code")).get("coding")
+    return (isinstance(codings, list) and bool(codings)
+            and all(_is_absence(c) for c in codings))
+
+
 def _concept_label(concept) -> str | None:
     """The server's name for a CodeableConcept, looked up by code in
     r6/terminology.py, or None.
@@ -118,6 +154,8 @@ def _concept_label(concept) -> str | None:
     engine does not lean on that (#884 QA F3), so it reads only the codes.
     """
     if not isinstance(concept, dict):
+        return None
+    if _names_an_absence(concept):
         return None
     for coding in concept.get("coding") or []:
         if isinstance(coding, dict):
@@ -281,7 +319,10 @@ def _obs_value(obs: dict) -> str:
     # route strips it already (apply_redaction); the engine does not lean
     # on that, because the brief reaches chat and text messages.
     if "valueCodeableConcept" in obs:
-        return _concept_label(obs["valueCodeableConcept"]) or ""
+        # A coded value we cannot name is still a value: "Result not
+        # listed" said there was none (#949 review).
+        vcc = obs["valueCodeableConcept"]
+        return _concept_label(vcc) or (UNLABELLED if _has_code(vcc) else "")
     return _blood_pressure(obs)
 
 
@@ -364,7 +405,7 @@ def build_problems(conditions: list[dict]) -> list[BriefField]:
         status = (c.get("clinicalStatus") or {}).get("coding", [{}])[0].get(
             "code", ""
         )
-        if status not in _ACTIVE_CONDITION_STATUSES:
+        if status not in _ACTIVE_CONDITION_STATUSES or _only_absences(c):
             continue
         label = _code_text(c)
         onset = _onset_display(c)
@@ -415,7 +456,8 @@ def build_labs(observations: list[dict],
             or ""
         )
 
-    sorted_obs = sorted(observations, key=_sort_key, reverse=True)
+    sorted_obs = sorted((o for o in observations if not _only_absences(o)),
+                        key=_sort_key, reverse=True)
     out = []
     for obs in sorted_obs[:_MAX_LABS]:
         label = _code_text(obs)

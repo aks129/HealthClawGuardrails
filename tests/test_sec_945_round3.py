@@ -35,7 +35,6 @@ def _sum(*resources, total=None):
 
 @pytest.mark.parametrize("system", [
     "https://snomed.info/sct", "http://snomed.info/sct/", "HTTP://SNOMED.INFO/SCT",
-    "urn:oid:2.16.840.1.113883.6.96", " http://snomed.info/sct",
     "http://snomed.info/sct/731000124108/version/20250301"])
 def test_r3_near_miss_systems_are_allergy_records_not_status(system):
     [item] = _sum(_a({"system": system, "code": NA}))
@@ -43,10 +42,24 @@ def test_r3_near_miss_systems_are_allergy_records_not_status(system):
     assert SILENT not in json.dumps(item)
 
 
-@pytest.mark.parametrize("code", [NA + " ", " " + NA, int(NA), "1631000175102x"])
+@pytest.mark.parametrize("code", ["1631000175102x", "1631000175102 x"])
 def test_r3_near_miss_codes_are_allergy_records_not_status(code):
     [item] = _sum(_a({"system": SNOMED, "code": code}))
     assert not item.get("not_an_allergy")
+
+
+#: The spellings the engine itself keys as SNOMED 1631000175102 before it
+#: labels them "Patient not asked" (r6.terminology: stripped, OID read as
+#: SNOMED, int code as its digits). Moved here from the two near-miss lists
+#: above by #949 security F1: read as allergy records, their label became
+#: an allergy's name.
+@pytest.mark.parametrize("system,code", [
+    ("urn:oid:2.16.840.1.113883.6.96", NA), (" http://snomed.info/sct", NA),
+    (SNOMED + " ", NA), (SNOMED, NA + " "), (SNOMED, " " + NA),
+    (SNOMED, int(NA))])
+def test_r3_engine_spellings_of_status_are_status(system, code):
+    [item] = _sum(_a({"system": system, "code": code}))
+    assert item.get("not_an_allergy")
 
 
 @pytest.mark.parametrize("other", ["penicillin", None, [], 7,

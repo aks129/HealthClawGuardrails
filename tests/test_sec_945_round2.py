@@ -117,13 +117,14 @@ def test_r2_a_real_allergy_past_the_page_still_rewords_the_status_items():
     assert not any("don't say whether" in json.dumps(i) for i in out), out
 
 
-def test_r2_the_reworded_note_is_an_instruction_not_a_quotable_claim():
+def test_r2_a_status_record_beside_an_allergy_is_not_sent():
+    # Was a reworded "do not mention this entry" note; #949 real-model QA
+    # showed such a note gets mentioned and disclosed, so the status
+    # record is no longer sent at all beside a recorded allergy.
     out = _items(_allergy("pen", (SNOMED, "91936005")),
                  _status({"system": SNOMED, "code": "1631000175102"}))
-    [status] = [i for i in out if i.get("not_an_allergy")]
-    assert "statement" not in status
-    note = status["note"].lower()
-    assert "do not mention this entry or quote it" in note
+    assert not [i for i in out if i.get("not_an_allergy")]
+    blob = json.dumps(out).lower()
     for bad in ("no known", "no allergies", "don't say whether",
-                "patient not asked"):
-        assert bad not in note
+                "patient not asked", "do not mention"):
+        assert bad not in blob

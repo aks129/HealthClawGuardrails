@@ -226,8 +226,9 @@ def test_a_status_code_on_another_type_is_left_alone():
     res = {"resourceType": "Condition",
            "code": {"coding": [{"system": "http://snomed.info/sct",
                                 "code": "1631000175102"}]}}
-    [item] = _summarize_bundle(_bundle(res))
-    assert "not_an_allergy" not in item
+    # Coded only as status, outside allergies: no finding, so left out of
+    # the list, and never an allergy statement (#949 patient tester).
+    assert _summarize_bundle(_bundle(res)) == []
 
 
 # --- 6. #939: truncation in plain words, no counts ---------------------------

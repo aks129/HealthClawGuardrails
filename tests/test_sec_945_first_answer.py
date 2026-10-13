@@ -133,9 +133,11 @@ def test_status_and_real_allergies_with_canaries_leak_nothing(
     model, sse, events = _turn_capturing(chain, monkeypatch)
     _no_canary(model, sse, events, caplog.text, _audit_details(chain))
     # a4 is a recorded penicillin allergy, so the status records must not
-    # say the records are silent on allergies (F2): they are reworded.
+    # say the records are silent on allergies (F2). They are not sent at
+    # all: a "do not mention" note was mentioned and disclosed (#949 QA).
     assert "Your records don't say whether you have allergies." not in model
-    assert "records that allergy information was not collected" in model
+    assert "allergy information was not collected" not in model
+    assert "do not mention" not in model.lower()
 
 
 # --- (1) V1: engine error bodies never reach the model ------------------------
@@ -225,11 +227,10 @@ def test_other_tool_failures_hand_over_no_exception_text(
 
 # --- (2) NKA is never inferred; status matching is keyed by system+code ------
 
+#: The "no known allergy" codes left this list when #946 was decided: they
+#: are quoted as dated entries, never as status or absence, and
+#: tests/test_careagents_nka_946.py pins how.
 @pytest.mark.parametrize("system,code", [
-    (SNOMED, "716186003"),     # No known allergy
-    (SNOMED, "409137002"),     # No known drug allergy
-    (SNOMED, "428607008"),     # No known environmental allergy
-    (SNOMED, "429625007"),     # No known food allergy
     (SNOMED, "1150001000175102"),
     ("http://loinc.org", "UNK"),                 # status code, wrong system
     ("http://snomed.info/sct/", "1631000175102"),  # near-miss system
