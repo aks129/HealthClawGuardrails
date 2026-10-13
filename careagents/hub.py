@@ -6,6 +6,7 @@ PHI: labels, statuses, counts and timestamps only (calm hub spec 3 and 7).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 
 #: The one place a stored status becomes a word a person reads. `revoked`
@@ -54,6 +55,11 @@ def _record(c: dict, now: float) -> dict:
             "is_sample": c.get("kind") == "sample"}
 
 
+def _plain(word: str) -> str:
+    # "Connecting...", "connecting…" and "Connecting…" are one word here.
+    return word.strip().lower().replace("...", "…")
+
+
 def subtitle(c: dict) -> str:
     """The line under a source's name: its provider, unless the name
     already says it ("Records from your doctor" over "your doctor", patient
@@ -62,7 +68,7 @@ def subtitle(c: dict) -> str:
     can't sit under a "Connected" chip (hub critique 2026-10)."""
     provider = (c.get("provider") or "").strip()
     if (not provider or provider.lower() in (c.get("label") or "").lower()
-            or provider in STATUS_WORDS.values()):
+            or _plain(provider) in {_plain(w) for w in STATUS_WORDS.values()}):
         return ""
     return provider
 
@@ -93,9 +99,10 @@ def build(home: dict, now: float) -> dict:
         "has_real": any(not r["is_sample"] for r in records),
         # The source list (hub critique 2026-10): made-up rows step aside
         # once real records are here, and an empty upload shows once.
-        "sources": _sources(records),
-        "made_up_sources": ([r for r in records if r["is_sample"]]
-                            if _real_has_records(records) else []),
+        "sources": _tell_apart(_sources(records)),
+        "made_up_sources": _tell_apart(
+            [r for r in records if r["is_sample"]]
+            if _real_has_records(records) else []),
         "news": _news(records, now),
     }
 
@@ -110,22 +117,44 @@ def _real_has_records(records: list[dict]) -> bool:
 
 def _sources(records: list[dict]) -> list[dict]:
     """The rows "Your sources" lists. Samples leave once a real source has
-    records (they wait in a quiet drawer instead). Of the uploads still
-    waiting for a file, only the oldest shows: two rows reading "Uploaded
-    records / No records yet" are one job. One an assistant reads stays."""
+    records (they wait in a quiet drawer instead). Nothing else is hidden:
+    a hidden empty upload made Delete look like it did nothing (patient
+    tester on #944). A second Upload tap reuses the empty row instead
+    (_start_connection), and old twins are told apart by _tell_apart."""
     hide_samples = _real_has_records(records)
-    out, empty_upload = [], False
-    for r in sorted(records, key=lambda r: r.get("connected_at") or 0):
-        if r["is_sample"] and hide_samples:
+    return [r for r in records if not (r["is_sample"] and hide_samples)]
+
+
+def _day(ts: float | None) -> str:
+    if ts is None:
+        return ""
+    d = datetime.fromtimestamp(ts, timezone.utc)
+    return f"{d:%b} {d.day}"
+
+
+def _tell_apart(rows: list[dict]) -> list[dict]:
+    """Rows that share a name say when each was added, so three
+    "Records from your doctor" can be told apart (QA #944 F4). Two made the
+    same day are numbered as well. A connect date is account bookkeeping,
+    not a health detail. A name nobody else has keeps its line as it was.
+    "Added", never "Connected": under a "Connecting…" chip that word is the
+    very contradiction the chip exists to prevent."""
+    by_label: dict = {}
+    for r in rows:
+        by_label.setdefault(r["label"], []).append(r)
+    notes = {}
+    for same in by_label.values():
+        if len(same) < 2:
             continue
-        if (r["kind"] == "direct" and r["status"] == "empty"
-                and r.get("last_count") is None and not r.get("readers")):
-            if empty_upload:
-                continue
-            empty_upload = True
-        out.append(r)
-    order = {r["id"]: i for i, r in enumerate(records)}
-    return sorted(out, key=lambda r: order[r["id"]])
+        seen: dict = {}
+        for r in sorted(same, key=lambda r: r.get("connected_at") or 0):
+            day = _day(r.get("connected_at"))
+            seen[day] = seen.get(day, 0) + 1
+            note = " ".join(x for x in (
+                "Added", day,
+                f"({seen[day]})" if seen[day] > 1 else "") if x)
+            notes[r["id"]] = f"{r['sub']} · {note}" if r["sub"] else note
+    return [{**r, "sub": notes.get(r["id"], r["sub"])} for r in rows]
 
 
 #: How long a new source's arrival is news.
@@ -216,8 +245,11 @@ def switch_prompt(home: dict) -> dict | None:
     records a conversation already under way reads (#937). The count says
     that something arrived, so the question is worth answering."""
     by_id = {c["id"]: c for c in home["connections"]}
-    real = [c for c in home["connections"]
-            if c["kind"] != "sample" and c["status"] == "active"]
+    # The newest arrival first, so the question names one source every
+    # time, and the one What's new would otherwise say again (QA #944 F3).
+    real = sorted((c for c in home["connections"]
+                   if c["kind"] != "sample" and c["status"] == "active"),
+                  key=lambda c: c.get("connected_at") or 0, reverse=True)
     if not real:
         return None
     for a in home["agents"]:

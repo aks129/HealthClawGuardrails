@@ -1127,3 +1127,22 @@ textarea:focus-visible {
 .made-up-sources > summary { cursor: pointer; min-height: 44px;
   display: flex; align-items: center; color: var(--ink-soft); font-size: 16px; }
 .made-up-sources[open] > summary { margin-bottom: 8px; }
+/* More and the made-up drawer look like the buttons they are (patient
+   tester on #944): an outline, and a chevron that turns when open. The
+   browser's own marker goes, so there is one arrow, not two. */
+.card-menu > summary, .made-up-sources > summary {
+  list-style: none; gap: 8px; border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm); background: var(--surface);
+  padding: 0 14px; color: var(--ink); font-weight: 600; }
+.card-menu > summary::-webkit-details-marker,
+.made-up-sources > summary::-webkit-details-marker { display: none; }
+.made-up-sources > summary { display: inline-flex; }
+.card-menu > summary::after, .made-up-sources > summary::after {
+  content: ""; width: 8px; height: 8px; flex: none;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg); transition: transform .12s ease; }
+.card-menu[open] > summary::after,
+.made-up-sources[open] > summary::after {
+  transform: translateY(2px) rotate(-135deg); }
+.card-menu > summary:hover, .made-up-sources > summary:hover {
+  border-color: var(--accent); color: var(--accent-ink); }

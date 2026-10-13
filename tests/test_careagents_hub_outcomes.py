@@ -8,13 +8,14 @@ rendered /home. No PHI: synthetic labels and counts only.
 from __future__ import annotations
 
 import html
+import pathlib
 import re
 import time
 
 from careagents import hub as hub_view
 from careagents.healthclaw import HealthClawError
 from careagents.tester_terms import CONSENT_VERSION
-from tests.test_careagents import FakeClient, _login
+from tests.test_careagents import FakeClient, _login, consented
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
@@ -160,6 +161,7 @@ def test_the_subtitle_is_never_a_status_word():
     assert sub("your doctor", "Records from your doctor") == ""
     for word in hub_view.STATUS_WORDS.values():
         assert sub(word) == ""
+    assert sub("connecting...") == "" and sub("CONNECTED") == ""
 
 
 def test_every_source_row_carries_exactly_one_status(app, svc, monkeypatch):
@@ -258,31 +260,37 @@ def test_the_sample_rule_on_the_view():
     assert [r["kind"] for r in view["made_up_sources"]] == ["sample"]
 
 
-# --- 6. empty duplicate uploads ----------------------------------------------
+# --- 6. empty uploads ----------------------------------------------------------
 
-def test_empty_duplicate_uploads_show_once(app, svc, monkeypatch):
+def test_legacy_empty_uploads_all_show_and_differ(app, svc, monkeypatch):
+    """Nothing is hidden (patient tester on #944): a hidden twin made
+    Delete look like it did nothing. The reuse in _start_connection means
+    no new twins are made; old ones show, each with when it was added."""
     c, aid = _signed_in(app, svc, monkeypatch)
     first = _conn(svc, aid, "direct", "ca-d1", "Uploaded records", "empty",
                   age_days=6)
     second = _conn(svc, aid, "direct", "ca-d2", "Uploaded records", "empty",
                    age_days=4)
     body = c.get("/home").get_data(as_text=True)
+    subs = [re.search(r'<div class="hub-card-sub">([^<]*)</div>',
+                      _row(body, x)).group(1) for x in (first, second)]
     assert f'data-conn="{first}"' in _list(body)
-    assert f'data-conn="{second}"' not in body
+    assert f'data-conn="{second}"' in _list(body)
+    assert subs[0] != subs[1] and all("Added" in s for s in subs)
 
 
-def test_an_empty_upload_an_assistant_reads_is_kept(app, svc, monkeypatch):
+def test_a_second_upload_tap_reuses_the_empty_row(app, svc, monkeypatch):
     c, aid = _signed_in(app, svc, monkeypatch)
-    _conn(svc, aid, "direct", "ca-d3", "Uploaded records", "empty",
-          age_days=6)
-    read = _conn(svc, aid, "direct", "ca-d4", "Uploaded records", "empty",
-                 age_days=4)
-    svc.create_agent(aid, "Rowan", "calm", read)
-    assert f'data-conn="{read}"' in _list(c.get("/home").get_data(
-        as_text=True))
+    a = c.post("/api/connections/direct", json=consented()).get_json()
+    b = c.post("/api/connections/direct", json=consented()).get_json()
+    assert b["id"] == a["id"] and b["existing"] is True
+    assert [x["kind"] for x in svc.list_home(aid)["connections"]] == [
+        "direct"]
+    # Consent is still asked for on the reused row.
+    assert c.post("/api/connections/direct", json={}).status_code == 428
 
 
-# --- 7. where you can reach me ------------------------------------------------
+# --- 7. where you can reach your assistant ------------------------------------
 
 def test_reach_says_web_and_points_imessage_at_settings(app, svc,
                                                         monkeypatch):
@@ -291,7 +299,8 @@ def test_reach_says_web_and_points_imessage_at_settings(app, svc,
                    count=100)
     svc.create_agent(aid, "Juniper", "calm", sample)
     reach = _section(c.get("/home").get_data(as_text=True), "reach-section")
-    assert "<h2>Where you can reach me</h2>" in reach
+    # The same heading as Settings (patient tester on #944).
+    assert "<h2>Where you can reach your assistant</h2>" in reach
     assert "Here on the web" in reach
     assert 'href="/settings#reach"' in reach
     # No email channel exists, so none is offered.
@@ -317,8 +326,9 @@ def test_reach_shows_a_connected_phone_masked(app, svc, monkeypatch):
 # --- 8. chat starters tuned to the records ------------------------------------
 
 INTAKE = "Fill out my intake form for a new doctor"
-TUNED = ["What changed since my last visit?", "Make my visit brief",
-         "Explain my latest labs"]
+#: "What changed since my last visit?" is gone: records hold no visit to
+#: compare with, so it repeated the brief (patient tester on #944).
+TUNED = ["Make my visit brief", "Explain my latest labs"]
 
 
 def _starters(page):
@@ -327,43 +337,55 @@ def _starters(page):
     return re.findall(r'class="starter">([^<]*)<', block)
 
 
-def _chat(app, svc, monkeypatch, totals):
+def _chat(app, svc, monkeypatch, totals, labs=1, kind="fasten"):
+    """A chat whose engine answers counts only: `labs` is the count of
+    Observations filed as laboratory (code=laboratory); absent from
+    `totals` means the search fails."""
     c, aid = _signed_in(app, svc, monkeypatch)
-    conn = _conn(svc, aid, "fasten", "ca-c1", "Records from your doctor",
+    conn = _conn(svc, aid, kind, "ca-c1", "Records from your doctor",
                  "active", count=sum(totals.values()) or None)
     agent = svc.create_agent(aid, "Rowan", "calm", conn)
+    seen = []
 
     def search(self, tenant, rt, params=None):
+        seen.append(dict(params or {}))
         if rt not in totals:
             raise HealthClawError("down", 503)
+        assert (params or {}).get("_summary") == "count", \
+            "only a total may cross for the starters"
+        if (params or {}).get("code") == "laboratory":
+            return {"total": labs}
         return {"total": totals[rt]}
     monkeypatch.setattr(FakeClient, "search", search)
-    return c, agent
+    return c, agent, seen
 
 
-def test_every_chat_offers_the_three_tuned_starters(app, svc, monkeypatch):
-    c, agent = _chat(app, svc, monkeypatch, {
+def test_every_chat_offers_the_tuned_starters(app, svc, monkeypatch):
+    c, agent, _ = _chat(app, svc, monkeypatch, {
         "Condition": 3, "MedicationRequest": 2, "Observation": 12})
     page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
     assert _starters(page) == [INTAKE, *TUNED]
+    assert "What changed since my last visit?" not in page
 
 
-def test_no_labs_means_no_labs_starter(app, svc, monkeypatch):
-    c, agent = _chat(app, svc, monkeypatch, {
+def test_no_observations_means_no_labs_starter(app, svc, monkeypatch):
+    c, agent, seen = _chat(app, svc, monkeypatch, {
         "Condition": 3, "MedicationRequest": 2, "Observation": 0})
     page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
-    assert _starters(page) == [INTAKE, *TUNED[:2]]
+    assert _starters(page) == [INTAKE, TUNED[0]]
+    # Counted at zero: nothing more is asked.
+    assert not any(p.get("code") == "laboratory" for p in seen)
 
 
 def test_an_unknown_lab_count_hides_the_labs_starter(app, svc, monkeypatch):
-    c, agent = _chat(app, svc, monkeypatch, {
+    c, agent, _ = _chat(app, svc, monkeypatch, {
         "Condition": 3, "MedicationRequest": 2})
     page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
     assert "Explain my latest labs" not in _starters(page)
 
 
 def test_a_returning_chat_knows_its_labs_too(app, svc, monkeypatch):
-    c, agent = _chat(app, svc, monkeypatch, {
+    c, agent, _ = _chat(app, svc, monkeypatch, {
         "Condition": 3, "MedicationRequest": 2, "Observation": 12})
     monkeypatch.setattr(
         FakeClient, "recent_messages",
@@ -374,7 +396,168 @@ def test_a_returning_chat_knows_its_labs_too(app, svc, monkeypatch):
 
 
 def test_empty_records_offer_only_the_intake_starter(app, svc, monkeypatch):
-    c, agent = _chat(app, svc, monkeypatch, {
+    c, agent, _ = _chat(app, svc, monkeypatch, {
         "Condition": 0, "MedicationRequest": 0, "Observation": 0})
     page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
     assert _starters(page) == [INTAKE]
+
+
+# --- QA #944 F2: labs means laboratory results, not vital signs --------------
+
+def test_vital_signs_alone_offer_no_labs_starter(app, svc, monkeypatch):
+    """150 heart rates and no Observation filed as a lab."""
+    c, agent, _ = _chat(app, svc, monkeypatch, {
+        "Condition": 0, "MedicationRequest": 0, "Observation": 150}, labs=0)
+    page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
+    assert _starters(page) == [INTAKE, TUNED[0]]
+
+
+def test_the_made_up_records_offer_labs(app, svc, monkeypatch):
+    """The sample seed holds A1c and glucose results and files none by
+    category, so the sample is not asked for a laboratory count."""
+    c, agent, seen = _chat(app, svc, monkeypatch, {
+        "Condition": 1, "MedicationRequest": 1, "Observation": 9}, labs=0,
+        kind="sample")
+    page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
+    assert _starters(page) == [INTAKE, *TUNED]
+    assert not any(p.get("code") == "laboratory" for p in seen)
+
+
+# --- QA #944 F1: a second Upload tap goes to the row already there ----------
+
+def test_the_upload_tile_opens_the_waiting_rows_picker_in_the_tap():
+    """No consent card and no request when an empty upload row is shown:
+    the tap is that row's Upload, so the picker opens inside it."""
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+          / "static" / "home.js").read_text()
+    tile = js[js.index('document.querySelectorAll(".connector-tile")'):]
+    tile = tile[:tile.index("showConsentCard")]
+    assert ('.conn-card[data-kind="direct"][data-status="empty"] '
+            '.conn-upload') in tile
+    assert "waiting.click()" in tile
+
+
+# --- QA #944 F3: one line per source, and a switch prompt that is stable ----
+
+def test_two_new_sources_are_each_said_once(app, svc, monkeypatch):
+    c, aid = _signed_in(app, svc, monkeypatch)
+    sample = _conn(svc, aid, "sample", "ca-f1", "Sample records", "active",
+                   count=100, age_days=30)
+    old = _conn(svc, aid, "fasten", "ca-f2", "Records from your doctor",
+                "active", count=40, age_days=5)
+    new = _conn(svc, aid, "fasten", "ca-f3", "Records from your doctor",
+                "active", count=7, age_days=1)
+    svc.create_agent(aid, "Juniper", "calm", sample)
+    body = c.get("/home").get_data(as_text=True)
+    news = _section(body, "whats-new")
+    # The switch question names the newest arrival; the older one gets
+    # its own line; neither is said twice.
+    assert f'data-conn="{new}"' in news
+    assert news.count("7 records") == 1 and news.count("40 records") == 1
+    assert old != new
+
+
+def test_the_switch_prompt_picks_the_newest_real_source():
+    now = time.time()
+    home = {"agents": [{"id": "a1", "name": "Juniper",
+                        "connection_id": "s"}],
+            "connections": [
+                {"id": "s", "kind": "sample", "status": "active",
+                 "label": "Sample records", "connected_at": now - 50 * DAY},
+                {"id": "old", "kind": "fasten", "status": "active",
+                 "label": "R", "connected_at": now - 9 * DAY,
+                 "last_count": 40},
+                {"id": "new", "kind": "fasten", "status": "active",
+                 "label": "R", "connected_at": now - DAY, "last_count": 7}]}
+    assert hub_view.switch_prompt(home)["connection_id"] == "new"
+
+
+# --- QA #944 F4: rows with the same name can be told apart ------------------
+
+def test_rows_with_the_same_name_say_when_each_was_added(app, svc,
+                                                            monkeypatch):
+    c, aid = _signed_in(app, svc, monkeypatch)
+    a = _conn(svc, aid, "fasten", "ca-n1", "Records from your doctor",
+              "active", count=40, age_days=12)
+    b = _conn(svc, aid, "fasten", "ca-n2", "Records from your doctor",
+              "pending", age_days=3)
+    solo = _conn(svc, aid, "wearable", "ca-n3", "Oura", "active", count=4,
+                 provider="Oura")
+    body = c.get("/home").get_data(as_text=True)
+    subs = [re.search(r'<div class="hub-card-sub">([^<]*)</div>',
+                      _row(body, x)).group(1) for x in (a, b, solo)]
+    assert subs[0].startswith("Added ") and subs[1].startswith(
+        "Added ")
+    assert subs[0] != subs[1]
+    assert subs[2] == ""                # a unique name needs no date
+
+
+def test_same_day_twins_still_differ():
+    now = time.time()
+
+    def row(i):
+        return {"id": f"c{i}", "kind": "fasten", "status": "active",
+                "label": "Records from your doctor", "tenant_id": "t",
+                "connected_at": now - 3600 * i, "last_count": 5,
+                "provider": "your doctor"}
+    view = hub_view.build({"agents": [], "connections": [row(1), row(2)]},
+                          now)
+    subs = [r["sub"] for r in view["sources"]]
+    assert len(set(subs)) == 2 and all(subs)
+
+
+# --- patient tester on #944: a link session reaches sign-in, not a wall -----
+
+_HOME_JS = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+            / "static" / "home.js").read_text()
+
+
+def test_a_link_session_hub_marks_the_add_section(app, svc, monkeypatch):
+    c, _ = _signed_in(app, svc, monkeypatch)
+    with c.session_transaction() as s:
+        s["via_link"] = True
+    sec = _section(c.get("/home").get_data(as_text=True), "connect-section")
+    assert 'data-link-session="1"' in sec
+    with c.session_transaction() as s:
+        s.pop("via_link")
+    sec = _section(c.get("/home").get_data(as_text=True), "connect-section")
+    assert "data-link-session" not in sec
+
+
+def test_a_real_tile_in_a_link_session_offers_the_code_sign_in():
+    tile = _HOME_JS[_HOME_JS.index(
+        'document.querySelectorAll(".connector-tile")'):]
+    tile = tile[:tile.index("function showConsentCard")]
+    # Before the consent card: no terms to read only to be refused.
+    assert tile.index("linkSession") < tile.index("showConsentCard(")
+    # #940's code-is-coming copy, and a same-tab link to the code sign-in.
+    assert tile.count("CODE_FIRST, CODE_SIGN_IN") == 2
+    consts = _HOME_JS[_HOME_JS.index("const CODE_FIRST"):]
+    consts = consts[:consts.index("};")]
+    assert "We'll email you a code to sign in." in consts
+    assert 'href: "/auth?connect=1"' in consts
+    assert "Sign in again to connect your records" in consts
+    assert "sameTab: true" in consts
+    # And a refusal from a stale page gets the same way forward.
+    assert 'res.d.error === "sign_in_again"' in tile
+
+
+def test_say_opens_a_same_tab_link_in_the_same_tab():
+    say = _HOME_JS[_HOME_JS.index("function say("):]
+    say = say[:say.index("\n  }\n")]
+    assert "link.sameTab" in say
+
+
+# --- patient tester on #944: More and the drawer look tappable --------------
+
+def test_menus_and_the_drawer_carry_a_chevron():
+    css = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+           / "static" / "careagents.css").read_text()
+    block = css[css.index("hub around outcomes"):]
+    for sel in (".card-menu > summary::after",
+                ".made-up-sources > summary::after",
+                ".card-menu[open] > summary::after",
+                ".made-up-sources[open] > summary::after"):
+        assert sel in block, sel
+    assert "::-webkit-details-marker" in block

@@ -210,18 +210,21 @@ def test_account_wide_accept_never_reaches_another_account_or_revoked(
     """One accept covers the account's own live real connections only:
     not another account's, not a revoked one, not a still-connecting one."""
     app, a, fake, _agent, a_fasten = _real_app(cfg, svc, monkeypatch)
-    a_direct = a.post("/api/connections/direct",
-                      json=consented()).get_json()["id"]
+    # Revoked before the live one is made: an empty upload connection is
+    # reused (#860), so two back-to-back posts would be one row.
     a_gone = a.post("/api/connections/direct",
                     json=consented()).get_json()["id"]
+    with svc.session() as s:
+        s.get(Connection, a_gone).status = "revoked"
+    a_direct = a.post("/api/connections/direct",
+                      json=consented()).get_json()["id"]
+    assert a_direct != a_gone
     b = app.test_client()
     _login(b, svc, monkeypatch, email="other@example.com")
     b_direct = b.post("/api/connections/direct",
                       json=consented()).get_json()["id"]
     b_pending = b.post("/api/connections/fasten",
                        json=consented()).get_json()["id"]
-    with svc.session() as s:
-        s.get(Connection, a_gone).status = "revoked"
     approve_terms(monkeypatch, "2026-10-01")
     # B anchors on A's connection: refused, nothing on either account moves.
     assert b.post(f"/api/connections/{a_fasten}/consent",

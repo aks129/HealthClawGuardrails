@@ -1,7 +1,7 @@
 """QA #944: gaps the PR's own tests leave open. Synthetic data only.
 
 - A returning chat whose totals were not counted falls back to the stored
-  count; a source counted at zero must not be offered "What changed" or
+  count; a source counted at zero must not be offered
   "Make my visit brief" (mutation Q1 survived the PR's suite).
 - Rows inside the made-up drawer keep Delete behind the menu too.
 """
@@ -9,8 +9,6 @@
 from __future__ import annotations
 
 import re
-
-import pytest
 
 from tests.test_careagents import FakeClient, _login, consented
 from tests.test_careagents import app as _app_fixture
@@ -53,8 +51,9 @@ def test_a_returning_chat_on_a_counted_source_offers_the_visit_taps(
         lambda self, *a, **k: [{"role": "user", "content": "hi"},
                                {"role": "assistant", "content": "hello"}])
     page = c.get(f"/chat?agent={agent}").get_data(as_text=True)
-    assert _starters(page) == [INTAKE, "What changed since my last visit?",
-                               "Make my visit brief"]
+    # "What changed since my last visit?" was dropped after the patient
+    # tester's walk on #944; the visit brief is the tap that stays.
+    assert _starters(page) == [INTAKE, "Make my visit brief"]
 
 
 def test_drawer_rows_keep_delete_behind_the_menu(app, svc, monkeypatch):
@@ -73,9 +72,6 @@ def test_drawer_rows_keep_delete_behind_the_menu(app, svc, monkeypatch):
         drawer.count('class="conn-delete"') == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #944 F1: a second Upload tap mints an empty upload the hub then "
-    "hides, so the tap shows nothing new. Remove this mark when fixed."))
 def test_tapping_upload_again_shows_where_to_upload(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
