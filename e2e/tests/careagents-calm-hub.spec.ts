@@ -135,9 +135,13 @@ test.describe('phone width, two uploads and an assistant (allowlisted)', () => {
     await blockThirdParty(page);
     await signIn(page, CARE_ALLOW_EMAIL, CARE_ALLOW_LOG);
     ids = [];
+    // The consent version the hub's card shows, sent back as home.js does.
+    const consentVersion = await page.locator('[data-consent-version]').first()
+      .getAttribute('data-consent-version');
     for (let i = 0; i < 2; i++) {
-      const r = await page.request.post('/api/connections/direct',
-                                        { data: { consent: true } });
+      const r = await page.request.post('/api/connections/direct', {
+        data: { consent: true, consent_version: consentVersion },
+      });
       expect(r.ok()).toBe(true);
       ids.push((await r.json()).id);
     }
@@ -149,18 +153,11 @@ test.describe('phone width, two uploads and an assistant (allowlisted)', () => {
     agentId = (await a.json()).id;
   });
 
-  test('chat header pills sit inside the gutter on one line each',
+  test('chat header fits the phone: one-line name, menu inside the gutter',
     async ({ page }, testInfo) => {
-      // The grade a real deployment shows, so the pill is as wide as a
-      // tester sees it, not the "…" placeholder.
-      await page.route('**/api/trust', (route) => route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ badge: 'A (all checks pass)' }),
-      }));
+      // The header is the name and one menu since #920; the shakeout's three
+      // wrapping pills are gone. This holds the new header to the same bar.
       await page.goto(`/chat?agent=${agentId}`);
-      await expect(page.locator('#trust-pill')).toHaveText('guardrails A');
-      await page.screenshot({ path: testInfo.outputPath('chat-375.png') });
-
       const width = page.viewportSize()!.width;
       const lines = (sel: string) => page.locator(sel).evaluateAll((els) =>
         els.map((el) => {
@@ -170,17 +167,25 @@ test.describe('phone width, two uploads and an assistant (allowlisted)', () => {
             - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth);
           return Math.round(inner / parseFloat(cs.lineHeight));
         }));
+      const inGutter = async (sel: string) => {
+        for (const box of await page.locator(sel).evaluateAll((els) =>
+          els.map((el) => el.getBoundingClientRect().toJSON()))) {
+          expect(box.left, sel).toBeGreaterThanOrEqual(16);
+          expect(box.right, sel).toBeLessThanOrEqual(width - 16);
+        }
+      };
 
-      const pills = page.locator('.chat-tools .pill');
-      await expect(pills).toHaveCount(3);
-      for (const box of await pills.evaluateAll((els) =>
-        els.map((el) => el.getBoundingClientRect().toJSON()))) {
-        expect(box.left).toBeGreaterThanOrEqual(16);
-        expect(box.right).toBeLessThanOrEqual(width - 16);
-      }
-      expect(await lines('.chat-tools .pill')).toEqual([1, 1, 1]);
       expect(await lines('.chat-name')).toEqual([1]);
-      expect(await lines('.chat-sub')).toEqual([1]);
+      await inGutter('.chat-head .chat-name, .chat-menu-btn');
+
+      await page.locator('.chat-menu-btn').click();
+      const items = page.locator('.chat-menu-list a, .chat-menu-list button');
+      await expect(items.first()).toBeVisible();
+      // Past the menu's fade-in, so the screenshot shows it as a person does.
+      await expect(page.locator('.chat-menu-list')).toHaveCSS('opacity', '1');
+      await page.screenshot({ path: testInfo.outputPath('chat-375.png') });
+      await inGutter('.chat-menu-list');
+      expect(new Set(await lines('.chat-menu-list a'))).toEqual(new Set([1]));
     });
 
   test('the upload control looks like the other card buttons',
