@@ -6,6 +6,7 @@ import pytest
 
 from careagents.accounts import AuthError
 from careagents.models import Agent, Surface
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.test_careagents import FakeClient, _login, _make_account
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
@@ -112,7 +113,7 @@ def test_rename_is_owner_only_and_refuses_a_blank_name(app, svc, monkeypatch):
 
 def test_delete_removes_the_agent_only(app, svc, fake, monkeypatch):
     c, aid, conn, agent = _person(app, svc, monkeypatch, "ann@example.com")
-    keep = svc.create_agent(aid, "Coach", "calm", conn)
+    keep = legacy_agent(svc, conn, "Coach")
     svc.add_surface(aid, agent, "imessage", "code-1")
     bob, _, _, _ = _person(app, svc, monkeypatch, "bob@example.com")
     assert bob.delete(f"/api/agents/{agent}").status_code == 404

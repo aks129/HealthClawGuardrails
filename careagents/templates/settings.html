@@ -118,6 +118,59 @@
     {% endif %}
   </section>
 
+  {# Tone and routines, one form per assistant (one assistant per person
+     spec, section 7). "Focuses on", not "Watching": nothing runs unprompted
+     (owner decision D3). assistant_settings.js posts each form. #}
+  {% if assistants %}
+  <section class="hub-section" id="assistant-settings">
+    <div class="section-head"><h2>Your assistant</h2></div>
+    {% set several = assistants | length > 1 %}
+    {% for a in assistants %}
+    <form class="assistant-settings hub-card" data-agent="{{ a.id }}">
+      <div class="hub-card-name">{{ a.name }}{% if a.person.kind == 'other' %}
+        <span class="hub-card-sub">for {{ a.person.nickname or ('your ' ~ a.person.relationship) }}</span>{% endif %}</div>
+      {# An account from before keeps several assistants (owner decision
+         D5): each says which records it reads, so they are told apart. #}
+      {% if several and a.reads %}
+      <div class="hub-card-sub">Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}</div>
+      {% endif %}
+      <fieldset class="choice-group assistant-tone">
+        <legend>Tone</legend>
+        {% for key, p in tones %}
+        <label class="choice-row"><input type="radio" name="tone-{{ a.id }}"
+          value="{{ key }}" {% if a.persona == key %}checked{% endif %}><span>{{ p.name }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="choice-group assistant-routines">
+        <legend>Focuses on</legend>
+        {% for r in routine_catalog %}
+        <label class="choice-row"><input type="checkbox" value="{{ r.id }}"
+          {% if r.name in a.routines %}checked{% endif %}><span>{{ r.name }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <p class="card-note">These change what your assistant pays attention
+        to, not what it can read.</p>
+      <div class="card-actions">
+        <button type="submit" class="pill">Save</button>
+        {% if a.legacy_extra %}
+        <button type="button" class="pill danger assistant-remove" data-agent="{{ a.id }}">Remove</button>
+        {% endif %}
+      </div>
+      {% if a.legacy_extra %}
+      <div class="assistant-remove-confirm" hidden>
+        <p>Remove {{ a.name }}? Its chat history stays with the records.</p>
+        <div class="card-actions">
+          <button type="button" class="pill danger assistant-remove-yes">Remove</button>
+          <button type="button" class="pill assistant-remove-no">Keep</button>
+        </div>
+      </div>
+      {% endif %}
+      <p class="inline-msg" role="status" aria-live="polite" hidden></p>
+    </form>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   <section class="leaving">
     <h2>Sign out or leave</h2>
     <form method="post" action="/logout"><button class="pill">Sign out</button></form>
@@ -150,4 +203,5 @@
    and every handler is guarded by the element it binds. #}
 <script src="{{ url_for('static', filename='home.js') }}"></script>
 <script src="{{ url_for('static', filename='invite.js') }}"></script>
+<script src="{{ url_for('static', filename='assistant_settings.js') }}"></script>
 {% endblock %}

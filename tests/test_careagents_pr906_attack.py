@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from careagents import sendblue_surface, tester_terms
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
 from tests.test_careagents_imessage import (
@@ -109,9 +110,7 @@ def test_a_real_tenant_run_is_not_texted_after_a_move_back_to_sample(
 def test_a_run_of_another_agent_on_the_same_sample_tenant_is_refused(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, hc, agent_id, tenant, conn_id = _chat_app(cfg, svc, monkeypatch)
-    other = c.post("/api/agents", json={
-        "name": "Other", "persona": "calm",
-        "connection_id": conn_id}).get_json()["id"]
+    other = legacy_agent(svc, conn_id, "Other")
     _pair(c, agent_id)
     run_id = _finished_run(hc, tenant, other, CANARY)
     r = _poll(c, run_id)

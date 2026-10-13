@@ -38,6 +38,21 @@ def register(app, svc) -> None:
             raise click.ClickException("no account with that email")
         click.echo("resumed")
 
+    @app.cli.group("assistants")
+    def assistants():
+        """How many assistants accounts hold."""
+
+    @assistants.command("count")
+    def assistants_count():
+        """Accounts with none, one, or more than one assistant: the ones
+        that see the legacy rendering (one assistant per person spec,
+        section 4). Counts only, no ids."""
+        n = svc.assistant_counts()
+        click.echo(f"accounts: {n['accounts']}")
+        click.echo(f"accounts with no assistant: {n['none']}")
+        click.echo(f"accounts with one assistant: {n['one']}")
+        click.echo(f"accounts with more than one assistant: {n['several']}")
+
     @app.cli.command("weekly-counts")
     @click.option("--weeks", default=4, show_default=True)
     def weekly(weeks):
