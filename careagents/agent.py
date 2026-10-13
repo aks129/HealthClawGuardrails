@@ -278,10 +278,13 @@ def _is_allergy_status(res: dict) -> bool:
     codings = code.get("coding") if isinstance(code, dict) else None
     # Strings only: a list in `code` is unhashable, and ingest stores
     # whatever arrived (#885).
-    return any(isinstance(c, dict) and isinstance(c.get("system"), str)
-               and isinstance(c.get("code"), str)
-               and (c["system"], c["code"]) in _ALLERGY_STATUS_CODES
-               for c in (codings if isinstance(codings, list) else ()))
+    keys = [(c["system"], c["code"])
+            for c in (codings if isinstance(codings, list) else ())
+            if isinstance(c, dict) and isinstance(c.get("system"), str)
+            and isinstance(c.get("code"), str)]
+    # EVERY coding, not any: penicillin coded beside a null flavor is a
+    # penicillin allergy, and one status coding hid it (#945 security F1).
+    return bool(keys) and all(k in _ALLERGY_STATUS_CODES for k in keys)
 
 
 def _summarize_bundle(bundle: dict, limit: int = 12,
@@ -416,6 +419,19 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             item["date"] = date
         out.append(item)
 
+    if any(i.get("type") == "AllergyIntolerance"
+           and not i.get("not_an_allergy") for i in out):
+        # A recorded allergy is in the same list, so "your records don't
+        # say whether you have allergies" would be false (#945 security F2).
+        # Reworded rather than dropped: a dropped item would read as a
+        # truncated list below.
+        for i in out:
+            if i.get("not_an_allergy"):
+                i.pop("statement", None)
+                i["note"] = ("This entry is not an allergy: it records that "
+                             "allergy information was not collected at one "
+                             "point. Report the allergies listed here; do "
+                             "not mention this entry or quote it.")
     # The bundle's total, when the engine gives one: the entries are one page
     # (50 by default), so counting them calls a longer list complete.
     stated = bundle.get("total")
