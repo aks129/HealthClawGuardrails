@@ -19,6 +19,7 @@ import pytest
 from careagents.config import Config, ConfigError
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.careagents_consent_helpers import consented
 
 
@@ -818,11 +819,9 @@ def test_two_agents_on_one_connection_have_isolated_transcripts(
         cfg, svc, monkeypatch):
     _app, c, fake, first_agent, tenant, conn_id = _chat_app(
         cfg, svc, monkeypatch)
-    second_agent = c.post("/api/agents", json={
-        "name": "Cedar",
-        "persona": "calm",
-        "connection_id": conn_id,
-    }).get_json()["id"]
+    # Two assistants on one connection: an account from before one
+    # assistant per person (spec PR #943, section 4).
+    second_agent = legacy_agent(svc, conn_id, "Cedar")
 
     _turn(c, first_agent, "only Juniper should see this")
     _turn(c, second_agent, "only Cedar should see this")
@@ -2924,11 +2923,12 @@ def test_sample_connection_agent_and_chat_gate(app, svc, monkeypatch):
     r = c.post("/api/connections/sample")
     assert r.status_code == 200 and r.get_json()["status"] == "active"
     conn_id = r.get_json()["id"]
+    # The sample made the assistant; asking again answers with it.
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.get_json()["existing"] is True
     agent_id = r.get_json()["id"]
-    assert b"Ada" in c.get(f"/chat?agent={agent_id}").data
+    assert b"Juniper" in c.get(f"/chat?agent={agent_id}").data
     # unknown agent → redirect to hub
     assert c.get("/chat?agent=nope").status_code == 302
     # chat api rejects an agent that isn't the account's
@@ -5304,11 +5304,8 @@ def test_agent_with_advisor_gets_specialized_prompt(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
-    r = c.post("/api/agents", json={"name": "Meds", "persona": "direct",
-                                    "advisor": "medication-refills",
-                                    "connection_id": conn})
-    assert r.status_code == 200
-    aid = r.get_json()["id"]
+    # A legacy assistant still carrying its advisor (spec PR #943, 2.2).
+    aid = legacy_agent(svc, conn, "Meds", "direct", "medication-refills")
     with svc.session() as s:
         from careagents.models import Account
         acct_id = s.query(Account).filter_by(

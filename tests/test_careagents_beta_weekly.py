@@ -9,6 +9,7 @@ import pytest
 
 from careagents import beta
 from careagents.models import Account, ActivityDay, Connection
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, _make_account, cfg, svc)
@@ -141,9 +142,8 @@ def test_an_approval_counts_on_a_real_assistant_only(cfg, svc, monkeypatch):  # 
         assert s.query(ActivityDay).one().approved == 1
 
     sample = c.post("/api/connections/sample").get_json()
-    sample_agent = sample.get("agent_id") or c.post("/api/agents", json={
-        "name": "S", "persona": "calm",
-        "connection_id": sample["id"]}).get_json()["id"]
+    # A sample assistant beside the real one: a legacy account.
+    sample_agent = legacy_agent(svc, sample["id"], "S")
     r = c.post(f"/review/{sample_agent}/act-1/submit",
                json={"med-0": "yes", "nka": "true"})
     assert r.status_code == 200 and r.get_json()["confirmed"] is True

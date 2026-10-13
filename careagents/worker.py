@@ -26,7 +26,8 @@ from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               tool_error_result as agent_tool_error_result,
                               _execute_tool, _trim_history)
 from careagents.config import Config
-from careagents.healthclaw import HealthClawClient, HealthClawError
+from careagents.healthclaw import (HealthClawClient, HealthClawError, act_as,
+                                   acting_for)
 from careagents.personas import system_prompt
 
 logger = logging.getLogger(__name__)
@@ -319,6 +320,13 @@ class RunWorker:
             request_id=f"run:{run['id']}:failed")
 
     def _execute(self, run: dict, heartbeat: LeaseHeartbeat) -> None:
+        # The turn's tenant reads are labelled with the account that asked
+        # (spec 6.2), and only for this turn; the run's own lifecycle calls
+        # stay careagents-worker.
+        with acting_for(None):
+            self._execute_turn(run, heartbeat)
+
+    def _execute_turn(self, run: dict, heartbeat: LeaseHeartbeat) -> None:
         run_id = str(run["id"])
         tenant = str(run["tenant_id"])
         agent_id = str(run.get("agent_id") or "")
@@ -330,6 +338,7 @@ class RunWorker:
         context = self.accounts.get_worker_agent_context(agent_id)
         if context is None or context["tenant"] != tenant:
             raise ValueError("claimed run does not match a CareAgents tenant")
+        act_as(context["account_id"])
         blocked = beta.turn_block(context["connection"], context["paused"],
                                   tester_terms.CONSENT_VERSION)
         if blocked:
@@ -357,7 +366,7 @@ class RunWorker:
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
             surface=str(run.get("surface") or ""), sample=sample,
-            arriving=arriving)
+            arriving=arriving, routines=agent.get("routines"))
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],

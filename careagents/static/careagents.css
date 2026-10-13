@@ -1157,3 +1157,21 @@ textarea:focus-visible {
 .inline-msg.is-next a { color: var(--accent-ink); font-weight: 600; }
 /* Empty for a moment while announce() reveals it: no tinted bar. */
 .inline-msg.is-next:empty { background: none; padding: 0; }
+
+/* Settings: an assistant's tone and what it focuses on. One choice per
+   row, the whole row the tap target, so nothing wraps mid-name at 375px. */
+.assistant-settings { display: block; margin-bottom: 16px; }
+.choice-group { border: 0; margin: 16px 0 0; padding: 0; min-width: 0; }
+.choice-group legend { padding: 0; margin-bottom: 6px; font-size: 15px;
+  font-weight: 600; color: var(--ink); }
+.choice-row { display: flex; align-items: center; gap: 12px; width: 100%;
+  min-height: 44px; padding: 8px 12px; box-sizing: border-box;
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  margin-top: 6px; font-size: 16px; cursor: pointer; }
+.choice-row span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.choice-row input { flex: none; width: 22px; height: 22px; margin: 0;
+  accent-color: var(--accent); }
+.choice-row:has(input:checked) { border-color: var(--accent); }
+.assistant-settings .card-actions { margin-top: 12px; flex-wrap: wrap; }
+.assistant-remove-confirm { margin-top: 12px; }
+.assistant-remove-confirm p { margin: 0 0 8px; }

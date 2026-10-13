@@ -72,10 +72,10 @@ def test_records_settling_on_the_chat_page_never_move_the_assistant(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     sample, juniper, conn, tenant = _sample_agent_and_fasten(c)
-    # A second assistant already on the (still connecting) real records.
-    own = c.post("/api/agents", json={
-        "name": "Rowan", "persona": "calm",
-        "connection_id": conn}).get_json()["id"]
+    # A second assistant already on the (still connecting) real records:
+    # a legacy account, since one person now has one assistant (#947).
+    from tests.careagents_legacy_helpers import legacy_agent
+    own = legacy_agent(svc, conn, "Rowan")
     fake.search = lambda t, rt, params=None: {"total": {
         "Condition": 2, "Observation": 5}.get(rt, 0)}
     fake.counted = 7
