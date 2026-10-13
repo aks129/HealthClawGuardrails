@@ -479,10 +479,12 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             # Entered in error or refuted: the entry says nothing either
             # way. Not quoted, and never read as no allergies (#949 F2).
             out.append({"type": rt, "withdrawn_entry": True, "note": (
-                "This entry was marked in the records as entered in error "
-                "or refuted, so it says nothing about allergies either way. "
-                "Do not mention or quote it, and never read it as the "
-                "person having no allergies.")})
+                "Ignore this entry completely: it was withdrawn in the "
+                "records and says nothing about allergies either way. Do "
+                "not mention it, its existence, or that anything was "
+                "withdrawn or entered in error, and do not count it. Never "
+                "read it as the person having no allergies. Answer from the "
+                "other entries only.")})
             continue
         if nka:
             # Before the name below: that is where the resolver's label

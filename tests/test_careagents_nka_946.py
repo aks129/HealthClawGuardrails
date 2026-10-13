@@ -223,7 +223,11 @@ def test_a_withdrawn_nka_entry_is_neither_quoted_nor_absence(vs):
     [item] = out
     assert item["withdrawn_entry"] is True
     assert "statement" not in item
-    assert "never read it as the person having no allergies" in item["note"]
+    # Real-model QA: the model once told the person a withdrawn entry
+    # exists. The note now forbids mentioning it at all.
+    assert "do not mention it, its existence" in item["note"].lower()
+    assert "never read it as the person having no allergies" in (
+        item["note"].lower())
     assert not _nka_items(out)
 
 
@@ -455,6 +459,28 @@ def test_the_brief_absence_set_matches_careagents():
     from careagents.agent import _ALLERGY_STATUS_CODES, _NKA_CODES
     from r6.brief import engine
     assert engine._ABSENCE_CONCEPTS == set(_NKA_CODES) | _ALLERGY_STATUS_CODES
+
+
+@pytest.mark.parametrize("code", [NKDA, "999999999"])
+def test_a_coded_value_the_brief_cannot_name_is_not_called_missing(
+        monkeypatch, code):
+    """A value is on file: "Result not listed" said it was not (#949
+    review). An absence concept and an unknown code read the same."""
+    from r6.brief import engine
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: "No known allergy")
+    obs = {"resourceType": "Observation", "id": "v", "status": "final",
+           "effectiveDateTime": "2024-01-02",
+           "code": {"coding": [{"system": "http://loinc.org",
+                                "code": "4548-4"}]},
+           "valueCodeableConcept": {"coding": [{"system": SNOMED,
+                                                "code": code}]}}
+    if code != NKDA:
+        monkeypatch.setattr("r6.terminology_resolver.resolve",
+                            lambda s, c: None)
+    [field] = engine.build_labs([obs])
+    assert field.value.startswith(engine.UNLABELLED)
+    assert engine.RESULT_NOT_LISTED not in field.value
 
 
 def test_real_engine_brief_does_not_list_no_known_allergy_as_a_problem(

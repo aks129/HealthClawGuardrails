@@ -309,7 +309,10 @@ def _obs_value(obs: dict) -> str:
     # route strips it already (apply_redaction); the engine does not lean
     # on that, because the brief reaches chat and text messages.
     if "valueCodeableConcept" in obs:
-        return _concept_label(obs["valueCodeableConcept"]) or ""
+        # A coded value we cannot name is still a value: "Result not
+        # listed" said there was none (#949 review).
+        vcc = obs["valueCodeableConcept"]
+        return _concept_label(vcc) or (UNLABELLED if _has_code(vcc) else "")
     return _blood_pressure(obs)
 
 
