@@ -286,20 +286,75 @@ _NKA_CODES = {
 }
 
 
-def _coding_keys(res: dict) -> list | None:
-    """(system, code) for every coding, or None when there is none or any
-    one is not a coding we can key on. A coding we cannot key on is still a
-    coding, never a reason to read the record as anything but an allergy
-    (F4). Strings only: a list in `code` is unhashable, and ingest stores
+#: The spellings of SNOMED's system the engine reads as SNOMED, mirrored
+#: from r6.terminology._SYSTEM_ALIASES (CareAgents imports nothing from
+#: the engine; a test holds the two equal).
+_SNOMED_SYSTEMS = frozenset({"http://snomed.info/sct",
+                             "urn:oid:2.16.840.1.113883.6.96"})
+
+
+def _coding_key(c: object) -> tuple[str, str] | None:
+    """(system, code) as the engine keys a coding before it labels it
+    (r6.terminology.canonical_system and lookup: stripped, the SNOMED OID
+    read as SNOMED, an int code read as its digits), or None when it is not
+    one we can key on. Keyed any other way, a coding the engine labels "No
+    known allergy" missed our sets and its label became a name (#949 F1).
+    Strings only: a list in `code` is unhashable, and ingest stores
     whatever arrived (#885)."""
+    if not isinstance(c, dict):
+        return None
+    system, code = c.get("system"), c.get("code")
+    if (not isinstance(system, str) or isinstance(code, bool)
+            or not isinstance(code, (str, int))):
+        return None
+    system, code = system.strip(), str(code).strip()
+    if not system or not code:
+        return None
+    return ("http://snomed.info/sct" if system in _SNOMED_SYSTEMS
+            else system, code)
+
+
+def _coding_keys(res: dict) -> list | None:
+    """The key of every coding, or None when there is none or any one is
+    not a coding we can key on. A coding we cannot key on is still a
+    coding, never a reason to read the record as anything but an allergy
+    (F4)."""
     code = res.get("code")
     codings = code.get("coding") if isinstance(code, dict) else None
     if not isinstance(codings, list) or not codings:
         return None
-    if not all(isinstance(c, dict) and isinstance(c.get("system"), str)
-               and isinstance(c.get("code"), str) for c in codings):
-        return None
-    return [(c["system"], c["code"]) for c in codings]
+    keys = [_coding_key(c) for c in codings]
+    return None if None in keys else keys
+
+
+def _carries_absence_code(res: dict) -> bool:
+    """Any coding at all that keys to a status or "no known allergy"
+    concept, whatever else the record carries. Such a record's text and
+    displays are never its name: the engine writes that concept's label
+    there ("No known allergy", "Patient not asked"), and a record that
+    failed the checks above would hand it to the model as an allergy
+    (#949 F1)."""
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    return isinstance(codings, list) and any(
+        k in _ALLERGY_STATUS_CODES or k in _NKA_CODES
+        for k in map(_coding_key, codings) if k)
+
+
+#: verificationStatus codes that withdraw an entry (FHIR
+#: allergyintolerance-verification). Read from any coding, system or not:
+#: a wrong match here only stops a "no known allergy" entry being quoted.
+_WITHDRAWN = frozenset({"entered-in-error", "refuted"})
+
+
+def _withdrawn(res: dict) -> bool:
+    vs = res.get("verificationStatus")
+    if isinstance(vs, str):  # STU3 wrote a bare code
+        return vs.strip() in _WITHDRAWN
+    codings = vs.get("coding") if isinstance(vs, dict) else None
+    return isinstance(codings, list) and any(
+        isinstance(c, dict) and isinstance(c.get("code"), str)
+        and c["code"].strip() in _WITHDRAWN for c in codings)
 
 
 def _is_allergy_status(res: dict) -> bool:
@@ -420,6 +475,15 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             out.append(item)
             continue
         nka = _nka_kinds(res) if rt == "AllergyIntolerance" else []
+        if nka and _withdrawn(res):
+            # Entered in error or refuted: the entry says nothing either
+            # way. Not quoted, and never read as no allergies (#949 F2).
+            out.append({"type": rt, "withdrawn_entry": True, "note": (
+                "This entry was marked in the records as entered in error "
+                "or refuted, so it says nothing about allergies either way. "
+                "Do not mention or quote it, and never read it as the "
+                "person having no allergies.")})
+            continue
         if nka:
             # Before the name below: that is where the resolver's label
             # "No known allergy" became an allergy's name (#946).
@@ -428,6 +492,11 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
             c.get("display", "") for c in (code.get("coding") or [])[:1])
+        if rt == "AllergyIntolerance" and _carries_absence_code(res):
+            # Backstop: whatever the checks above made of it, a record
+            # with a status or "no known allergy" coding is never named by
+            # its text, which holds that concept's label (#949 F1).
+            text = ""
         lookup_reason = None
         if not text and resolve_ref is not None:
             # No inline code — the name may live behind medicationReference.
@@ -521,9 +590,11 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     if isinstance(stated, int) and not isinstance(stated, bool):
         total = max(total, stated)
     if total > len(out) or any(i.get("type") == "AllergyIntolerance"
-                               and not i.get("not_an_allergy") for i in out):
+                               and not i.get("not_an_allergy")
+                               and not i.get("withdrawn_entry") for i in out):
         # "Your records don't say whether you have allergies" holds only for
-        # a list known in full to be status records alone. A recorded
+        # a list known in full to be status records alone (a withdrawn
+        # entry says nothing, so it changes nothing). A recorded
         # allergy in this list (#945 security F2), or a cut list whose rest
         # we have not seen (F5), makes it false. Reworded rather than
         # dropped: a dropped item would read as a truncated list below.
@@ -540,7 +611,8 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     # hold an allergy. Either way it never says "no known" (#946).
     conflict = any(i.get("type") == "AllergyIntolerance"
                    and not i.get("not_an_allergy")
-                   and not i.get("no_known_allergy_record") for i in out)
+                   and not i.get("no_known_allergy_record")
+                   and not i.get("withdrawn_entry") for i in out)
     for i in out:
         if not i.get("no_known_allergy_record"):
             continue

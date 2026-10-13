@@ -153,8 +153,8 @@ def test_onset_string_is_never_used_as_a_date():
     [{"system": "http://snomed.info/sct/", "code": NKA}],
     [{"system": "https://snomed.info/sct", "code": NKA}],
     [{"code": NKA}],
-    [{"system": SNOMED, "code": NKA + " "}],
-    [{"system": SNOMED, "code": int(NKA)}],
+    [{"system": SNOMED, "code": NKA + "x"}],
+    [{"system": SNOMED, "code": True}],
     [{"system": SNOMED, "code": NKA}, {"system": SNOMED, "code": PENICILLIN}],
     [{"system": SNOMED, "code": NKA}, {"system": "urn:x", "code": "Z"}],
     [{"system": SNOMED, "code": NKA}, "not-a-coding"],
@@ -167,6 +167,79 @@ def test_anything_but_an_exact_nka_coding_set_is_a_real_allergy(codings):
     assert not item.get("no_known_allergy_record")
     assert not item.get("not_an_allergy")
     assert "no known" not in json.dumps(item).lower()
+
+
+@pytest.mark.parametrize("system,code", [
+    ("urn:oid:2.16.840.1.113883.6.96", NKA), (" " + SNOMED, NKA),
+    (SNOMED + "\n", NKA), (SNOMED, " " + NKA), (SNOMED, NKA + "\n"),
+    (SNOMED, int(NKA))])
+def test_engine_spellings_of_nka_are_nka(system, code):
+    """Keyed as the engine keys a coding before it labels it (#949 F1)."""
+    res = {"resourceType": "AllergyIntolerance", "id": "x",
+           "code": {"coding": [{"system": system, "code": code}],
+                    "text": "No known allergy"}}
+    [item] = _summarize_bundle(_bundle(res))
+    assert item.get("no_known_allergy_record") is True
+    assert "name" not in item
+
+
+def test_snomed_spellings_match_the_engine():
+    """CareAgents imports nothing from the engine, so the SNOMED aliases
+    are mirrored; this holds the mirror equal to r6.terminology."""
+    from careagents.agent import _SNOMED_SYSTEMS
+    from r6 import terminology
+    assert _SNOMED_SYSTEMS == {
+        k for k, v in terminology._SYSTEM_ALIASES.items()
+        if v == terminology.SNOMED}
+    assert terminology.SNOMED == SNOMED
+
+
+@pytest.mark.parametrize("coding", [
+    {"system": SNOMED, "code": NKA}, {"system": SNOMED, "code": STATUS}])
+@pytest.mark.parametrize("other", [
+    "not-a-coding", {"display": "x"}, {"system": SNOMED, "code": PENICILLIN},
+    {"system": "urn:x", "code": "Z"}])
+def test_an_absence_code_is_never_a_name_whatever_sits_beside_it(
+        coding, other):
+    """Backstop (#949 F1): a record that fails the checks above is still
+    never named by text the engine filled with that concept's label."""
+    res = {"resourceType": "AllergyIntolerance", "id": "x",
+           "code": {"coding": [dict(coding, display="No known allergy"),
+                               other],
+                    "text": "No known allergy"}}
+    [item] = _summarize_bundle(_bundle(res))
+    assert "no known" not in json.dumps(_quoted(item)).lower()
+    assert item.get("name", "").startswith("unlabeled record") or (
+        "name" not in item)
+
+
+@pytest.mark.parametrize("vs", [
+    {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/"
+                 "allergyintolerance-verification", "code": "refuted"}]},
+    {"coding": [{"code": " entered-in-error"}]}, "entered-in-error"])
+def test_a_withdrawn_nka_entry_is_neither_quoted_nor_absence(vs):
+    out = _summarize_bundle(_bundle(_nka(recordedDate="2024-03-05",
+                                         verificationStatus=vs)))
+    [item] = out
+    assert item["withdrawn_entry"] is True
+    assert "statement" not in item
+    assert "never read it as the person having no allergies" in item["note"]
+    assert not _nka_items(out)
+
+
+def test_a_withdrawn_nka_entry_leaves_the_status_statement_alone():
+    status = _allergy("s1", (SNOMED, STATUS))
+    withdrawn = _nka(verificationStatus={"coding": [{"code": "refuted"}]})
+    out = _summarize_bundle(_bundle(withdrawn, status))
+    [st] = [i for i in out if i.get("not_an_allergy")]
+    assert st["statement"] == "Your records don't say whether you have allergies."
+
+
+def test_a_confirmed_nka_entry_is_still_quoted():
+    [item] = _summarize_bundle(_bundle(_nka(
+        recordedDate="2024-03-05",
+        verificationStatus={"coding": [{"code": "confirmed"}]})))
+    assert "lists no known allergies" in item["statement"]
 
 
 def test_text_alone_saying_no_known_allergy_is_not_an_nka_record():
