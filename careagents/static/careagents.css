@@ -624,26 +624,18 @@ button.linkish { background: none; border: 0; color: var(--accent-ink);
 .auth-fine a, .consent-fine a { color: var(--accent-ink); }
 
 /* --- connection actions --------------------------------------------------- */
-.conn-refresh, .conn-disconnect, .conn-delete {
+.conn-upload, .conn-refresh, .conn-disconnect, .conn-delete {
   align-self: flex-start; margin-top: 8px; min-height: 44px;
   font: inherit; font-size: 16px; cursor: pointer;
   border-radius: var(--radius-sm); padding: 8px 16px;
 }
-.conn-refresh, .conn-disconnect {
+.conn-upload, .conn-refresh, .conn-disconnect {
   font-weight: 600; color: var(--ink);
   background: var(--surface); border: 1px solid var(--hairline);
 }
-.conn-refresh:hover, .conn-disconnect:hover {
+.conn-upload:hover, .conn-refresh:hover, .conn-disconnect:hover {
   border-color: var(--accent); color: var(--accent-ink);
 }
-/* The record card's Upload, until #858/#860 fold it into the rules above. */
-.conn-upload {
-  align-self: flex-start; margin-top: 8px; min-height: 44px;
-  font: inherit; font-size: 16px; font-weight: 600; cursor: pointer;
-  border-radius: var(--radius-sm); padding: 8px 16px; color: var(--ink);
-  background: var(--surface); border: 1px solid var(--hairline);
-}
-.conn-upload:hover { border-color: var(--accent); color: var(--accent-ink); }
 /* Delete is irreversible, so it reads as danger — but with no fill and a
    lighter weight it stays quieter than Refresh. Destructive should be
    findable, not inviting. */

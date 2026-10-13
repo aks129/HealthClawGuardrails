@@ -117,3 +117,97 @@ test.describe('calm hub, real records open (allowlisted)', () => {
     await expect(page.locator('.sample-link')).toBeVisible();
   });
 });
+
+/**
+ * Phone-width polish from the 2026-10-01 synthetic-hospital shakeout
+ * (finding 5). Two upload connections and an assistant are made through the
+ * API: a direct upload never calls HealthClaw, so the dead port is fine.
+ */
+test.describe('phone width, two uploads and an assistant (allowlisted)', () => {
+  test.use({ baseURL: CARE_ALLOW_BASE_URL, ...PHONE });
+
+  // The allowlisted account is shared by every test on this server, so its
+  // connections pile up across tests. Each test looks only at its own two.
+  let agentId = '';
+  let ids: string[] = [];
+
+  test.beforeEach(async ({ page }) => {
+    await blockThirdParty(page);
+    await signIn(page, CARE_ALLOW_EMAIL, CARE_ALLOW_LOG);
+    ids = [];
+    // The consent version the hub's card shows, sent back as home.js does.
+    const consentVersion = await page.locator('[data-consent-version]').first()
+      .getAttribute('data-consent-version');
+    for (let i = 0; i < 2; i++) {
+      const r = await page.request.post('/api/connections/direct', {
+        data: { consent: true, consent_version: consentVersion },
+      });
+      expect(r.ok()).toBe(true);
+      ids.push((await r.json()).id);
+    }
+    await page.reload();
+    const a = await page.request.post('/api/agents', {
+      data: { name: 'Morning Helper', persona: 'calm', connection_id: ids[0] },
+    });
+    expect(a.ok()).toBe(true);
+    agentId = (await a.json()).id;
+  });
+
+  test('chat header fits the phone: one-line name, menu inside the gutter',
+    async ({ page }, testInfo) => {
+      // The header is the name and one menu since #920; the shakeout's three
+      // wrapping pills are gone. This holds the new header to the same bar.
+      await page.goto(`/chat?agent=${agentId}`);
+      const width = page.viewportSize()!.width;
+      const lines = (sel: string) => page.locator(sel).evaluateAll((els) =>
+        els.map((el) => {
+          const cs = getComputedStyle(el);
+          const inner = el.getBoundingClientRect().height
+            - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+            - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth);
+          return Math.round(inner / parseFloat(cs.lineHeight));
+        }));
+      const inGutter = async (sel: string) => {
+        for (const box of await page.locator(sel).evaluateAll((els) =>
+          els.map((el) => el.getBoundingClientRect().toJSON()))) {
+          expect(box.left, sel).toBeGreaterThanOrEqual(16);
+          expect(box.right, sel).toBeLessThanOrEqual(width - 16);
+        }
+      };
+
+      expect(await lines('.chat-name')).toEqual([1]);
+      await inGutter('.chat-head .chat-name, .chat-menu-btn');
+
+      await page.locator('.chat-menu-btn').click();
+      const items = page.locator('.chat-menu-list a, .chat-menu-list button');
+      await expect(items.first()).toBeVisible();
+      // Past the menu's fade-in, so the screenshot shows it as a person does.
+      await expect(page.locator('.chat-menu-list')).toHaveCSS('opacity', '1');
+      await page.screenshot({ path: testInfo.outputPath('chat-375.png') });
+      await inGutter('.chat-menu-list');
+      expect(new Set(await lines('.chat-menu-list a'))).toEqual(new Set([1]));
+    });
+
+  test('the upload control looks like the other card buttons',
+    async ({ page }, testInfo) => {
+      const card = page.locator(`.conn-card[data-conn="${ids[0]}"]`);
+      await card.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath('hub-375.png'),
+                              fullPage: true });
+      const style = (sel: string) => card.locator(sel).evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return [cs.borderRadius, cs.borderStyle, cs.backgroundColor,
+                cs.minHeight, cs.fontSize, cs.fontWeight, cs.fontFamily];
+      });
+      expect(await style('.conn-upload')).toEqual(await style('.conn-disconnect'));
+    });
+
+  test('two upload connections can be told apart', async ({ page }) => {
+    const name = (id: string) =>
+      page.locator(`.conn-card[data-conn="${id}"] .hub-card-name`);
+    await expect(name(ids[0])).toHaveText(/^Uploaded records \d+$/);
+    await expect(name(ids[1])).toHaveText(/^Uploaded records \d+$/);
+    expect(await name(ids[0]).textContent())
+      .not.toBe(await name(ids[1]).textContent());
+  });
+});
