@@ -131,7 +131,12 @@ def live_link(link, now: float) -> str | None:
 
 def switch_prompt(home: dict) -> dict | None:
     """The one "Switch Juniper to your records?" question, when it applies:
-    an assistant reads the sample and a real connection is active."""
+    an assistant reads the sample and a real connection is active.
+
+    Asked, never done for the person: what the assistant reads changes only
+    on their tap. The connect consent covers bringing records in, not which
+    records a conversation already under way reads (#937). The count says
+    that something arrived, so the question is worth answering."""
     by_id = {c["id"]: c for c in home["connections"]}
     real = [c for c in home["connections"]
             if c["kind"] != "sample" and c["status"] == "active"]
@@ -141,5 +146,6 @@ def switch_prompt(home: dict) -> dict | None:
         c = by_id.get(a["connection_id"])
         if c and c["kind"] == "sample":
             return {"agent_id": a["id"], "agent_name": a["name"],
-                    "connection_id": real[0]["id"], "label": real[0]["label"]}
+                    "connection_id": real[0]["id"], "label": real[0]["label"],
+                    "count_line": count_line(real[0].get("last_count"))}
     return None
