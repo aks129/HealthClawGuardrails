@@ -1371,7 +1371,10 @@ def _checkin_coverage(original, res, patient_id):
             res['period'] = kept
 
     subscriber_id = original.get('subscriberId')
-    if isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64:
+    # Subscriber ids were historically sometimes SSNs: one with an SSN's
+    # shape is dropped, by the same value check as identifiers (#963).
+    if (isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64
+            and not _SSN_VALUE.fullmatch(subscriber_id.strip())):
         res['subscriberId'] = subscriber_id
 
     idents = []
