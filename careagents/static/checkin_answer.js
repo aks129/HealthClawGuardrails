@@ -79,24 +79,27 @@ export function prepareRecords(bundle) {
   return { entries, patientFullUrl: patient ? patient.fullUrl : null };
 }
 
-/* For each item: { item, unsupported: bool, entries: [...] }. */
+/* For each item: { item, unsupported, entries, primary }. `entries` is what
+   would be sent; `primary` is the part of it the item asked for, which is
+   what the person is shown (a payer or prescriber rides along unnamed). */
 export function matchItems(request, unsupportedItems, records) {
   const unsupported = new Set((unsupportedItems || []).map((u) => u.id));
   return request.items.map((item) => {
     const content = item.content || {};
     if (unsupported.has(item.id) || content.kind !== "selection.fhir" ||
         !(item.accept || []).includes(FHIR_JSON)) {
-      return { item, unsupported: true, entries: [] };
+      return { item, unsupported: true, entries: [], primary: [] };
     }
     const shareable = records.entries.filter((e) => !isNoKnownAllergy(e.resource));
     // Only what the item asks for makes it answerable: a payer that would
     // ride along by reference is not, on its own, something to share.
     const primary = shareable.filter((e) => selects(content, e.resource));
-    if (!primary.length) return { item, unsupported: false, entries: [] };
+    if (!primary.length) return { item, unsupported: false, entries: [], primary: [] };
     // The Patient has an item of its own; elsewhere it is not pulled along.
     const asksForPatient = primary.some((e) => e.fullUrl === records.patientFullUrl);
     const exclude = asksForPatient || !records.patientFullUrl ? [] : [records.patientFullUrl];
-    return { item, unsupported: false, entries: selectEntries(content, shareable, { exclude }) };
+    return { item, unsupported: false, primary,
+      entries: selectEntries(content, shareable, { exclude }) };
   });
 }
 
@@ -131,4 +134,107 @@ export function buildResponse(request, matches, share) {
     artifacts,
     requestStatus,
   };
+}
+
+/* --- What the person is shown, in plain words ---------------------------
+
+   Never a FHIR type name, never `text` or a coding's `display`: those are
+   the fields a real feed puts other people's names in. A record is named by
+   its code, from LABELS, or by structured fields of the person's own
+   (their name, the payer Organization's name, a masked member id). The
+   real-record path will name records from the engine's output, whose
+   labels come from r6/terminology.py; LABELS mirrors that table for the
+   test patient's codes (tests/test_checkin_wallet.py holds them equal). */
+
+const RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm";
+const CVX = "http://hl7.org/fhir/sid/cvx";
+
+export const LABELS = {
+  [`${SNOMED[0]}|38341003`]: "Hypertensive disorder",
+  [`${RXNORM}|7980`]: "Penicillin",
+  [`${RXNORM}|314076`]: "Lisinopril 10 mg",
+  [`${CVX}|150`]: "Influenza vaccine",
+};
+
+const HEADINGS = {
+  Patient: "Your name, birth date and contact details",
+  Condition: "Your health problems",
+  AllergyIntolerance: "Your allergies",
+  MedicationRequest: "Your medicines",
+  MedicationStatement: "Your medicines",
+  Immunization: "Your vaccines",
+  Coverage: "Your insurance card",
+};
+
+/* Our heading for an item, from what it matched; the website's own title
+   only when there is nothing to name it by. */
+export function itemHeading(match) {
+  const types = new Set((match.primary || []).map((e) => e.resource.resourceType));
+  if (types.size === 1) {
+    const h = HEADINGS[[...types][0]];
+    if (h) return h;
+  }
+  return match.item.title || match.item.id;
+}
+
+function labelOf(concept) {
+  const codings = (concept && Array.isArray(concept.coding)) ? concept.coding : [];
+  for (const c of codings) {
+    if (!c) continue;
+    const system = SNOMED.includes(c.system) ? SNOMED[0] : c.system;
+    const label = LABELS[`${system}|${String(c.code)}`];
+    if (label) return label;
+  }
+  return null;
+}
+
+const day = (s) => (typeof s === "string" ? s.slice(0, 10) : "");
+
+function masked(value) {
+  const s = String(value || "");
+  return s.length > 4 ? `ending ${s.slice(-4)}` : "on file";
+}
+
+/* One short line per record the item asked for. `entries` is everything
+   that would be sent with it, so a Coverage can name its payer. */
+export function recordNames(match) {
+  const byUrl = new Map((match.entries || []).map((e) => [e.fullUrl, e.resource]));
+  return (match.primary || []).flatMap(({ resource: r }) => {
+    switch (r.resourceType) {
+      case "Patient": {
+        const n = (Array.isArray(r.name) && r.name[0]) || {};
+        const given = Array.isArray(n.given) ? n.given[0] : "";
+        const who = [given, n.family].filter(Boolean).join(" ") || "Your name";
+        const lines = [r.birthDate ? `${who}, born ${day(r.birthDate)}` : who];
+        // What else goes with it, named but not repeated here.
+        const also = [
+          Array.isArray(r.address) && r.address.length && "address",
+          Array.isArray(r.telecom) && r.telecom.some((t) => t && t.system === "phone") && "phone",
+          Array.isArray(r.telecom) && r.telecom.some((t) => t && t.system === "email") && "email",
+        ].filter(Boolean);
+        if (also.length) lines.push(`Your ${also.join(", ")}`);
+        return lines;
+      }
+      case "Coverage": {
+        const payerRef = Array.isArray(r.payor) && r.payor[0] && r.payor[0].reference;
+        const payer = byUrl.get(payerRef);
+        const insurer = (payer && payer.resourceType === "Organization" &&
+          typeof payer.name === "string" && payer.name) || "Your insurer";
+        return `${insurer}, member ID ${masked(r.subscriberId)}`;
+      }
+      case "Immunization": {
+        const what = labelOf(r.vaccineCode) || "A vaccine";
+        return r.occurrenceDateTime ? `${what}, ${day(r.occurrenceDateTime)}` : what;
+      }
+      case "MedicationRequest":
+      case "MedicationStatement":
+        return labelOf(r.medicationCodeableConcept) || "A medicine";
+      case "AllergyIntolerance":
+        return labelOf(r.code) || "An allergy";
+      case "Condition":
+        return labelOf(r.code) || "A health problem";
+      default:
+        return "A record";
+    }
+  });
 }

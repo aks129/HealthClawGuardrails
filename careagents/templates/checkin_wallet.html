@@ -18,7 +18,8 @@
   .checkin-item { border: 1px solid var(--hairline); border-radius: var(--radius-sm);
     padding: 12px; margin: 0 0 8px; }
   .checkin-item-title { font-weight: 700; }
-  .checkin-item-what { color: var(--ink-soft); font-size: 14px; margin: 2px 0 6px; }
+  .checkin-item-what { color: var(--ink-soft); font-size: 15px; margin: 2px 0 6px;
+    list-style: none; padding: 0; overflow-wrap: anywhere; }
   .checkin-choice { display: flex; gap: 20px; }
   .checkin-choice label { display: flex; align-items: center; gap: 6px; min-height: 44px; }
 </style>
@@ -35,8 +36,12 @@
 
     <section id="wallet-signin" {% if signed_in %}hidden{% endif %}>
       <h1>Sign in to answer</h1>
-      <p class="setup-sub">A website opened this page to ask for health
-        information. Sign in here first. This tab stays open.</p>
+      {# The website's address is not known yet: it arrives with the request,
+         and the request comes only after sign-in. So say when it will show. #}
+      <p class="setup-sub">A website opened this page to ask for some of
+        your health information. Sign in first. Then you'll see which website
+        it is and exactly what it asks for, and you choose what to share.
+        This tab stays open.</p>
       <div id="signin-start">
         <button class="btn-primary btn-block" id="signin-passkey">
           Sign in with a passkey</button>
@@ -52,12 +57,13 @@
             policy</a>.</p>
       </div>
       <div id="signin-code" hidden>
-        <p class="setup-sub" id="signin-code-lede">Enter the 8-digit code we
-          emailed you.</p>
-        <label class="field-label" for="signin-code-input">Code</label>
+        <p class="setup-sub" id="signin-code-note"></p>
+        <label class="field-label" for="signin-code-input">Enter the 8-digit code</label>
         <input class="field code-input" id="signin-code-input" inputmode="numeric"
                maxlength="8" placeholder="••••••••" autocomplete="one-time-code">
         <button class="btn-primary btn-block" id="signin-verify">Continue</button>
+        <button class="btn-secondary btn-block" id="signin-resend">Send a new code</button>
+        <button class="linkish" id="signin-other-email">Use a different email</button>
       </div>
     </section>
 
@@ -65,6 +71,9 @@
       <h1>Waiting for the request</h1>
       <p class="setup-sub">You're signed in. The website that opened this page
         is sending its request.</p>
+      <p class="setup-sub" id="wallet-waiting-late" hidden>Nothing has arrived
+        yet. Go back to the website's tab and start check-in again. It will
+        open a new tab like this one, and you can close this one.</p>
     </section>
 
     <section id="wallet-direct" hidden>

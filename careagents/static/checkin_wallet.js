@@ -12,7 +12,12 @@
 import {
   checkWalletResponse, declineAll, serveWebWallet,
 } from "./vendor/smart-health-checkin-client/0.4.4/wallet.js";
-import { buildResponse, matchItems, prepareRecords } from "./checkin_answer.js";
+// Loaded with this file's own ?v= build stamp, so a cached copy from an
+// earlier deploy never runs against this page (#909). A static import
+// cannot carry it.
+const {
+  buildResponse, itemHeading, matchItems, prepareRecords, recordNames,
+} = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
 const $ = (id) => document.getElementById(id);
 const card = $("wallet");
@@ -20,6 +25,9 @@ const SECTIONS = ["wallet-signin", "wallet-waiting", "wallet-direct",
   "wallet-review", "wallet-done"];
 const show = (id) => SECTIONS.forEach((s) => ($(s).hidden = s !== id));
 const err = $("wallet-err");
+// How long "Waiting for the request" waits before it offers a next step.
+// A test can shorten it with ?wait=<ms>; nothing else reads the query.
+const WAIT_MS = Number(new URLSearchParams(location.search).get("wait")) || 20000;
 const fail = (msg) => { err.textContent = msg; err.hidden = false; };
 const clear = () => { err.hidden = true; };
 
@@ -66,16 +74,45 @@ $("signin-passkey").addEventListener("click", async () => {
 });
 
 let pendingEmail = "";
+
+/* Ask for a code. The note says what happened: sent, held by the resend
+   cooldown (the earlier code still works), or not confirmed (#220, #262). */
+async function requestCode(email) {
+  const res = await post("/api/auth/email", { email });
+  if (!res.ok) { fail(res.d.error || "Couldn't send a code."); return false; }
+  let note = `We emailed a code to ${email}.`;
+  if (res.d.sent === false) {
+    note = `We sent a code moments ago. You can ask for a new one in ${res.d.retry_after} seconds.`;
+  } else if (res.d.sent !== true) {
+    note = res.d.notice || "We couldn't confirm the code was sent. Check your inbox.";
+  }
+  $("signin-code-note").textContent = note;
+  return true;
+}
+
 $("signin-email-btn").addEventListener("click", async () => {
   clear();
   const email = $("signin-email").value.trim();
   if (!email) return fail("Enter your email.");
-  const res = await post("/api/auth/email", { email });
-  if (!res.ok) return fail(res.d.error || "Couldn't send a code.");
+  if (!(await requestCode(email))) return;
   pendingEmail = email;
   $("signin-start").hidden = true;
   $("signin-code").hidden = false;
   $("signin-code-input").focus();
+});
+
+$("signin-resend").addEventListener("click", async () => {
+  clear();
+  if (pendingEmail) await requestCode(pendingEmail);
+});
+
+$("signin-other-email").addEventListener("click", () => {
+  clear();
+  pendingEmail = "";
+  $("signin-code-input").value = "";
+  $("signin-code").hidden = true;
+  $("signin-start").hidden = false;
+  $("signin-email").focus();
 });
 
 $("signin-verify").addEventListener("click", async () => {
@@ -91,17 +128,12 @@ $("signin-code-input").addEventListener("keydown", (e) => {
 
 // --- the review -------------------------------------------------------------
 
+// What an item would send, in plain words: one line per record it asked
+// for (checkin_answer.js recordNames), or why there is nothing to send.
 function describe(m) {
-  if (m.unsupported) return "This wallet can't answer this kind of request yet.";
-  if (!m.entries.length) return "Nothing on file matches. The website will be told it's unavailable.";
-  const counts = {};
-  m.entries.forEach((e) => {
-    const t = e.resource.resourceType;
-    counts[t] = (counts[t] || 0) + 1;
-  });
-  const n = m.entries.length;
-  return `${n} record${n === 1 ? "" : "s"}: ` +
-    Object.entries(counts).map(([t, c]) => `${t} (${c})`).join(", ");
+  if (m.unsupported) return ["This wallet can't answer this yet."];
+  if (!m.entries.length) return ["Nothing on file. The website will be told that."];
+  return recordNames(m);
 }
 
 /* Resolves to {kind: "send", share}, {kind: "declined-all"} or
@@ -122,10 +154,14 @@ function review(request, origin, matches) {
     li.dataset.item = m.item.id;
     const title = document.createElement("div");
     title.className = "checkin-item-title";
-    title.textContent = m.item.title || m.item.id;
-    const what = document.createElement("div");
+    title.textContent = itemHeading(m);
+    const what = document.createElement("ul");
     what.className = "checkin-item-what";
-    what.textContent = describe(m);
+    describe(m).forEach((line) => {
+      const row = document.createElement("li");
+      row.textContent = line;
+      what.append(row);
+    });
     li.append(title, what);
     if (!m.unsupported && m.entries.length) {
       const group = document.createElement("div");
@@ -180,10 +216,15 @@ function start() {
   started = true;
   clear();
   show("wallet-waiting");
+  // The website sends its request a moment after this tab says it is ready.
+  // If nothing comes, say so and what to do, rather than wait forever.
+  const late = setTimeout(() => { $("wallet-waiting-late").hidden = false; },
+    WAIT_MS);
   const served = serveWebWallet({
     // Stay open to say what happened; the person closes the tab.
     closeAfterReply: false,
     async onRequest({ request, origin, unsupportedItems }) {
+      clearTimeout(late);
       let records;
       try { records = await loadRecords(); } catch (e) {
         done("Couldn't answer", "We couldn't read the test records. The website was told something went wrong.");

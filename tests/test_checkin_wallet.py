@@ -170,6 +170,18 @@ def test_the_page_loads_the_wallet_as_a_same_origin_module(wallet):
         assert imports and all(i.startswith("./") for i in imports), imports
 
 
+def test_the_answer_module_carries_the_page_build_stamp(wallet):
+    # The page's script URL carries ?v=<build>; the answer module it loads
+    # must carry the same, or a cached copy from an older deploy runs (#909).
+    app, _ = wallet
+    html = app.test_client().get("/checkin/wallet").get_data(as_text=True)
+    assert re.search(r'src="/static/checkin_wallet\.js\?v=[^"]+"', html)
+    page = _code(STATIC / "checkin_wallet.js")
+    assert ("await import(`./checkin_answer.js${new URL(import.meta.url)"
+            ".search}`)") in page
+    assert 'from "./checkin_answer.js"' not in page
+
+
 # --- no PHI in CareAgents ---------------------------------------------------------
 
 def test_every_wallet_route_is_read_only(wallet):
@@ -254,3 +266,22 @@ def test_no_known_allergy_codes_match_the_chat():
     block = re.search(r"NKA_CODES = \[(.*?)\]", src, re.S).group(1)
     js = set(re.findall(r'"(\d+)"', block))
     assert js == {code for _, code in _NKA_CODES}
+
+
+def test_review_names_follow_the_engine_terminology_table():
+    """The review names a record by its code, never by the record's own
+    text. Where r6/terminology.py labels a code, the wallet says the same."""
+    from r6 import terminology
+    src = (STATIC / "checkin_answer.js").read_text()
+    block = re.search(r"export const LABELS = \{(.*?)\};", src, re.S).group(1)
+    systems = {"SNOMED[0]": terminology.SNOMED, "RXNORM": terminology.RXNORM,
+               "CVX": terminology.CVX}
+    rows = re.findall(r"\[`\$\{(\w+(?:\[0\])?)\}\|(\w+)`\]: \"([^\"]+)\"", block)
+    assert len(rows) == 4
+    for system, code, label in rows:
+        engine = terminology.lookup(systems[system], code)
+        if engine is not None:
+            assert label == engine, (code, label, engine)
+    # And the code never reads a record's own words.
+    names = src.split("What the person is shown", 1)[1]
+    assert ".display" not in names and ".text" not in names

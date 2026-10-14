@@ -72,6 +72,33 @@ async function answer(page: Page, bundle: unknown, share: Record<string, boolean
   }, { request: REQUEST, bundle, share });
 }
 
+// A check-in page on another origin, served by route, using the organizers'
+// Verifier library (e2e/fixtures, the 0.4.4 release asset; the security
+// spec pins its hash).
+const VERIFIER = 'http://127.0.0.1:5398';
+const CHECKIN_JS = fs.readFileSync(path.join(__dirname, '..', 'fixtures',
+  'smart-health-checkin-client', '0.4.4', 'checkin.js'));
+const VERIFIER_HTML = `<!doctype html><meta charset="utf-8"><title>verifier</title>
+<button id="go">check in</button>
+<script type="module">
+import { runCheckin, webWallet } from '/checkin.js';
+document.getElementById('go').onclick = () => {
+  const wallet = webWallet({ id: 'e2e', name: 'e2e',
+    walletUrl: ${JSON.stringify(`${CARE_BASE_URL}/checkin/wallet`)} });
+  runCheckin(window.__req, { wallet }).then((r) => {
+    window.__result = { status: r.status, json: r.response ? r.response.json : null };
+  }, (e) => { window.__result = { status: "threw", error: String(e) }; });
+};
+</script>`;
+
+async function signInInTab(wallet: Page) {
+  const email = uniqueEmail();
+  await wallet.locator('#signin-email').fill(email);
+  await wallet.locator('#signin-email-btn').click();
+  await wallet.locator('#signin-code-input').fill(await codeFromLog(email, CARE_LOG));
+  await wallet.locator('#signin-verify').click();
+}
+
 const ALL = { patient: true, problems: true, allergies: true,
   medications: true, immunizations: true, coverage: true, phq2: true };
 
@@ -205,6 +232,130 @@ test.describe('check-in wallet', () => {
       expect(r.status.allergies, text).toBe('fulfilled');
     }
   });
+
+  test('the review speaks plain words, never FHIR type names',
+    async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await page.route(`${VERIFIER}/**`, (route) => {
+        const url = new URL(route.request().url());
+        return url.pathname === '/checkin.js'
+          ? route.fulfill({ status: 200, contentType: 'text/javascript', body: CHECKIN_JS })
+          : route.fulfill({ status: 200, contentType: 'text/html', body: VERIFIER_HTML });
+      });
+      await page.goto(`${VERIFIER}/`);
+      await page.evaluate((req) => { (window as any).__req = req; }, {
+        purpose: 'Pre-visit check-in', items: REQUEST.items.slice(0, 6) });
+      const [wallet] = await Promise.all([
+        page.waitForEvent('popup'), page.locator('#go').click()]);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      await signInInTab(wallet);
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      await expect(wallet.locator('#wallet-origin')).toHaveText(VERIFIER);
+      const text = await wallet.locator('#wallet-review').innerText();
+      for (const type of ['Patient', 'Condition', 'AllergyIntolerance',
+        'MedicationRequest', 'Immunization', 'Coverage', 'Organization',
+        'Practitioner', 'Bundle', 'FHIR']) {
+        expect(text, type).not.toContain(type);
+      }
+      for (const plain of ['Your allergies', 'Penicillin', 'Your medicines',
+        'Lisinopril 10 mg', 'Your insurance card',
+        'Synthetic Test Health Plan, member ID ending 0001',
+        'Your vaccines', 'Influenza vaccine, 2025-10-01',
+        'Casey Testpatient, born 1985-07-04', 'Your address, phone, email']) {
+        expect(text, plain).toContain(plain);
+      }
+      // The member ID is masked, and the problem with no profile is not there.
+      expect(text).not.toContain('FAKE-MEMBER-0000001');
+      if (process.env.CHECKIN_SHOTS) {
+        await wallet.screenshot({ fullPage: true,
+          path: path.join(process.env.CHECKIN_SHOTS, 'review-375.png') });
+      }
+    });
+
+  test('every item starts at "Don\'t share", and a bare Send releases nothing',
+    async ({ page }) => {
+      await page.route(`${VERIFIER}/**`, (route) => {
+        const url = new URL(route.request().url());
+        return url.pathname === '/checkin.js'
+          ? route.fulfill({ status: 200, contentType: 'text/javascript', body: CHECKIN_JS })
+          : route.fulfill({ status: 200, contentType: 'text/html', body: VERIFIER_HTML });
+      });
+      await page.goto(`${VERIFIER}/`);
+      await page.evaluate((req) => { (window as any).__req = req; },
+        { items: REQUEST.items.slice(0, 6) });
+      const [wallet] = await Promise.all([
+        page.waitForEvent('popup'), page.locator('#go').click()]);
+      await signInInTab(wallet);
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      const checked = wallet.locator('#wallet-items input[type=radio]:checked');
+      await expect(checked).toHaveCount(6);
+      expect(await checked.evaluateAll((els) =>
+        els.map((e) => (e as HTMLInputElement).value)))
+        .toEqual(Array(6).fill('decline'));
+      await wallet.locator('#wallet-send').click();
+      await expect.poll(() => page.evaluate(() => (window as any).__result),
+        { timeout: 15_000 }).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.artifacts).toEqual([]);
+      expect(r.json.requestStatus.map((s: any) => s.status))
+        .toEqual(Array(6).fill('declined'));
+    });
+
+  test('the code screen can send a new code or go back to the email',
+    async ({ page }) => {
+      await page.goto('/');
+      const [wallet] = await Promise.all([
+        page.waitForEvent('popup'),
+        page.evaluate(() => { window.open('/checkin/wallet'); }),
+      ]);
+      await blockThirdParty(wallet);
+      if (process.env.CHECKIN_SHOTS) {
+        await wallet.setViewportSize({ width: 375, height: 812 });
+        await wallet.screenshot({ fullPage: true,
+          path: path.join(process.env.CHECKIN_SHOTS, 'signin-375.png') });
+      }
+      const email = uniqueEmail();
+      await wallet.locator('#signin-email').fill(email);
+      await wallet.locator('#signin-email-btn').click();
+      await expect(wallet.locator('#signin-code')).toBeVisible();
+      await expect(wallet.locator('#signin-code-note')).toContainText(email);
+      if (process.env.CHECKIN_SHOTS) {
+        await wallet.setViewportSize({ width: 375, height: 812 });
+        await wallet.screenshot({ fullPage: true,
+          path: path.join(process.env.CHECKIN_SHOTS, 'code-375.png') });
+      }
+      // A new code at once is held by the resend cooldown, and says so.
+      const resend = wallet.waitForRequest((r) =>
+        r.url().endsWith('/api/auth/email') && r.method() === 'POST');
+      await wallet.locator('#signin-resend').click();
+      await resend;
+      await expect(wallet.locator('#signin-code-note'))
+        .toContainText('You can ask for a new one in');
+      await wallet.locator('#signin-other-email').click();
+      await expect(wallet.locator('#signin-start')).toBeVisible();
+      await expect(wallet.locator('#signin-code')).toBeHidden();
+      await expect(wallet.locator('#signin-code-input')).toHaveValue('');
+    });
+
+  test('waiting for a request that never comes offers a next step',
+    async ({ page }) => {
+      await page.goto('/');
+      const [wallet] = await Promise.all([
+        page.waitForEvent('popup'),
+        page.evaluate(() => { window.open('/checkin/wallet?wait=300'); }),
+      ]);
+      await blockThirdParty(wallet);
+      await signInInTab(wallet);
+      await expect(wallet.locator('#wallet-waiting')).toBeVisible();
+      await expect(wallet.locator('#wallet-waiting-late')).toBeVisible();
+      await expect(wallet.locator('#wallet-waiting-late'))
+        .toContainText('start check-in again');
+      if (process.env.CHECKIN_SHOTS) {
+        await wallet.setViewportSize({ width: 375, height: 812 });
+        await wallet.screenshot({ fullPage: true,
+          path: path.join(process.env.CHECKIN_SHOTS, 'waiting-late-375.png') });
+      }
+    });
 
   test('every Bundle it sends is tagged as test data', async ({ page }) => {
     await page.goto('/');
