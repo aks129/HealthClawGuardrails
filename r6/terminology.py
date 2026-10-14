@@ -308,14 +308,21 @@ _MISSES: collections.Counter = collections.Counter()
 
 #: A SNOMED CT concept id: 6 to 18 digits, no leading zero.
 _SNOMED_CODE = re.compile(r"[1-9][0-9]{5,17}")
-#: Resolver answers that state an absence or a status, not a name. Strict
-#: on purpose: a real substance or finding is never named "none" or "nil",
-#: and a false positive only drops a label (#957 round 2). The last line
-#: holds the German, French, Spanish and Italian negations.
+#: Resolver answers that state an absence about allergies, not a name. The
+#: closed sets above are the real control; this is the backstop for codes
+#: they lag. A label is refused when it is:
+#:   - "no known ..." anything, or an NK..A abbreviation (NKA, NKDA, NKFA);
+#:   - a bare "None known" / "Nil known" (or "None or none/not known");
+#:   - a negation (English, German, French, Spanish, Italian) in a label
+#:     that is about allergies, sensitivities, intolerances or reactions.
+#: A negation on any other topic is a name: "None detected", "Nil by mouth",
+#: "Sin Nombre virus" (#957 round 3).
 _ABSENCE_WORDING = re.compile(
-    r"\bno known\b|\bnot (?:asked|known)\b|\bnone\b|\bnil\b"
-    r"|\bnk[a-z]{0,2}a\b|\bno\b.*\ballerg"
-    r"|\bkeine?\b|\baucune?\b|\bsin\b|\bning[uú]n[ao]?\b|\bnessun[ao]?\b",
+    r"\bno known\b|\bnk[a-z]{0,2}a\b"
+    r"|^\s*(?:none|nil)(?: or (?:none|not))? known\s*$"
+    r"|^(?=.*(?:al+erg|sensitiv|intoleran|reaction))"
+    r"(?=.*(?:\bno\b|\bnone\b|\bnil\b|\bnot (?:asked|known)\b"
+    r"|\bkeine?\b|\baucune?\b|\bsin\b|\bning[uú]n[ao]?\b|\bnessun[ao]?\b))",
     re.IGNORECASE)
 
 

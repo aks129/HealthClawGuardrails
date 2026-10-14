@@ -173,9 +173,11 @@ def test_a_well_formed_snomed_code_still_reaches_the_resolver(monkeypatch):
 
 @pytest.mark.parametrize("label", [
     "No known allergies", "No known drug allergy", "NKDA", "NKA",
-    "Patient not asked", "No drug allergy", "No allergy to latex",
-    "Allergy status not asked", "None known", "None or not known",
-    "Nil known allergies", "Allergies: none", "NKFA", "Not known",
+    "No drug allergy", "No allergy to latex", "Allergy status not asked",
+    "None known", "None or not known", "None or none known", "Nil known",
+    "Nil known allergies", "Allergies: none", "NKFA",
+    "No known sensitivities", "Drug intolerance: none",
+    "Adverse reaction: nil", "No known medications",
     "Keine bekannten Allergien", "Aucune allergie connue",
     "Sin alergias conocidas", "Nessuna allergia nota",
     "Ninguna alergia conocida"])
@@ -195,7 +197,12 @@ def test_a_resolver_absence_answer_for_an_unlisted_code_is_never_a_label(
 @pytest.mark.parametrize("label", [
     "Allergy to penicillin", "Non-allergic rhinitis", "Known allergy",
     "Nodular goiter", "Nilotinib", "Sinus tachycardia",
-    "Nonsteroidal anti-inflammatory agent", "Ketoconazole"])
+    "Nonsteroidal anti-inflammatory agent", "Ketoconazole",
+    # Real labels the round-2 check refused (#957 round 3): a negation that
+    # is not about allergies is a name, and the closed sets do the rest.
+    "None detected", "Nil by mouth",
+    "Hantavirus sin nombre Ab [Presence] in Serum",
+    "Sin Nombre virus encephalitis"])
 def test_an_ordinary_resolver_answer_is_still_a_label(monkeypatch, label):
     monkeypatch.setattr("r6.terminology_resolver.resolve",
                         lambda s, c: label)

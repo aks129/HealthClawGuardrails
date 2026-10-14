@@ -8,8 +8,9 @@ round 3 found (live tx.fhir.org answers captured 2026-10-14):
   SNOMED 1300212001 "Allergy status" = 373067005) reads back as the bare
   answer "No". That is not an absence concept, and no code set can close it
   without knowing the question. Follow-up, non-blocking: xfail.
-- Wording false positives: real labels the broadened pattern drops (only a
-  label is lost, never a fact is added). Non-blocking: xfail.
+- Wording false positives: real labels the broadened pattern dropped.
+  Fixed: a negation is refused only when it is about allergies or
+  sensitivities, so these are must-keep controls now.
 
 Synthetic data only.
 """
@@ -76,8 +77,8 @@ def test_a_no_to_an_allergy_question_is_qualified(q, a):
     assert out["valueCodeableConcept"].get("text") != "No", json.dumps(out)
 
 
-@pytest.mark.xfail(strict=False, reason="non-blocking false positives: the "
-                   "label is dropped, nothing is asserted")
+# Must-keep: fixed after round 3 by refusing a negation only when it is
+# about allergies or sensitivities.
 @pytest.mark.parametrize("label", [
     "Hantavirus sin nombre Ab [Presence] in Serum",   # LOINC 33549-7
     "Sin Nombre virus encephalitis",                  # SNOMED 1177044001
