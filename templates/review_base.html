@@ -160,6 +160,13 @@
                      color: #fff; }
       .btn-primary:hover { background: var(--clay-deep);
                            border-color: var(--clay-deep); }
+      /* A disabled Approve looked exactly like a live one (#853). */
+      .btn:disabled, .btn:disabled:hover {
+        opacity: .45; cursor: not-allowed; }
+      .btn-primary:disabled:hover { background: var(--clay);
+                                    border-color: var(--clay); }
+      /* `.btn` sets display, which would beat the hidden attribute. */
+      [hidden] { display: none !important; }
       .btn-outline-success { color: var(--sage); }
       .btn-outline-warning { color: var(--warn); }
       .btn-outline-danger  { color: var(--danger); }

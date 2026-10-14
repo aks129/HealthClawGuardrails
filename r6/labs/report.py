@@ -8,10 +8,29 @@ build_consumer_summary() is the plain-language, outcomes-oriented consumer view.
 Neither summary may be placed in audit detail (PHI).
 """
 import copy
+import re
 
 from r6.labs.interpret import (NO_NUMERIC_VALUE, RANGE_NOT_ASSERTED,
                                UNIT_MISMATCH, UNKNOWN_ANALYTE)
+from r6.labs.trend import kdigo_consumer_line
+from r6.redaction import UNIT_REDACTED, unit_is_shaped
 from r6.terminology import LOINC, lookup
+
+#: A LOINC code: up to five ASCII digits, a dash, and its mod-10 check
+#: digit. `\d` matched other scripts' digits, and eight digits left room
+#: for a phone number (#922 re-test N1).
+_LOINC_SHAPE = re.compile(r"([0-9]{1,5})-([0-9])")
+
+
+def _loinc_ok(code):
+    m = isinstance(code, str) and _LOINC_SHAPE.fullmatch(code)
+    if not m:
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(m.group(1))):
+        d = int(ch) * (2 if i % 2 == 0 else 1)
+        total += d - 9 if d > 9 else d
+    return (10 - total % 10) % 10 == int(m.group(2))
 
 V3_INTERPRETATION = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 
@@ -29,11 +48,22 @@ def annotate_observation(obs, result):
     if result.get("range_source") == "table":
         rng = {"text": "HealthClaw population default (adult); "
                        "not the performing lab's range"}
+        # The result's unit is the stored record's, unredacted, and this
+        # range is added after redaction ran on `obs` (#922 B4).
+        unit = result.get("unit")
+        if unit and not unit_is_shaped(unit):
+            unit = UNIT_REDACTED
         if result.get("low") is not None:
-            rng["low"] = {"value": result["low"], "unit": result.get("unit")}
+            rng["low"] = {"value": result["low"], "unit": unit}
         if result.get("high") is not None:
-            rng["high"] = {"value": result["high"], "unit": result.get("unit")}
-        out.setdefault("referenceRange", []).insert(0, rng)
+            rng["high"] = {"value": result["high"], "unit": unit}
+        # A stored referenceRange that is not a list is upstream junk the
+        # interpreter already ignored (r6/labs/interpret.py `_list`). It is
+        # replaced by the range actually used; inserting into it raised and
+        # made $interpret 500 for the whole tenant (#878 QA, #869).
+        existing = out.get("referenceRange")
+        out["referenceRange"] = [rng] + (
+            existing if isinstance(existing, list) else [])
     return out
 
 
@@ -54,8 +84,13 @@ def build_interpretation_summary(results):
         elif flag == "H":
             buckets["high"] += 1
         if flag != "N":
+            # The result's unit is the stored record's, unredacted; on the
+            # performing lab's range it is whatever upstream wrote.
+            unit = r.get("unit")
             flagged.append({"analyte": r.get("analyte"), "value": r.get("value"),
-                            "unit": r.get("unit"), "flag": flag})
+                            "unit": unit if unit_is_shaped(unit)
+                            else (UNIT_REDACTED if unit else unit),
+                            "flag": flag})
     return {**buckets, "flagged": flagged, "total": len(results),
             "indeterminate_analytes": _undecided_names(results)}
 
@@ -73,8 +108,10 @@ def _undecided_name(r):
     if r.get("analyte"):
         return r["analyte"]
     code = r.get("loinc")
-    return lookup(LOINC, code) or (f"LOINC {code}" if code
-                                   else "an unidentified analyte")
+    # Only a code shaped like a LOINC is named: the interpreter takes any
+    # string under the LOINC system, and upstream can write a name there.
+    return lookup(LOINC, code) or (
+        f"LOINC {code}" if _loinc_ok(code) else "an unidentified analyte")
 
 
 def _undecided_names(results):
@@ -118,21 +155,42 @@ def _unevaluated_marker(results):
         reason = causes.pop()
         why = _CAUSE_NOTES.get(reason, "it could not be interpreted")
         if plural:
-            why = why.replace(" for it", " for them").replace(
-                "the result carried", "the results carried").replace(
-                "the value falls", "the values fall")
+            why = _plural_cause(why)
+        said = f"{', '.join(names)}, because {why}"
     else:
+        # Each cause in its own words. "They could not be interpreted, for
+        # more than one reason" was read out as a blood pressure and a
+        # glucose that "could not be interpreted" (#937): true of the check,
+        # and no use to the person.
         reason = "partly-unevaluated"
-        why = "they could not be interpreted, for more than one reason"
-    listed = ", ".join(names)
+        by_cause = {}
+        for r, name in zip(undecided, names):
+            by_cause.setdefault(r.get("indeterminate_reason"), []).append(name)
+        said = "; ".join(
+            f"{', '.join(group)}, because "
+            + (_plural_cause(why) if len(group) > 1 else why)
+            for group, why in (
+                (group, _CAUSE_NOTES.get(cause, "it could not be interpreted"))
+                for cause, group in by_cause.items()))
     return {"unevaluated": reason,
             "unevaluated_count": len(undecided),
             "unevaluated_analytes": names,
+            # The LOINC code each name stands for, in the same order: a code
+            # is not PHI, and a reader pairing a name with its reading needs
+            # more than a position to go on.
+            "unevaluated_codes": [r.get("loinc") if _loinc_ok(r.get("loinc"))
+                                  else None for r in undecided],
             "unevaluated_note": (
-                f"This check did not evaluate {listed}, because {why}. That is "
+                f"This check did not evaluate {said}. That is "
                 f"a limit on the check and not a statement about your health — "
                 f"ask your clinician to read {'them' if plural else 'it'}"
                 f" directly.")}
+
+
+def _plural_cause(why):
+    return why.replace(" for it", " for them").replace(
+        "the result carried", "the results carried").replace(
+        "the value falls", "the values fall")
 
 
 def _consumer_line(r):
@@ -151,7 +209,11 @@ def _consumer_line(r):
                        f"worth discussing with your clinician."}
 
 
-def build_consumer_summary(results):
+def build_consumer_summary(results, trends=None):
+    """`trends` are r6/labs/trend.py results for ONE patient. A fired check
+    lands under its own `trends` key, not in `lines`: `lines` is shaped per
+    result with a range flag, and CareAgents and the brief read it that way.
+    """
     lines = [_consumer_line(r) for r in results if r.get("flag")]
     out = {"lines": lines,
            "note": "This is general information to help you understand your "
@@ -160,4 +222,19 @@ def build_consumer_summary(results):
     marker = _unevaluated_marker(results)
     if marker:
         out.update(marker)
+    trend_lines = [line for line in map(kdigo_consumer_line, trends or ())
+                   if line]
+    if trend_lines:
+        out["trends"] = trend_lines
+        # The range check and the trend check read the same result
+        # differently: a umol/L creatinine is a unit mismatch against the
+        # mg/dL range, while the trend converts it. Left alone, the note
+        # would say creatinine was not evaluated beside a line saying it
+        # rose. Both are true; say which check each one is about.
+        for line in trend_lines:
+            if line["analyte"] in (marker or {}).get("unevaluated_analytes", ()):
+                out["unevaluated_note"] += (
+                    f" {line['analyte']} was still compared with its own "
+                    f"earlier results; that comparison is described "
+                    f"separately.")
     return out

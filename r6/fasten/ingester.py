@@ -26,6 +26,7 @@ import httpx
 
 from models import db
 from r6.audit import add_audit_event
+from r6.fasten.models import connection_revoked, tenant_closed
 from r6.models import R6Resource
 
 logger = logging.getLogger(__name__)
@@ -199,12 +200,53 @@ _CURATR_ELIGIBLE = frozenset({
 })
 
 
+def _stopped_by_disconnect(job_id: int, task_id: str, tenant_id: str,
+                           org_connection_id: str) -> bool:
+    """True, with the uncommitted batch dropped, once access is taken back:
+    the tenant disconnected in CareAgents, or this connection revoked at
+    Fasten (patient.authorization_revoked).
+
+    Called before every commit in stream_ingest. The revoke endpoint has
+    usually failed the job already, but this thread holds a stale job
+    object whose next commit would write its own status back over that, so
+    the job is closed by a conditional UPDATE rather than through the
+    object (a purge may also have deleted the row, which matches nothing).
+    """
+    from r6.fasten.models import FastenJob
+    from r6.fasten.reaper import TERMINAL_STATUSES
+
+    if not (tenant_closed(tenant_id)
+            or connection_revoked(org_connection_id)):
+        return False
+    db.session.rollback()
+    (FastenJob.query
+     .filter(FastenJob.id == job_id,
+             FastenJob.status.notin_(TERMINAL_STATUSES))
+     .update({'status': 'failed', 'failure_reason': 'disconnected',
+              'completed_at': datetime.now(timezone.utc)},
+             synchronize_session=False))
+    add_audit_event(
+        event_type='fasten_import_refused',
+        agent_id='fasten-connect',
+        tenant_id=tenant_id,
+        outcome='failure',
+        detail=f'job={task_id} stopped: disconnected',
+    )
+    db.session.commit()
+    logger.info('Fasten job %s stopped: tenant disconnected', task_id)
+    return True
+
+
 def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> None:
     """
     Background worker: stream-download NDJSON export files and ingest FHIR resources.
 
     Runs in a daemon thread via threading.Thread.
     Uses app.app_context() for all DB access.
+
+    Every commit is preceded by a disconnect check, so an ingest that is
+    running when the account holder disconnects stops at its next commit
+    and keeps nothing it had not committed yet.
     """
     from r6.fasten.models import FastenJob  # avoid circular import at module level
 
@@ -213,7 +255,12 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
         if not job:
             logger.error('FastenJob %s not found', job_id)
             return
+        task_id = job.task_id
+        org_connection_id = job.org_connection_id
 
+        if _stopped_by_disconnect(job_id, task_id, tenant_id,
+                                  org_connection_id):
+            return
         job.status = 'downloading'
         db.session.commit()
 
@@ -241,6 +288,9 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 ) as resp:
                     resp.raise_for_status()
 
+                    if _stopped_by_disconnect(job_id, task_id, tenant_id,
+                                              org_connection_id):
+                        return
                     job.status = 'ingesting'
                     db.session.commit()
 
@@ -282,6 +332,10 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
 
                         total = ingested + skipped + failed
                         if total % _PROGRESS_BATCH == 0:
+                            if _stopped_by_disconnect(job_id, task_id,
+                                                      tenant_id,
+                                                      org_connection_id):
+                                return
                             job.ingested_resources = ingested
                             job.skipped_resources = skipped
                             job.failed_resources = failed
@@ -290,6 +344,9 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                                 'Fasten job %s progress: ingested=%d skipped=%d '
                                 'failed=%d', job.task_id, ingested, skipped, failed)
 
+            if _stopped_by_disconnect(job_id, task_id, tenant_id,
+                                      org_connection_id):
+                return
             job.status = 'complete'
             job.ingested_resources = ingested
             job.skipped_resources = skipped

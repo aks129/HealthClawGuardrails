@@ -16,37 +16,46 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import quote
 
 import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
+from markupsafe import Markup, escape
 
 from careagents.accounts import (AccountService, AuthError, MailError,
-                                 MailUnconfirmed, new_binding_code)
-from careagents import advisors, analytics, connectors, consent
+                                 MailUnconfirmed, new_binding_code,
+                                 secret_matches)
+from careagents import advisors, analytics, connectors, consent, mail
+from careagents import beta, imessage, operator_cli, tester_terms
+from careagents import security_headers, sendblue_surface
+from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
+from careagents import beta_signup, feedback, funnel, invites
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
-                                   HealthClawUnconfirmed)
+                                   HealthClawUnconfirmed, acting_for)
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
 
-# Bump when the consent-card copy or the terms/privacy content it points at
-# changes materially. Stored per connection so we always know which version a
-# person agreed to — a later change never silently claims earlier consent.
-# 2026-08-01: the "leaving" clause said to email support, while self-serve
-# Disconnect and Delete sat on the same page (#203). Understating our own
-# strongest privacy control in the one place people read carefully.
-CONSENT_VERSION = "2026-08-01"
+#: Session key: this session was opened by a beta confirm link (_first_run),
+#: not by a code or passkey. Limited (full_sign_in_required) and ended once
+#: the account has real records (login_required), #920 F1.
+_VIA_LINK = "via_link"
+#: What a link session is told when it reaches for more than the sample.
+REAUTH_TEXT = ("For that, sign in again with a code we email you. Your chat "
+               "stays as it is.")
 
 # `/healthz` asks HealthClaw whether a run worker is present. That call gets
 # its own budget rather than the client's 25s chat timeout: as a
@@ -57,6 +66,25 @@ CONSENT_VERSION = "2026-08-01"
 # chat timeout (docs/evidence/2026-09-03-probe-219-thread-saturation.md §8,
 # PR #573).
 _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
+
+#: The one address patient-facing copy sends people to.
+CONTACT_EMAIL = "contactus@healthclaw.io"
+
+
+def contact_links(text) -> Markup:
+    """Jinja filter: escape `text`, then make the contact address a mailto
+    link. Only that fixed address is linked, so nothing in `text` becomes
+    markup."""
+    return Markup(str(escape(text)).replace(
+        CONTACT_EMAIL,
+        f'<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>'))
+
+
+def chat_links(text) -> Markup:
+    """Jinja filter for a replayed assistant bubble: contact_links, and
+    "your hub" links to the hub, the same two links chat.js adds live."""
+    return Markup(str(contact_links(text)).replace(
+        "your hub", '<a href="/home">your hub</a>'))
 
 # The same call on the ADMISSION path (`POST /api/chat`, and the iMessage
 # relay ingress). It gets its own budget rather than sharing the readiness
@@ -92,8 +120,19 @@ _UPLOAD_MIME_TYPES = frozenset({
     "application/json+fhir",
 })
 
-_BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
+# The brief is read in careagents/brief.py, shared with the agent's
+# appointment_brief tool; these names are kept for this module's callers.
+_BRIEF_SECTION_PREFIX = brief_mod.SECTION_PREFIX
+_parse_brief_sections = brief_mod.parse_sections
+_care_gaps_marker = brief_mod.care_gaps_marker
+_CARE_GAPS_OK = brief_mod.CARE_GAPS_OK
 
+
+#: Default names for the assistant of someone the holder cares for, in
+#: order; the first one no assistant on the account already has. Fixed
+#: words only: an assistant's name is part of the model's prompt, so a
+#: nickname is never used (#951 F4).
+_CARE_NAMES = ("Rowan", "Hazel", "Linden", "Willow", "Aspen", "Cedar")
 
 #: What a pending request is called on the approvals page, by engine kind.
 _KIND_LABELS = {
@@ -131,54 +170,16 @@ class OwnershipUnknown(Exception):
     """
 
 
-def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
-    """Deserialize a FHIR Basic AppointmentBrief into section→field lists.
-
-    Each section is a list of dicts with keys: label, value, sourceType, sourceId.
-    Returns {} on any parse error so the template always gets a plain dict —
-    empty sections render as 'not available from connected records'.
-    """
-    out: dict[str, list[dict]] = {}
-    try:
-        for ext in resource.get("extension", []):
-            url = ext.get("url", "")
-            if not url.startswith(_BRIEF_SECTION_PREFIX):
-                continue
-            name = url[len(_BRIEF_SECTION_PREFIX):]
-            fields = []
-            for fe in ext.get("extension", []):
-                raw = fe.get("valueString")
-                if raw:
-                    try:
-                        fields.append(json.loads(raw))
-                    except (ValueError, TypeError):
-                        pass
-            out[name] = fields
-    except (AttributeError, TypeError):
-        pass
-    return out
+#: The engine review page's tab title ends "— HealthClaw Guardrails".
+_REVIEW_TAB_BRAND = re.compile(
+    r"(<title>[^<]*?)HealthClaw Guardrails(\s*</title>)")
 
 
-# Mirrors r6.brief.engine.CARE_GAPS_OK. CareAgents talks to HealthClaw over
-# HTTP and imports nothing from it, so the string is repeated rather than
-# shared.
-_CARE_GAPS_OK = "ok"
-
-
-def _care_gaps_marker(resource: dict | None, key: str) -> str:
-    """One `status`/`reason` sub-extension of the brief's care-gaps section,
-    or "" when the brief, the section or the marker is missing or unreadable."""
-    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
-    try:
-        for ext in (resource or {}).get("extension", []):
-            if ext.get("url") != care_gaps_url:
-                continue
-            for sub in ext.get("extension", []):
-                if sub.get("url") == key:
-                    return sub.get("valueString") or ""
-    except (AttributeError, TypeError):
-        pass
-    return ""
+def _connection_is_live(ctx: dict) -> bool:
+    """Whether an agent context's connection may still reach the tenant's
+    requests: not revoked (#215). The one rule for every approval surface,
+    the web pages and APPROVALS by text alike."""
+    return (ctx.get("connection") or {}).get("status") != "revoked"
 
 
 def _parse_care_gaps_status(resource: dict | None) -> str:
@@ -252,6 +253,19 @@ def create_app(config: Config | None = None,
     cfg = config or Config()
     app = Flask(__name__)
     app.secret_key = cfg.session_secret
+    # Every static URL names the build, so a deploy is a new URL and a
+    # browser cannot keep running the old home.js against the new server
+    # (#909). The deploy stamp when there is one, else this process's start.
+    asset_version = (cfg.build_sha if cfg.build_sha != "unknown"
+                     else str(int(time.time())))
+
+    @app.url_defaults
+    def _versioned_static(endpoint, values):
+        if endpoint == "static":
+            values.setdefault("v", asset_version)
+
+    app.jinja_env.filters["contact_links"] = contact_links
+    app.jinja_env.filters["chat_links"] = chat_links
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),
@@ -266,6 +280,24 @@ def create_app(config: Config | None = None,
         "config": cfg, "client": hc, "accounts": svc}
 
     turns: dict[str, deque] = defaultdict(deque)
+
+    def _real_records_open(acct) -> bool:
+        """May this account START a real-record connection? The one gate.
+
+        Order matters. `off` closes everything, before the table is read
+        (never a back door around `off`). A paused account is closed in
+        every mode (beta spec 4.6). Then the config rule: `on` is open,
+        `allowlist` is the environment list or an active invite, and the
+        invite table is asked only once the tester terms are approved (#565).
+        """
+        if cfg.real_records == "off":
+            return False
+        if svc.is_paused(acct.id):
+            return False
+        return cfg.real_records_open_for(
+            acct.email,
+            invited=svc.real_records_invited if tester_terms.approved()
+            else None)
 
     # --- canonical host (#264, D7) -------------------------------------------
 
@@ -303,6 +335,21 @@ def create_app(config: Config | None = None,
         return redirect(target, code=308)
 
     # --- page-view counting (careagents/analytics.py) ------------------------
+
+    #: Pages on the texted-link path. No Referer leaves them: /link carries a
+    #: live token in its query string, and the two pages after it are where
+    #: a person on that path clicks out. Scoped, not app-wide: an outbound
+    #: connector flow may rely on the default policy.
+    _NO_REFERRER_ENDPOINTS = frozenset(
+        {"imessage_link", "imessage_link_claim", "auth"})
+
+    security_headers.install(app, production=cfg.app_env == "production")
+
+    @app.after_request
+    def _no_referrer_on_the_link_path(response):
+        if request.endpoint in _NO_REFERRER_ENDPOINTS:
+            response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.after_request
     def _count_a_public_page_view(response):
@@ -342,20 +389,68 @@ def create_app(config: Config | None = None,
             # at the moment the person is trying to confirm their records are
             # gone (#265). A vanished account is an ended session, and this is
             # the one place all protected routes pass through.
-            if current_account() is None:
+            #
+            # A session a confirm link opened (_first_run) ends the moment
+            # its account has anything but the sample: a forwarded link must
+            # never read records connected after it was used (#920 F1). A
+            # code or passkey sign-in replaces it with an ordinary session.
+            ended = current_account() is None or (
+                session.get(_VIA_LINK)
+                and svc.has_real_connection(session.get("account_id")))
+            if ended:
                 if session.get("account_id"):
+                    # A texted link parked before this session went stale
+                    # survives, so the sign-in that follows still binds it.
+                    imessage_link = session.get("imessage_link")
                     session.clear()
+                    if isinstance(imessage_link, str):
+                        session["imessage_link"] = imessage_link
                 if request.path.startswith("/api/") or request.path.startswith(
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
+                return redirect(url_for("auth"))
+            # The engine's audit trail names the account that asked
+            # (one assistant per person spec, section 6.2).
+            with acting_for(session.get("account_id")):
+                return fn(*a, **k)
+        return wrapper
+
+    def full_sign_in_required(fn):
+        """For what outlasts or widens a session: a passkey, a grant to an
+        app, a phone or chat bound to the account, real records; and for
+        what undoes the owner's own choices: deleting the account, revoking
+        a grant. A session
+        a confirm link opened is refused until a code or passkey sign-in
+        (#920 F1). Goes under @login_required."""
+        @wraps(fn)
+        def wrapper(*a, **k):
+            if session.get(_VIA_LINK):
+                if (request.path.startswith(("/api/", "/webauthn/"))
+                        or request.method == "POST"
+                        and request.path == "/authorize/decide"):
+                    return jsonify({"error": "sign_in_again",
+                                    "message": REAUTH_TEXT}), 403
                 return redirect(url_for("auth"))
             return fn(*a, **k)
         return wrapper
 
     def _login(account):
+        # Cleared against session fixation. The one value carried across is
+        # a consent handle parked by /authorize before sign-in, and only if it
+        # still verifies: it is signed by HealthClaw and names no account,
+        # and without it the person lands on the hub, not the request (#846).
+        consent_req = session.get("consent_req")
+        imessage_link = session.get("imessage_link")
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
+        if (isinstance(consent_req, str)
+                and consent.parse_handle(consent_req, cfg.mint_secret)):
+            session["consent_req"] = consent_req
+        # A texted sign-in link parked by /link/<token> (careagents.imessage):
+        # an id, not the token, and spent only after this sign-in.
+        if isinstance(imessage_link, str):
+            session["imessage_link"] = imessage_link
 
     # --- pages ---------------------------------------------------------------
 
@@ -370,10 +465,49 @@ def create_app(config: Config | None = None,
         # verification: skip once and the "sign in with your face" promise
         # quietly expired into email codes forever, because this route sent
         # every logged-in visitor straight back to /home (#223).
-        enroll = request.args.get("enroll") == "1"
-        if session.get("account_id") and not enroll:
+        asked_enroll = request.args.get("enroll") == "1"
+        # A confirm-link session signs in properly here before anything
+        # full_sign_in_required guards, a passkey included.
+        via_link = bool(session.get(_VIA_LINK))
+        enroll = asked_enroll and not via_link
+        # The chat "Add a passkey" came from, to return to afterwards: only
+        # this account's own, so it can never send anyone elsewhere.
+        back = ""
+        me = current_account()
+        agent = request.args.get("agent") or ""
+        if asked_enroll and me and svc.get_agent_context(me.id, agent):
+            back = url_for("chat", agent=agent)
+        # "Sign in again to connect your records" from a link session's
+        # hub card or chat (#934 QA F1): a code first, then back to the card.
+        code_for_connect = (request.args.get("connect") == "1"
+                            and via_link and me is not None)
+        if code_for_connect:
+            back = url_for("home") + "#connect-records"
+        # The same step for Settings' invite link (#937): a code, then back
+        # to the card that now shows the link.
+        code_for_invite = (request.args.get("invite") == "1"
+                           and via_link and me is not None
+                           and not code_for_connect)
+        if code_for_invite:
+            back = url_for("settings") + "#invite-section"
+        if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
+        # Set by a beta confirm that could not sign in (beta_signup): the
+        # address is filled in and the email code is the first step.
+        prefill = session.get(beta_signup.AUTH_EMAIL_KEY)
+        if via_link and not isinstance(prefill, str):
+            prefill = me.email if me else ""
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
+                               back=back,
+                               # "Add a passkey" from a link session: say
+                               # why a code comes first (patient walk F1).
+                               code_for_passkey=asked_enroll and via_link,
+                               code_for_connect=code_for_connect,
+                               code_for_invite=code_for_invite,
+                               prefill=(prefill if isinstance(prefill, str)
+                                        else ""),
+                               imessage_pending=bool(
+                                   session.get("imessage_link")),
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
@@ -384,36 +518,186 @@ def create_app(config: Config | None = None,
         pending_req = session.pop("consent_req", None)
         if pending_req:
             return redirect(url_for("consent_authorize", req=pending_req))
+        # So does a texted sign-in link: bind the handle it came from.
+        if session.get("imessage_link"):
+            return redirect(url_for("imessage_link_claim"))
         acct = current_account()
         data = svc.list_home(acct.id)
         view = hub_view.build(data, time.time())
-        real_open = cfg.real_records_open_for(acct.email)
+        real_open = _real_records_open(acct)
+        # Real connections whose consent predates the current terms (beta
+        # spec 4.3). The worker refuses their turns until this is answered.
+        # One prompt for the account, however many connections it covers.
+        stale_consent = svc.stale_consent(data["connections"],
+                                          tester_terms.CONSENT_VERSION)
+        paused = svc.is_paused(acct.id)
+        # Invited, but the invite waits on the tester terms (#565): say so
+        # rather than "coming for invited testers" to someone who is one.
+        invited = (cfg.real_records == "allowlist"
+                   and svc.real_records_invited(acct.email))
+        menu = hub_view.menu_items(
+            connectors.catalog(cfg, real_records=real_open), real_open)
         return render_template(
             "home.html", me=acct,
+            connect_next=_connect_next(acct, view, menu, real_open, paused),
+            # A confirm-link session connects only after a code (#920 F1):
+            # the card says so and goes to /auth (#934 QA F1).
+            link_session=bool(session.get(_VIA_LINK)),
+            invite_line=_invite_line(acct, real_open),
+            stale_consent=stale_consent,
+            paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
+            invited=invited,
             hub=view,
-            banner_records=("your records are connected" if view["has_real"]
-                            else "sample records"),
+            # Person, tone and routines per assistant, and whether the
+            # account kept several (one assistant per person spec, 4 and
+            # 8), for the hub card to render.
+            people_view=hub_view.assistants(data),
+            # "Add someone you care for", made-up records only (owner
+            # decision D1), behind CARE_PEOPLE as /api/people is.
+            people_enabled=cfg.people_enabled,
+            text_tile=beta_signup.text_tile(
+                cfg, view, svc.session, acct.email),
+            # "Connected" only once a real connection is active; has_real
+            # also counts one still connecting. "Made-up", as on /beta.
+            banner_records=("your records are connected"
+                            if any(not r["is_sample"]
+                                   for r in view["active_records"])
+                            else "made-up records"),
             switch_prompt=(None if svc.switch_prompted_at(acct.id)
                            else hub_view.switch_prompt(data)),
+            # A Fasten card still connecting links to its connect page
+            # (#937). A link is never blocked as a popup is, so a person
+            # whose browser blocked the first window is not left with only
+            # a Refresh that repeats it. While an import runs the card says
+            # the records are on their way instead, and after a failed one
+            # it says so and offers the page again (QA940 rounds 2 and 3).
+            connect_pages=({} if paused else {
+                r["id"]: {"url": hc.fasten_connect_url(r["tenant_id"]),
+                          "state": _import_state(r["tenant_id"])}
+                for r in view["records"]
+                if r["kind"] == "fasten" and r["status"] == "pending"}),
             has_grants=bool(svc.list_grants(acct.id)),
+            # One status per source row, chosen in one place (hub critique).
+            chip=hub_view.status_chip,
+            # "Where you can reach me": connected phones, masked as Settings
+            # shows them. Setting one up stays on Settings.
+            reach_phones=[imessage.masked_display(x["handle"])
+                          for x in data["surfaces"]
+                          if x["kind"] == "imessage"
+                          and x["status"] == "active"],
+            imessage_handle=cfg.imessage_handle,
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
-            menu=hub_view.menu_items(
-                connectors.catalog(cfg, real_records=real_open), real_open))
+            tester_terms_approved=tester_terms.approved(),
+            consent_version=tester_terms.CONSENT_VERSION,
+            terms_change=tester_terms.CHANGE_SUMMARY,
+            menu=menu)
+
+    def _can_connect_next(menu, real_open, paused, has_real) -> bool:
+        """May "Connect your records" be offered? When the account may
+        start a real-record connection (`_real_records_open`, the one
+        gate), the Fasten tile is live, and it has no real records yet."""
+        return (not paused and real_open and not has_real
+                and any(m["id"] == "fasten" and m["tier"] != "soon"
+                        for m in menu))
+
+    def _answered(acct) -> bool:
+        try:
+            return funnel.reached(svc.session, acct.id, "first_answer")
+        except Exception:  # noqa: BLE001 - the card is left out, not the page
+            return False
+
+    def _import_state(tenant: str) -> str:
+        """What a connecting Fasten card says (QA940 rounds 2 and 3):
+        "running", "failed", or anything else for the plain connect link.
+        A failed look answers "unknown": the link is the fallback for a
+        blocked popup, so doubt keeps it."""
+        try:
+            return hc.fasten_import_state(tenant)
+        except HealthClawError:
+            logger.warning("import status unavailable on the hub")
+            return "unknown"
+
+    def _connect_next(acct, view, menu, real_open, paused) -> bool:
+        """Is "Connect your records" the hub's next step? Once made-up
+        records have answered a question, and `_can_connect_next`."""
+        return (_can_connect_next(menu, real_open, paused, view["has_real"])
+                and _answered(acct))
+
+    def _chat_connect_next(acct, sample: bool) -> str | None:
+        """The chat's pointer to the hub's card: "now" once a made-up answer
+        has come, "after" to show it when this page's first answer does, or
+        None. On a sample chat only."""
+        if not sample:
+            return None
+        real_open = _real_records_open(acct)
+        menu = hub_view.menu_items(
+            connectors.catalog(cfg, real_records=real_open), real_open)
+        has_real = any(c["kind"] != "sample" and c["status"] != "revoked"
+                       for c in svc.list_home(acct.id)["connections"])
+        if not _can_connect_next(menu, real_open, svc.is_paused(acct.id),
+                                 has_real):
+            return None
+        return "now" if _answered(acct) else "after"
+
+    def _invite_line(acct, real_open) -> str | None:
+        """The honest line for someone who joined through an invite link
+        but could not be given real records."""
+        if real_open:
+            return None
+        try:
+            outcome = invites.join_outcome(svc.session, acct.email)
+        except Exception:  # noqa: BLE001
+            return None
+        if outcome == invites.FULL:
+            return ("Spots for connecting your own records are full right "
+                    "now, so you're using made-up records.")
+        if outcome == invites.CLOSED:
+            return ("Connecting your own records isn't open yet, so you're "
+                    "using made-up records.")
+        if outcome == invites.NONE:
+            return ("For now you can use made-up records. Connecting your "
+                    "own records isn't open to you yet.")
+        return None
 
     @app.get("/settings")
     @login_required
     def settings():
         acct = current_account()
         data = svc.list_home(acct.id)
+        assistants = hub_view.assistants(data)["assistants"]
+        # A link is a lasting power to sign people up, so it is made and
+        # shown only after a full sign-in (#928 F6), as full_sign_in_required
+        # holds for the routes that widen an account.
+        invite = None
+        if not session.get(_VIA_LINK):
+            try:
+                invite = invites.settings_row(svc, cfg, acct.id)
+            except Exception:  # noqa: BLE001 - the row is left out, not the page
+                logger.warning("invite link not shown")
         return render_template(
-            "settings.html", me=acct,
+            "settings.html", me=acct, invite=invite,
+            # Says where the link is instead of leaving the section out
+            # (#937): one code sign-in away.
+            link_session=bool(session.get(_VIA_LINK)),
             passkeys=svc.list_passkeys(acct.id),
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
-            first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
-            imessage_handle=cfg.imessage_handle)
+            # Pairing a phone binds the holder's own assistant, never the
+            # one for someone they care for (spec section 5).
+            first_agent=next(
+                (a["id"] for a in assistants
+                 if a["is_primary"] and a["person"]["kind"] == "self"), ""),
+            assistants=assistants,
+            tones=list(PERSONAS.items()),
+            routine_catalog=advisors.routine_catalog(),
+            imessage_handle=cfg.imessage_handle,
+            # Every connected phone, masked, each with its own Disconnect.
+            imessage_connected=[
+                {"id": x["id"], "label": imessage.masked_display(x["handle"])}
+                for x in data["surfaces"]
+                if x["kind"] == "imessage" and x["status"] == "active"])
 
     @app.post("/logout")
     def logout():
@@ -438,6 +722,7 @@ def create_app(config: Config | None = None,
             # unknown. Ordered before MailError: MailUnconfirmed subclasses it.
             return jsonify({"sent": None, "notice": str(exc)}), 202
         except MailError as exc:
+            funnel.note_mail(svc.session, cfg, mail.NOT_SENT)
             # Never report "sent" when nothing was sent — this is the front
             # door, and a silent failure leaves the person watching an empty
             # inbox with no idea whether to wait or retry.
@@ -467,14 +752,19 @@ def create_app(config: Config | None = None,
             acct = svc.verify_email_code(body.get("email", ""),
                                          body.get("code", ""))
         except AuthError as exc:
+            funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
         _login(acct)
-        return jsonify({"ok": True, "has_passkey": svc.has_passkey(acct.id)})
+        # Nothing connected yet: the records come first, and the passkey
+        # waits (it is in the chat's menu), so auth.js skips its prompt.
+        return jsonify({"ok": True, "has_passkey": svc.has_passkey(acct.id),
+                        "first_run": not svc.has_connections(acct.id)})
 
     # --- WebAuthn (biometric) ------------------------------------------------
 
     @app.post("/webauthn/register/options")
     @login_required
+    @full_sign_in_required
     def wa_register_options():
         acct = current_account()
         options, challenge = svc.registration_options(acct)
@@ -483,6 +773,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/webauthn/register/verify")
     @login_required
+    @full_sign_in_required
     def wa_register_verify():
         acct = current_account()
         challenge = session.pop("wa_challenge", None)
@@ -511,8 +802,10 @@ def create_app(config: Config | None = None,
             acct = svc.finish_authentication(request.get_json(force=True),
                                              challenge)
         except AuthError as exc:
+            funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
         except Exception:  # noqa: BLE001
+            funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": "passkey sign-in failed"}), 400
         _login(acct)
         return jsonify({"ok": True})
@@ -535,10 +828,13 @@ def create_app(config: Config | None = None,
                 f"?grant={grant}")
 
     def _offered_connections(acct):
-        real_open = cfg.real_records_open_for(acct.email)
+        real_open = _real_records_open(acct)
         conns = svc.list_home(acct.id)["connections"]
+        # Someone the holder cares for is never offered to a third-party
+        # app in the beta (one assistant per person spec, 6.3).
+        others = svc.other_person_connection_ids(acct.id)
         return [c for c in conns
-                if c["status"] != "revoked"
+                if c["status"] != "revoked" and c["id"] not in others
                 and (c["kind"] == "sample" or real_open)], real_open
 
     @app.get("/authorize")
@@ -548,10 +844,18 @@ def create_app(config: Config | None = None,
         if request_id is None:
             return render_template("consent.html", state="invalid",
                                    me=current_account()), 400
-        if current_account() is None:
+        if current_account() is None or session.get(_VIA_LINK):
+            # A confirm-link session grants no app anything (#920 F1): the
+            # request waits for a code or passkey sign-in, as signed out.
             session["consent_req"] = req
             return redirect(url_for("auth"))
-        parked = hc.consent_request(request_id)
+        try:
+            parked = hc.consent_request(request_id)
+        except HealthClawError:
+            # HealthClaw unreachable: say so plainly, not a 500. The handle is
+            # still good for ten minutes, so trying again can work.
+            return render_template("consent.html", state="unavailable",
+                                   me=current_account()), 503
         if parked is None:
             return render_template("consent.html", state="expired",
                                    me=current_account()), 410
@@ -559,7 +863,7 @@ def create_app(config: Config | None = None,
         offered, real_open = _offered_connections(acct)
         return render_template(
             "consent.html", state="ask", req=req, me=acct,
-            client_name=parked.get("client_name") or "An agent",
+            **consent.app_identity(parked),
             scopes=[consent.describe_scope(x) for x in parked.get("scopes", [])],
             connections=offered, real_open=real_open,
             has_passkey=svc.has_passkey(acct.id),
@@ -567,6 +871,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/webauthn/consent/options")
     @login_required
+    @full_sign_in_required
     def wa_consent_options():
         options, challenge = svc.authentication_options(require_uv=True)
         session["wa_consent_challenge"] = challenge
@@ -574,20 +879,39 @@ def create_app(config: Config | None = None,
 
     @app.post("/authorize/decide")
     @login_required
+    @full_sign_in_required
     def consent_decide():
         body = request.get_json(force=True, silent=True) or {}
         request_id = consent.parse_handle(body.get("req") or "", cfg.mint_secret)
         if request_id is None:
             return jsonify({"error": "This request is not valid any more."}), 400
         if body.get("decision") != "approved":
+            # Only a recognized address gets the OAuth access_denied, which
+            # sends the browser to the client. Any other stays here: its
+            # redirect URI is a stranger's page. The parked request is spent
+            # at HealthClaw with no redirect, so an older tab or another
+            # account cannot approve it afterwards (#846). HealthClaw
+            # unreachable: nothing was shared, so say no here too; the
+            # request then lapses at its ten-minute expiry.
+            try:
+                parked = hc.consent_request(request_id)
+            except HealthClawError:
+                parked = None
+            if not consent.app_identity(parked or {})["host_recognized"]:
+                try:
+                    hc.discard_consent_request(request_id)
+                except HealthClawError:
+                    logger.warning("consent discard failed; request lapses at expiry")
+                return jsonify({"redirect": url_for("consent_declined")})
             grant, _ = consent.build_grant(cfg.mint_secret, request_id, "denied")
             return jsonify({"redirect": _consent_return(grant)})
 
         acct = current_account()
         conn = svc.get_connection(acct.id, str(body.get("connection_id") or ""))
-        if conn is None or conn["status"] == "revoked":
+        if (conn is None or conn["status"] == "revoked"
+                or conn["id"] in svc.other_person_connection_ids(acct.id)):
             return jsonify({"error": "unknown connection"}), 404
-        if conn["kind"] != "sample" and not cfg.real_records_open_for(acct.email):
+        if conn["kind"] != "sample" and not _real_records_open(acct):
             return jsonify({"error": "Sharing real records is not open for "
                                      "this account yet."}), 403
 
@@ -614,11 +938,18 @@ def create_app(config: Config | None = None,
             cfg.mint_secret, request_id, "approved", tenant_id=conn["tenant_id"])
         svc.add_grant(acct.id, conn["id"], conn["tenant_id"],
                       parked.get("client_id", ""), parked.get("client_name", ""),
-                      " ".join(parked.get("scopes", [])), consent_id)
+                      " ".join(parked.get("scopes", [])), consent_id,
+                      redirect_host=consent.app_identity(parked)["redirect_host"])
         return jsonify({"redirect": _consent_return(grant)})
+
+    @app.get("/authorize/declined")
+    def consent_declined():
+        return render_template("consent.html", state="declined",
+                               me=current_account())
 
     @app.post("/api/grants/<grant_id>/revoke")
     @login_required
+    @full_sign_in_required
     def revoke_grant(grant_id):
         """Take a consent back. HealthClaw first, the row here second, so a
         revocation is never shown that did not happen."""
@@ -643,7 +974,7 @@ def create_app(config: Config | None = None,
     def connections_catalog():
         acct = current_account()
         return jsonify({"connectors": connectors.catalog(
-            cfg, real_records=cfg.real_records_open_for(acct.email))})
+            cfg, real_records=_real_records_open(acct))})
 
     def _sample_answer(account_id, conn_id, existing):
         """What a sample tap answers: the connection, and the chat to open."""
@@ -654,13 +985,39 @@ def create_app(config: Config | None = None,
             out["redirect"] = url_for("chat", agent=agent["id"])
         return out
 
+    def _consent_refusal(body):
+        """The 428 for a consent that does not name the current terms, or
+        None. The client echoes the version on the card it showed; a card
+        rendered before a terms change and submitted after it is not
+        acceptance of wording the person never saw (security review of
+        #904, F4). The answer carries the current version so the client
+        can show the current card, never so it can resend that version."""
+        if (body.get("consent") is True
+                and body.get("consent_version")
+                == tester_terms.CONSENT_VERSION):
+            return None
+        if body.get("consent") is True and not body.get("consent_version"):
+            # A page loaded before versions were sent (#909) shows `error`
+            # as it is: give it a sentence, not a code.
+            reload_line = "This page changed. Please reload."
+            return jsonify({"error": reload_line, "message": reload_line,
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
+        return jsonify({"error": "consent_required",
+                        "consent_version": tester_terms.CONSENT_VERSION}), 428
+
     def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
         # existing connection never consult the real-records switch.
+        real_open = _real_records_open(acct)
         plan = connectors.start(
             connector_id, body.get("provider"), cfg, hc,
-            real_records=cfg.real_records_open_for(acct.email))
+            real_records=real_open)
         if plan.get("error"):
+            if connector_id == "fasten" and real_open:
+                # Past the gate and still refused: Fasten is not available
+                # here. A refusal at the gate is not a Fasten failure.
+                funnel.safely(funnel.count_issue, svc.session,
+                              "fasten_failed")
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
         if plan.get("soon"):
             # Not live yet — acknowledge intent (never a dead-end button).
@@ -670,14 +1027,38 @@ def create_app(config: Config | None = None,
         # CoC: proactive consent in advance of personal data disclosure).
         consent_version = None
         if plan.get("requires_consent"):
-            if body.get("consent") is not True:
-                return jsonify({"error": "consent_required",
-                                "consent_version": CONSENT_VERSION}), 428
-            consent_version = CONSENT_VERSION
-        if connector_id == "fasten":
+            refused = _consent_refusal(body)
+            if refused:
+                return refused
+            consent_version = tester_terms.CONSENT_VERSION
+        if connector_id not in ("fasten", "direct"):
+            return _persist_connection(connector_id, acct, plan,
+                                       consent_version)
+        # Two tabs or devices connecting at once (#847): both passed the
+        # pending check before either inserted. The account's connect lease
+        # (the same one the sample tap uses) makes the check and the insert
+        # one step. A pending row keeps the consent_version it was made
+        # with; a stale one is asked again by the worker (beta spec 4.3).
+        if not svc.claim_sample_start(acct.id):
+            return jsonify({"status": "connecting",
+                            "error": "Your records are already on their "
+                                     "way. Try again in a moment."}), 409
+        try:
             # A second tap while the first is still connecting reuses it:
             # two taps made two identical rows, both stuck connecting. Only
-            # a pending row is reused, and only after consent above.
+            # a pending row is reused, and only after the gate and consent
+            # above.
+            if connector_id == "direct":
+                # Same for a file: a connection still waiting for its first
+                # file takes the next one, so a second try never adds a
+                # second card.
+                waiting = svc.pending_connection(acct.id, "direct",
+                                                 status="empty")
+                if waiting:
+                    return jsonify({"id": waiting["id"], "status": "empty",
+                                    "existing": True})
+                return _persist_connection(connector_id, acct, plan,
+                                           consent_version)
             waiting = svc.pending_connection(acct.id, "fasten")
             if waiting:
                 return jsonify({
@@ -685,6 +1066,14 @@ def create_app(config: Config | None = None,
                     "existing": True,
                     "connect_url": hc.fasten_connect_url(
                         waiting["tenant_id"])})
+            return _persist_connection(connector_id, acct, plan,
+                                       consent_version)
+        finally:
+            svc.release_sample_start(acct.id)
+
+    def _persist_connection(connector_id, acct, plan, consent_version):
+        """What _start_connection does once the gate and consent passed:
+        seed, record the connection, answer."""
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:
@@ -695,6 +1084,10 @@ def create_app(config: Config | None = None,
                                  status=plan["status"],
                                  provider=plan.get("provider"),
                                  consent_version=consent_version)
+        if consent_version is not None:
+            # A real-record connection, past the gate and the consent.
+            funnel.safely(funnel.mark, svc.session, acct.id,
+                          "connect_started")
         if connector_id == "sample":
             # A count for the record card, and the first assistant. Neither
             # blocks the connect: an unknown count renders as no count.
@@ -716,7 +1109,22 @@ def create_app(config: Config | None = None,
         acct = current_account()
         body = request.get_json(silent=True) or {}
         if connector_id != "sample":
+            if session.get(_VIA_LINK):
+                # Real records only after a code or passkey (#920 F1).
+                return jsonify({"error": "sign_in_again",
+                                "message": REAUTH_TEXT}), 403
             return _start_connection(connector_id, acct, body)
+        return _sample_tap(acct, body)
+
+    def _sample_tap(acct, body):
+        """"Explore with made-up records": the hub's tap, and a confirmed
+        beta request's first run (_first_run)."""
+        connector_id = "sample"
+        if svc.is_paused(acct.id):
+            # Nothing new is added while paused, the sample included; the
+            # same answer as refresh and upload (#856 sign-off F2).
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
         # One sample per account (calm hub spec section 4). A second tap
         # opens the one that exists; a tap while another is still seeding
         # mints nothing.
@@ -739,6 +1147,35 @@ def create_app(config: Config | None = None,
             return _start_connection(connector_id, acct, body)
         finally:
             svc.release_sample_start(acct.id)
+
+    def _first_run(email: str) -> str | None:
+        """Sign in the address that just confirmed its beta request and
+        open its made-up records, or None for the confirmed page.
+
+        Never swaps out someone else signed in on this browser, and never
+        signs in to an account with records already (first_run_account):
+        a forwarded link opens nothing that is there. A seed that fails
+        still signs in; the hub's sample button tries again."""
+        me = current_account()
+        if me is not None and me.email != email.strip().lower():
+            return None
+        acct = svc.first_run_account(email)
+        if acct is None:
+            return None
+        if me is None:
+            _login(acct)
+            # A link-opened session: gone with the browser, limited to the
+            # sample, and ended once real records arrive (#920 F1).
+            session.permanent = False
+            session[_VIA_LINK] = True
+        # Already signed in here as this address: that session, full or
+        # link, stays as it is; never downgraded (#920 QA Low 1).
+        with acting_for(acct.id):
+            answer = app.make_response(_sample_tap(acct, {}))
+        landing = (answer.get_json(silent=True) or {}).get("redirect")
+        if answer.status_code == 200 and landing:
+            return landing
+        return url_for("home")
 
     @app.post("/api/connections/<conn_id>/upload")
     @login_required
@@ -773,6 +1210,9 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
         # Only the `direct` tile ships this flow today. `shl` (SMART Health
         # Link) will land on the same endpoint once the encrypted-manifest
         # decoder is in.
@@ -874,6 +1314,8 @@ def create_app(config: Config | None = None,
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
+            funnel.safely(funnel.mark, svc.session, acct.id,
+                          "records_connected")
             uncounted = None
             try:
                 readable_total = hc.record_count(conn["tenant_id"])
@@ -903,9 +1345,30 @@ def create_app(config: Config | None = None,
     def disconnect_connection(conn_id):
         """Stop new data flowing; keep records already collected."""
         acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if conn is None:
+            return jsonify({"error": "unknown connection"}), 404
+        # HealthClaw first, for every kind (a no-op on a sample tenant).
+        # Flipping only our row left the engine importing into the tenant
+        # from an old connect link, a late webhook, a retry or the reaper.
+        # Unconfirmed means the row stays as it was: we never say
+        # "disconnected" while records may still arrive. Nor "still on": a
+        # lost answer can follow a revoke that ran, as in delete_connection.
+        try:
+            hc.revoke_fasten(conn["tenant_id"])
+        except HealthClawError:
+            return jsonify({"error": "disconnect_failed",
+                            "message": "We couldn't confirm the disconnect. "
+                                       "Please try again in a minute."}), 503
         if not svc.revoke_connection(acct.id, conn_id):
             return jsonify({"error": "unknown connection"}), 404
-        return jsonify({"status": "revoked", "connection_id": conn_id})
+        # The hub shows this after its reload, so the person is told what
+        # changed, and that what they had stays (#847).
+        return jsonify({"status": "revoked", "connection_id": conn_id,
+                        "message": ("Disconnected. No new records will "
+                                    "arrive. The records already here stay; "
+                                    "you'll find them under Past "
+                                    "connections.")})
 
     @app.delete("/api/connections/<conn_id>")
     @login_required
@@ -920,6 +1383,13 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        # The typed DELETE, checked here as the account delete checks it
+        # (security review of #944): the modal alone is a client's promise.
+        # After the ownership check, so a stranger's id still reads 404.
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirm") != "DELETE":
+            return jsonify({"error": "confirm_required",
+                            "message": "Type DELETE to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
@@ -962,20 +1432,46 @@ def create_app(config: Config | None = None,
                             "that an app you shared them with was cut off. The "
                             "connection stays listed so you can try again."),
             }), 502
+        # Read before the unlink: deleting a connection deletes the
+        # assistants that read it, and the person is told which (#853).
+        gone = [a["name"] for a in svc.list_home(acct.id)["agents"]
+                if a["connection_id"] == conn_id]
         svc.delete_connection(acct.id, conn_id)
+        # The count is the one the card showed. The engine's resource count
+        # includes kinds the card leaves out, so "15 stored items" beside a
+        # card saying 9 records read as a mistake (patient tester, #853).
+        n = conn.get("last_count")
+        n = n if isinstance(n, int) and not isinstance(n, bool) else None
         return jsonify({
             "deleted": True,
             "unlinked": True,
             "connection_id": conn_id,
             "rows_deleted": purged.get("rows_deleted", 0),
+            "records_deleted": n,
+            "assistants_deleted": gone,
             "audit_retained": True,
-            "message": ("Your records were deleted. The PHI-free audit trail "
-                        "is kept as the record of who accessed what, and this "
-                        "deletion was added to it."),
+            "message": _deleted_sentence(n, conn["label"], gone),
         })
+
+    def _deleted_sentence(n: int | None, label: str,
+                          gone: list[str]) -> str:
+        if n is None:
+            lead = f"Your records in {label} were deleted."
+        elif n == 1:
+            lead = f"The 1 record in {label} was deleted."
+        else:
+            lead = f"All {n} records in {label} were deleted."
+        if gone:
+            lead += (f" {' and '.join(gone)} "
+                     f"{'was' if len(gone) == 1 else 'were'} deleted too, "
+                     f"because {'it' if len(gone) == 1 else 'they'} read "
+                     "these records.")
+        return (lead + " We keep a log of who looked at your records, with "
+                "no health details in it, and this deletion is in it.")
 
     @app.post("/api/account/delete")
     @login_required
+    @full_sign_in_required
     def delete_account():
         """Delete the account itself, end to end (#554).
 
@@ -1021,6 +1517,24 @@ def create_app(config: Config | None = None,
         return jsonify({"deleted": True, "connections_purged": purged,
                         "audit_retained": True})
 
+    @app.post("/api/connections/<conn_id>/consent")
+    @login_required
+    def reconsent_connection(conn_id):
+        """Accept the current terms for an existing real connection (beta
+        spec 4.3). Until this is done, the worker answers that connection's
+        turns with beta.TERMS_TEXT instead of reaching a model."""
+        acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if (conn is None or conn["kind"] == "sample"
+                or conn["status"] == "revoked"):
+            return jsonify({"error": "unknown connection"}), 404
+        body = request.get_json(silent=True) or {}
+        refused = _consent_refusal(body)
+        if refused:
+            return refused
+        svc.record_consent(acct.id, conn_id, tester_terms.CONSENT_VERSION)
+        return jsonify({"consent_version": tester_terms.CONSENT_VERSION})
+
     @app.post("/api/connections/<conn_id>/refresh")
     @login_required
     def refresh_connection(conn_id):
@@ -1036,6 +1550,19 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        # Disconnect stops new records. A refresh hands back the connect URL
+        # for the same tenant, so on a disconnected connection it would
+        # reopen the pipe (security review of #904, F2). Refused before the
+        # sync baseline below is touched; same answer upload gives.
+        if conn["status"] == "revoked":
+            return jsonify({"error": "connection_not_active",
+                            "status": conn["status"],
+                            "message": "This connection has been "
+                                       "disconnected. Connect your records "
+                                       "again to get new ones."}), 409
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
 
         body = request.get_json(silent=True) or {}
         plan = connectors.refresh(conn["kind"], conn["tenant_id"],
@@ -1047,17 +1574,23 @@ def create_app(config: Config | None = None,
 
         # Same server-side consent gate as the initial connect: a client that
         # skips the card is refused here, on every surface.
-        if plan.get("requires_consent") and body.get("consent") is not True:
-            return jsonify({"error": "consent_required",
-                            "consent_version": CONSENT_VERSION}), 428
+        if plan.get("requires_consent"):
+            refused = _consent_refusal(body)
+            if refused:
+                return refused
 
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
         # report what the refresh actually added — documents on the same
         # terms, so "notes arrived" is a measured delta rather than a restatement
-        # of "this tenant holds notes" (#226).
+        # of "this tenant holds notes" (#226). Not while a Fasten import is
+        # still writing: that count is part of an import, and storing it left
+        # the card at "49 records" for good (QA940-F1b). The last baseline
+        # stands, or none, and the poll stores the count once it is done.
         try:
-            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
-                            hc.uncounted_record_count(conn["tenant_id"]))
+            if not (conn["kind"] == "fasten"
+                    and hc.fasten_import_running(conn["tenant_id"])):
+                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                                hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
             return jsonify({"error": "records service unavailable"}), 503
 
@@ -1075,8 +1608,19 @@ def create_app(config: Config | None = None,
                  for c in svc.list_home(acct.id)["connections"]}
         if conn_tenant not in conns:
             return jsonify({"error": "not yours"}), 404
+        # Disconnected: say so. Records that landed earlier made this answer
+        # "active" while the row stayed revoked (QA on #909).
+        if conns[conn_tenant]["status"] == "revoked":
+            return jsonify({"status": "revoked"})
         try:
             landed = hc.tenant_has_records(conn_tenant)
+            # A Fasten export is written in the background, a Patient first,
+            # so records landing is not the import being done. Until it is,
+            # no count is stored or shown: a mid-import count was stored once
+            # and the card read "29 records" for good with 150 there
+            # (QA940-F1).
+            importing = (landed and conns[conn_tenant]["kind"] == "fasten"
+                         and hc.fasten_import_running(conn_tenant))
         except HealthClawError:
             # Not "pending". We did not fail to find records, we failed to
             # look, and the two are different answers. Rendering this as
@@ -1089,9 +1633,31 @@ def create_app(config: Config | None = None,
                 "message": "We couldn't reach your records right now. That's "
                            "a problem on our side — we'll keep checking.",
             }), 503
+        if importing:
+            # Still "Connecting…" on the card, so the pending poller keeps
+            # asking. A connection already active (a refresh) stays active,
+            # with no "new records" yet: the watcher stops at the first one.
+            return jsonify({"status": "active"
+                            if conns[conn_tenant]["status"] == "active"
+                            else "pending"})
         if landed:
             svc.activate_connection(conn_tenant)
+            if conns[conn_tenant]["kind"] != "sample":
+                funnel.safely(funnel.mark, svc.session, acct.id,
+                              "records_connected")
             out = {"status": "active"}
+            # First records ever on this connection: store the count the
+            # card shows ("N records", hub.py). Only when none is stored, so
+            # a refresh's baseline below is never overwritten (#937). A
+            # failed count leaves it unset, which the card shows as nothing,
+            # never as zero.
+            if conns[conn_tenant].get("last_count") is None:
+                try:
+                    svc.mark_synced(conns[conn_tenant]["id"],
+                                    hc.record_count(conn_tenant),
+                                    hc.uncounted_record_count(conn_tenant))
+                except HealthClawError:
+                    logger.warning("record count unavailable on activation")
             # After a refresh, report growth against the baseline that refresh
             # recorded. Read-only: the count is re-baselined by the next
             # refresh, so repeated polls keep showing the same number instead
@@ -1138,6 +1704,9 @@ def create_app(config: Config | None = None,
     @app.post("/api/agents")
     @login_required
     def create_agent():
+        """The assistant for the person whose records `connection_id` holds.
+        One per person (spec section 3): when they already have one, that
+        one is the answer, `existing` set, and nothing is made."""
         acct = current_account()
         body = request.get_json(silent=True) or {}
         name = (body.get("name") or "Juniper").strip()[:48] or "Juniper"
@@ -1153,13 +1722,109 @@ def create_app(config: Config | None = None,
             if not spec["available"]:
                 return jsonify({"error": "advisor_not_available",
                                 "note": spec.get("note", "")}), 400
+        conn_id = str(body.get("connection_id") or "")
+        had = svc.agent_for_person_of(acct.id, conn_id)
+        if had:
+            return jsonify({"id": had, "existing": True})
         try:
-            aid = svc.create_agent(acct.id, name, persona,
-                                   body.get("connection_id", ""),
+            aid = svc.create_agent(acct.id, name, persona, conn_id,
                                    advisor=advisor)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
+        if aid and advisor:
+            svc.set_agent_settings(
+                acct.id, aid, persona,
+                advisors.routines_for({"routines": None, "advisor": advisor}))
         return jsonify({"id": aid})
+
+    @app.post("/api/agents/<agent_id>/settings")
+    @login_required
+    def agent_settings(agent_id):
+        """Tone and routines (spec section 7). Both are checked against the
+        fixed sets here; neither changes what the assistant can read."""
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        ctx = svc.get_agent_context(acct.id, agent_id)
+        if ctx is None:
+            return jsonify({"error": "unknown agent"}), 404
+        if "persona" not in body and "routines" not in body:
+            return jsonify({"error": "nothing to change"}), 400
+        persona = body.get("persona", ctx["agent"]["persona"])
+        # A string first: a list or object is unhashable, not a tone.
+        if not isinstance(persona, str) or persona not in PERSONAS:
+            return jsonify({"error": "unknown tone"}), 400
+        if "routines" in body:
+            asked = body["routines"]
+            if (not isinstance(asked, list)
+                    or not all(isinstance(r, str) and r in advisors.ROUTINES
+                               for r in asked)):
+                return jsonify({"error": "unknown routine"}), 400
+            # Stored in the catalog's order, once each.
+            routines = [r for r in advisors.ROUTINES if r in asked]
+        else:
+            routines = advisors.routines_for(ctx["agent"])
+        svc.set_agent_settings(acct.id, agent_id, persona, routines)
+        return jsonify({"id": agent_id, "persona": persona,
+                        "routines": routines})
+
+    @app.post("/api/people")
+    @login_required
+    @full_sign_in_required
+    def add_person():
+        """"Add someone you care for", on made-up records only (spec 6,
+        owner decision D1). A relationship and an optional nickname; the
+        body is read for nothing else, so there is no path here to real
+        records. Their own sample tenant, their own assistant."""
+        if not cfg.people_enabled:
+            # Behind CARE_PEOPLE until the hub renders people (#947 QA).
+            return jsonify({"error": "not found"}), 404
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
+        # The sample tap's lease: one tenant mint at a time per account.
+        if not svc.claim_sample_start(acct.id):
+            return jsonify({"status": "connecting",
+                            "error": "Made-up records are on their way. "
+                                     "Try again in a moment."}), 409
+        try:
+            try:
+                person = svc.add_person(acct.id, body.get("relationship"),
+                                        body.get("nickname"))
+            except ValueError:
+                return jsonify({"error": "Choose who they are to you, and "
+                                         "a nickname of up to 24 "
+                                         "characters if you like."}), 400
+            except AuthError as exc:
+                return jsonify({"error": str(exc)}), 409
+            plan = connectors.start("sample", None, cfg, hc)
+            try:
+                hc.seed(plan["tenant"])
+            except HealthClawError:
+                svc.remove_empty_person(acct.id, person)
+                return jsonify({"error": "records service unavailable"}), 503
+            cid = svc.add_connection(acct.id, "sample", plan["tenant"],
+                                     plan["label"], status="active",
+                                     provider=plan.get("provider"),
+                                     person_id=person)
+            try:
+                svc.mark_synced(cid, hc.record_count(plan["tenant"]))
+            except HealthClawError:
+                logger.warning("record count after sample seed failed for %s",
+                               cid)
+            # A name of their own, so two cards are not both "Juniper"
+            # (#951 F4). From a fixed list, never the nickname: the name
+            # goes into the model's prompt ("You are ...").
+            taken = {a["name"] for a in svc.list_home(acct.id)["agents"]}
+            name = next((n for n in _CARE_NAMES if n not in taken),
+                        _CARE_NAMES[0])
+            aid = svc.create_agent(acct.id, name, DEFAULT_PERSONA, cid)
+            return jsonify({"person_id": person, "connection_id": cid,
+                            "agent_id": aid,
+                            "redirect": url_for("chat", agent=aid)})
+        finally:
+            svc.release_sample_start(acct.id)
 
     @app.post("/api/agents/<agent_id>/rename")
     @login_required
@@ -1191,6 +1856,14 @@ def create_app(config: Config | None = None,
     @login_required
     def delete_agent(agent_id):
         acct = current_account()
+        # A person's primary assistant is not removed, here as on the card
+        # (owner decision D5, SEC951-L1): only an older account's extras
+        # are. Deleting the account, or the records it reads, still goes.
+        primary = {a["id"] for a in hub_view.assistants(
+            svc.list_home(acct.id))["assistants"] if a["is_primary"]}
+        if agent_id in primary:
+            return jsonify({"error": "This is your assistant, so it "
+                                     "can't be removed."}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})
@@ -1247,6 +1920,13 @@ def create_app(config: Config | None = None,
             logger.exception("chat history unavailable for agent %s", agent_id)
             past, history_lost = [], True
         conn = ctx.get("connection") or {}
+        sample = conn.get("kind") == "sample"
+        if sample:
+            # The banner above the log says the records are made up, so a
+            # replayed answer does not say it again (beta.under_banner).
+            past = [dict(m, content=beta.under_banner(str(m.get("content")
+                                                          or "")))
+                    if m.get("role") != "user" else m for m in past]
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is
@@ -1275,23 +1955,122 @@ def create_app(config: Config | None = None,
                 }
             except (HealthClawError, TypeError, ValueError):
                 totals = None   # unknown, which is never the same as zero
+        # A Fasten export still being written is a fraction of the record:
+        # no greeting counts, no settle and no stored count, as the poll
+        # leaves it (QA940-F1). A failed look is treated the same way. Never
+        # "overdue" either: a long import is not one that sent nothing.
+        importing = False
+        # Asked only once something landed, so "still arriving" is the true
+        # sentence whether the import runs or could not be asked about.
+        if (pending and totals and any(totals.values())
+                and conn.get("kind") == "fasten"):
+            try:
+                importing = hc.fasten_import_running(ctx["tenant"])
+            except HealthClawError:
+                logger.warning("import status unavailable for agent %s",
+                               agent_id)
+                importing = True
         intake = intake_state.classify(
-            totals=totals,
+            totals=None if importing else totals,
             connection_status=conn.get("status"),
-            connected_at=conn.get("connected_at"),
+            connected_at=None if importing else conn.get("connected_at"),
             now=time.time(),
             provider=conn.get("provider") or conn.get("label"))
         if pending and intake.state == intake_state.READY:
             # Records landed while nobody was polling /connect. Settle the
             # stored status here so the next visit costs no counts.
             svc.set_connection_status(ctx["tenant"], "active")
+            # And the hub card's "N records", as the poll stores it (#937).
+            if conn.get("id") and conn.get("last_count") is None:
+                try:
+                    svc.mark_synced(conn["id"], hc.record_count(ctx["tenant"]),
+                                    hc.uncounted_record_count(ctx["tenant"]))
+                except HealthClawError:
+                    logger.warning("record count unavailable on activation")
+        # Starter taps tuned to what the records can answer (hub critique
+        # 2026-10). Labs only when laboratory results are known to be there,
+        # not a heart rate (QA #944 F2). Only a total crosses, as for the
+        # greeting: the engine's `code` filter matches a category's code
+        # too, so `code=laboratory` counts Observations filed as labs
+        # (pinned on the real engine by test_hub_labs_count_real_engine).
+        # The made-up records are a fixed seed that holds lab results and
+        # files none by category. A failed count hides the tap, never
+        # offers it. "What changed since my last visit?" is not offered:
+        # records hold no visit to compare with (patient tester on #944).
+        has_labs = False
+        if totals and totals["labs"] == 0:
+            has_labs = False
+        elif sample:
+            has_labs = True
+        else:
+            try:
+                has_labs = int(hc.search(
+                    ctx["tenant"], "Observation",
+                    {"code": "laboratory", "_summary": "count"}
+                ).get("total") or 0) > 0
+            except (HealthClawError, TypeError, ValueError):
+                has_labs = False
+        has_records = (any(totals.values()) if totals is not None
+                       else bool(conn.get("last_count")))
+        starters = [s for s, ok in (
+            ("Make my visit brief", has_records),
+            ("Explain my latest labs", has_labs)) if ok]
+        # The "Open the review" card is a turn event, and history keeps only
+        # text, so a reload lost it while the reply above still promised it
+        # (#847). Ask the engine what is waiting instead; nothing is stored.
+        # A lookup that fails draws no card, and the "Waiting for you" pill
+        # in the header still leads to the list. A disconnected connection
+        # is not a pathway to its requests (#215), so it is not asked at
+        # all: a card there would promise an approval the relay refuses
+        # (security review of #853).
+        reviews = []
+        if conn.get("status") != "revoked":
+            try:
+                reviews = [{"id": a["id"],
+                            "label": _KIND_LABELS.get(a.get("kind"),
+                                                      "Request"),
+                            "form": a.get("kind") == "form-fill"}
+                           for a in hc.pending_actions(ctx["tenant"])
+                           if a.get("id")]
+            except HealthClawError:
+                logger.warning("pending reviews unavailable for agent %s",
+                               agent_id)
+                reviews = []
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
                                past=past,
                                history_lost=history_lost,
                                intake=intake,
-                               summary_counts=intake.counts)
+                               # Records landed and more are coming: the
+                               # assistant reads the part that is here.
+                               importing=importing,
+                               summary_counts=intake.counts,
+                               pending_reviews=reviews,
+                               starters=starters,
+                               # A link session reaches it through a code
+                               # sign-in first (/auth, #920 F1).
+                               offer_passkey=not svc.has_passkey(acct.id),
+                               # Back from /auth?enroll=1 (auth.js); said
+                               # only when the passkey is really there.
+                               passkey_added=(
+                                   request.args.get("passkey") == "added"
+                                   and svc.has_passkey(acct.id)),
+                               connect_next=_chat_connect_next(acct, sample),
+                               link_session=bool(session.get(_VIA_LINK)),
+                               sample_line=(beta.SAMPLE_FRAME
+                                            if sample else None),
+                               # "Mom's records" when they are not the
+                               # holder's own (spec section 5).
+                               whose=_whose(acct, ctx["agent"]))
+
+    def _whose(acct, agent, mid: bool = False) -> str:
+        """Whose records this assistant reads, as the chat header and the
+        approvals page name them; empty for the holder's own. Rendered by
+        the template only: the nickname is never passed to the model, a
+        log line or the engine."""
+        return hub_view.whose_records(hub_view.person_of(
+            svc.list_home(acct.id), agent.get("person_id")), mid=mid)
 
     @app.get("/brief")
     @login_required
@@ -1301,8 +2080,12 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return redirect(url_for("home"))
+        sample = (ctx.get("connection") or {}).get("kind") == "sample"
         try:
-            raw = hc.fetch_appointment_brief(ctx["tenant"])
+            # Made-up records ask the engine to word its sentences about
+            # "the sample person" (r6/voice.py). A real brief asks as before.
+            raw = (hc.fetch_appointment_brief(ctx["tenant"], voice="sample")
+                   if sample else hc.fetch_appointment_brief(ctx["tenant"]))
             unavailable = False
         except HealthClawError:
             # "Not available from your connected records" is a statement about
@@ -1315,7 +2098,9 @@ def create_app(config: Config | None = None,
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
-                               care_gaps_note=_parse_care_gaps_reason(raw))
+                               care_gaps_note=_parse_care_gaps_reason(raw),
+                               sample_line=(beta.SAMPLE_FRAME if sample
+                                            else None))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
@@ -1409,8 +2194,13 @@ def create_app(config: Config | None = None,
             "message": "Chat is temporarily unavailable. Try again soon.",
         }), 503
 
-    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0):
-        """Replay durable UI events. Disconnecting only stops this projection."""
+    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
+                    account_id: str | None = None):
+        """Replay durable UI events. Disconnecting only stops this projection.
+
+        The body runs after login_required has returned, so each read names
+        the account itself (spec 6.2), scoped to that one call: a block held
+        across a yield would outlive the request on this thread."""
         cursor = max(0, after)
         started = time.monotonic()
         # #575: the wait after a page with events is the base; after the k-th
@@ -1423,8 +2213,9 @@ def create_app(config: Config | None = None,
             "next_cursor": cursor}) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
             try:
-                page = hc.agent_run_events(tenant, run_id, after=cursor,
-                                           limit=100)
+                with acting_for(account_id):
+                    page = hc.agent_run_events(tenant, run_id, after=cursor,
+                                               limit=100)
             except HealthClawError:
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
@@ -1434,6 +2225,8 @@ def create_app(config: Config | None = None,
                 # an exception message here would be the first place engine
                 # internals reached a patient's screen.
                 logger.warning("run event stream failed for tenant %s", tenant)
+                funnel.safely(funnel.count_issue, svc.session,
+                              "run_replay_error")
                 yield "data: " + json.dumps({
                     "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
                 return
@@ -1485,20 +2278,32 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "message must be 1-2000 characters"}), 400
         workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
+            funnel.safely(funnel.count_issue, svc.session, "chat_error")
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return jsonify({"error": "rate_limited"}), 429
+        # A turn the worker will refuse (paused, or terms not accepted; beta
+        # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
+        # a model, so the day's allowance does not stop it here.
+        refused = beta.turn_block(ctx["connection"], svc.is_paused(acct.id),
+                                  tester_terms.CONSENT_VERSION)
         # Durable daily ceiling — survives restarts and is shared across
         # workers, so it is the real bound on per-account inference spend.
-        allowed, used = svc.claim_daily_turn(acct.id, cfg.chat_turns_per_day)
-        if not allowed:
-            return jsonify({
-                "error": "daily_limit_reached",
-                "used": used,
-                "limit": cfg.chat_turns_per_day,
-                "message": ("You've reached today's message limit. It resets "
-                            "at midnight UTC."),
-            }), 429
+        # Read only: the worker charges the turn where the model is called
+        # (#856 sign-off F4), so a turn admitted while refused and unblocked
+        # before it is claimed is still charged.
+        if not refused:
+            used = svc.daily_turns_used(acct.id)
+            if used >= cfg.chat_turns_per_day:
+                funnel.safely(funnel.count_issue, svc.session,
+                              "rate_limited")
+                return jsonify({
+                    "error": "daily_limit_reached",
+                    "used": used,
+                    "limit": cfg.chat_turns_per_day,
+                    "message": beta.DAILY_LIMIT_TEXT,
+                }), 429
 
         tenant = ctx["tenant"]
         agent = ctx["agent"]
@@ -1512,16 +2317,18 @@ def create_app(config: Config | None = None,
         created, user_message_id = hc.claim_inbound_message(
             tenant, text, agent["id"], conversation_id, "web", request_id)
         if created is None or not user_message_id:
+            funnel.safely(funnel.count_issue, svc.session, "chat_error")
             return jsonify({"error": "message store unavailable"}), 503
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
         except HealthClawError:
+            funnel.safely(funnel.count_issue, svc.session, "chat_error")
             return jsonify({"error": "run queue unavailable"}), 503
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(
-            tenant, agent["id"], run["id"], after),
+            tenant, agent["id"], run["id"], after, account_id=acct.id),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no",
@@ -1542,12 +2349,15 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "unknown run"}), 404
             # "Unknown run" is a claim about what exists. During an incident
             # it is not true — we just could not look it up (#410).
+            funnel.safely(funnel.count_issue, svc.session,
+                          "run_replay_error")
             return jsonify({"error": "run service unavailable"}), 503
         if not _run_belongs_to(run, ctx["tenant"], agent_id):
             return jsonify({"error": "unknown run"}), 404
         after = _parse_cursor(request.args.get("after") or
                               request.headers.get("Last-Event-ID"))
-        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after),
+        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after,
+                                    account_id=acct.id),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})
@@ -1559,9 +2369,7 @@ def create_app(config: Config | None = None,
         view all resolve ownership here, on the server. A revoked
         connection is not a pathway to the tenant's requests."""
         ctx = svc.get_agent_context(acct.id, agent_id) if acct else None
-        if not ctx:
-            return None
-        if (ctx.get("connection") or {}).get("status") == "revoked":
+        if not ctx or not _connection_is_live(ctx):
             return None
         return ctx
 
@@ -1585,8 +2393,13 @@ def create_app(config: Config | None = None,
             outcome = json.loads(status.get("outcome_summary") or "{}")
         except ValueError:
             pass
+        if not isinstance(outcome, dict):
+            outcome = {}
+        # `to` is the recipient label the pending list already shows; the
+        # review page names it when a request is done (#847).
         return jsonify({"status": status.get("status"),
-                        "delivery_link": outcome.get("delivery_link")})
+                        "delivery_link": outcome.get("delivery_link"),
+                        "to": status.get("to")})
 
     @app.get("/api/labs/timeline")
     @login_required
@@ -1645,7 +2458,9 @@ def create_app(config: Config | None = None,
                                    message=_APPROVALS_UNCHECKABLE), 503
         return render_template("approvals.html", me=ctx["agent"],
                                agent_id=agent_id, pending=pending,
-                               kind_labels=_KIND_LABELS)
+                               kind_labels=_KIND_LABELS,
+                               # "Requests for Mom's records" (#951 F3).
+                               whose=_whose(acct, ctx["agent"], mid=True))
 
     @app.get("/api/approvals/count")
     @login_required
@@ -1684,14 +2499,24 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
+            # Each queue says whose records it is when they are not the
+            # holder's own (spec section 5): the connection's person, the
+            # same person its assistant is for.
+            whose = hub_view.whose_records(
+                hub_view.person_of(data, conn.get("person_id")))
+            named = {"whose": whose} if whose else {}
             if n and agent:
                 queues.append({"agent_id": agent["id"], "name": agent["name"],
-                               "count": n,
+                               "count": n, **named,
                                "href": url_for("approvals",
                                                agent_id=agent["id"])})
             elif n:
-                queues.append({"name": conn["label"], "count": n,
-                               "needs_assistant": True})
+                # Whether any assistant exists decides the next step: with
+                # one, it is switched to these records ("Change records");
+                # with none, the hub's Start a chat is the way in (#847).
+                queues.append({"name": conn["label"], "count": n, **named,
+                               "needs_assistant": True,
+                               "has_assistant": bool(data["agents"])})
         out = {"count": total}
         if queues:
             linked = [q for q in queues if q.get("href")]
@@ -1699,9 +2524,123 @@ def create_app(config: Config | None = None,
                 out["agent_id"] = linked[0]["agent_id"]
                 out["href"] = linked[0]["href"]
             out["queues"] = queues
+        # What became of requests already answered. A recent list that
+        # cannot be read is said, and never fails the count above: the
+        # pending number is the one a person acts on.
+        try:
+            recent = _recent_outcomes(tenants, bool(data["agents"]))
+        except HealthClawError:
+            logger.warning("recent outcomes unavailable for account %s",
+                           acct.id)
+            out["recent_unavailable"] = True
+        else:
+            if recent:
+                out["recent"] = recent
         return jsonify(out)
 
+    #: How many answered requests the hub lists. A week of them is the
+    #: engine's window; the hub shows the newest few.
+    _RECENT_SHOWN = 5
+
+    def _recent_outcomes(tenants, has_assistant):
+        """The hub's "done" and "didn't finish" lines (#847), newest first.
+
+        Read from the engine on every visit and stored nowhere. A completed
+        intake form is looked up once more for its PDF link; a lookup that
+        fails leaves the line saying done, without a link. Records no
+        assistant reads carry the same hint as their pending queue: with an
+        assistant elsewhere, the step is to switch it, not to start a chat."""
+        now = time.time()
+        items = []
+        for tenant, (agent, conn) in tenants.items():
+            for a in hc.recent_actions(tenant):
+                state = hub_view.recent_state(a.get("status"))
+                if not state or _failed_long_ago(state, a, now):
+                    continue
+                item = {"id": a.get("id"), "state": state,
+                        "label": _KIND_LABELS.get(a.get("kind"),
+                                                  "Request"),
+                        "updated_at": a.get("updated_at") or ""}
+                # An intake form goes nowhere: only a PDF is made, so naming
+                # a recipient read as though it had been sent (#853).
+                if a.get("to") and a.get("kind") != "form-fill":
+                    item["to"] = a["to"]
+                if agent:
+                    item["agent_name"] = agent["name"]
+                    item["chat"] = url_for("chat", agent=agent["id"])
+                else:
+                    item["records"] = conn["label"]
+                    item["has_assistant"] = has_assistant
+                items.append((item, tenant, a.get("kind")))
+        items.sort(key=lambda t: t[0]["updated_at"], reverse=True)
+        out = []
+        for item, tenant, kind in items[:_RECENT_SHOWN]:
+            if item["state"] == "done" and kind == "form-fill":
+                link = _pdf_link(tenant, item["id"], now)
+                if link:
+                    item["link"] = link
+            out.append(item)
+        return out
+
+    def _failed_long_ago(state, action, now):
+        """A failed request leaves the hub after a day (#876). It could not
+        be cleared, and sat beside the ready form that a retry made. Only
+        `failed`: a line that asks the person to check with us stays, and
+        so does one we cannot date."""
+        if state != "failed":
+            return False
+        try:
+            when = datetime.fromisoformat(
+                str(action.get("updated_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return now - when.timestamp() > 86400
+
+    def _pdf_link(tenant, action_id, now):
+        try:
+            status = hc.action_status(tenant, action_id)
+            outcome = json.loads(status.get("outcome_summary") or "{}")
+        except (HealthClawError, ValueError, TypeError):
+            return None
+        if not isinstance(outcome, dict):
+            return None
+        return hub_view.live_link(outcome.get("delivery_link"), now)
+
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
+
+    def _form_past_review(tenant, agent_id, action_id):
+        """A form the engine no longer offers for review: ready with its PDF,
+        still being made, or done. The PDF link comes from the action's
+        outcome, as the post-approve screen reads it (/api/form)."""
+        try:
+            status = hc.action_status(tenant, action_id)
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return render_template("chat_error.html",
+                                       message="That form isn't yours."), 404
+            logger.exception("form status failed for %s", action_id)
+            return render_template("chat_error.html",
+                                   message=_REVIEW_UNCHECKABLE), 503
+        outcome = {}
+        try:
+            outcome = json.loads(status.get("outcome_summary") or "{}")
+        except (TypeError, ValueError):
+            pass
+        link = outcome.get("delivery_link") if isinstance(outcome, dict) else None
+        # Only an http(s) link becomes an href, as on the post-approve screen.
+        if not (isinstance(link, str)
+                and re.match(r"^https?://", link, re.IGNORECASE)):
+            link = None
+        state = status.get("status")
+        shown = ("ready" if state == "completed" and link else
+                 "preparing" if state == "executing" else "done")
+        # Corrections and other requests pass this way too; only a form
+        # (the intake rail, or an engine that names no kind) is "your form".
+        is_form = status.get("kind") in (None, "form-fill")
+        return render_template("form_done.html", state=shown, link=link,
+                               agent_id=agent_id, is_form=is_form)
 
     def _agent_owns_action(agent_id, action_id):
         """The tenant that owns this action, or None if it is not this
@@ -1711,6 +2650,16 @@ def create_app(config: Config | None = None,
         outage is not evidence about ownership, and this is the
         human-approval path — the guardrail the product exists to
         guarantee (#410).
+        """
+        ctx = _agent_action_context(agent_id, action_id)
+        return ctx["tenant"] if ctx else None
+
+    def _agent_action_context(agent_id, action_id):
+        """The agent context whose tenant owns this action, or None.
+
+        One read, so a caller deciding anything else from the context (the
+        review's sample voice) sees the same connection that resolved the
+        tenant (#919 security review F1).
         """
         acct = current_account()
         ctx = _live_agent_context(acct, agent_id)
@@ -1722,7 +2671,7 @@ def create_app(config: Config | None = None,
             if _engine_said_absent(exc):
                 return None
             raise OwnershipUnknown from exc
-        return ctx["tenant"]
+        return ctx
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
@@ -1762,15 +2711,28 @@ def create_app(config: Config | None = None,
     @login_required
     def review(agent_id, action_id):
         try:
-            tenant = _agent_owns_action(agent_id, action_id)
+            ctx = _agent_action_context(agent_id, action_id)
         except OwnershipUnknown:
             return render_template("chat_error.html",
                                    message=_REVIEW_UNCHECKABLE), 503
-        if not tenant:
+        if not ctx:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
+        tenant = ctx["tenant"]
+        if svc.is_paused(current_account().id):
+            # Pause stops approvals too (beta spec 4.6, #856 review F1).
+            return render_template("chat_error.html",
+                                   message=beta.PAUSED_HUB_TEXT), 423
+        # Made-up records ask the engine to word the review about "the sample
+        # person" (r6/voice.py), so a tester is not asked to attest about
+        # someone else as "I". Decided from the connection, never the request,
+        # and from the same read that resolved the tenant.
+        sample = (ctx.get("connection") or {}).get("kind") == "sample"
         try:
-            status, html = hc.fetch_review_page(tenant, action_id)
+            status, html = (hc.fetch_review_page(tenant, action_id,
+                                                 voice="sample")
+                            if sample else
+                            hc.fetch_review_page(tenant, action_id))
         except HealthClawError:
             # A dead socket reached Flask as a 500 before this: no statement
             # about the form, on the approval gate.
@@ -1789,12 +2751,27 @@ def create_app(config: Config | None = None,
                                status, action_id)
                 return render_template("chat_error.html",
                                        message=_REVIEW_UNCHECKABLE), 503
-            return render_template(
-                "chat_error.html",
-                message="This form is no longer awaiting review."), 404
+            # Past review. The texted "Your intake form is ready" link lands
+            # here after approval, so show the form, not a dead end (#875).
+            return _form_past_review(tenant, agent_id, action_id)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
-        return html
+        # The engine names its own product in the tab; here the page is
+        # CareAgents', reached from a CareAgents chat or text.
+        return _REVIEW_TAB_BRAND.sub(r"\1CareAgents\2", html, count=1)
+
+    def _count_approval(agent_id):
+        """One approval on a real-record assistant, for the weekly number
+        (beta spec 4.5). The sample is not counted. Never fails a review."""
+        acct = current_account()
+        # The funnel counts an approval on any records, the sample included.
+        funnel.safely(funnel.mark, svc.session, acct.id, "action_approved")
+        try:
+            ctx = svc.get_agent_context(acct.id, agent_id)
+            if ctx and ctx["connection"]["kind"] != "sample":
+                svc.count_activity(acct.id, "approved")
+        except Exception:  # noqa: BLE001 - a count never fails a review
+            logger.warning("could not count an approval")
 
     @app.post("/review/<agent_id>/<action_id>/submit")
     @login_required
@@ -1806,6 +2783,11 @@ def create_app(config: Config | None = None,
                             "message": _REVIEW_UNCHECKABLE}), 503
         if not tenant:
             return jsonify({"error": "not yours"}), 404
+        if svc.is_paused(current_account().id):
+            # Before the review is submitted, so nothing is confirmed or
+            # executed for a paused account (beta spec 4.6, #856 review F1).
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_HUB_TEXT}), 423
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
@@ -1934,6 +2916,7 @@ def create_app(config: Config | None = None,
                 return jsonify(body), 502
             body = dict(body) if isinstance(body, dict) else {}
             body["confirmed"] = True
+            _count_approval(agent_id)
         return jsonify(body), status
 
     @app.post("/review/<agent_id>/<action_id>/decline")
@@ -1978,8 +2961,21 @@ def create_app(config: Config | None = None,
 
     # --- surfaces ------------------------------------------------------------
 
+    def _is_real(ctx: dict) -> bool:
+        """Whether the agent is on anything but the sample, for the Mac
+        relay and Telegram. Unconditional: SENDBLUE_REAL_RECORDS stands for
+        Sendblue's BAA only, and these transports have none. An unknown
+        kind counts as real."""
+        return (ctx.get("connection") or {}).get("kind") != "sample"
+
+    def _telegram_real_records():
+        return jsonify({"error": "real_records",
+                        "message": sendblue_surface.real_records_text(
+                            cfg.origin)}), 409
+
     @app.post("/api/surfaces/telegram")
     @login_required
+    @full_sign_in_required
     def connect_telegram():
         acct = current_account()
         body = request.get_json(silent=True) or {}
@@ -1987,6 +2983,10 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if _is_real(ctx):
+            # The gateway answers Telegram outside the run worker, so no
+            # turn check here would hold it back: refuse the binding.
+            return _telegram_real_records()
         code = new_binding_code()
         sid = svc.add_surface(acct.id, agent_id, "telegram", code,
                               status="pending")
@@ -1998,7 +2998,7 @@ def create_app(config: Config | None = None,
     def telegram_bind():
         """Called by the OpenClaw bot's /start handler with the code + chat_id.
         Gated by the mint secret (server-to-server)."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
         code = str(body.get("code") or "").replace("care_", "")
@@ -2007,6 +3007,10 @@ def create_app(config: Config | None = None,
         if not surface or chat_id is None:
             return jsonify({"error": "unknown code"}), 404
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
+        if ctx and _is_real(ctx):
+            # A code minted while sample does not expire; read fresh here,
+            # so a switch to real records since then binds nothing.
+            return _telegram_real_records()
         if not ctx or not hc.bind_telegram(ctx["tenant"], int(chat_id)):
             return jsonify({"error": "bind failed"}), 502
         svc.bind_surface(surface["id"], str(chat_id))
@@ -2014,14 +3018,114 @@ def create_app(config: Config | None = None,
 
     # --- iMessage surface ----------------------------------------------------
     # Unlike Telegram (driven by the OpenClaw gateway), careagents runs the
-    # iMessage message loop itself: a Mac-mini relay POSTs inbound texts here
-    # (mint-secret gated) and we return the agent's reply for it to send back.
+    # iMessage message loop itself. careagents.imessage.handle_inbound is the
+    # transport-agnostic core; the mint-secret-gated routes below are the
+    # Mac-mini relay's adapter onto it.
+
+    def _imessage_admission_block(account_id: str, ctx: dict) -> str | None:
+        # The same admission rule as /api/chat: a turn the worker will
+        # refuse (paused, terms) is queued and answered there; otherwise the
+        # day's allowance is read here so a spent day costs no run.
+        if beta.turn_block(ctx["connection"], svc.is_paused(account_id),
+                           tester_terms.CONSENT_VERSION):
+            return None
+        if svc.daily_turns_used(account_id) >= cfg.chat_turns_per_day:
+            return beta.DAILY_LIMIT_TEXT
+        return None
+
+    def _imessage_queue_turn(ctx, text, request_id, conversation_id):
+        tenant, agent = ctx["tenant"], ctx["agent"]
+        conversation_id = conversation_id or hc.conversation_id(agent["id"])
+        created, user_message_id = hc.claim_inbound_message(
+            tenant, text, agent["id"], conversation_id, "imessage",
+            str(request_id or uuid.uuid4()))
+        if created is None or not user_message_id:
+            raise HealthClawError("message store unavailable")
+        run = hc.create_agent_run(
+            tenant, user_message_id, cfg.run_deadline_seconds)
+        return {**run, "duplicate": not created}
+
+    def _relay_secret_ok() -> bool:
+        """X-Internal-Secret, compared in constant time."""
+        given = request.headers.get("X-Internal-Secret") or ""
+        return secret_matches(given, cfg.mint_secret)
+
+    def _imessage_connected(account_id: str, handle: str) -> None:
+        """Tell the owner by email that a phone was connected. One line, the
+        handle masked. Skipped quietly when email is not set up."""
+        funnel.safely(funnel.mark, svc.session, account_id,
+                      "imessage_linked")
+        if not cfg.resend_api_key:
+            return
+        acct = svc.get_account(account_id)
+        if acct is None:
+            return
+        try:
+            mail.send_notice(cfg, acct.email,
+                             "A phone was connected to CareAgents",
+                             imessage.connected_notice(handle))
+        except Exception:               # pragma: no cover - defensive
+            logger.warning("connected notice failed to send")
+
+    def _imessage_reverify(account_id: str, handle: str) -> None:
+        """Tell the owner, once, that their phone was asked to re-confirm
+        (#871). Masked, and skipped quietly when email is not set up."""
+        if not cfg.resend_api_key:
+            return
+        acct = svc.get_account(account_id)
+        if acct is None:
+            return
+        try:
+            mail.send_notice(cfg, acct.email, imessage.REVERIFY_SUBJECT,
+                             imessage.reverify_notice(handle))
+        except Exception:               # pragma: no cover - defensive
+            logger.warning("reverify notice failed to send")
+
+    def _imessage_pending_count(ctx: dict) -> int:
+        # The approvals page's rule (#215): a revoked connection is not a
+        # pathway to the tenant's requests, so it is not asked. Raised as
+        # "could not check", never answered as zero.
+        if not _connection_is_live(ctx):
+            raise HealthClawError("connection revoked", 0)
+        return len(hc.pending_actions(ctx["tenant"]))
+
+    imessage_deps = imessage.Deps(
+        origin=cfg.origin, svc=svc,
+        workers_ready=lambda: _worker_state(
+            timeout=_ADMISSION_WORKER_TIMEOUT) == WORKERS_READY,
+        allow_turn=lambda account_id: _allow_turn(account_id),
+        admission_block=_imessage_admission_block,
+        queue_turn=_imessage_queue_turn,
+        queue_error=HealthClawError,
+        burst_window_seconds=cfg.chat_window_seconds,
+        on_connected=_imessage_connected,
+        reverify_seconds=cfg.imessage_reverify_days * 86400,
+        on_reverify=_imessage_reverify,
+        # APPROVALS by text: the approvals page's own source and its rule —
+        # an engine that cannot answer raises, never reads as zero (#215).
+        pending_count=_imessage_pending_count)
+    # A second transport (a hosted provider's webhook) calls the same core.
+    app.extensions["careagents_imessage"] = imessage_deps
+    sendblue_surface.register(app, cfg, svc, imessage_deps)
+
+    def _imessage_json_object() -> dict | None:
+        """The request's JSON object, {} when there is no body at all, or
+        None for anything else. `get_json(silent=True) or {}` read null,
+        [], 0, false, "" and malformed JSON as {}, and on Disconnect {}
+        meant every phone."""
+        body = request.get_json(silent=True)
+        if body is None:
+            return None if request.get_data(cache=True) else {}
+        return body if isinstance(body, dict) else None
 
     @app.post("/api/surfaces/imessage")
     @login_required
+    @full_sign_in_required
     def connect_imessage():
         acct = current_account()
-        body = request.get_json(silent=True) or {}
+        body = _imessage_json_object()
+        if body is None:
+            return jsonify({"error": "body must be a JSON object"}), 400
         agent_id = body.get("agent_id", "")
         if not svc.get_agent_context(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
@@ -2035,77 +3139,169 @@ def create_app(config: Config | None = None,
                             if cfg.imessage_handle else
                             "iMessage isn't available yet.")})
 
+    @app.post("/api/surfaces/imessage/disconnect")
+    @login_required
+    def disconnect_imessage():
+        """Settings' Disconnect: unbind one phone ({surface_id}), or every
+        iMessage handle on the account only when asked in so many words
+        ({"all": true}). Anything else is a 400, never "all". A freed phone
+        may text again later and get a fresh sign-in link."""
+        acct = current_account()
+        body = _imessage_json_object()
+        if body is None:
+            return jsonify({"error": "body must be a JSON object"}), 400
+        surface_id = body.get("surface_id")
+        if surface_id is not None and not isinstance(surface_id, str):
+            return jsonify({"error": "invalid surface_id"}), 400
+        if surface_id is None and body.get("all") is not True:
+            return jsonify({"error": "name a surface_id, or all: true"}), 400
+        removed = svc.disconnect_imessage(acct.id, surface_id)
+        if surface_id is not None and not removed:
+            return jsonify({"error": "unknown phone"}), 404
+        return jsonify({"ok": True, "removed": removed})
+
     @app.post("/api/surfaces/imessage/bind")
     def imessage_bind():
-        """Relay calls this when a user texts `care <code>`: bind the sender's
-        handle to the pending surface. Mint-secret gated (server-to-server)."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        """An older relay calls this for `care <code>`. Inbound handles the
+        same line now; kept so a relay not yet updated keeps pairing."""
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
-        body = request.get_json(silent=True) or {}
+        body = _imessage_json_object()
+        if body is None:
+            return jsonify({"error": "body must be a JSON object"}), 400
         code = str(body.get("code") or "").replace("care_", "").replace(
-            "care ", "").strip()
-        handle = str(body.get("handle") or "").strip()
-        if not handle:
+            "care ", "").strip().lower()
+        raw = str(body.get("handle") or "").strip()
+        if not raw:
             return jsonify({"error": "missing handle"}), 400
-        surface = svc.find_surface_by_code(code, kind="imessage")
-        if not surface:
-            return jsonify({"error": "unknown code"}), 404
-        svc.bind_surface(surface["id"], handle)
-        return jsonify({"ok": True})
+        handle = imessage.normalize_handle(raw)
+        if not handle:
+            # The same rule as inbound: nothing we cannot text back is bound.
+            return jsonify({"error": "unsupported handle"}), 400
+        reply, status = imessage.bind_by_code(imessage_deps, handle, code,
+                                              raw=raw)
+        return jsonify(reply), status
 
     @app.post("/api/surfaces/imessage/inbound")
     def imessage_inbound():
-        """Relay POSTs an inbound message {handle, text}; we route it to the
-        bound agent and return {reply} for the relay to send back."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        """Relay POSTs an inbound message {handle, text}. Answers
+        {reply?, run_id?}: send `reply` now if present, then poll `run_id`
+        for the agent's answer."""
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
-        body = request.get_json(silent=True) or {}
-        handle = str(body.get("handle") or "").strip()
-        text = (body.get("text") or "").strip()
-        surface = svc.find_surface_by_handle(handle, kind="imessage")
-        if not surface:
-            return jsonify({"error": "unbound handle"}), 404
-        ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
-        if not ctx:
-            return jsonify({"error": "unknown agent"}), 404
-        if not text or len(text) > 2000:
-            return jsonify({"error": "message must be 1-2000 characters"}), 400
-        workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
-        if workers != WORKERS_READY:
-            return _refuse_turn_without_workers(workers)
-        if not _allow_turn(surface["account_id"]):
-            return jsonify({"reply": "One moment — too many messages just now. "
-                                     "Try again in a bit."}), 200
-        tenant = ctx["tenant"]
-        agent = ctx["agent"]
-        conversation_id = (body.get("conversation_id")
-                           or hc.conversation_id(agent["id"]))
-        request_id = str(body.get("request_id") or uuid.uuid4())
-        try:
-            created, user_message_id = hc.claim_inbound_message(
-                tenant, text, agent["id"], conversation_id,
-                "imessage", request_id)
-            if created is None or not user_message_id:
-                return jsonify({"error": "message store unavailable"}), 503
-            run = hc.create_agent_run(
-                tenant, user_message_id, cfg.run_deadline_seconds)
-        except HealthClawError:
-            return jsonify({"error": "run queue unavailable"}), 503
-        return jsonify({"run_id": run["id"], "status": run["status"],
-                        "duplicate": not created}), 202
+        body = _imessage_json_object()
+        if body is None:
+            return jsonify({"error": "body must be a JSON object"}), 400
+        request_id = body.get("request_id")
+        conversation_id = body.get("conversation_id")
+        if request_id is not None and not 1 <= len(str(request_id)) <= 128:
+            return jsonify({"error": "invalid request_id"}), 400
+        reply, status = imessage.handle_inbound(
+            imessage_deps, str(body.get("handle") or ""),
+            str(body.get("text") or ""),
+            request_id=str(request_id) if request_id else None,
+            conversation_id=conversation_id,
+            # A real-records agent gets the app pointer and no turn is
+            # queued, whatever SENDBLUE_REAL_RECORDS says (_is_real).
+            transport_block=lambda ctx: (
+                sendblue_surface.real_records_text(cfg.origin)
+                if _is_real(ctx) else None))
+        return jsonify(reply), status
+
+    @app.get("/link")
+    def imessage_link():
+        """The sign-in link texted to a new handle, `/link?t=<token>`. The
+        token is in the query string so the access log, which records the
+        path only, never holds it. Parks the link's id in the session, then
+        the ordinary sign-in (or sign-up) runs; the handle is bound once
+        someone signed in says yes."""
+        token = str(request.args.get("t") or "")
+        link_id = (svc.peek_imessage_link(token)
+                   if 0 < len(token) <= 64 else None)
+        if not link_id:
+            return render_template("imessage_link.html", outcome="expired"), 410
+        session["imessage_link"] = link_id
+        if current_account() is None:
+            return redirect(url_for("auth"))
+        return redirect(url_for("imessage_link_claim"))
+
+    @app.route("/link/done", methods=["GET", "POST"])
+    @login_required
+    @full_sign_in_required
+    def imessage_link_claim():
+        """GET asks, POST binds. A link can be forwarded, so whoever opens
+        it must see which phone they are connecting and say yes; otherwise
+        a stranger's number could be tied to their records unnoticed."""
+        if request.method == "GET":
+            link_id = session.get("imessage_link")
+            if not link_id:
+                return redirect(url_for("home"))
+            handle = svc.imessage_link_handle(link_id)
+            if not handle:
+                session.pop("imessage_link", None)
+                return render_template("imessage_link.html",
+                                       outcome="expired"), 410
+            # Already this account's phone: the link is a re-confirm.
+            bound = svc.find_surface_by_handle(handle)
+            again = bool(bound and bound["account_id"]
+                         == current_account().id)
+            return render_template("imessage_link.html", outcome="confirm",
+                                   again=again,
+                                   handle=imessage.display_handle(handle))
+        link_id = session.pop("imessage_link", None)
+        if not link_id:
+            return redirect(url_for("home"))
+        if request.form.get("connect") != "yes":
+            handle = svc.imessage_link_handle(link_id)
+            # Spent, so the same link opened again reads as used.
+            svc.void_imessage_link(link_id)
+            # The owner says their own phone isn't theirs any more (#871):
+            # disconnect it as Settings does. Only this account's binding.
+            bound = svc.find_surface_by_handle(handle) if handle else None
+            if bound and bound["account_id"] == current_account().id:
+                svc.disconnect_imessage(bound["account_id"], bound["id"])
+                return render_template("imessage_link.html",
+                                       outcome="disconnected")
+            return render_template("imessage_link.html", outcome="declined")
+        acct = current_account()
+        handle = svc.imessage_link_handle(link_id)
+        outcome = svc.claim_imessage_link(link_id, acct.id)
+        if outcome == "connected":
+            if handle:
+                _imessage_connected(acct.id, handle)
+            if not svc.list_home(acct.id)["agents"]:
+                outcome = "connected_setup"
+        return render_template("imessage_link.html", outcome=outcome)
 
     @app.get("/api/surfaces/imessage/runs/<run_id>")
     def imessage_run_result(run_id):
         """Mint-secret-gated projection polled by the Mac relay."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
-        handle = str(request.args.get("handle") or "").strip()
-        surface = svc.find_surface_by_handle(handle, kind="imessage")
-        if not surface:
+        # A header, not the query string: the access log keeps neither,
+        # but a URL travels further than a header does. The query form is
+        # still read for a relay not yet updated.
+        raw = str(request.headers.get("X-Imessage-Handle")
+                  or request.args.get("handle") or "").strip()
+        surface = svc.find_surface_by_handle(
+            imessage.normalize_handle(raw) or raw, kind="imessage", also=raw)
+        if (not surface or not surface.get("agent_id")
+                or imessage.reverify_due(surface, time.time(),
+                                         imessage_deps.reverify_seconds)):
+            # Due to re-confirm (#871): read as unbound, so the relay sends
+            # nothing to whoever holds the number now.
             return jsonify({"error": "unbound handle"}), 404
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if _is_real(ctx):
+            # Read fresh at each poll, before anything about the run: an
+            # assistant switched to real records mid-run, by kind or by a
+            # move to a new tenant (where the run lookup would fail and the
+            # relay retry forever), gets the pointer and nothing of the run.
+            return jsonify({"run_id": run_id,
+                            "reply": sendblue_surface.real_records_text(
+                                cfg.origin)})
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
             if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):
@@ -2118,55 +3314,79 @@ def create_app(config: Config | None = None,
             # The relay retries on 503. Answering 404 retired the run as
             # non-existent and dropped the patient's reply (#410).
             return jsonify({"error": "run service unavailable"}), 503
-        if page.get("status") not in (
-                "completed", "failed", "cancelled", "waiting_for_human"):
+        if page.get("status") not in imessage.FINAL_STATUSES:
             return jsonify({"run_id": run_id,
                             "status": page.get("status")}), 202
-
-        parts: list[str] = []
-        extras: list[str] = []
-        for raw in page.get("events") or []:
-            event = _event_for_browser(raw)
-            if not event:
-                continue
-            if event.get("type") == "text" and event.get("text"):
-                parts.append(event["text"])
-            elif event.get("type") == "card" and (
-                    event.get("kind") == "review"):
-                extras.append(
-                    "I've prepared a form for your review — approve each "
-                    f"item here: {cfg.origin}/review/{surface['agent_id']}/"
-                    f"{event.get('action_id', '')}")
-            elif event.get("type") == "card" and (
-                    event.get("kind") == "pdf" and event.get("url")):
-                extras.append(
-                    f"Your signed document is ready: {event['url']}")
-            elif event.get("type") == "error":
-                parts.append(event.get("text") or GENERIC_FAILURE_TEXT)
-        reply = "\n\n".join([*parts, *extras]).strip() or (
-            GENERIC_FAILURE_TEXT + " Please try again.")
+        reply = imessage.run_reply(page.get("events") or [], cfg.origin,
+                                   surface["agent_id"])
         return jsonify({"run_id": run_id, "status": page.get("status"),
                         "reply": reply})
 
     # --- trust + ops ---------------------------------------------------------
 
-    @app.get("/api/trust")
-    def trust():
+    #: How long one read of the engine's badge answers for. /safety and
+    #: /api/trust are public, so each load was an engine call (#884
+    #: security). Per process; the engine keeps its own longer cache.
+    BADGE_TTL = 120
+    badge_cache = {"at": None, "message": "unavailable"}
+    badge_lock = threading.Lock()
+
+    def _badge_message() -> str:
+        """The engine's badge message, read at most once per BADGE_TTL. An
+        unreachable engine is cached too: an outage is when re-asking on
+        every load hurts most."""
+        now = time.time()
+        with badge_lock:
+            at = badge_cache["at"]
+            if at is not None and now - at < BADGE_TTL:
+                return badge_cache["message"]
         try:
-            badge = hc.conformance_badge()
+            message = hc.conformance_badge().get("message", "unavailable")
         except HealthClawError:
             # The badge is a claim about the engine. Unreachable means we do
             # not have one — the same honest answer a non-200 already gives,
             # rather than a 500 on the trust panel (#403).
-            badge = {}
-        return jsonify({"badge": badge.get("message", "unavailable")})
+            message = "unavailable"
+        message = str(message or "unavailable")
+        with badge_lock:
+            badge_cache.update(at=now, message=message)
+        return message
+
+    @app.get("/api/trust")
+    def trust():
+        return jsonify({"badge": _badge_message()})
+
+    @app.get("/safety")
+    def safety():
+        """What the safety grade means, in plain words (#884 G7). Public,
+        like the landing page that links it. The grade is the engine's,
+        read as /api/trust reads it; without one, the page links the live
+        report instead of showing a grade nobody fetched."""
+        message = _badge_message()
+        grade = message.split(" ")[0] if message else ""
+        # Back where the person came from (#884 G7): their chat when they
+        # have an assistant, the hub when they have none, the landing page
+        # when signed out. Reading the session sets no cookie.
+        acct = current_account()
+        agents = svc.list_home(acct.id)["agents"] if acct else []
+        if agents:
+            back = (url_for("chat", agent=agents[0]["id"]), "Back to chat")
+        elif acct:
+            back = ("/home", "Back to CareAgents")
+        else:
+            back = ("/", "Back")
+        return render_template(
+            "safety.html", back_href=back[0], back_label=back[1],
+            grade=grade if grade in ("A", "B", "C", "D", "F") else None,
+            report_url=(cfg.healthclaw_public_base.rstrip("/")
+                        + "/r6/fhir/$conformance?format=text"))
 
     @app.get("/manifest.webmanifest")
     def manifest():
         return jsonify({
             "name": "CareAgents", "short_name": "CareAgents",
             "start_url": "/home", "display": "standalone",
-            "background_color": "#FBF6EE", "theme_color": "#C2532E",
+            "background_color": "#F6F8F7", "theme_color": "#0B6B5D",
             "icons": [{"src": "/static/icon.svg", "sizes": "any",
                        "type": "image/svg+xml"}]})
 
@@ -2258,5 +3478,68 @@ def create_app(config: Config | None = None,
             return
         for day, endpoint, views in rows:
             click.echo(f"{day}  {endpoint:<12} {views}")
+
+    # --- real-record invites (beta pathway spec section 4.2) ---------------
+
+    @app.cli.group("invites")
+    def _invites():
+        """Invite, list and revoke real-record testers.
+
+        Invites are read only when CARE_REAL_RECORDS=allowlist, alongside
+        CARE_REAL_RECORDS_ALLOWLIST. A command for the same reason as
+        page-views: no admin page to authorise.
+        """
+
+    @_invites.command("add")
+    @click.argument("email")
+    @click.option("--by", "invited_by", required=True,
+                  help="Who is inviting, for the record.")
+    def _invites_add(email, invited_by):
+        try:
+            created = svc.invite_real_records(email, invited_by)
+        except (AuthError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"invited {email.strip().lower()}" if created
+                   else f"{email.strip().lower()} was already invited")
+        if cfg.real_records != "allowlist":
+            click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
+                       "invites are read only in 'allowlist' mode")
+        if not tester_terms.approved():
+            click.echo("note: invites are not honoured until the tester "
+                       "terms are approved (#565)")
+
+    @_invites.command("revoke")
+    @click.argument("email")
+    def _invites_revoke(email):
+        """Refuse new real connections. Existing ones keep working until the
+        person disconnects them."""
+        try:
+            revoked = svc.revoke_real_records_invite(email)
+        except AuthError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"revoked {email.strip().lower()}" if revoked
+                   else f"no live invite for {email.strip().lower()}")
+
+    @_invites.command("list")
+    def _invites_list():
+        rows = svc.real_record_invites()
+        if not rows:
+            click.echo("no invites")
+        for r in rows:
+            when = datetime.fromtimestamp(r["invited_at"], timezone.utc)
+            state = ("revoked " + datetime.fromtimestamp(
+                r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
+                     if r["revoked_at"] else "live")
+            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
+                       f"by {r['invited_by']:<20} {state}")
+
+    # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
+
+    operator_cli.register(app, svc)
+    beta_signup.register(app, svc, cfg, first_run=_first_run)
+    feedback.register(app, svc, cfg)
+    invites.register(app, svc, cfg, beta_signup.page_context)
+    funnel.register(app, svc, cfg, full_session=lambda: not session.get(
+        _VIA_LINK))
 
     return app

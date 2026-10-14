@@ -10,12 +10,94 @@
     return { ok: r.ok, d: await r.json().catch(() => ({})) };
   }
 
+  // The terms version the consent cards on this page show, as rendered.
+  // Every consent sends it back so the server records the wording the
+  // person read. A 428 to a consent that carried it means the terms changed
+  // after this page loaded: reload to show the current card. Never resend
+  // the version the 428 names; that would accept wording nobody saw.
+  const versioned = document.querySelector("[data-consent-version]");
+  const shownConsentVersion = versioned ? versioned.dataset.consentVersion : "";
+  const termsChanged = (res) =>
+    !res.ok && res.d.error === "consent_required";
+  // What a refusal says to a person: its `message`, or an `error` that is a
+  // sentence. A bare code (sign_in_again, records_paused) is never shown
+  // (#934 QA F1); the fallback is said instead.
+  const refusal = (d, fallback) =>
+    (d && typeof d.message === "string" && d.message) ||
+    (d && typeof d.error === "string" && d.error.includes(" ") && d.error) ||
+    fallback;
+
+  // --- a page to open after a request: the popup iOS blocks (#937) ---
+  // iOS Safari and in-app browsers block window.open unless it runs inside
+  // the tap itself, and the connect page's address only exists after an
+  // await. So the window opens empty on the tap and is pointed at the page
+  // once the answer is in. `noopener` cannot be passed here (open would
+  // return null, leaving nothing to point); the opener is cut instead.
+  function openBlank() {
+    let w = null;
+    try { w = window.open("", "_blank"); } catch (e) { w = null; }
+    if (w) { try { w.opener = null; } catch (e) { /* nothing to cut */ } }
+    return w;
+  }
+  function dropBlank(w) {
+    if (w && !w.closed) { try { w.close(); } catch (e) { /* gone */ } }
+  }
+  // Point the window opened on the tap at `url`. Blocked, or closed by the
+  // person meanwhile: say so with a link, since a tapped link always opens.
+  // Returns whether the page opened.
+  function sendTo(w, url, anchor, msgEl) {
+    if (w && !w.closed) {
+      try { w.location.href = url; return true; } catch (e) { /* below */ }
+    }
+    say(anchor, msgEl, "Your browser didn't open the connect page.",
+        { href: url, text: "Open the connect page" });
+    return false;
+  }
+
+  // A confirm-link session (#920 F1): #940's code-is-coming copy, and a
+  // link to the code sign-in that comes back to the hub.
+  const addSection = $("connect-section");
+  const linkSession = !!(addSection && addSection.dataset.linkSession);
+  const CODE_FIRST = "To connect your own records, sign in again first. " +
+    "We'll email you a code to sign in. Then you'll come back here.";
+  const CODE_SIGN_IN = { href: "/auth?connect=1",
+                         text: "Sign in again to connect your records",
+                         sameTab: true };
+  // The normal way forward, so it reads in the next-step teal, not as an
+  // error (patient tester recheck on #944).
+  function sayNext(tile) {
+    $("connect-msg").classList.add("is-next");
+    say(tile, $("connect-msg"), CODE_FIRST, CODE_SIGN_IN);
+  }
+
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
       const id = tile.dataset.connector;
       let body = {};
+      // Only Fasten answers with a page to open (connect_url).
+      const opensPage = id === "fasten";
+      let page = null;
       $("connect-msg").hidden = true;
+      // Only the code sign-in reads as a next step; anything else said
+      // under a tile keeps the message colour.
+      $("connect-msg").classList.remove("is-next");
+      // An upload row still waiting for its file is where this tap belongs
+      // (QA #944 F1, as #860's startFileUpload): its consent was given when
+      // it was made, and its picker opens inside this tap.
+      if (id === "direct") {
+        const waiting = document.querySelector(
+          '.conn-card[data-kind="direct"][data-status="empty"] .conn-upload');
+        if (waiting) {
+          waiting.closest(".conn-card").scrollIntoView({ block: "center" });
+          return waiting.click();
+        }
+      }
+      // Opened from the confirm link: real records wait on a code sign-in
+      // (#920 F1). Say so on the tap, before any terms, with the way there.
+      if (tile.dataset.consent && linkSession) {
+        return sayNext(tile);
+      }
       if (tile.dataset.providers) {
         const provider = await pickProvider(JSON.parse(tile.dataset.providers));
         if (!provider) return;
@@ -23,38 +105,83 @@
       }
       // Real-record sources: informed consent before anything happens. The
       // server refuses (428) without it, so this card is UX, not the gate.
+      // "I agree" is the last tap before the request, so the window for the
+      // connect page opens inside it.
       if (tile.dataset.consent) {
-        const agreed = await showConsentCard();
+        const agreed = await showConsentCard(
+          opensPage ? () => { page = openBlank(); } : null);
         if (!agreed) return;
         body.consent = true;
+        body.consent_version = shownConsentVersion;
+      } else if (opensPage) {
+        page = openBlank();
       }
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
+      if (!res.ok || !res.d.connect_url) dropBlank(page);
+      if (body.consent && termsChanged(res)) { location.reload(); return; }
+      if (!res.ok && res.d.error === "sign_in_again") {
+        // A page from before the session changed: the same way forward.
+        return sayNext(tile);
+      }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
         // needs dismissing, and the page stays usable.
         return say(tile, $("connect-msg"),
-                   res.d.error || "Couldn't connect that source.");
+                   refusal(res.d, "Couldn't connect that source."));
       }
       if (res.d.redirect) { location.assign(res.d.redirect); return; }
-      if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
+      // Blocked: stay on this page with the link rather than reload it away.
+      if (res.d.connect_url &&
+          !sendTo(page, res.d.connect_url, tile, $("connect-msg"))) return;
       location.reload();
     });
   });
 
-  // Consent card: resolves true only on an explicit "I agree".
-  function showConsentCard() {
+  // Consent card: resolves true only on an explicit "I agree". `onAgree`
+  // runs inside the agree tap itself, for what a browser allows only there.
+  function showConsentCard(onAgree) {
     return new Promise((resolve) => {
       const modal = document.getElementById("consent-modal");
       const agree = document.getElementById("consent-agree");
       const cancel = document.getElementById("consent-cancel");
       const done = (v) => { modal.hidden = true; resolve(v); };
-      agree.onclick = () => done(true);
+      agree.onclick = () => { if (onAgree) onAgree(); done(true); };
       cancel.onclick = () => done(false);
       modal.hidden = false;
     });
   }
+
+  // Accept the current terms for real connections made under older ones
+  // (beta spec 4.3). Its own card, not the first-connect one; the server
+  // refuses (428) without an explicit `consent: true`.
+  function showReconsentCard() {
+    return new Promise((resolve) => {
+      const modal = $("reconsent-modal");
+      const done = (v) => { modal.hidden = true; resolve(v); };
+      $("reconsent-agree").onclick = () => done(true);
+      $("reconsent-cancel").onclick = () => done(false);
+      modal.hidden = false;
+    });
+  }
+  document.querySelectorAll("[data-reconsent]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const agreed = await showReconsentCard();
+      if (!agreed) return;
+      btn.disabled = true;
+      const res = await post(
+        `/api/connections/${btn.dataset.reconsent}/consent`,
+        { consent: true, consent_version: shownConsentVersion });
+      if (termsChanged(res)) { location.reload(); return; }
+      if (!res.ok) {
+        btn.disabled = false;
+        return announce(btn.parentElement.querySelector(".inline-msg"),
+                        "That didn't work. Try again.");
+      }
+      location.reload();
+    });
+  });
 
   // One shared primitive for the dialogs below: unhide a static modal, resolve
   // once when it closes. ESC and a backdrop tap both abandon it — every one of
@@ -116,10 +243,28 @@
   // text. Delete arms "Deleting…" and then awaits the request; a failure that
   // lands inside the wait would otherwise be papered over by the stale
   // "Deleting…" arriving on top of "Your records were not deleted."
+  // After a write: make the contact address a mailto link, from nodes.
+  const CONTACT = "contactus@healthclaw.io";
+  function linkContact(el) {
+    const text = el.textContent;
+    if (text.indexOf(CONTACT) < 0) return;
+    el.textContent = "";
+    text.split(CONTACT).forEach((part, i) => {
+      if (i) {
+        const a = document.createElement("a");
+        a.href = "mailto:" + CONTACT;
+        a.textContent = CONTACT;
+        el.appendChild(a);
+      }
+      if (part) el.appendChild(document.createTextNode(part));
+    });
+  }
+
   function announce(el, text, after) {
     const pending = announceTimers.get(el);
     if (pending) clearTimeout(pending);
-    const write = () => { el.textContent = text; if (after) after(); };
+    const write = () => {
+      el.textContent = text; linkContact(el); if (after) after(); };
     if (!el.hidden && !pending) return write();
     el.textContent = "";
     el.hidden = false;
@@ -147,7 +292,8 @@
   // fold on a phone — which looks exactly like the dead browser dialog this
   // replaced, so the position is part of the fix, not decoration. Moving the
   // one element keeps the id stable for anything addressing it.
-  function say(anchor, el, text) {
+  // `link` ({href, text}), when given, follows the sentence as a real link.
+  function say(anchor, el, text, link) {
     if (anchor && el.previousElementSibling !== anchor) {
       // The move is a remove-then-insert, so the region leaves the
       // accessibility tree even when it was already on screen. Hide it first
@@ -162,6 +308,18 @@
       el.hidden = true;
     }
     announce(el, text, () => {
+      if (link) {
+        const a = document.createElement("a");
+        a.href = link.href;
+        // A sign-in continues in this tab; a provider's page opens beside it.
+        if (!link.sameTab) {
+          a.target = "_blank";
+          a.rel = "noopener";
+        }
+        a.className = "open-connect-page";
+        a.textContent = link.text;
+        el.append(" ", a);
+      }
       // Only scrolls if it isn't already fully visible, and only as far as it
       // has to — no jump when the message is already under the user's thumb.
       // Never while a dialog is up: the message is behind the overlay, so the
@@ -283,7 +441,10 @@
       // Only clear what this poller wrote — the refresh flow shares this
       // element and its message must survive.
       if (saidUnavailable) { msg.hidden = true; saidUnavailable = false; }
-      if (d.status === "active") { clearInterval(iv); location.reload(); }
+      // Disconnected (perhaps in another tab): stop and show the real state.
+      if (d.status === "active" || d.status === "revoked") {
+        clearInterval(iv); location.reload();
+      }
     }, 5000);
   });
 
@@ -297,21 +458,32 @@
       // Named apart from the module-scope say(anchor, el, text): this one is
       // card-local and takes only the text.
       const report = (t) => announce(msg, t);
+      // Refresh answers with the provider's sign-in page (Fasten, devices):
+      // open the window on this tap, as the tiles do (#937). A consent card
+      // in between replaces it with one opened on "I agree".
+      let page = openBlank();
       btn.disabled = true;
       report("Checking…");
       let res = await post(`/api/connections/${btn.dataset.conn}/refresh`);
       // 428 means this deployment wants consent re-affirmed for the re-pull.
       if (!res.ok && res.d.error === "consent_required") {
-        const agreed = await showConsentCard();
+        dropBlank(page);
+        page = null;
+        const agreed = await showConsentCard(() => { page = openBlank(); });
         if (!agreed) { btn.disabled = false; msg.hidden = true; return; }
         res = await post(`/api/connections/${btn.dataset.conn}/refresh`,
-                         { consent: true });
+                         { consent: true, consent_version: shownConsentVersion });
+        if (termsChanged(res)) { dropBlank(page); location.reload(); return; }
       }
       btn.disabled = false;
-      if (!res.ok) return report(res.d.error || "Couldn't refresh right now.");
+      if (!res.ok || !res.d.reauth_url) dropBlank(page);
+      // `message` first: a coded refusal (records_paused) carries its
+      // sentence there, and the code itself is never shown (#856 review).
+      if (!res.ok) return report(refusal(res.d,
+                                         "Couldn't refresh right now."));
       if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
-        window.open(res.d.reauth_url, "_blank", "noopener");
+        if (!sendTo(page, res.d.reauth_url, null, msg)) return;
         report("Finish signing in to your provider — new records appear here.");
         watchForNewRecords(card, msg);
       }
@@ -350,17 +522,24 @@
     legacy_body_selector:
       "Upload was rejected. Please retry — if it repeats, refresh this page.",
     commit_failed:
-      "Something went wrong saving the records. Quote the code below to " +
-      "support if you need to reach us.",
+      "Something went wrong saving the records. Try again in a moment.",
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
-      "moment or contact support with the code below.",
+      "moment.",
+    records_paused:
+      "Your records are paused, so new records can't be added right now. " +
+      "If you didn't expect this, write to contactus@healthclaw.io.",
   };
-  function messageForError(code) {
-    return UPLOAD_MSG[code] || (
-      "The upload didn't go through. If this keeps happening, quote the " +
-      "code below to support.");
-  }
+  // Failures that may repeat get a way to reach us, and a support code only
+  // when the server sent one: a sentence never promises a code it lacks.
+  const UPLOAD_SUPPORT = { commit_failed: 1, ingest_failed: 1 };
+  const uploadErrorLine = (code, supportCode) =>
+    (UPLOAD_MSG[code] || "The upload didn't go through. Try again in a moment.")
+    + ((UPLOAD_SUPPORT[code] || !UPLOAD_MSG[code])
+      ? (" If it keeps happening, write to contactus@healthclaw.io" +
+         (supportCode ? " and quote this code: " + supportCode + "." : "."))
+      : "");
+  function messageForError(code) { return uploadErrorLine(code, ""); }
 
   // Reused file input — the current owner card is tracked here.
   const fileInput = $("upload-file");
@@ -419,9 +598,8 @@
       }
       btn.disabled = false;
       if (!r.ok) {
-        let line = messageForError(d.error);
-        if (d.correlation_id) line += " Support code: " + d.correlation_id + ".";
-        return sayUpload(msg, line, "form-error");
+        return sayUpload(msg, uploadErrorLine(d.error, d.correlation_id),
+                         "form-error");
       }
       // Success or partial success — show a plain-language summary of
       // what actually landed. When entries failed, surface the unique
@@ -458,19 +636,62 @@
     });
   }
 
-  // --- disconnect: stop new records, keep what's already here ---
+  // --- what the last action did, across its reload (#847) ---
+  // Delete and disconnect reload the hub so every card is redrawn from the
+  // server, and the reload threw away the one sentence saying what happened.
+  // The sentence rides through sessionStorage, which only this tab reads;
+  // it holds a count and a sentence, never a record. Storage that is
+  // blocked (private mode, some in-app browsers) costs only the sentence.
+  const NOTICE_KEY = "careagents.hubNotice";
+  function carryNotice(text) {
+    try { if (text) sessionStorage.setItem(NOTICE_KEY, text); } catch (e) { /* reload anyway */ }
+    // The reload would otherwise restore the scroll position of the card
+    // that was tapped, far below the notice (seen in the 375px walk).
+    try { history.scrollRestoration = "manual"; } catch (e) { /* older browsers */ }
+    location.reload();
+  }
+  (function showCarriedNotice() {
+    const el = $("hub-notice");
+    if (!el) return;
+    let text = null;
+    try {
+      text = sessionStorage.getItem(NOTICE_KEY);
+      sessionStorage.removeItem(NOTICE_KEY);
+    } catch (e) { text = null; }
+    if (text) announce(el, text, () => el.scrollIntoView({ block: "center" }));
+  })();
+
+  // --- disconnect: ask first, stop new records, keep what's already here ---
+  function askToDisconnect(label, readers) {
+    $("disconnect-name").textContent = label;   // the person's label: text only
+    // A disconnected connection is no longer a way to its requests (#215),
+    // so an assistant reading it keeps its chat but loses its approvals.
+    const who = $("disconnect-readers");
+    who.textContent = readers
+      ? readers + " reads these records. It can still answer questions " +
+        "about them, but anything it prepares can't be approved."
+      : "";
+    who.hidden = !readers;
+    const dlg = openDialog($("disconnect-modal"));
+    $("disconnect-confirm").onclick = () => dlg.close(true);
+    $("disconnect-cancel").onclick = () => dlg.close(false);
+    $("disconnect-cancel").focus();
+    return dlg.result;
+  }
   document.querySelectorAll(".conn-disconnect").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
+      if (!(await askToDisconnect(btn.dataset.label || "these records",
+                                  btn.dataset.readers || ""))) return;
       btn.disabled = true;
       const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
       if (!res.ok) {
         btn.disabled = false;
-        announce(msg, res.d.error || "Couldn't disconnect.");
+        announce(msg, refusal(res.d, "Couldn't disconnect."));
         return;
       }
-      location.reload();
+      carryNotice(res.d.message || "Disconnected.");
     });
   });
 
@@ -481,13 +702,20 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const agreed = await askToDelete(btn.dataset.label || "these records");
+      // Whose records go, once someone the holder cares for is here (#951):
+      // "Sample records (Mom's records)". Text only, never markup.
+      const label = btn.dataset.label || "these records";
+      const agreed = await askToDelete(
+        btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
+        btn.dataset.readers || "");
       if (!agreed) return;
 
       btn.disabled = true;
       announce(msg, "Deleting…");
-      const r = await fetch(`/api/connections/${btn.dataset.conn}`,
-                            { method: "DELETE" });
+      // The typed word goes with the request: the server checks it too.
+      const r = await fetch(`/api/connections/${btn.dataset.conn}`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE" }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         btn.disabled = false;
@@ -500,7 +728,8 @@
           "We couldn't confirm your records were deleted.");
         return;
       }
-      location.reload();
+      // The count the consent box promises, shown after the reload (#847).
+      carryNotice(d.message || "Your records were deleted.");
     });
   });
 
@@ -523,7 +752,9 @@
       announce(msg, d.message || "We couldn't confirm your records were deleted.");
       return;
     }
-    location.assign("/?deleted=1");
+    // replace, not assign: Back must not return to the settings of an
+    // account that is gone (#884 G7).
+    location.replace("/?deleted=1");
   });
 
   // The word, in any case, with the whitespace trimmed: phones capitalise
@@ -534,11 +765,20 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label) {
+  function askToDelete(label, readers) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
     if (named) named.textContent = label;
+    // Deleting a connection deletes the assistants that read it. Said
+    // before the tap, by name (#853). Absent on the account page.
+    const who = $("delete-readers");
+    if (who) {
+      who.textContent = readers
+        ? readers + " reads these records and will be deleted too."
+        : "";
+      who.hidden = !readers;
+    }
     input.value = "";
     ok.disabled = true;
     const dlg = openDialog($("delete-modal"));
@@ -590,15 +830,88 @@
   // A queue whose assistant was deleted has no page to open yet: say how
   // to reach it instead of linking nowhere. Names are the person's own
   // words, so they go in as text, never markup.
+  // With an assistant on other records, the one Chat button opens a chat
+  // that cannot see these requests: the step is to switch it (#847).
+  // A queue says whose records it is when they are not the holder's own
+  // (spec section 5): "Juniper (Mom's records)". Text only, like every name.
   const orphanLine = (q) => requests(q.count) + " waiting on " + q.name +
-    ". Start a chat to review " + (q.count === 1 ? "it" : "them") + ".";
+    (q.whose ? " (" + q.whose + ")" : "") + ". " +
+    (q.has_assistant
+      ? "To review " + (q.count === 1 ? "it" : "them") + ", switch your " +
+        "assistant to " + q.name + ": More, then Change records."
+      : "Start a chat to review " + (q.count === 1 ? "it" : "them") + ".");
+
+  // What became of requests already answered (#847). Before this, an
+  // approval that finished left the band at "Nothing yet" with no way to the
+  // result, and one that failed vanished. Each line says what happened and,
+  // where there is one, the next step. Labels and names go in as text.
+  // The one contact address (#856), linked by showRecent.
+  const SUPPORT = "Email " + CONTACT + " to check.";
+  const recentLine = (r) => {
+    const what = r.label + (r.to ? " to " + r.to : "") + ": ";
+    // A form with its PDF is "ready": it went nowhere, it waits for the
+    // person to save, print or send it (#853).
+    if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
+      link: r.link ? { href: r.link, text: "Open the PDF", away: true } : null };
+    if (r.state === "failed") return { text: what + "Didn't finish.",
+      link: r.chat ? { href: r.chat, text: "Ask " + r.agent_name + " to try again" } : null,
+      after: r.chat ? ""
+        : r.has_assistant
+          ? " To try again, switch your assistant to " + r.records +
+            ": More, then Change records."
+          : " Start a chat to try again." };
+    if (r.state === "in_progress") return { text: what + "In progress." };
+    if (r.state === "needs_review") return { text: what +
+      "Didn't finish. We couldn't confirm it went through. " + SUPPORT };
+    if (r.state === "unknown") return { text: what +
+      "Didn't finish. It may have gone out, so it won't be sent again. " + SUPPORT };
+    return null;
+  };
+  function showRecent(d) {
+    if (d.recent_unavailable) {
+      const p = document.createElement("p");
+      p.className = "recent-note";
+      p.textContent = "Couldn't check what happened to earlier requests.";
+      waiting.appendChild(p);
+      return;
+    }
+    if (!Array.isArray(d.recent) || !d.recent.length) return;
+    const head = document.createElement("h3");
+    head.className = "recent-head";
+    head.textContent = "Recently";
+    const list = document.createElement("ul");
+    list.className = "recent-list";
+    d.recent.forEach((r) => {
+      const line = recentLine(r);
+      if (!line) return;
+      const li = document.createElement("li");
+      li.textContent = line.text;
+      linkContact(li);   // before any link below: it rewrites the text
+      if (line.link && /^(https?:\/\/|\/)/.test(line.link.href)) {
+        const a = document.createElement("a");
+        a.href = line.link.href;
+        a.textContent = line.link.text;
+        if (line.link.away) { a.target = "_blank"; a.rel = "noopener"; }
+        li.append(" ", a);
+      }
+      if (line.after) li.append(line.after);
+      list.appendChild(li);
+    });
+    if (list.children.length) waiting.append(head, list);
+  }
+
   function showWaiting(state, d) {
     const line = waiting.querySelector(".waiting-line");
     waiting.dataset.state = state;
     if (state === "fail") { line.textContent = "Couldn't check for requests."; return; }
+    showRecent(d);
     if (state === "none") {
-      line.textContent = "Nothing yet. Anything your assistant prepares, " +
-        "like a form or a reminder, waits here for your OK.";
+      // "Nothing yet" above a list of finished requests reads as though
+      // they never happened.
+      line.textContent = Array.isArray(d.recent) && d.recent.length
+        ? "Nothing waiting for you now."
+        : "Nothing yet. Anything your assistant prepares, " +
+          "like a form or a reminder, waits here for your OK.";
       return;
     }
     // The approvals page reads one assistant's records, so each assistant
@@ -609,7 +922,8 @@
       if (!queues[0].href) { line.textContent = orphanLine(queues[0]); return; }
       const a = document.createElement("a");
       a.href = queues[0].href;
-      a.textContent = requests(d.count) + " waiting for your approval";
+      a.textContent = requests(d.count) + " waiting for your approval" +
+        (queues[0].whose ? " on " + queues[0].whose : "");
       line.replaceChildren(a);
       return;
     }
@@ -621,7 +935,8 @@
       if (q.href) {
         const a = document.createElement("a");
         a.href = q.href;
-        a.textContent = q.name + ": " + requests(q.count);
+        a.textContent = q.name + (q.whose ? " (" + q.whose + ")" : "") +
+          ": " + requests(q.count);
         li.appendChild(a);
       } else {
         li.textContent = orphanLine(q);
@@ -682,7 +997,7 @@
       const name = await askForName(btn.dataset.name);
       if (!name) return;
       const res = await post(`/api/agents/${btn.dataset.agent}/rename`, { name });
-      if (!res.ok) return announce(agentMsg(btn), res.d.error || "Couldn't rename.");
+      if (!res.ok) return announce(agentMsg(btn), refusal(res.d, "Couldn't rename."));
       location.reload();
     });
   });
@@ -690,11 +1005,15 @@
   let moveChoices = [];
   try { moveChoices = JSON.parse(($("agents") && $("agents").dataset.records) || "[]"); }
   catch (e) { moveChoices = []; }
-  function pickRecords(currentId) {
+  // A card carries its own person's records (spec section 9); the list on
+  // #agents is the holder's, for a card that carries none.
+  function pickRecords(currentId, own) {
+    let choices = moveChoices;
+    try { if (own) choices = JSON.parse(own); } catch (e) { choices = moveChoices; }
     const rows = $("records-rows");
     rows.textContent = "";
     const dlg = openDialog($("records-picker"));
-    moveChoices.filter((c) => c.id !== currentId).forEach((c) => {
+    choices.filter((c) => c.id !== currentId).forEach((c) => {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "picker-row";
@@ -709,7 +1028,7 @@
   }
   document.querySelectorAll(".agent-move").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const conn = await pickRecords(btn.dataset.conn);
+      const conn = await pickRecords(btn.dataset.conn, btn.dataset.records);
       if (!conn) return;
       const res = await post(`/api/agents/${btn.dataset.agent}/connection`,
                              { connection_id: conn });
@@ -728,13 +1047,37 @@
     $("agent-delete-cancel").focus();
     return dlg.result;
   }
-  document.querySelectorAll(".agent-delete").forEach((btn) => {
+  // Remove: an older account's extra assistant only (owner decision D5).
+  // The primary's card has no button.
+  document.querySelectorAll(".agent-remove").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!(await askToRemoveAgent(btn.dataset.name))) return;
       const r = await fetch(`/api/agents/${btn.dataset.agent}`, { method: "DELETE" });
-      if (!r.ok) return announce(agentMsg(btn), "Couldn't delete. Try again.");
+      if (!r.ok) return announce(agentMsg(btn), "Couldn't remove. Try again.");
       location.reload();
     });
+  });
+
+  // --- someone you care for (spec section 6), made-up records only ---
+  // The server checks the relationship and the 24-character nickname; this
+  // only stops an empty choice before the round trip.
+  const addPerson = $("add-person-form");
+  // A pick answers "Choose who they are to you.", so the line goes now.
+  if (addPerson) addPerson.addEventListener("change", (e) => {
+    if (e.target.name === "relationship") $("add-person-msg").hidden = true;
+  });
+  if (addPerson) addPerson.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const picked = addPerson.querySelector('input[name="relationship"]:checked');
+    if (!picked) return announce($("add-person-msg"), "Choose who they are to you.");
+    const nickname = $("add-person-nickname").value.trim();
+    const submit = addPerson.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    const res = await post("/api/people", nickname
+      ? { relationship: picked.value, nickname } : { relationship: picked.value });
+    if (res.ok) { location.reload(); return; }
+    submit.disabled = false;
+    announce($("add-person-msg"), refusal(res.d, "Couldn't add them. Try again."));
   });
 
   // --- iMessage surface (settings page) ---
@@ -743,16 +1086,40 @@
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
     $("surfaces-msg").hidden = true;
+    $("surfaces-msg").classList.remove("is-ok");
     const agentId = im.dataset.agent;
     if (!agentId) {
       return say(im, $("surfaces-msg"),
         "Start a chat with your assistant first, then connect iMessage.");
     }
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
-    if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
+    if (!res.ok) return say(im, $("surfaces-msg"), refusal(res.d, "That didn't work."));
     $("im-state").textContent = "pending — text to finish";
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
+  });
+  // Disconnect, one phone per tile: its texts stop reaching the assistant.
+  // Texting again later sends a fresh sign-in link. Success is said in the
+  // calm style; only a failure uses the error colour.
+  document.querySelectorAll(".im-disconnect").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const tile = btn.closest(".surface");
+      const msg = $("surfaces-msg");
+      btn.disabled = true;
+      const res = await post("/api/surfaces/imessage/disconnect",
+                             { surface_id: btn.dataset.surface });
+      if (!res.ok) {
+        btn.disabled = false;
+        msg.classList.remove("is-ok");
+        return say(tile, msg, "Couldn't disconnect. Try again.");
+      }
+      btn.remove();
+      tile.classList.remove("on");
+      tile.querySelector(".im-state").textContent = "disconnected";
+      msg.classList.add("is-ok");
+      say(tile, msg,
+        "Disconnected. Texts from that phone won't reach your assistant.");
+    });
   });
   // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
   // HealthClaw is asked first; the card changes only on its yes, and a
@@ -769,7 +1136,7 @@
         if (status) { status.textContent = "revoked"; status.className = "status status-revoked"; }
       } else {
         btn.disabled = false;
-        if (msg) announce(msg, res.d.message || res.d.error || "That didn't work.");
+        if (msg) announce(msg, refusal(res.d, "That didn't work."));
       }
     });
   });

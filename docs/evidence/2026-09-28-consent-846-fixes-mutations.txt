@@ -1,0 +1,138 @@
+# #846 fixes: mutation runs
+# 19 mutations across r6/oauth.py, careagents/{consent,app,models}.py,
+# consent.html and careagents.css, against six test files:
+# test_oauth_redirect_host_exploit, test_consent_redirect_host_parity,
+# test_careagents_consent, test_careagents_consent_homograph_exploit,
+# test_oauth_registration_hardening, test_oauth_consent_handoff.
+# Tree: 130caee, committed before the run. PYTHONDONTWRITEBYTECODE=1,
+# __pycache__ purged before each run, replacement count asserted == 1,
+# restored with git checkout -- and the restore asserted byte-identical.
+# Every mutant was caught.
+#
+# M1 fails one row only because the other backslash rows also carry an '@',
+# which the userinfo refusal catches on its own (M2).
+
+== M1 registration keeps a backslash
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\\.evil.example/cb]
+1 failed, 103 passed in 4.11s
+
+== M2 registration keeps userinfo
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai@evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example;@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example\t@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://user:pass@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_loopback_candidate_with_a_backslash_or_userinfo_is_refused[http://evil.example@localhost:9/cb]
+5 failed, 99 passed in 3.92s
+
+== M3 registration keeps a non-ASCII host
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://cl\u0430ude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://xn--clude-5ve.com.cl\u0430ude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\u3002evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\uff0eevil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\uff61evil.example/cb]
+5 failed, 99 passed in 3.94s
+
+== M4 unparseable URI not caught
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_unbalanced_bracket_in_redirect_uris_is_a_400_not_a_500
+FAILED tests/test_oauth_redirect_host_exploit.py::test_unbalanced_bracket_at_authorize_is_a_400_not_a_500
+2 failed, 102 passed in 4.05s
+
+== M5 _loopback_form parses the raw URI
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_loopback_candidate_with_a_backslash_or_userinfo_is_refused[http://evil.example\\@localhost:9/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_loopback_candidate_with_a_backslash_or_userinfo_is_refused[http://evil.example@localhost:9/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_unbalanced_bracket_at_authorize_is_a_400_not_a_500
+3 failed, 101 passed in 3.99s
+
+== M6 redirect_host ignores backslash
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_redirect_host_agrees_with_the_browser_on_the_raw_uri[https://evil.example\\@claude.ai/api/mcp/auth_callback]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_redirect_host_agrees_with_the_browser_on_the_raw_uri[https://evil.example\\\\@claude.com/cb]
+2 failed, 102 passed in 3.88s
+
+== M7 redirect_host returns Unicode
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_legacy_full_stop_host_is_shown_the_way_the_browser_resolves_it[\u3002]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_legacy_full_stop_host_is_shown_the_way_the_browser_resolves_it[\uff0e]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_legacy_full_stop_host_is_shown_the_way_the_browser_resolves_it[\uff61]
+3 failed, 101 passed in 3.89s
+
+== M8 app_identity skips the A-label
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_app_identity_shows_a_non_ascii_host_as_the_browser_resolves_it[cl\u0430ude.com-xn--clude-5ve.com]
+FAILED tests/test_careagents_consent.py::test_app_identity_shows_a_non_ascii_host_as_the_browser_resolves_it[claude.ai\u3002evil.example-claude.ai.evil.example]
+FAILED tests/test_careagents_consent.py::test_app_identity_shows_a_non_ascii_host_as_the_browser_resolves_it[claude.ai\uff0eevil.example-claude.ai.evil.example]
+FAILED tests/test_careagents_consent.py::test_app_identity_shows_a_non_ascii_host_as_the_browser_resolves_it[claude.ai\uff61evil.example-claude.ai.evil.example]
+FAILED tests/test_careagents_consent.py::test_app_identity_shows_no_host_rather_than_one_it_cannot_encode
+FAILED tests/test_careagents_consent_homograph_exploit.py::test_the_lookalike_host_is_not_rendered_as_a_lookalike
+6 failed, 98 passed in 3.96s
+
+== M9 lookalike never flagged
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that[claude.ai.secure-login.example-claude.ai]
+FAILED tests/test_careagents_consent.py::test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that[claudeai-help.example-claude.ai]
+FAILED tests/test_careagents_consent.py::test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that[evilclaude.ai-claude.ai]
+FAILED tests/test_careagents_consent.py::test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that[claude.com.evil.example-claude.com]
+FAILED tests/test_careagents_consent.py::test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that[my-claude-tools.example-claude.ai]
+5 failed, 99 passed in 3.96s
+
+== M10 lookalike flagged for exact hosts
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_recognized_host_heads_the_page_and_reads_as_recognized[claude.ai]
+FAILED tests/test_careagents_consent.py::test_a_recognized_host_heads_the_page_and_reads_as_recognized[claude.com]
+FAILED tests/test_careagents_consent.py::test_app_identity_matches_hosts_exactly
+3 failed, 101 passed in 3.90s
+
+== M11 no <wbr>
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_host_wraps_only_at_its_dots
+FAILED tests/test_careagents_consent.py::test_app_identity_matches_hosts_exactly
+2 failed, 102 passed in 4.24s
+
+== M12 labels not escaped
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_host_is_escaped_between_its_line_breaks
+1 failed, 103 passed in 3.94s
+
+== M13 Allow primary for every host
+mutated careagents/templates/consent.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_an_unrecognized_host_makes_dont_allow_the_primary_button[evil.example]
+FAILED tests/test_careagents_consent.py::test_an_unrecognized_host_makes_dont_allow_the_primary_button[localhost]
+FAILED tests/test_careagents_consent.py::test_an_unrecognized_host_makes_dont_allow_the_primary_button[None]
+3 failed, 101 passed in 3.92s
+
+== M14 _login drops consent_req
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_signing_in_by_email_code_resumes_the_consent_request
+1 failed, 103 passed in 3.89s
+
+== M15 _login carries an unverified handle
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_forged_consent_handle_is_not_carried_across_sign_in
+1 failed, 103 passed in 3.94s
+
+== M16 denial redirects for every host
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_dont_allow_on_an_unrecognized_host_stays_here_and_sends_nothing
+FAILED tests/test_careagents_consent.py::test_dont_allow_without_a_host_also_stays_here
+2 failed, 102 passed in 3.95s
+
+== M17 grant stores no host
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_grant_records_the_redirect_host_and_the_hub_leads_with_it
+1 failed, 103 passed in 3.92s
+
+== M18 ca_grants column never added
+mutated careagents/models.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_an_existing_grants_table_gains_redirect_host_at_start
+1 failed, 103 passed in 3.89s
+
+== M19 anywhere back in the consent CSS
+mutated careagents/static/careagents.css: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_host_wraps_only_at_its_dots
+1 failed, 103 passed in 3.91s
+

@@ -32,6 +32,8 @@ const typed = JSON.parse(process.argv[2]);
 process.stdout.write(JSON.stringify({
   one: orphanLine({ name: 'Juniper', count: 1 }),
   two: orphanLine({ name: 'Coach', count: 2 }),
+  switchOne: orphanLine({ name: 'Clinic', count: 1, has_assistant: true }),
+  switchTwo: orphanLine({ name: 'Clinic', count: 2, has_assistant: true }),
   typed: typed.map(deleteTyped),
 }));
 """
@@ -56,6 +58,18 @@ def test_the_orphan_line_is_singular_for_one_request():
                           "Start a chat to review it.")
     assert got["two"] == ("2 requests waiting on Coach. "
                           "Start a chat to review them.")
+
+
+def test_the_orphan_line_names_the_switch_when_an_assistant_exists():
+    """Two connections, one assistant on the other: "Start a chat" pointed
+    at the one Chat button, whose assistant cannot see these (#847)."""
+    got = _run()
+    assert got["switchOne"] == (
+        "1 request waiting on Clinic. To review it, switch your assistant "
+        "to Clinic: More, then Change records.")
+    assert got["switchTwo"].startswith("2 requests waiting on Clinic. "
+                                       "To review them,")
+    assert "Start a chat" not in got["switchTwo"]
 
 
 def test_delete_is_accepted_in_any_case_with_the_whitespace_trimmed():

@@ -53,6 +53,9 @@ account-level data. It asks for no health information and says so.
 
 ### 4.2 Invites in the database
 
+Built 2026-10-01: `flask --app careagents.wsgi invites add|list|revoke`.
+See `docs/runbooks/careagents-durable-worker.md`.
+
 Today real-record access is a comma-separated environment variable. That
 does not scale past a handful of people.
 

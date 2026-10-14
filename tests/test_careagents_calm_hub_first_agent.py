@@ -6,6 +6,8 @@ import json
 
 from careagents.healthclaw import HealthClawError
 from careagents.models import Account, Agent
+from tests.careagents_legacy_helpers import legacy_agent
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import FakeClient, _login, _make_account
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
@@ -64,7 +66,7 @@ def test_a_second_connection_does_not_create_another_agent(
     _login(c, svc, monkeypatch)
     c.post("/api/connections/sample")
     direct = c.post("/api/connections/direct",
-                    json={"consent": True}).get_json()["id"]
+                    json=consented()).get_json()["id"]
     bundle = {"resourceType": "Bundle", "type": "collection", "entry": [
         {"resource": {"resourceType": "Patient", "id": "p-1"}}]}
     r = c.post(f"/api/connections/{direct}/upload", data=json.dumps(bundle),
@@ -78,7 +80,7 @@ def test_repeated_ingest_complete_callbacks_create_one_agent(
     """Poll is the ingest-complete path for Fasten and runs every 5s."""
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    started = c.post("/api/connections/fasten", json={"consent": True})
+    started = c.post("/api/connections/fasten", json=consented())
     tenant = started.get_json()["connect_url"].rsplit("/connect/", 1)[1]
     for _ in range(3):
         assert c.get(f"/api/connections/{tenant}/poll").status_code == 200
@@ -93,7 +95,7 @@ def test_an_existing_account_with_agents_gets_no_new_one(svc, monkeypatch):
                               status="empty")
     svc.set_connection_status("ca-legacy", "active")
     svc.create_agent(acct.id, "Ada", "calm", conn)
-    svc.create_agent(acct.id, "Coach", "calm", conn)
+    legacy_agent(svc, conn, "Coach")
     assert svc.activate_connection("ca-legacy") == []
     assert [a[0] for a in _agents(svc, acct.id)] == ["Ada", "Coach"]
 

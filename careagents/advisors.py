@@ -175,3 +175,82 @@ def prompt_block(key: str | None) -> str:
     if not a or not a["available"] or not a.get("guidance"):
         return ""
     return f"\n\n{a['guidance']}"
+
+
+# --- routines (one assistant per person spec, section 7) -------------------
+#
+# One assistant per person runs routines instead of being one advisor. A
+# routine is the same thing an advisor was, a guidance block, and nothing
+# else: the tool set stays the guarded six whatever is on, so turning a
+# routine on or off changes no access. `general` is the base prompt, not a
+# routine. `research-monitor` stays hidden (still unavailable) and
+# `kids-health` becomes the Person kind, its guidance unwritten.
+
+_HABITS_FROM_DIET = (
+    "- Read activity through wearable-sourced Observations (search_records) "
+    "and clinical results (get_labs); put connections plainly: 'on weeks "
+    "with more activity, your average BP reads lower.' Correlations need "
+    "enough data: say when the sample is too thin to mean anything.\n"
+    "- Encourage consistency over intensity; patterns over single "
+    "workouts.\n"
+    "- Anyone with a cardiac condition gets a see-your-provider note before "
+    "exercise-intensity suggestions; symptoms during exercise (chest pain, "
+    "dizziness) are an immediate seek-care answer."
+)
+
+#: id -> name and guidance. Owner decision D6 merges diet-exercise into
+#: Habits and vitals. The hub and settings say "Focuses on" (D3): nothing
+#: here runs unprompted.
+ROUTINES: dict[str, dict] = {
+    "habits": {
+        "name": "Habits and vitals",
+        "short": "habits and vitals",
+        "guidance": (ADVISORS["healthy-habits"]["guidance"] + "\n"
+                     + _HABITS_FROM_DIET),
+    },
+    "care-gaps": {
+        "name": "Care gaps",
+        "short": "care gaps",
+        "guidance": ADVISORS["care-completion"]["guidance"],
+    },
+    "refills": {
+        "name": "Refills",
+        "short": "refills",
+        "guidance": ADVISORS["medication-refills"]["guidance"],
+    },
+}
+
+
+def routines_for(agent: dict) -> list[str]:
+    """The routine ids an assistant runs, in stored order; unknown ids and
+    repeats are dropped. A row whose `routines` is still NULL reads its
+    legacy advisor, for the one release the advisor column stays readable
+    (spec 2.2)."""
+    from careagents.models import LEGACY_ADVISOR_ROUTINES
+    raw = agent.get("routines")
+    if raw is None:
+        legacy = LEGACY_ADVISOR_ROUTINES.get(agent.get("advisor") or "")
+        return [legacy] if legacy else []
+    out: list[str] = []
+    for rid in str(raw).split(","):
+        rid = rid.strip()
+        if rid in ROUTINES and rid not in out:
+            out.append(rid)
+    return out
+
+
+def routine_blocks(ids: list[str]) -> str:
+    """The system-prompt additions for these routines, concatenated."""
+    return "".join(f"\n\n{ROUTINES[r]['guidance']}" for r in ids
+                   if r in ROUTINES)
+
+
+def routine_catalog() -> list[dict]:
+    """The routine toggles settings shows, in a fixed order."""
+    return [{"id": rid, "name": r["name"]} for rid, r in ROUTINES.items()]
+
+
+def focuses_on(ids: list[str]) -> str:
+    """The hub's line for an assistant's routines (D3), or "" for none."""
+    names = [ROUTINES[r]["short"] for r in ids if r in ROUTINES]
+    return f"Focuses on: {', '.join(names)}" if names else ""

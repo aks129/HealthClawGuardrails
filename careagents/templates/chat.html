@@ -5,27 +5,59 @@
 <main class="chat-wrap">
   <div class="chat-head">
     <div class="chat-id">
-      <span class="chat-emoji">{{ persona.emoji }}</span>
+      <span class="chat-emoji" aria-hidden="true">{{ persona.emoji }}</span>
       <div>
         <div class="chat-name">{{ me.name }}</div>
-        <div class="chat-sub">{{ persona.name }}</div>
+        {# Someone the holder cares for is always named here (one assistant
+           per person spec, section 5). The holder's own chat says nothing. #}
+        {% if whose %}<div class="chat-whose">{{ whose }}</div>{% endif %}
       </div>
     </div>
-    <div class="chat-tools">
-      <a class="pill" href="/home">← hub</a>
-      <a class="pill" href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
-      <span class="pill pill-quiet" id="trust-pill" title="Live guardrail grade">…</span>
-    </div>
-  </div>
+    {# One quiet menu, not three pills and a persona label: a first-timer
+       at 375px read five things before the first question (2026-10
+       patient walk). A <details>, so it opens without script. #}
+    <details class="chat-menu">
+      <summary class="chat-menu-btn" aria-label="Menu">⋯</summary>
+      <nav class="chat-menu-list">
+        <a href="/home">Home</a>
+        <a href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
+        {# The page the landing links too (#884 G7), named for what it
+           tells a patient, not as a grade. Ours, so the same tab. #}
+        <a id="trust-pill" href="/safety">How we keep you safe</a>
+        {# A first sign-in skips the passkey prompt; it waits here, and
+           comes back to this chat (`agent`). #}
+        {% if offer_passkey %}<a href="/auth?enroll=1&amp;agent={{ agent_id }}">Add a passkey</a>{% endif %}
+        <form method="post" action="/logout">
+          <button type="submit">Sign out</button>
+        </form>
+      </nav>
+    </details>
+  </div>{# Sample records only: one plain line above the log, sticky, and
+     written onto this tag so a real chat page renders byte for byte as
+     before. Every sample answer opens with the same line (worker); this
+     page shows it here only, so a bubble drops that leading copy
+     (beta.under_banner, chat.js withoutFrame). #}{% if sample_line %}
+  <p class="beta-banner sample-banner" role="note">{{ sample_line }}</p>{% endif %}
 
-  <div class="chat-log" id="log">
+  {# Opened from a texted chart link (?chart=): the history stays hidden
+     until chat.js has drawn the chart and scrolled to it, so the page does
+     not paint at the top of the history first. #}
+  <div class="chat-log" id="log" data-pending-reviews='{{ pending_reviews | tojson }}'
+       {%- if request.args.get('chart') is not none %} data-chart-pending style="visibility:hidden"{% endif %}>
     {# An outstanding import is news on every visit, not only the first. The
        greeting is where a patient looks for "did my records land?", and it
        used to be computed only for a first visit — so the one person actually
        watching for arrival was the one person never shown it (#336). #}
+    {% if passkey_added %}
+    <div class="chat-notice" role="status">Passkey added. Next time, sign in with your face or fingerprint.</div>
+    {% endif %}
     {% if intake and intake.state in ("arriving", "overdue") %}
     <div class="chat-notice">
-      {% if intake.state == "arriving" %}
+      {% if importing %}
+      {# Some records are here and the assistant reads them (QA940 round 2). #}
+      Your records are still arriving. Answers may miss some until they
+      finish.
+      {% elif intake.state == "arriving" %}
       Your records{% if intake.provider %} from {{ intake.provider }}{% endif %}
       haven't arrived yet — imports take 5–45 minutes. Nothing below reflects
       them.
@@ -49,54 +81,67 @@
     {# Returning: replay what was actually said rather than greeting them as a
        stranger. The starters are for someone who hasn't asked anything yet. #}
     <div class="chat-resumed">Picking up where you left off</div>
+    {# .msg is white-space: pre-wrap (it keeps a reply's line breaks), so
+       every space between these tags would be drawn. Each bubble is written
+       with no text outside its <p> (#884 G7). #}
     {% for m in past %}
     <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
-      <p>{{ m.content }}</p>
-    </div>
+      {#- -#}<p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
+      {#- -#}</div>
     {% endfor %}
     {% elif summary_counts %}
     {# First visit with connected records: show real counts so the user sees
        immediate value rather than a generic capabilities list. #}
+    {# "test results & measurements", not "lab results": this counts every
+       Observation — vitals and wearable readings included — and the number
+       is now a true total, so the label has to be true too. One line per
+       paragraph: .msg draws every newline and indent (pre-wrap). #}
     <div class="msg agent">
-      <p>Hi — I'm {{ me.name }}. I found
-      <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>,
-      <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>,
-      {# "test results & measurements", not "lab results": this counts every
-         Observation — vitals and wearable readings included — and the number
-         is now a true total, so the label has to be true too. #}
-      and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong>
-      in your records. Want me to walk through what they show?</p>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in {{ 'these made-up' if sample_line else 'your' }} records. Want me to walk through what they show?</p>
+      {#- -#}</div>
+    {# The greeting asks a question: one tap answers it. What it sends
+       names the records, since the greeting is not in the model's history. #}
+    <div class="quick-replies" id="quick">
+      <button type="button" class="quick-reply" data-ask="Walk me through what {{ 'these made-up' if sample_line else 'my' }} records show.">Yes, walk me through</button>
     </div>
     {% else %}
     <div class="msg agent">
-      <p>Hi — I'm {{ me.name }}. I can read the health records in this space,
-      explain labs in plain language, check what preventive care is due, and
-      fill out your new-patient intake form — though you'll approve every line
-      of that yourself.</p>
-      <p>What would you like to know?</p>
-    </div>
-    {% endif %}
-    {% if not past %}
-    {# One block for every first visit. Intake comes first: that path ends
-       in an approval, which is what the product is for (spec section 5). #}
-    <div class="starters" id="starters">
-      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
-      <button type="button" class="starter">What do my labs say?</button>
-      <button type="button" class="starter">Any screenings I'm due for?</button>
-      <button type="button" class="starter">What medications am I on?</button>
-    </div>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I can read the health records in this space, explain labs in plain language, check what preventive care is due, and fill out your new-patient intake form — though you'll approve every line of that yourself.</p>
+      {#- -#}<p>What would you like to know?</p>
+      {#- -#}</div>
     {% endif %}
   </div>
 
+  {# One block for every first visit. Intake comes first: that path ends
+     in an approval, which is what the product is for (spec section 5).
+     Then the taps the records can answer (app.py chat: labs only when some
+     are known to be there). Just above the message box, outside the
+     scrolling log, so all of them show on a short phone screen (patient
+     tester recheck on #944). A returning visit has it hidden: chat.js
+     shows it after an error, so the next try is one tap. #}
+  <div class="starters" id="starters"{% if past %} hidden{% endif %}>
+    <button type="button" class="starter">Fill out my intake form for a new doctor</button>
+    {% for s in starters %}
+    <button type="button" class="starter">{{ s }}</button>
+    {% endfor %}
+  </div>
   <form class="chat-input" id="composer">
     <input id="box" autocomplete="off" maxlength="2000"
            placeholder="Ask {{ me.name }} anything about the records…">
     <button class="btn-primary" id="send" type="submit">Send</button>
   </form>
+  {# Made-up records answered; this account may connect its own (app.py
+     _chat_connect_next). "after": chat.js shows it once an answer is done. #}
+  {% if connect_next %}
+  <p class="chat-next" id="connect-next"{% if connect_next == "after" %} hidden{% endif %}>Ready for your own records?
+    {% if link_session %}<a href="/auth?connect=1">Sign in again to connect your records</a>{% else %}<a href="/home#connect-records">Connect your records</a>{% endif %}</p>
+  {% endif %}
+  <p class="chat-feedback">Something confusing? <a href="/feedback">Tell us</a>.</p>
 </main>
 <script>
 window.CARE_AGENT = {{ agent_id|tojson }};
 window.CARE_CONVERSATION = {{ conversation_id|tojson }};
+window.CARE_AGENT_NAME = {{ me.name|tojson }};
 </script>
 <script src="{{ url_for('static', filename='chat.js') }}"></script>
 {% endblock %}

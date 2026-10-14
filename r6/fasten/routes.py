@@ -29,11 +29,12 @@ from r6.fasten.enrollment import (
     enrollment_tenant,
     establish_enrollment,
 )
-from r6.fasten.models import FastenConnection, FastenJob
+from r6.fasten.models import FastenConnection, FastenJob, tenant_closed
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
 from r6.read_auth import authorize_tenant_read
-from r6.stepup import generate_step_up_token, READ_TOKEN_TTL_SECONDS
+from r6.stepup import (PATIENT_CONNECT_SUBJECT, READ_TOKEN_TTL_SECONDS,
+                       generate_step_up_token)
 from r6.fasten.api import trigger_ehi_export
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,24 @@ def _handle_export_success(payload: dict) -> None:
             'Fasten export_success: unknown org_connection_id (not registered)'
         )
         return
+    # No more records once access was taken back: by the account holder in
+    # CareAgents (the tenant tombstone, which also covers a connection row
+    # created after the disconnect), or by Fasten's authorization_revoked
+    # for this one connection (security review of #904, F2). Acknowledged
+    # and dropped, so Fasten stops redelivering.
+    if tenant_closed(conn.tenant_id) or conn.connection_status == 'revoked':
+        add_audit_event(
+            event_type='fasten_import_refused',
+            agent_id='fasten-connect',
+            tenant_id=conn.tenant_id,
+            outcome='failure',
+            # task_id is not type-checked yet here; only a string id
+            # reaches the audit row, never a payload object.
+            detail=('job=' + (task_id[:64] if isinstance(task_id, str)
+                              else '<invalid>') + ' connection revoked'),
+        )
+        db.session.commit()
+        return
 
     # Idempotency with recovery: skip only a COMPLETED job. A job stranded in
     # a non-terminal state (a redeploy/crash killed the daemon thread) or a
@@ -209,6 +228,22 @@ def retry_job(task_id):
     if not job.download_links_json:
         return jsonify({'error': 'no stored download links — re-trigger the '
                                  'export instead'}), 409
+    # No records from a retry once access was taken back: the tenant
+    # disconnected in CareAgents, this connection revoked at Fasten, or its
+    # row gone, which proves no live authorization (security review of #909).
+    conn = FastenConnection.query.filter_by(
+        org_connection_id=job.org_connection_id).first()
+    if (tenant_closed(tenant_id) or conn is None
+            or conn.connection_status == 'revoked'):
+        add_audit_event(
+            event_type='fasten_import_refused',
+            agent_id='fasten-connect',
+            tenant_id=tenant_id,
+            outcome='failure',
+            detail='retry refused: connection revoked',
+        )
+        db.session.commit()
+        return jsonify({'error': 'connection revoked'}), 409
     links = json.loads(job.download_links_json)
     job.status = 'pending'
     job.ingested_resources = 0
@@ -283,6 +318,21 @@ def _handle_connection_success(payload: dict) -> None:
 
     existing = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id).first()
+    # Disconnected in CareAgents, possibly before this webhook arrived: no
+    # row is created or verified, and no export is requested. A registered
+    # row's own tenant is the one that counts.
+    owner = existing.tenant_id if existing else tenant_id
+    if tenant_closed(owner):
+        add_audit_event(
+            event_type='fasten_import_refused',
+            agent_id='fasten-connect',
+            tenant_id=owner,
+            outcome='failure',
+            detail='connection_success after disconnect',
+        )
+        db.session.commit()
+        return
+
     if existing:
         # The signature check already passed upstream — this is the proof the
         # org_connection_id is real. Stamp it for the agent-access mint gate.
@@ -314,6 +364,26 @@ def _handle_connection_success(payload: dict) -> None:
 # ---------------------------------------------------------------------------
 # Connection registry
 # ---------------------------------------------------------------------------
+
+#: CareAgents names every tenant it creates `ca-<hex>`
+#: (careagents/healthclaw.py new_tenant_id).
+CAREAGENTS_TENANT_PREFIX = 'ca-'
+
+
+def _careagents_tenant(tenant_id: str) -> bool:
+    """True for a tenant CareAgents created, judged by its id alone.
+
+    The engine keeps no record of which service created a tenant: CareAgents
+    picks the id and sends the patient to the connect page, often before it
+    has called the engine at all. So the prefix is the marker. That is safe
+    because the only thing it decides is to WITHHOLD a capability (the
+    browser enrollment proof, SEC940-F1): a developer who names a tenant
+    `ca-...` loses the one-time browser handoff of the read token and gains
+    nothing. CareAgents never uses that handoff; it reads with tokens it
+    mints server-side.
+    """
+    return tenant_id.startswith(CAREAGENTS_TENANT_PREFIX)
+
 
 def _tenant_for_read():
     """Resolve a tenant claim only after the shared read-auth gate.
@@ -385,6 +455,9 @@ def register_connection():
     if tenant_error is not None:
         return tenant_error
 
+    if tenant_closed(tenant_id):
+        return jsonify({'error': 'connection disconnected'}), 409
+
     data = request.get_json(silent=True) or {}
     org_connection_id = data.get('org_connection_id', '').strip()
     if not org_connection_id:
@@ -419,14 +492,20 @@ def register_connection():
         except ValueError:
             pass  # ignore malformed timestamps
 
+    # A CareAgents tenant gets no enrollment proof: the browser on its
+    # connect page could otherwise mint a 30-day read token from
+    # agent-access (SEC940-F1). agent-access then asks the ordinary tenant
+    # read check, which that browser does not pass.
+    enroll = not _careagents_tenant(tenant_id)
     db.session.add(conn)
     try:
         db.session.flush()
-        proof_hash, proof_expires_at = establish_enrollment(
-            tenant_id, org_connection_id
-        )
-        conn.enrollment_proof_hash = proof_hash
-        conn.enrollment_expires_at = proof_expires_at
+        if enroll:
+            proof_hash, proof_expires_at = establish_enrollment(
+                tenant_id, org_connection_id
+            )
+            conn.enrollment_proof_hash = proof_hash
+            conn.enrollment_expires_at = proof_expires_at
         add_audit_event(
             event_type='fasten_connection_registered',
             agent_id='fasten-connect',
@@ -445,8 +524,9 @@ def register_connection():
         'status': 'registered',
         'org_connection_id': org_connection_id,
         # token is minted by GET .../agent-access AFTER the signed
-        # connection_success webhook verifies this org_connection_id
-        'agent_access_pending': True,
+        # connection_success webhook verifies this org_connection_id; this
+        # browser holds no proof for a CareAgents tenant
+        'agent_access_pending': enroll,
     }), 201
 
 
@@ -563,6 +643,8 @@ def agent_access(org_connection_id):
         org_connection_id=org_connection_id, tenant_id=tenant_id).first()
     if conn is None:
         return jsonify({'error': 'not found'}), 404
+    if tenant_closed(tenant_id):
+        return jsonify({'error': 'connection disconnected'}), 403
 
     from r6.command_center.access import is_public
     if is_public(tenant_id):
@@ -580,7 +662,7 @@ def agent_access(org_connection_id):
 
     try:
         token = generate_step_up_token(
-            tenant_id, agent_id='patient-connect',
+            tenant_id, agent_id=PATIENT_CONNECT_SUBJECT,
             ttl_seconds=READ_TOKEN_TTL_SECONDS, scope='read')
     except ValueError:
         return jsonify({'error': 'server not configured to mint'}), 503

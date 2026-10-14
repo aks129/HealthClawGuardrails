@@ -48,11 +48,14 @@ from r6.actions.confirmations import has_confirmation, issue_confirmation
 from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
+from r6.internal_auth import internal_secret_presented
+from r6.brief.engine import MEDICINE_UNNAMED
 from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
-from r6.access import Scope, require_grant
+from r6 import voice as voices
+from r6.access import Scope, require_grant, require_open_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -332,8 +335,31 @@ def _leaf_value(repeat_item, leaf_link_id):
     return None
 
 
+_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def _shown(value):
+    """How one answer reads on the page, never what is stored (#884 G7): a
+    date as "Mar 15, 1985" and a lowercase code such as "female" with a
+    capital. The QuestionnaireResponse keeps the value as it was."""
+    if not isinstance(value, str):
+        return value
+    parts = value.split('-')
+    if len(parts) == 3 and all(p.isdigit() for p in parts) and len(parts[0]) == 4:
+        month, day = int(parts[1]), int(parts[2])
+        # Month 00 indexed _MONTHS[-1] and read as December (#884 QA).
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return value
+        return f'{_MONTHS[month - 1]} {day}, {parts[0]}'
+    if value.isalpha() and value.islower():
+        return value.capitalize()
+    return value
+
+
 def _demographics(draft_qr):
-    """Ordered (label, value) pairs from the populated demographics group."""
+    """Ordered (label, value) pairs from the populated demographics group,
+    as the page shows them."""
     labels = {
         'demographics.given-name': 'First name',
         'demographics.family-name': 'Last name',
@@ -360,7 +386,7 @@ def _demographics(draft_qr):
                         or ans['valueCoding'].get('code')
             if value is not None:
                 out.append((labels.get(child.get('linkId'),
-                                       child.get('linkId')), value))
+                                       child.get('linkId')), _shown(value)))
     return out
 
 
@@ -369,7 +395,9 @@ def _view_rows(draft_qr):
     meds = []
     for row in _section_repeats(draft_qr, 'medications', 'medications.item'):
         meds.append({
-            'name': _leaf_value(row, 'medications.item.name') or 'Medication',
+            # The brief's sentence for a medicine we cannot name (#884 G7).
+            'name': (_leaf_value(row, 'medications.item.name')
+                     or MEDICINE_UNNAMED),
             'dose': _leaf_value(row, 'medications.item.dose'),
         })
     allergies = []
@@ -402,6 +430,16 @@ def review_form(action_id):
         return _error(404, 'Unknown action')
 
     if action.kind == 'form-fill':
+        # Wording only (r6/voice.py): CareAgents asks for the sample voice
+        # on its made-up records, so a tester is not asked to attest "I have
+        # no known allergies" about a person who is not them. It never
+        # reaches a read, the rows listed, the gate or the audit. Honoured
+        # only with the internal secret, as on the brief (#908): any other
+        # step-up holder could otherwise word a person's own attestation as
+        # "the sample person's".
+        voice = voices.parse(request.args.get('voice'))
+        if voice != voices.PATIENT and not internal_secret_presented():
+            voice = voices.PATIENT
         _questionnaire, _patient, draft_qr, content = _draft_qr(action, tenant_id)
         demographics = _demographics(draft_qr)
         meds, allergies, conditions = _view_rows(draft_qr)
@@ -414,6 +452,8 @@ def review_form(action_id):
             action_id=action_id, demographics=demographics,
             meds=meds, allergies=allergies, conditions=conditions,
             record_readable=content.resolved, record_reason=content.reason)
+        if voice == voices.SAMPLE:
+            context.update(voice=voice, sample_banner=voices.SAMPLE_BANNER)
     else:
         detail = 'approve page rendered; kind=%s' % action.kind
         template, context = 'action_approve.html', _approve_context(action)
@@ -450,6 +490,8 @@ def review_submit(action_id):
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
     _require_step_up(tenant)
+    # A closed tenant takes no reviewed QuestionnaireResponse (409, audited).
+    require_open_tenant(tenant)
 
     action = _load_awaiting_action(action_id, tenant_id)
     if action is None:
@@ -509,8 +551,8 @@ def review_submit(action_id):
     confirmed_allergy = any(d == 'confirm' for d in allergy_decisions)
     if not (nka_affirmed or confirmed_allergy):
         return _error(422, 'You must confirm at least one allergy OR check '
-                           '"No known allergies (patient confirmed)". No '
-                           'known allergies is never assumed.')
+                           '"I have no known allergies". No known allergies '
+                           'is never assumed.')
 
     # (3a) The two answers cannot both be true. "No known allergies" beside a
     # confirmed allergy row is not a stricter reading of the same fact, it is
@@ -520,10 +562,10 @@ def review_submit(action_id):
     # attests there are none. The message names both halves and neither the
     # substance nor the reaction: the person is looking at the row.
     if nka_affirmed and confirmed_allergy:
-        return _error(422, 'You confirmed an allergy and also checked "No '
-                           'known allergies (patient confirmed)". Both cannot '
-                           'be true: uncheck the box, or remove the allergy '
-                           'rows you confirmed.')
+        return _error(422, 'You confirmed an allergy and also checked "I '
+                           'have no known allergies". Both cannot be true: '
+                           'uncheck the box, or remove the allergy rows you '
+                           'confirmed.')
 
     # (4) Conditions are confirmable but not gating.
     condition_decisions = [
@@ -572,14 +614,12 @@ def review_submit(action_id):
                                'next_step': _FORM_NEXT_STEP})
 
 
-_FORM_NEXT_STEP = ('Review recorded and approval issued. The form is '
-                   'generated once the confirmation above is claimed and '
-                   'executed — check the action\'s own status for the '
-                   'outcome.')
-_APPROVE_NEXT_STEP = ('Approval recorded over exactly what the page showed. '
-                      'The request is carried out once that approval is '
-                      'claimed and executed — check the action\'s own status '
-                      'for the outcome.')
+# Read by the person who just tapped Approve, so in their words (#847). The
+# page then looks up the outcome and replaces this with what happened.
+_FORM_NEXT_STEP = ('Review recorded and approved. We are making your form '
+                   'now; the link to it appears here when it is ready.')
+_APPROVE_NEXT_STEP = ('Approved, exactly as shown. We are carrying out this '
+                      'request now; what happened appears here in a moment.')
 _ALREADY_APPROVED = ('This request has already been approved from this page; '
                      'nothing further is needed.')
 

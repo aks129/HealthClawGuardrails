@@ -6,6 +6,7 @@ import pathlib
 import re
 
 from careagents import connectors
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import FakeClient, _login
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
@@ -29,7 +30,7 @@ def test_the_hub_banner_matches_the_account(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     assert _banner(c.get("/home").get_data(as_text=True)) == (
-        "Beta: sample records. Things will break, tell us.")
+        "Beta: made-up records. Things will break, tell us.")
     with c.session_transaction() as s:
         aid = s["account_id"]
     svc.add_connection(aid, "direct", "ca-real", "Upload", status="active")
@@ -39,7 +40,7 @@ def test_the_hub_banner_matches_the_account(app, svc, monkeypatch):
 
 def test_the_landing_banner_keeps_its_words_without_the_em_dash(app):
     assert _banner(app.test_client().get("/").get_data(as_text=True)) == (
-        "Beta: synthetic records only. Things will break, tell us.")
+        "Beta: made-up records only. Things will break, tell us.")
 
 
 def test_the_stale_telegram_handler_is_gone():
@@ -79,7 +80,7 @@ def test_the_waiting_chat_notice_reads_as_a_sentence(cfg, svc, monkeypatch):
     a.config["TESTING"] = True
     c = a.test_client()
     _login(c, svc, monkeypatch)
-    conn = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    conn = c.post("/api/connections/fasten", json=consented()).get_json()
     with c.session_transaction() as s:
         aid = s["account_id"]
     agent = svc.create_agent(aid, "Juniper", "calm", conn["id"])

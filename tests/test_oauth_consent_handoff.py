@@ -117,7 +117,8 @@ def test_the_mcp_audience_sends_the_browser_to_the_consent_surface(client, hando
 
 def test_the_consent_page_reads_the_parked_request_with_the_service_secret_only(
         client, handoff):
-    """MUTATION: drop internal_secret_authorized from consent_request -> red."""
+    """MUTATION: drop internal_secret_authorized from consent_request -> red;
+    drop redirect_host from its body -> red."""
     reg = _register(client)
     _, challenge = _pkce()
     request_id, _, _ = _park(client, reg, challenge)
@@ -131,6 +132,9 @@ def test_the_consent_page_reads_the_parked_request_with_the_service_secret_only(
     body = shown.get_json()
     assert body['client_name'] == 'Claude'
     assert body['scopes'] == ['fhir.read', 'context.read']
+    # Where the code will go, as a host: the one thing a client that picked
+    # its own name cannot fake. The full URI and the PKCE challenge stay here.
+    assert body['redirect_host'] == 'claude.ai'
     assert 'redirect_uri' not in body and 'code_challenge' not in body
     missing = client.get('/r6/fhir/oauth/consent/no-such-request', headers=_service())
     assert missing.status_code == 404

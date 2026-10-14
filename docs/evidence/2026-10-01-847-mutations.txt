@@ -1,0 +1,23 @@
+#847 mutation run (PYTHONDONTWRITEBYTECODE=1, __pycache__ purged, replacement count asserted == 1, restored with git checkout --)
+CAUGHT: recent window on expires_at [r6/actions/routes.py] -> 1 failed in 1.08s
+CAUGHT: failed dropped from recent states [r6/actions/routes.py] -> 1 failed in 0.91s
+CAUGHT: orphan has_assistant always False [careagents/app.py] -> 1 failed, 29 passed in 1.42s
+CAUGHT: recent orphan has_assistant dropped [careagents/app.py] -> 1 failed, 30 passed in 1.38s
+CAUGHT: delete count from all-table rows [careagents/app.py] -> 1 failed, 18 passed in 1.12s
+CAUGHT: delete message says PHI again [careagents/app.py] -> 1 failed, 18 passed in 1.14s
+CAUGHT: expired link kept [careagents/hub.py] -> 1 failed, 3 passed in 0.99s
+CAUGHT: any scheme kept [careagents/hub.py] -> 1 failed, 4 passed in 1.00s
+CAUGHT: recent lookup failure fails the count [careagents/app.py] -> 1 failed, 9 passed in 1.06s
+CAUGHT: approve stops at next_step [templates/_review_handlers.html] -> 1 failed, 12 passed in 1.11s
+CAUGHT: any link becomes an href [templates/_review_handlers.html] -> 1 failed, 12 passed in 1.06s
+CAUGHT: failed arm without next step [templates/_review_handlers.html] -> 1 failed, 14 passed in 1.07s
+CAUGHT: jargon back in next_step [r6/actions/review.py] -> 1 failed, 11 passed in 1.12s
+CAUGHT: patient wording back [templates/action_review.html] -> 1 failed, 16 passed in 1.06s
+CAUGHT: chat draws no pending cards [careagents/app.py] -> 1 failed, 23 passed in 1.23s
+CAUGHT: disconnect without asking [careagents/static/home.js] -> 1 failed, 2 passed in 0.92s
+CAUGHT: delete reload drops the notice [careagents/static/home.js] -> 1 failed, 22 passed in 1.22s
+CAUGHT: welcome back [careagents/templates/home.html] -> 1 failed, 26 passed in 1.29s
+CAUGHT: account delete undoable [careagents/templates/_delete_modal.html] -> 1 failed, 28 passed in 1.41s
+CAUGHT: orphan line always start a chat [careagents/static/home.js] -> 1 failed, 1 passed in 0.09s
+tree after restore: clean
+CAUGHT: hub head may not shrink (CSS: .hub-head > div min-width + .hub-sub overflow-wrap removed, 1 match each) [careagents/static/careagents.css] -> e2e/tests/careagents-375-width.spec.ts: 2 failed (scrollWidth 720 and 691, expected 375); restored with git checkout --, then 10 passed with careagents-calm-hub.spec.ts

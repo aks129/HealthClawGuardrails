@@ -1,0 +1,161 @@
+# #846 round 2 (security R2-1, R2-2, D1; QA; patient lookalike line;
+# HealthClaw-down page; Revoke button): mutation runs.
+# 19 mutations across r6/oauth.py, careagents/{consent,app,healthclaw}.py and
+# careagents.css, against nine test files (round-2 exploit, redirect-host
+# exploit, parity, consent, homograph, decline-offline, registration
+# hardening, consent handoff, test_careagents).
+# Tree: 0b0e7d8, committed before the run. PYTHONDONTWRITEBYTECODE=1,
+# __pycache__ purged before each run, replacement count asserted == 1,
+# restored with git checkout -- and the restore asserted byte-identical.
+# Every mutant was caught.
+#
+# The round-2 exploit rows were confirmed XPASS(strict) against the fix
+# before their markers came off (registration rows and stripped-host rows).
+# The approve rows could no longer reach their 500 once registration refused
+# the URI, so they now plant a pre-fix client/request and assert the fail-
+# closed 400 with no consent stored or audited.
+#
+# Screenshots were taken at 375px with a scratchpad harness on port 5287.
+# Port 5231 was held by another agent's server, which I left alone.
+
+== R1 port range not checked
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai:65536/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai:0/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai:65536/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_an_approval_never_ends_in_a_500_after_the_consent_is_recorded[https://claude.ai:65536/cb]
+4 failed, 442 passed in 10.28s
+
+== R2 authority prefix match instead of full
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai:443:evil.example/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai:evil/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai:/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai:-1/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai:443:evil.example/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai:evil/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_an_approval_never_ends_in_a_500_after_the_consent_is_recorded[https://claude.ai:443:evil.example/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_redirect_to_client_fails_closed_on_an_unredirectable_uri
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai@evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example;@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://user:pass@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://cl\u0430ude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://xn--clude-5ve.com.cl\u0430ude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\u3002evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\uff0eevil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\uff61evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai%2eevil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_loopback_candidate_with_a_backslash_or_userinfo_is_refused[http://evil.example@localhost:9/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_legacy_homograph_client_is_refused_before_anything_is_parked
+FAILED tests/test_consent_redirect_host_parity.py::test_a_non_ascii_host_is_refused_or_shown_as_the_browser_resolves_it[https://claude.ai%2eevil.example/cb-claude.ai.evil.example]
+20 failed, 426 passed in 10.13s
+
+== R3 whitespace/control check dropped
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://clau\tde.ai/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_registration_refuses_a_uri_that_cannot_be_redirected_to[https://claude.ai/c b]
+2 failed, 444 passed in 10.02s
+
+== R4 authorize parks an unredirectable URI
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai:443:evil.example/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai:65536/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai\r\nX-Injected: 1/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_a_pre_fix_client_is_refused_at_authorize_before_anything_is_parked[https://claude.ai:evil/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_a_legacy_homograph_client_is_refused_before_anything_is_parked
+5 failed, 441 passed in 10.14s
+
+== R5 consent_return stores before checking
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_an_approval_never_ends_in_a_500_after_the_consent_is_recorded[https://claude.ai:443:evil.example/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_an_approval_never_ends_in_a_500_after_the_consent_is_recorded[https://claude.ai:65536/cb]
+FAILED tests/test_consent_846_round2_exploit.py::test_an_approval_never_ends_in_a_500_after_the_consent_is_recorded[https://claude.ai\r\nX-Injected: 1/cb]
+3 failed, 443 passed in 10.07s
+
+== R6 _redirect_to_client does not fail closed
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_redirect_to_client_fails_closed_on_an_unredirectable_uri
+1 failed, 445 passed in 10.18s
+
+== R7 discard reads instead of spending
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_discard_spends_the_parked_request_so_it_cannot_be_approved_later
+FAILED tests/test_consent_846_round2_exploit.py::test_careagents_real_client_spends_the_request_on_the_real_engine
+2 failed, 444 passed in 10.29s
+
+== R8 discard without the service credential
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_discard_spends_the_parked_request_so_it_cannot_be_approved_later
+1 failed, 445 passed in 10.10s
+
+== C1 host stripped again
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_the_hosts_above_are_not_claude_ai_to_careagents_either
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai\x1f-None-False]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[ claude.ai-None-False]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai -None-False]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai\t-None-False]
+5 failed, 441 passed in 12.37s
+
+== C2 trailing dot kept
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai.-claude.ai-True]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[CLAUDE.COM.-claude.com-True]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai..-claude.ai.-False]
+3 failed, 443 passed in 10.96s
+
+== C3 any ASCII host shown
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_host_is_escaped_between_its_line_breaks
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai\x1f-None-False]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[ claude.ai-None-False]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai -None-False]
+FAILED tests/test_careagents_consent.py::test_app_identity_compares_hosts_exactly[claude.ai\t-None-False]
+5 failed, 441 passed in 11.69s
+
+== C4 decoded match claims 'just has'
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--clude-5ve.com-claude.com]
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--laude-0ye.ai-claude.ai]
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_only_claims_what_is_on_screen[xn--clude-5ve.ai-It uses letters that look like it.]
+3 failed, 443 passed in 11.63s
+
+== C5 literal match never claims 'just has'
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_names_the_recognized_address_it_borrows
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_only_claims_what_is_on_screen[claude.ai.secure-login.example-It just has claude.ai in it.]
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_only_claims_what_is_on_screen[evilclaude.ai-It just has claude.ai in it.]
+3 failed, 443 passed in 11.49s
+
+== C6 dot-less match says 'letters'
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_only_claims_what_is_on_screen[claudeai-help.example-It only looks similar.]
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_only_claims_what_is_on_screen[claudeaiconnectorauthorizationcallbackservicesecureverification.example-It only looks similar.]
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_only_claims_what_is_on_screen[my-claude-tools.example-It only looks similar.]
+3 failed, 443 passed in 11.57s
+
+== C7 deny does not discard
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_dont_allow_on_an_unrecognized_host_spends_the_request_at_healthclaw
+1 failed, 445 passed in 12.03s
+
+== C8 discard failure escapes
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_dont_allow_still_says_no_when_the_discard_fails
+1 failed, 445 passed in 11.76s
+
+== C9 /authorize 500s with HealthClaw down
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_consent_page_says_plainly_when_healthclaw_cannot_be_reached
+1 failed, 445 passed in 11.43s
+
+== C10 client treats already-gone as an error
+mutated careagents/healthclaw.py: 1 replacement
+FAILED tests/test_consent_846_round2_exploit.py::test_careagents_real_client_spends_the_request_on_the_real_engine
+1 failed, 445 passed in 11.50s
+
+== C11 Revoke under 44px
+mutated careagents/static/careagents.css: 1 replacement
+FAILED tests/test_careagents_consent.py::test_revoke_is_a_real_button_with_a_44px_target
+1 failed, 445 passed in 11.55s
+

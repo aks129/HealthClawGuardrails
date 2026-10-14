@@ -20,13 +20,15 @@ import json
 import logging
 import os
 import uuid
+from datetime import timedelta
 
 from flask import Blueprint, jsonify, request
 
 from models import db
 from r6 import constant_time
+from r6.runtime_config import internal_mint_secret
 from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
-                       require_grant, tenant_from_request)
+                       require_grant, require_open_tenant, tenant_from_request)
 from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
@@ -442,6 +444,8 @@ def commit_action(action_id):
         absent_status=401,
         rejected_status=401,
     )
+    # A closed tenant arms nothing new (409, audited).
+    require_open_tenant(tenant)
 
     action = ProposedAction.query.filter_by(
         id=action_id, tenant_id=tenant_id).first()
@@ -703,6 +707,9 @@ def confirm_action(action_id):
         absent_status=401,
         rejected_status=401,
     )
+    # An approval given before a disconnect does not execute after it: a
+    # closed tenant takes no new records (409, audited, nothing claimed).
+    require_open_tenant(tenant)
 
     # (a) Load, tenant-scoped.
     action = ProposedAction.query.filter_by(
@@ -890,7 +897,7 @@ def issue_action_approval_token(action_id):
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
 
-    expected = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '')
+    expected = internal_mint_secret()
     provided = request.headers.get('X-Internal-Secret', '')
     if not expected or not constant_time.equal(provided, expected):
         return _error(403, 'Forbidden')
@@ -940,8 +947,10 @@ def list_pending_actions():
     if auth_err is not None:
         return auth_err
     status = request.args.get('status', 'awaiting_confirmation')
+    if status == 'recent':
+        return _recent_actions(tenant_id)
     if status != 'awaiting_confirmation':
-        return _error(400, 'status must be awaiting_confirmation')
+        return _error(400, 'status must be awaiting_confirmation or recent')
     rows = (ProposedAction.query
             .filter_by(tenant_id=tenant_id, status=status)
             .filter(ProposedAction.expires_at > _utcnow())
@@ -949,6 +958,38 @@ def list_pending_actions():
             .limit(_LIST_CAP).all())
     return jsonify({'actions': [a.summary() for a in rows],
                     'count': len(rows)}), 200
+
+
+#: What became of an approved request: the states past the human gate. A
+#: request that finished, or did not, must not vanish from the person's hub
+#: the moment it leaves the pending list (#847). Declined and expired are
+#: the person's own answer or its absence, and are not listed.
+_RECENT_STATES = ('executing', 'completed', 'failed', 'needs_review',
+                  'unknown')
+_RECENT_DAYS = 7
+_RECENT_CAP = 10
+
+
+def _recent_actions(tenant_id):
+    """Requests that moved past approval in the last week, newest first.
+
+    The window is on `updated_at`. `expires_at` is the 30-minute proposal
+    window, so filtering on it would drop a completed request half an hour
+    after it was proposed. Same summaries and the same no-persist posture as
+    the pending list, plus when the request last moved."""
+    since = _utcnow() - timedelta(days=_RECENT_DAYS)
+    rows = (ProposedAction.query
+            .filter_by(tenant_id=tenant_id)
+            .filter(ProposedAction.status.in_(_RECENT_STATES))
+            .filter(ProposedAction.updated_at > since)
+            .order_by(ProposedAction.updated_at.desc())
+            .limit(_RECENT_CAP).all())
+    out = []
+    for a in rows:
+        item = a.summary()
+        item['updated_at'] = a.updated_at.replace(tzinfo=None).isoformat() + 'Z'
+        out.append(item)
+    return jsonify({'actions': out, 'count': len(out)}), 200
 
 
 @actions_blueprint.route('/<action_id>', methods=['GET'])

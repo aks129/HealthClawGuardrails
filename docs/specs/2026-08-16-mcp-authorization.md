@@ -1190,10 +1190,26 @@ already grants everything.
 random `request_id` (10 minutes, single use) with `client_id`, `client_name`,
 `redirect_uri`, `scopes`, `code_challenge`, `state`, `resource`. The URL
 carries `req=<request_id>.<exp>.<tag>`, where `tag` is HMAC-SHA256 over
-`request_id.exp` under the handoff key. The page shows the client name and
-scopes from the parked request, fetched by CareAgents from Flask
+`request_id.exp` under the handoff key. The page shows what it needs from
+the parked request, fetched by CareAgents from Flask
 (`GET /r6/fhir/oauth/consent/<request_id>`, service-authenticated with the
-mint secret), so nothing about the client rides in the URL.
+mint secret), so nothing about the client rides in the URL. The response
+carries `client_name`, `scopes` and `redirect_host`: the host the code will
+be sent to, lowercased, with no port, as an IDNA A-label if it is not ASCII.
+The full `redirect_uri` stays in Flask.
+
+**Which redirect URIs exist at all.** Registration accepts a redirect URI
+only if it is `https://`, or plain-http loopback (`localhost`, `127.0.0.1`,
+`[::1]`), and its authority is a host made of ASCII letters, digits, dots
+and hyphens (or `[::1]`), optionally followed by a port from 1 to 65535.
+There is no userinfo, percent-escape, backslash, whitespace, control
+character or fragment. This is an allowlist, written once
+(`r6.oauth._split_unambiguous`). It makes the host a browser resolves the
+host the page names, and every accepted URI one a Location header can
+carry. The authorize step and the redirect itself apply the same rule, so a
+client stored before it fails closed with a 400 before anything is parked.
+A request parked before it fails closed at the return, before any consent
+is stored.
 
 **Inbound (CareAgents to Flask).** `grant=<base64url(JSON)>.<tag>` where the
 JSON is `{request_id, tenant_id, consent_id, nonce, exp, decision}` and
@@ -1202,6 +1218,19 @@ JSON is `{request_id, tenant_id, consent_id, nonce, exp, decision}` and
 the parked request popped exactly once; `tenant_id` matches
 `^[a-zA-Z0-9_-]{1,64}$`. Then the code is issued bound to `tenant_id`, or
 the client is sent `error=access_denied`.
+
+**A "no" depends on who is asking.** CareAgents sends a `denied` grant
+through the browser, and so `access_denied` to the client, only when
+`redirect_host` is a recognized host (`claude.ai`, `claude.com`, matched
+exactly after removing one trailing dot). For any other host, the client's
+redirect URI is a stranger's page. In that case CareAgents spends the
+parked request with
+`POST /r6/fhir/oauth/consent/<request_id>/discard` (service-authenticated;
+`204` when spent, `404` when already gone) and shows its own "You said no.
+Nothing was shared." page. No redirect leaves CareAgents, and an older tab
+or another account can no longer approve the request. If HealthClaw cannot
+be reached, the page still says no, and the request lapses at its
+ten-minute expiry.
 
 **Trust, written down as an assumption.** Flask cannot verify that the
 CareAgents account owns `tenant_id`; it trusts the signed assertion. That
@@ -1264,9 +1293,17 @@ same outcome.
 
 ### 13.7 What the person sees, and what is true about their identity
 
-The consent page says who is asking (`Claude`), what they get (read access,
-redacted, audited; never writes, which still need the human gate), and to
-which records. Approval requires a fresh passkey assertion with
+The consent page says who is asking, what they get (read access, redacted,
+audited; never writes, which still need the human gate), and to which
+records. Who is asking is the redirect host, not the client's chosen name:
+registration is open, so a client can call itself anything, but the code
+goes only to its address. The page leads with that address and says where
+the person will go back to. It says whether the address is recognized.
+When an address borrows a recognized name, it says so ("This is not
+claude.ai."), and it says when an address uses unusual letters. It always
+says to tap Don't allow if the person did not start this. For an address it
+does not recognize, Don't allow is the primary button. The client's own
+name appears only as what the app calls itself. Approval requires a fresh passkey assertion with
 `user_verification=required`, not a remembered session. That is what makes
 "biometric" a true word here. The tenants offered are the account's
 connections, each created through a provider-portal sign-in via Fasten or

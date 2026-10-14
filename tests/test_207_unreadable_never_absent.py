@@ -25,6 +25,8 @@ UNKNOWN_CODE = "Q99.9"
 def _condition(system: str, code: str, **coding_fields) -> dict:
     return {
         "resourceType": "Condition",
+        # Condition has no `status` element (clinicalStatus is a concept), so
+        # this one never reaches the summary (#922 B1).
         "status": "active",
         "code": {"coding": [{"system": system, "code": code,
                               **coding_fields}]},
@@ -50,11 +52,12 @@ def test_unknown_code_survives_redaction_as_unreadable_summary():
         display="Chromosomal finding for Jane Secret",
     ))
 
+    # The note says what to tell the person (#949 patient tester).
+    assert "no readable name" in summary[0].pop("note")
     assert summary == [{
         "type": "Condition",
-        "name": f"unlabeled record, code {UNKNOWN_CODE}",
+        "name": "unlabeled record (ICD-10-CM code)",
         "unreadable": True,
-        "status": "active",
     }]
     assert "Jane" not in str(summary)
     assert "Secret" not in str(summary)
@@ -69,7 +72,7 @@ def test_mixed_bundle_labels_known_and_flags_unknown():
     assert len(summary) == 2
     assert "diabetes" in summary[0]["name"].lower()
     assert summary[0].get("unreadable") is None
-    assert summary[1]["name"].endswith(UNKNOWN_CODE)
+    assert summary[1]["name"] == "unlabeled record (ICD-10-CM code)"
     assert summary[1]["unreadable"] is True
 
 
@@ -124,14 +127,14 @@ def test_agent_turn_receives_unreadable_record_and_never_emits_bare_no(
 
         assert messages[-1]["role"] == "tool"
         result = json.loads(messages[-1]["content"])
+        assert "no readable name" in result[0].pop("note")
         assert result == [{
             "type": "Condition",
-            "name": f"unlabeled record, code {UNKNOWN_CODE}",
+            "name": "unlabeled record (ICD-10-CM code)",
             "unreadable": True,
-            "status": "active",
         }]
         return llm.LLMTurn(text=(
-            f"I found an active condition record with code {UNKNOWN_CODE}, "
+            "I found an active condition record with an ICD-10-CM code, "
             "but I cannot read its name here. Ask your clinician to identify "
             "the code; I cannot treat this record as absence."))
 

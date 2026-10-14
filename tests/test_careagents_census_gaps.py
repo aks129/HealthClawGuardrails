@@ -20,7 +20,8 @@ from sqlalchemy import LargeBinary, String, Text, inspect as sa_inspect
 
 from careagents.models import Base
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    FakeClient, _chat_app, _login, _sink_code, _turn, cfg, svc)
+    FakeClient, _chat_app, _login, _sink_code, _turn, cfg, sample_framed,
+    svc)
 
 _CA = pathlib.Path(__file__).resolve().parents[1] / "careagents"
 _HOME_JS = (_CA / "static" / "home.js").read_text()
@@ -461,4 +462,4 @@ def test_a_chat_turn_is_accepted_by_the_real_engine_end_to_end(
         conversation_id=real.conversation_id(agent_id))
     assert [m["role"] for m in stored] == ["user", "assistant"]
     assert stored[0]["content"] == "hi there"
-    assert stored[1]["content"] == "here you go"
+    assert stored[1]["content"] == sample_framed("here you go")

@@ -1,0 +1,17 @@
+#847 mutation run (PYTHONDONTWRITEBYTECODE=1, __pycache__ purged, replacement count asserted == 1, restored with git checkout --)
+CAUGHT: QA: recent list uncapped [careagents/app.py] -> 1 failed, 43 passed in 1.82s
+CAUGHT: QA: carried notice never cleared [careagents/static/home.js] -> 1 failed, 44 passed in 1.64s
+CAUGHT: L1: chat reads a revoked connection [careagents/app.py] -> 1 failed in 0.67s
+CAUGHT: count from the engine again [careagents/app.py] -> 1 failed, 18 passed in 1.21s
+CAUGHT: assistants deleted not said [careagents/app.py] -> 1 failed, 21 passed in 1.33s
+NOT APPLIED (0 matches): delete dialog readers not rendered
+CAUGHT: delete dialog reader sentence dropped [careagents/static/home.js] -> 1 failed, 22 passed in 1.35s
+CAUGHT: form recipient listed again [careagents/app.py] -> 1 failed, 35 passed in 1.58s
+CAUGHT: hub says Done for a ready form [careagents/static/home.js] -> 1 failed, 35 passed in 1.58s
+CAUGHT: review page says it went somewhere [templates/_review_handlers.html] -> 1 failed, 36 passed in 1.53s
+CAUGHT: buttons stay after approve [templates/_review_handlers.html] -> 1 failed, 38 passed in 1.50s
+CAUGHT: disabled looks enabled [templates/review_base.html] -> 1 failed, 40 passed in 1.52s
+CAUGHT: hidden overridden by .btn [templates/review_base.html] -> 1 failed, 40 passed in 1.49s
+CAUGHT: hint names the old box [templates/action_review.html] -> 1 failed, 41 passed in 1.50s
+CAUGHT: shared link promises again [careagents/connectors.py] -> 1 failed, 42 passed in 1.52s
+tree after restore: clean

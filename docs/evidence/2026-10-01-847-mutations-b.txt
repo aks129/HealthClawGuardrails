@@ -1,0 +1,5 @@
+#847 mutation run (PYTHONDONTWRITEBYTECODE=1, __pycache__ purged, replacement count asserted == 1, restored with git checkout --)
+CAUGHT: disconnect readers not rendered [careagents/templates/home.html] -> 1 failed, 23 passed in 1.52s
+CAUGHT: disconnect reader sentence dropped [careagents/static/home.js] -> 1 failed, 23 passed in 1.36s
+CAUGHT: every card polls for a PDF [careagents/static/chat.js] -> 1 failed, 27 passed in 1.43s
+tree after restore: clean

@@ -1,0 +1,85 @@
+# Consent page shows the redirect host: mutation runs
+# Ten mutations across tests/test_oauth_registration_hardening.py,
+# tests/test_oauth_consent_handoff.py and tests/test_careagents_consent.py.
+# The first draft of M7 swapped %r for %s on a list. That was an equivalent
+# mutant, because str(list) calls repr on each item, so it was replaced by the
+# join-as-text mutant below.
+# Tree: e9903cf. PYTHONDONTWRITEBYTECODE=1, __pycache__ purged before each
+# run, replacement count asserted == 1, restored with git checkout --.
+
+== M1: consent_request drops redirect_host
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_consent_handoff.py::test_the_consent_page_reads_the_parked_request_with_the_service_secret_only
+1 failed, 48 passed in 3.25s
+
+== M2: every host reads as recognized
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[evil.example]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[claude.ai.evil.example]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[evilclaude.ai]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[localhost]
+FAILED tests/test_careagents_consent.py::test_without_a_host_the_page_says_it_cannot_tell_where_the_code_goes
+FAILED tests/test_careagents_consent.py::test_app_identity_matches_hosts_exactly
+6 failed, 43 passed in 3.16s
+
+== M3: suffix match instead of exact
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[claude.ai.evil.example]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[evilclaude.ai]
+FAILED tests/test_careagents_consent.py::test_app_identity_matches_hosts_exactly
+3 failed, 46 passed in 3.14s
+
+== M4: client_name stored unchanged
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_registration_hardening.py::test_client_name_is_trimmed_capped_and_stripped_of_control_characters
+FAILED tests/test_oauth_registration_hardening.py::test_a_missing_blank_or_non_string_client_name_is_unknown_client
+2 failed, 47 passed in 3.00s
+
+== M5: control characters kept
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_registration_hardening.py::test_client_name_is_trimmed_capped_and_stripped_of_control_characters
+FAILED tests/test_oauth_registration_hardening.py::test_a_missing_blank_or_non_string_client_name_is_unknown_client
+2 failed, 47 passed in 2.97s
+
+== M6: registration log line dropped
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_registration_hardening.py::test_each_registration_is_logged_without_the_name_or_secret
+FAILED tests/test_oauth_registration_hardening.py::test_logged_hosts_cannot_forge_a_log_line
+2 failed, 47 passed in 2.99s
+
+== M7: log hosts as joined raw text (%s), not repr
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_registration_hardening.py::test_each_registration_is_logged_without_the_name_or_secret
+FAILED tests/test_oauth_registration_hardening.py::test_logged_hosts_cannot_forge_a_log_line
+2 failed, 47 passed in 2.98s
+
+== M8: /oauth/register exempt from the rate limit
+mutated r6/rate_limit.py: 1 replacement
+FAILED tests/test_oauth_registration_hardening.py::test_registration_sits_under_the_per_client_rate_limit
+1 failed, 48 passed in 3.00s
+
+== M9: client_name rendered |safe
+mutated careagents/templates/consent.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_client_name_and_host_are_escaped_on_the_page
+1 failed, 48 passed in 3.08s
+
+== M10: page headlines client_name again
+mutated careagents/templates/consent.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_page_names_the_client_the_permissions_and_the_persons_connections
+FAILED tests/test_careagents_consent.py::test_a_recognized_host_heads_the_page_and_reads_as_recognized[claude.ai]
+FAILED tests/test_careagents_consent.py::test_a_recognized_host_heads_the_page_and_reads_as_recognized[claude.com]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[evil.example]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[claude.ai.evil.example]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[evilclaude.ai]
+FAILED tests/test_careagents_consent.py::test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself[localhost]
+7 failed, 42 passed in 3.04s
+
+== control: unmutated tree
+49 passed in 3.03s
+
+== 375px screenshots (synthetic account, FakeClient, sample connection only)
+2026-09-28-consent-375-recognized-host.png    host claude.ai: recognized line, no caution
+2026-09-28-consent-375-unrecognized-host.png  host claude.ai.connector-callback-portal.example:
+                                              caution shown, long host wraps
+Both: document scrollWidth 375 == clientWidth 375 (no horizontal scroll).
+Server checked with curl before capture to confirm it served the new page.

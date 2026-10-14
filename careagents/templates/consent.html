@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Share your records? — CareAgents{% endblock %}
+{% block title %}{% if state == "declined" %}You said no{% else %}Share your records?{% endif %} — CareAgents{% endblock %}
 {% block bodyclass %}page-setup{% endblock %}
 {% block content %}
 <main class="setup-wrap">
@@ -14,11 +14,56 @@
     <p class="setup-sub">Requests to share your records last ten minutes.
     Go back to the app that asked and start again.</p>
     <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+  {% elif state == "unavailable" %}
+    <h1>We can't check this request right now</h1>
+    <p class="setup-sub">Nothing has been shared. Try again in a minute: reload
+    this page. If it keeps happening, go back to the app that asked and start
+    again.</p>
+    <a class="btn-secondary btn-block" href="">Try again</a>
+  {% elif state == "declined" %}
+    <h1>You said no.</h1>
+    <p class="setup-sub">Nothing was shared. You can close this page.</p>
   {% else %}
-    <h1>{{ client_name }} wants to read your records</h1>
+    {#- The address the code goes to names the app: anyone can register a
+        client under any name, but not with somebody else's address. The
+        first screen at 375px answers who is asking, where you'll go, whether
+        we recognize it, and what to do if you didn't start this. The host
+        only ever appears as host_html, which carries its wrap fallback. -#}
+    {% if redirect_host %}
+    <h1 class="consent-title">{{ host_html }} wants to read your records</h1>
+    {% if lookalike_of %}
+    {#- Only say what the person can check on screen: "has X in it" when X
+        is in the address letter for letter. -#}
+    <p class="form-warn consent-lookalike"><strong>This is not {{ lookalike_of }}.</strong>
+    {% if lookalike_how == "contains" %}It just has {{ lookalike_of }} in it.
+    {%- elif lookalike_how == "letters" %}It uses letters that look like it.
+    {%- else %}It only looks similar.{% endif %}</p>
+    {% endif %}
+    {% if unusual_letters %}
+    <p class="form-warn consent-lookalike">This address uses unusual letters
+    that can imitate another address.</p>
+    {% endif %}
+    <p class="consent-origin">After you allow,
+      you'll go back to <strong>{{ host_html }}</strong>.</p>
+    {% else %}
+    <h1 class="consent-title">An app wants to read your records</h1>
+    {% endif %}
+    {% if host_recognized %}
+    <p class="form-ok">We recognize this address.</p>
+    {% elif redirect_host %}
+    <p class="form-warn">We don't recognize this address.
+    Only allow it if you started this from {{ host_html }} yourself.</p>
+    {% else %}
+    <p class="form-warn">We can't tell which address you'd go back to. Only
+    allow it if you started this yourself, just now.</p>
+    {% endif %}
+    <p class="consent-stop">
+      If you didn't just ask {{ host_html or "an app" }} to connect, tap Don't allow.</p>
+    <p class="consent-name">The app calls itself &ldquo;{{ client_name }}&rdquo;.
+    Any app can choose that name, so check the web address above.</p>
     <p class="setup-sub">Through HealthClaw: every read redacted and audited,
-    nothing written. {{ client_name }} can never change your records or act
-    on your behalf; those still need your approval, one action at a time.</p>
+    nothing written. This app can never change your records or act on your
+    behalf; those still need your approval, one action at a time.</p>
 
     <div id="err" class="form-error" hidden></div>
 
@@ -49,8 +94,15 @@
       that asked.</p>
     {% endif %}
 
+    {#- A recognized address keeps Allow primary. Any other puts Don't allow
+        first and primary: saying no is the safe answer there. -#}
+    {% macro deny_button(cls) %}
+    <button class="{{ cls }} btn-block" id="deny-btn"
+            data-req="{{ req }}">Don't allow</button>
+    {% endmacro %}
+    {% if not host_recognized %}{{ deny_button("btn-primary") }}{% endif %}
     {% if has_passkey and connections %}
-    <button class="btn-primary btn-block" id="approve-btn"
+    <button class="{{ 'btn-primary' if host_recognized else 'btn-secondary' }} btn-block" id="approve-btn"
             data-req="{{ req }}">Allow, with my passkey</button>
     <p class="auth-fine">Your face, fingerprint or PIN confirms it is you,
     now, not a remembered sign-in.</p>
@@ -59,8 +111,7 @@
     remembered sign-in is never enough to share your records.
       <a href="/auth?enroll=1">Add a passkey</a>, then come back.</p>
     {% endif %}
-    <button class="btn-secondary btn-block" id="deny-btn"
-            data-req="{{ req }}">Don't allow</button>
+    {% if host_recognized %}{{ deny_button("btn-secondary") }}{% endif %}
     <p class="auth-fine">You can take this back any time from your hub.
       <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
       policy</a>.</p>

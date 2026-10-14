@@ -59,6 +59,21 @@ class Conversation(db.Model):
         }
 
 
+#: The surfaces a conversation turn may arrive on (#884 security note).
+#: The channel was checked for length only, and it is copied into AuditEvent
+#: detail, so a caller could write any 32 characters into the audit trail.
+#: "unknown" is the route's own default for a write that names none.
+KNOWN_CHANNELS = frozenset({
+    "web", "imessage", "telegram", "sms", "mcp", "api", "worker", "unknown"})
+
+
+def audit_channel(channel) -> str:
+    """The channel as audit detail may carry it: a known one, else "other".
+    A row stored before the allowlist keeps its value; its audit does not."""
+    return (channel if isinstance(channel, str) and channel in KNOWN_CHANNELS
+            else "other")
+
+
 class ConversationMessage(db.Model):
     """
     One turn in an agent conversation. A "turn" is a single user message or

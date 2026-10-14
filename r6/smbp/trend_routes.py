@@ -14,6 +14,7 @@ from flask import Response, jsonify, request
 from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.audit import record_audit_event
 from r6.models import R6Resource
+from r6.safe_read import codes, subject_reference
 from r6.smbp.trend import render_svg, summarize
 
 _BP_PANEL = "85354-9"
@@ -110,10 +111,11 @@ def register_trend_routes(blueprint, deps):
         observations = []
         for row in rows:
             obs = row.to_fhir_json()
-            if obs.get("subject", {}).get("reference") != subject:
+            # Wrong-shaped subject or code reads as absent: the row is
+            # skipped, not a 500 for the page (#879).
+            if subject_reference(obs) != subject:
                 continue
-            coding = (obs.get("code", {}).get("coding") or [{}])[0]
-            if coding.get("code") != _BP_PANEL:
+            if next(iter(codes(obs.get("code"))), None) != _BP_PANEL:
                 continue
             observations.append(obs)
 

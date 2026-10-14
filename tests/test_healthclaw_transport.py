@@ -207,6 +207,7 @@ def _call(client, name):
         "uncounted_record_count": lambda: client.uncounted_record_count("t"),
         "tenant_has_records": lambda: client.tenant_has_records("t"),
         "purge_tenant": lambda: client.purge_tenant("t"),
+        "revoke_fasten": lambda: client.revoke_fasten("t"),
         "action_status": lambda: client.action_status("t", "a1"),
         "start_form_action": lambda: client.start_form_action("t"),
         "confirm_action": lambda: client.confirm_action("t", "a1"),
@@ -243,7 +244,8 @@ EVERY_SEAM_METHOD = [
     # ensemble gap. A raw requests exception here 500s the poll, and the
     # patient gets neither the count nor the hedge this PR added.
     "uncounted_record_count",
-    "tenant_has_records", "purge_tenant", "action_status", "start_form_action",
+    "tenant_has_records", "purge_tenant", "revoke_fasten", "action_status",
+    "start_form_action",
     "confirm_action", "fetch_review_page", "submit_review", "seed",
     "mint_token", "bind_telegram", "conformance_badge",
 ]

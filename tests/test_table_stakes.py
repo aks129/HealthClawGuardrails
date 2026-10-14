@@ -147,7 +147,7 @@ def test_motion_without_the_media_query_is_flagged():
 def test_apple_system_in_a_fallback_chain_is_fine():
     # design.md is explicit: -apple-system in the FALLBACK is a performance
     # decision, and our primary faces are distinctive.
-    assert not _rules(_style('  font-family: "Public Sans", '
+    assert not _rules(_style('  font-family: "Atkinson Hyperlegible Next", '
                              '-apple-system, sans-serif;'))
 
 
@@ -235,7 +235,7 @@ def test_vendored_third_party_paths_are_exempt():
     for path in ("static/js/vendor/bootstrap.bundle.min.js",
                  "static/css/vendor/fontawesome.min.css",
                  "static/fonts/archivo-latin.woff2",
-                 "careagents/static/fonts/fraunces-latin.woff2"):
+                 "careagents/static/fonts/atkinson-next-latin.woff2"):
         assert is_exempt(path), f"{path} should be exempt as vendored"
 
 
