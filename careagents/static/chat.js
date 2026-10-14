@@ -61,7 +61,9 @@
       if (m.index > last)
         parent.appendChild(document.createTextNode(text.slice(last, m.index)));
       const a = el("a", null, m[0]);
-      a.href = m[0] === "your hub" ? "/home" : "mailto:" + m[0];
+      // Both hrefs are fixed strings, never built from the matched text:
+      // a replayed bubble's text comes from the page (CodeQL 124).
+      a.href = m[0] === "your hub" ? "/home" : "mailto:contactus@healthclaw.io";
       parent.appendChild(a);
       last = LINKS.lastIndex;
     }

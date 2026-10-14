@@ -237,8 +237,20 @@ const marked = bubble('Your **A1c** went from 9.2% to 8.1%.');
 renderReplayed(marked);
 const plain = bubble('Nothing to lay out here.');
 renderReplayed(plain);
+// Replayed text is the page's DOM text, which CodeQL treats as tainted
+// (alert 124): every link it yields must carry one of two fixed hrefs.
+const linked = bubble('**Hi** - write to contactus@healthclaw.io or ' +
+  'mailto:x@evil.test, javascript:alert(1), or go to your hub. ' +
+  'contactus@healthclaw.io.evil.test and your hubx too.');
+renderReplayed(linked);
+const hrefs = [];
+(function walk(n) {
+  if (n.nodeType !== 1) return;
+  if (n.tagName === 'A') hrefs.push({ href: n.href, text: n.textContent });
+  n.children.forEach(walk);
+})(linked);
 process.stdout.write(JSON.stringify({
-  marked: tree(marked), plain: tree(plain),
+  marked: tree(marked), plain: tree(plain), hrefs,
   a1c: axisLabels(7.935, 9.365),
   chol: axisLabels(204.9, 249.1),
   flat: axisLabels(5, 7),
@@ -293,3 +305,19 @@ def test_the_chart_dates_are_readable():
     got = _node()
     assert got["date"] == "Apr 21, 2025"
     assert got["bad"] == "2025-13-40"
+
+
+def test_a_replayed_bubble_links_only_to_the_two_fixed_hrefs():
+    """CodeQL alert 124 (js/xss-through-dom): the href was built from the
+    regex match, which comes from replayed DOM text. Both hrefs are fixed
+    strings now, so no text in a bubble can choose where a link goes.
+
+    MUTATION: build the mailto from the match again -> the source check is
+    red; derive the href from the text -> the href check is red."""
+    got = _node()["hrefs"]
+    assert got, "the bubble produced no links at all"
+    assert {h["href"] for h in got} == {"/home",
+                                        "mailto:contactus@healthclaw.io"}
+    assert all(h["text"] in ("your hub", "contactus@healthclaw.io")
+               for h in got), got
+    assert '"mailto:" + m[0]' not in CHAT_JS.read_text()
