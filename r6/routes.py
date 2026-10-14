@@ -42,7 +42,7 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 _SUPPORTED_SEARCH_PARAMS, classify_search_args,
                                 error_fidelity_outcome, lenient_search_warnings,
                                 search_self_link, unsupported_input_text,
-                                upstream_entry)
+                                upstream_entry, upstream_total)
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -799,7 +799,7 @@ def search_resources(resource_type):
         result = {
             'resourceType': 'Bundle',
             'type': 'searchset',
-            'total': bundle.get('total', len(entries)),
+            'total': upstream_total(bundle.get('total'), len(entries)),
             'link': [{'relation': 'self', 'url': self_link}],
             'entry': entries + warning_entries,
             '_source': 'upstream',

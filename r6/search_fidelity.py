@@ -60,8 +60,15 @@ def search_self_link(host_url, resource_type, values):
     return f'{link}?{urlencode(pairs)}' if pairs else link
 
 
-_ENTRY_TYPE = re.compile(r'^[A-Z][A-Za-z]{1,63}$')
-_ENTRY_ID = re.compile(r'^[A-Za-z0-9\-.]{1,64}$')
+_ENTRY_TYPE = re.compile(r'[A-Z][A-Za-z]{1,63}')
+_ENTRY_ID = re.compile(r'[A-Za-z0-9\-.]{1,64}')
+
+
+def _plain(value, pattern):
+    """A whole-string match (fullmatch: `$` would accept a trailing
+    newline), and never `.` or `..`, which a client resolves as a path."""
+    return (isinstance(value, str) and value not in ('.', '..')
+            and pattern.fullmatch(value) is not None)
 
 
 def upstream_entry(host_url, resource):
@@ -74,11 +81,19 @@ def upstream_entry(host_url, resource):
     """
     entry = {'resource': resource}
     rtype, rid = resource.get('resourceType'), resource.get('id')
-    if (rtype != 'OperationOutcome'
-            and isinstance(rtype, str) and _ENTRY_TYPE.match(rtype)
-            and isinstance(rid, str) and _ENTRY_ID.match(rid)):
+    if (rtype != 'OperationOutcome' and _plain(rtype, _ENTRY_TYPE)
+            and _plain(rid, _ENTRY_ID)):
         entry['fullUrl'] = f'{host_url.rstrip("/")}/r6/fhir/{rtype}/{rid}'
     return entry
+
+
+def upstream_total(total, count):
+    """An upstream Bundle.total, kept only as a non-negative int (not a
+    bool); otherwise the entry count. A string there can carry the upstream
+    host, a cursor or free text, and CareAgents' int() raises on it."""
+    if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+        return total
+    return count
 
 # Query keys are untrusted input too. Only these locally defined semantic
 # aliases may be named in responses or audit evidence; every other unsupported

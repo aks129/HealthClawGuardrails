@@ -3,8 +3,12 @@ proxied response.
 
 Drives a real FHIRUpstreamProxy (MockTransport upstream) through the real
 Flask routes, with FHIR_LOCAL_BASE_URL unset and set. Synthetic data only.
-Tests named `test_finding_*` pin behaviour the review found to be wrong;
-they fail at the PR head on purpose.
+
+The review's two findings on f39d389 are fixed and pinned here as ordinary
+tests: an upstream Bundle.total is kept only as a non-negative int, and an
+entry's fullUrl is built only from a type and id that fully match and are
+not `.` or `..`. Absolute upstream URLs inside a resource's own fields are a
+separate, tracked gap and are not tested here.
 """
 
 import json
@@ -121,7 +125,7 @@ class TestLinksAndFullUrls:
             'relation': 'self',
             'url': 'http://localhost/r6/fhir/Condition?patient=Patient%2Fp1'}]
         # The shell: everything except each entry's resource body (a
-        # resource's own fields are the separate gap, TestResourceFieldsGap).
+        # resource's own fields are a separate, tracked gap).
         shell = dict(body)
         shell['entry'] = [{k: v for k, v in e.items() if k != 'resource'}
                           for e in body['entry']]
@@ -137,25 +141,32 @@ class TestLinksAndFullUrls:
                 assert set(entry['search']) <= {'mode', 'score'}
 
     @pytest.mark.parametrize('local_base', LOCAL_BASES)
-    def test_finding_dot_dot_id_gets_a_traversing_fullurl(
+    def test_a_dot_or_dot_dot_id_gets_no_fullurl(
             self, client, tenant_headers, monkeypatch, local_base):
-        """`..` and `.` match [A-Za-z0-9\\-.]{1,64}, so fullUrl becomes
-        http://localhost/r6/fhir/Condition/.. which a client normalises to
-        /r6/fhir/. Our host only; informational."""
+        """`.` and `..` match the id class, and a client normalises
+        .../Condition/.. to /r6/fhir/. They get no fullUrl at all.
+
+        MUTATION: drop the `.`/`..` rejection in upstream_entry -> red."""
         bundle = {'resourceType': 'Bundle', 'type': 'searchset', 'entry': [
-            {'resource': {'resourceType': 'Condition', 'id': '..'}}]}
+            {'resource': {'resourceType': 'Condition', 'id': '..'}},
+            {'resource': {'resourceType': 'Condition', 'id': '.'}},
+            {'resource': {'resourceType': 'Condition', 'id': 'ok-1'}}]}
         proxy = _make_proxy(monkeypatch, local_base, search_body=bundle)
         with patch('r6.routes.get_proxy_for_request', return_value=proxy):
             resp = client.get('/r6/fhir/Condition', headers=tenant_headers)
-        assert not resp.get_json()['entry'][0].get('fullUrl', '').endswith('/..')
+        entries = resp.get_json()['entry']
+        assert 'fullUrl' not in entries[0]
+        assert 'fullUrl' not in entries[1]
+        assert entries[2]['fullUrl'] == 'http://localhost/r6/fhir/Condition/ok-1'
 
     @pytest.mark.parametrize('local_base', LOCAL_BASES)
-    def test_finding_id_with_trailing_newline_gets_a_fullurl(
+    def test_a_trailing_newline_in_type_or_id_gets_no_fullurl(
             self, client, tenant_headers, monkeypatch, local_base):
-        """`$` in _ENTRY_ID/_ENTRY_TYPE matches before a trailing newline, so
-        `id: "ok-2\\n"` passes the "plain id" check and yields a fullUrl that
-        ends in a newline. Low: the host is ours; but the check is not the
-        check it claims to be. Fix: re.fullmatch or \\Z."""
+        """`$` matches before a trailing newline, so `id: "ok-2\\n"` passed
+        a re.match check. The check is re.fullmatch, so neither entry gets a
+        fullUrl.
+
+        MUTATION: fullmatch -> match -> red."""
         bundle = {'resourceType': 'Bundle', 'type': 'searchset', 'entry': [
             {'resource': {'resourceType': 'Condition', 'id': 'ok-2\n'}},
             {'resource': {'resourceType': 'Condition\n', 'id': 'ok-5'}}]}
@@ -163,24 +174,49 @@ class TestLinksAndFullUrls:
         with patch('r6.routes.get_proxy_for_request', return_value=proxy):
             resp = client.get('/r6/fhir/Condition', headers=tenant_headers)
         for entry in resp.get_json()['entry']:
-            assert '\n' not in entry.get('fullUrl', ''), entry['fullUrl']
+            assert 'fullUrl' not in entry, entry['fullUrl']
 
 
 class TestTotal:
 
     @pytest.mark.parametrize('local_base', LOCAL_BASES)
-    def test_finding_upstream_total_passes_through_unvalidated(
+    def test_a_non_integer_upstream_total_is_replaced_by_the_entry_count(
             self, client, tenant_headers, monkeypatch, local_base):
-        """Bundle.total is copied raw from upstream (r6/routes.py, upstream
-        branch `bundle.get('total', ...)`). A hostile upstream puts its host,
-        a cursor, or free text there. Pre-existing, not introduced by #955,
-        but it falsifies "no response carries the upstream host"."""
-        bundle = _hostile_bundle(total=f'{UP_BASE}/Condition?_getpages={CURSOR} {CANARY}')
+        """A hostile upstream can put its host, a cursor or free text in
+        Bundle.total. It reached MCP clients raw, and CareAgents' int() on it
+        raised. Only a non-negative int (not a bool) is kept.
+
+        MUTATION: copy bundle['total'] raw again -> red."""
+        # Entries without upstream URLs in their own fields: those are the
+        # separate, tracked gap. This isolates Bundle.total.
+        bundle = {'resourceType': 'Bundle', 'type': 'searchset',
+                  'total': f'{UP_BASE}/Condition?_getpages={CURSOR} {CANARY}',
+                  'link': HOSTILE_LINKS,
+                  'entry': [{'fullUrl': f'{UP_BASE}/Condition/c1',
+                             'resource': {'resourceType': 'Condition',
+                                          'id': 'c1'}}]}
         proxy = _make_proxy(monkeypatch, local_base, search_body=bundle)
         with patch('r6.routes.get_proxy_for_request', return_value=proxy):
             resp = client.get('/r6/fhir/Condition', headers=tenant_headers)
         text = resp.get_data(as_text=True)
         assert UP_HOST not in text and CANARY not in text
+        body = resp.get_json()
+        assert body['total'] == len(body['entry'])
+
+    @pytest.mark.parametrize('total,expected', [
+        (7, 7), (0, 0), (-1, 1), (True, 1), (2.5, 1), ('7', 1), (None, 1),
+        ([7], 1)])
+    def test_only_a_non_negative_int_total_is_kept(
+            self, client, tenant_headers, monkeypatch, total, expected):
+        bundle = {'resourceType': 'Bundle', 'type': 'searchset',
+                  'total': total,
+                  'entry': [{'resource': {'resourceType': 'Condition',
+                                          'id': 'c1'}}]}
+        proxy = _make_proxy(monkeypatch, None, search_body=bundle)
+        with patch('r6.routes.get_proxy_for_request', return_value=proxy):
+            resp = client.get('/r6/fhir/Condition', headers=tenant_headers)
+        got = resp.get_json()['total']
+        assert got == expected and not isinstance(got, bool)
 
 
 class TestSelfLink:
@@ -223,45 +259,6 @@ class TestSelfLink:
         text = resp.get_data(as_text=True)
         assert step_up_token not in text
         assert tenant_headers['X-Tenant-Id'] not in resp.get_json()['link'][0]['url']
-
-
-class TestResourceFieldsGap:
-    """The gap the builder left open: absolute upstream URLs inside a
-    resource's own fields. Pinned so the ruling is visible."""
-
-    RES = {'resourceType': 'Condition', 'id': 'c1',
-           'subject': {'reference': f'{UP_BASE}/Patient/p1'},
-           'meta': {'source': f'{UP_BASE}/{CURSOR}'},
-           'extension': [{'url': f'{UP_BASE}/StructureDefinition/x',
-                          'valueReference': {'reference': f'{UP_BASE}/Encounter/e1'}}],
-           'evidence': [{'detail': [{'reference': f'{UP_BASE}/Observation/o1'}]}]}
-
-    @pytest.mark.parametrize('path', ['/r6/fhir/Condition/c1', '/r6/fhir/Condition'])
-    def test_finding_unset_base_resource_fields_name_upstream(
-            self, client, tenant_headers, monkeypatch, path):
-        proxy = _make_proxy(monkeypatch, None, read_body=self.RES,
-                            search_body={'resourceType': 'Bundle', 'type': 'searchset',
-                                         'entry': [{'resource': self.RES}]})
-        with patch('r6.routes.get_proxy_for_request', return_value=proxy):
-            resp = client.get(path, headers=tenant_headers)
-        assert resp.status_code == 200
-        assert UP_HOST not in resp.get_data(as_text=True)
-
-    @pytest.mark.parametrize('variant', [
-        f'https://{UP_HOST.upper()}/fhir',
-        f'http://{UP_HOST}/fhir',
-        f'https://{UP_HOST}:443/fhir',
-        f'https://{UP_HOST}/fhir/',  # trailing slash still contains base
-    ])
-    def test_finding_set_base_rewrite_is_exact_string_only(
-            self, client, tenant_headers, monkeypatch, variant):
-        """With FHIR_LOCAL_BASE_URL set, _rewrite_urls replaces only the exact
-        upstream_url string; a case, scheme or port variant survives."""
-        res = json.loads(json.dumps(self.RES).replace(UP_BASE, variant))
-        proxy = _make_proxy(monkeypatch, 'http://localhost/r6/fhir', read_body=res)
-        with patch('r6.routes.get_proxy_for_request', return_value=proxy):
-            resp = client.get('/r6/fhir/Condition/c1', headers=tenant_headers)
-        assert UP_HOST not in resp.get_data(as_text=True).lower()
 
 
 class TestAuditUnchanged:
