@@ -128,8 +128,16 @@ def test_an_unknown_source_is_refused_on_an_existing_row_too(app):
 
     _ingest_one(_condition(), "test-tenant", source="upload")
     db.session.commit()
+    row = _row("test-tenant", "Condition", "src-c-1")
+    version, content = row.version_id, row.resource_json
     with pytest.raises(ValueError):
-        _ingest_one(_condition(), "test-tenant", source="fasten-dr-smith")
+        _ingest_one(_condition(meta={"source": _CANARY_URI}), "test-tenant",
+                    source="fasten-dr-smith")
+    # Refused BEFORE the upsert touched the row: a caller that catches the
+    # error and carries on without a rollback must not flush new content.
+    # MUTATION: drop the up-front check in `_ingest_one` -> red.
+    assert (row.version_id, row.resource_json) == (version, content)
+    assert row not in db.session.dirty
     db.session.rollback()
     assert _row("test-tenant", "Condition", "src-c-1").source == "upload"
 
