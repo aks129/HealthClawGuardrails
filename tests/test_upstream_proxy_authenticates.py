@@ -16,6 +16,8 @@ So the guardrail layer could not sit in front of a secured FHIR server,
 which is the only kind worth guarding.
 """
 
+from unittest.mock import MagicMock, patch
+
 import httpx
 import pytest
 
@@ -323,13 +325,21 @@ class TestTokensDoNotCrossUpstreams:
             'sh-user') != 'medplum:access_token'
 
 
-class TestBrokenPagingLinksAreDropped:
-    """The simulator sends self url "" and next url "&_offset=10".
+class TestUpstreamLinksNeverPassThrough:
+    """No Bundle.link from the upstream server reaches the client (#954).
 
-    MUTATION: return the upstream Bundle.link unfiltered -> red.
+    This reverses an earlier pin, TestBrokenPagingLinksAreDropped, which
+    kept every absolute http(s) link and dropped only the malformed ones.
+    An absolute upstream link is the problem, not the fix: it points out of
+    the guardrail, around redaction and audit, and names the upstream host.
+    The proxy now drops every upstream link and the route publishes its own
+    `self` link. `total` still tells the caller that more records exist.
+
+    MUTATION: keep the upstream Bundle.link in FHIRUpstreamProxy.search,
+    or pass bundle['link'] through in the route -> red.
     """
 
-    def test_only_absolute_links_survive(self):
+    def test_the_proxy_drops_every_upstream_link(self):
         proxy = fhir_proxy.FHIRUpstreamProxy(SH_BASE)
         good = {'relation': 'next',
                 'url': 'https://fhir.example/Condition?_offset=10'}
@@ -346,5 +356,32 @@ class TestBrokenPagingLinksAreDropped:
         finally:
             proxy.close()
         assert status == 200
-        assert bundle['link'] == [good]
+        assert bundle['link'] == []
         assert bundle['total'] == 42
+
+    def test_the_route_publishes_only_its_own_self_link(
+            self, client, tenant_headers):
+        proxy = MagicMock()
+        proxy.search.return_value = ({
+            'resourceType': 'Bundle', 'type': 'searchset', 'total': 42,
+            'link': [
+                {'relation': 'self',
+                 'url': 'https://fhir.example/Condition?patient=1'},
+                {'relation': 'next',
+                 'url': 'https://fhir.example/Condition?_getpages=abc&_offset=10'},
+            ],
+            'entry': []}, 200)
+        with patch('r6.routes.get_proxy_for_request', return_value=proxy):
+            resp = client.get(
+                '/r6/fhir/Condition?patient=Patient/1&_count=10'
+                '&context-id=ctx-1&tenant=other&bogus=1',
+                headers=tenant_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['total'] == 42
+        assert body['link'] == [{
+            'relation': 'self',
+            'url': 'http://localhost/r6/fhir/Condition'
+                   '?patient=Patient%2F1&_count=10',
+        }]
+        assert 'fhir.example' not in resp.get_data(as_text=True)

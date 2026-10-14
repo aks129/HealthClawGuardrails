@@ -794,11 +794,20 @@ def search_resources(resource_type):
 
         warning_entries, audit_note, outcome_code = lenient_search_warnings(
             ignored_params, _SUPPORTED_PARAMS_TEXT)
+        # Our own self link, never the upstream's (#954): built from the
+        # parameters actually forwarded, in registry order, like the local
+        # path's. Upstream paging links are dropped, not rewritten.
+        self_params = [(spec['name'], params[spec['name']])
+                       for spec in _SEARCH_PARAMETER_SPECS
+                       if params.get(spec['name'])]
+        self_link = f'{request.host_url.rstrip("/")}/r6/fhir/{resource_type}'
+        if self_params:
+            self_link += '?' + urlencode(self_params)
         result = {
             'resourceType': 'Bundle',
             'type': 'searchset',
             'total': bundle.get('total', len(entries)),
-            'link': bundle.get('link', []),
+            'link': [{'relation': 'self', 'url': self_link}],
             'entry': entries + warning_entries,
             '_source': 'upstream',
         }
