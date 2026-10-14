@@ -171,4 +171,52 @@ test.describe('check-in wallet', () => {
       expect(r.status.allergies).toBe('unavailable');
       expect(r.ids.allergies).toBeUndefined();
     });
+
+  // Said in words rather than a SNOMED code: in code.text, or as a local
+  // code's display. Still an absence, still never sent.
+  for (const code of [
+    { text: 'No known allergies' },
+    { text: 'NKDA' },
+    { text: 'None' },
+    { text: 'nil known' },
+    { text: 'No drug allergies.' },
+    { coding: [{ system: 'urn:oid:1.2.3.4.5', code: 'X1',
+      display: 'No Known Allergies' }] },
+    { coding: [{ system: 'urn:oid:1.2.3.4.5', code: 'NKA', display: 'NKA' }] },
+  ]) {
+    test(`an absence in words is unavailable: ${JSON.stringify(code)}`,
+      async ({ page }) => {
+        await page.goto('/');
+        const nka = structuredClone(FIXTURE);
+        nka.entry.find((e: any) => e.resource.resourceType ===
+          'AllergyIntolerance').resource.code = code;
+        const r = await answer(page, nka, ALL);
+        expect(r.status.allergies).toBe('unavailable');
+      });
+  }
+
+  test('an allergen named in words is still an allergy', async ({ page }) => {
+    await page.goto('/');
+    for (const text of ['Penicillin', 'Nickel', 'Nuts', 'Known latex sensitivity']) {
+      const one = structuredClone(FIXTURE);
+      one.entry.find((e: any) => e.resource.resourceType ===
+        'AllergyIntolerance').resource.code = { text };
+      const r = await answer(page, one, ALL);
+      expect(r.status.allergies, text).toBe('fulfilled');
+    }
+  });
+
+  test('every Bundle it sends is tagged as test data', async ({ page }) => {
+    await page.goto('/');
+    const tags = await page.evaluate(async ({ request, bundle }) => {
+      const m = await import('/static/checkin_answer.js');
+      const res = m.buildResponse(request,
+        m.matchItems(request, [], m.prepareRecords(bundle)),
+        Object.fromEntries(request.items.map((i: any) => [i.id, true])));
+      return res.artifacts.map((a: any) =>
+        ((a.value.meta && a.value.meta.tag) || []).map((t: any) => t.code));
+    }, { request: REQUEST, bundle: FIXTURE });
+    expect(tags.length).toBe(6);
+    for (const t of tags) expect(t).toEqual(['HTEST']);
+  });
 });

@@ -24,12 +24,36 @@ export const NKA_CODES = [
   "429625007", "716220001", "1003774007",
 ];
 
+// Words that state an absence rather than name an allergen: "No known
+// allergies", "NKDA", "None", "Nil known". Feeds write these in code.text or
+// as a local code's display. Read only to hold a record back, never to show
+// it, so a false match costs an "unavailable", never a disclosure.
+const ABSENCE_WORDING = new RegExp(
+  "^(?:none|nil)(?: known)?$" +
+  "|^no (?:known )?(?:\\w+ )?allerg" +
+  "|\\bno known\\b" +
+  "|\\bnk[a-z]?a\\b");
+
+function readsAsAbsence(text) {
+  if (typeof text !== "string") return false;
+  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return words !== "" && ABSENCE_WORDING.test(words);
+}
+
 function isNoKnownAllergy(resource) {
   if (!resource || resource.resourceType !== "AllergyIntolerance") return false;
-  const codings = (resource.code && resource.code.coding) || [];
-  return codings.some((c) => c && SNOMED.includes(c.system) &&
-    NKA_CODES.includes(String(c.code)));
+  const code = resource.code || {};
+  const codings = Array.isArray(code.coding) ? code.coding : [];
+  return readsAsAbsence(code.text) || codings.some((c) => c && (
+    (SNOMED.includes(c.system) && NKA_CODES.includes(String(c.code))) ||
+    readsAsAbsence(c.display)));
 }
+
+// HL7 v3 ActReason HTEST: every Bundle this wallet sends says it is test
+// data, whatever its records carry. True while it answers only from the
+// synthetic test patient; the real-record export must drop it.
+const HTEST = { system: "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+  code: "HTEST", display: "test health data" };
 
 /* The record set as Bundle entries whose references can be followed.
    selectEntries pulls along what a match references (a payer, a
@@ -93,6 +117,7 @@ export function buildResponse(request, matches, share) {
       fulfills: [id],
       value: {
         resourceType: "Bundle",
+        meta: { tag: [{ ...HTEST }] },
         type: "collection",
         entry: m.entries.map((e) => ({ fullUrl: e.fullUrl, resource: e.resource })),
       },
