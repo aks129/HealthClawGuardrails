@@ -93,7 +93,7 @@ def test_exactly_one_record_claims_no_profile_and_it_is_a_requested_type():
     unprofiled = [r for r in RESOURCES if not _profiles(r)]
     assert [r['id'] for r in unprofiled] == [UNPROFILED_ID]
     assert unprofiled[0]['resourceType'] in REQUESTED
-    assert 'meta' not in unprofiled[0]
+    assert 'profile' not in unprofiled[0]['meta']
 
 
 def test_every_reference_resolves_inside_the_bundle():
