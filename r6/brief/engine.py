@@ -152,8 +152,11 @@ def _concept_label(concept) -> str | None:
 
 
 def _has_code(concept) -> bool:
+    """A coding was recorded: a code, or the system redaction leaves when
+    it drops a malformed code (#957). That entry reads "Recorded, name
+    unavailable", never "Unknown", which read like a mystery illness."""
     return isinstance(concept, dict) and any(
-        isinstance(c, dict) and c.get("code")
+        isinstance(c, dict) and (c.get("code") or c.get("system"))
         for c in concept.get("coding") or [])
 
 

@@ -267,6 +267,7 @@ ALLERGY_STATUS_STATEMENT = (
 #: codes are not status either: they are _NKA_CODES below.
 _ALLERGY_STATUS_CODES = frozenset({
     ("http://snomed.info/sct", "1631000175102"),  # Patient not asked
+    ("http://loinc.org", "LA14761-3"),  # Not asked (#957 delta 4)
 })
 
 #: "No known allergy" concepts: SNOMED 716186003 and every descendant
@@ -285,6 +286,8 @@ _NKA_CODES = {
     ("http://snomed.info/sct", "1003774007"): "no known latex allergies",
     # Inactive predecessor of 716186003, still in legacy feeds (#957).
     ("http://snomed.info/sct", "160244002"): "no known allergies",
+    # "None", which named an allergy "None" (#957 delta 4).
+    ("http://snomed.info/sct", "260413007"): "allergies as none",
     # LOINC answers stating an absence (r6.terminology.LOINC_ABSENCE_ANSWERS).
     # Missing here, LA10030-7 read as an ordinary allergy named by the
     # engine's qualified text, and undated (#957 re-QA).

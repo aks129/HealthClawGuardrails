@@ -38,7 +38,10 @@ LOINC_ANSWERS = {"LA10030-7": "none known", "LA9134-3": "none known",
 NKA_CODES = ("716186003", "409137002", "428197003", "428607008",
              "429625007", "716220001", "1003774007",
              # Inactive since 2016-07-31; legacy feeds still carry it.
-             "160244002")
+             "160244002",
+             # "None" (qualifier value): an allergy coded with it was named
+             # "None" (#957 delta 4).
+             "260413007")
 STATUS = "1631000175102"
 ABSENCE_CODES = NKA_CODES + (STATUS,)
 PENICILLIN = "91936005"
@@ -74,7 +77,8 @@ def _no_bare_name(obj):
 
 def test_the_concept_sets_are_the_closed_lists():
     assert NKA_CONCEPTS == {(SNOMED, c) for c in NKA_CODES}
-    assert ALLERGY_STATUS_CONCEPTS == {(SNOMED, STATUS)}
+    assert ALLERGY_STATUS_CONCEPTS == {(SNOMED, STATUS),
+                                       (LOINC, "LA14761-3")}
     assert LOINC_ABSENCE_ANSWERS == {(LOINC, c) for c in LOINC_ANSWERS}
     assert ABSENCE_CONCEPTS == (NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS
                                 | LOINC_ABSENCE_ANSWERS)
@@ -99,6 +103,17 @@ def test_every_absence_concept_has_qualified_text_and_nothing_else_does():
         assert text.startswith("Recorded entry: ")
         assert "confirm with a clinician" in text
     assert terminology.absence_text(SNOMED, PENICILLIN) is None
+
+
+def test_loinc_not_asked_is_a_status_entry(monkeypatch):
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: "Not asked")
+    concept = {"coding": [{"system": LOINC, "code": "LA14761-3"}]}
+    label_codings(concept)
+    assert "display" not in concept["coding"][0]
+    assert concept["text"] == (
+        "Recorded entry: 'not asked about allergies'. Allergies were not "
+        "checked; confirm with a clinician.")
 
 
 def test_patient_not_asked_is_never_worded_as_no_allergies():
@@ -175,6 +190,7 @@ def test_a_well_formed_snomed_code_still_reaches_the_resolver(monkeypatch):
     "No known allergies", "No known drug allergy", "NKDA", "NKA",
     "No drug allergy", "No allergy to latex", "Allergy status not asked",
     "None known", "None or not known", "None or none known", "Nil known",
+    "None", " none ", "NIL",
     "Nil known allergies", "Allergies: none", "NKFA",
     "No known sensitivities", "Drug intolerance: none",
     "Adverse reaction: nil", "No known medications",
@@ -209,6 +225,31 @@ def test_an_ordinary_resolver_answer_is_still_a_label(monkeypatch, label):
     monkeypatch.setattr("r6.terminology_resolver.resolve",
                         lambda s, c: label)
     assert terminology.lookup(SNOMED, "999999001") == label
+
+
+# --- the brief: a dropped code is still a recorded entry ---------------------
+
+def test_a_condition_whose_code_redaction_dropped_reads_unnamed_not_unknown():
+    """Redaction drops a malformed SNOMED code and leaves the system. That
+    entry was recorded; "Unknown · Active" read like a mystery illness
+    (#957 patient test)."""
+    from r6.brief import engine
+    cond = {"resourceType": "Condition", "id": "c",
+            "clinicalStatus": {"coding": [{"code": "active"}]},
+            "code": {"coding": [{"system": SNOMED,
+                                 "code": "716186003|x|"}]}}
+    redacted = apply_redaction(cond)
+    assert redacted["code"]["coding"] == [{"system": SNOMED}]
+    [field] = engine.build_problems([redacted])
+    assert field.label == engine.UNLABELLED
+
+
+def test_a_condition_with_no_code_element_still_reads_unknown():
+    from r6.brief import engine
+    cond = {"resourceType": "Condition", "id": "c",
+            "clinicalStatus": {"coding": [{"code": "active"}]}}
+    [field] = engine.build_problems([apply_redaction(cond)])
+    assert field.label == engine.UNKNOWN
 
 
 @pytest.mark.parametrize("code", [True, ["716186003"], {"c": 1}])

@@ -269,8 +269,14 @@ _LABELS: dict[tuple[str, str], str] = {
 #: carry it and the resolver still names it "No known allergies" (#957).
 NKA_CONCEPTS = frozenset((SNOMED, c) for c in (
     "716186003", "409137002", "428197003", "428607008", "429625007",
-    "716220001", "1003774007", "160244002"))
-ALLERGY_STATUS_CONCEPTS = frozenset({(SNOMED, "1631000175102")})
+    "716220001", "1003774007", "160244002",
+    # "None" (qualifier value): an allergy coded with it read back named
+    # "None" (#957 delta 4).
+    "260413007"))
+ALLERGY_STATUS_CONCEPTS = frozenset({
+    (SNOMED, "1631000175102"),      # Patient not asked
+    (LOINC, "LA14761-3"),           # Not asked (#957 delta 4)
+})
 #: LOINC answers that state an absence: "None known", "None or none known"
 #: and "None or not known" (tx.fhir.org $lookup, 2026-10-14). An Observation
 #: for 52571-7, known allergies, answered LA10030-7 read back as a bare
@@ -294,9 +300,13 @@ _ABSENCE_TEXT: dict[tuple[str, str], str] = {
     (SNOMED, "716220001"): _NKA_ENTRY.format("no known animal allergy"),
     (SNOMED, "1003774007"): _NKA_ENTRY.format("no known latex allergy"),
     (SNOMED, "160244002"): _NKA_ENTRY.format("no known allergies"),
+    (SNOMED, "260413007"): _NKA_ENTRY.format("none"),
     (LOINC, "LA10030-7"): _NKA_ENTRY.format("none known"),
     (LOINC, "LA9134-3"): _NKA_ENTRY.format("none known"),
     (LOINC, "LA4715-4"): _NKA_ENTRY.format("none or not known"),
+    (LOINC, "LA14761-3"): (
+        "Recorded entry: 'not asked about allergies'. Allergies were not "
+        "checked; confirm with a clinician."),
     (SNOMED, "1631000175102"): (
         "Recorded entry: 'patient not asked about allergies'. Allergies were "
         "not checked; confirm with a clinician."),
@@ -312,7 +322,8 @@ _SNOMED_CODE = re.compile(r"[1-9][0-9]{5,17}")
 #: closed sets above are the real control; this is the backstop for codes
 #: they lag. A label is refused when it is:
 #:   - "no known ..." anything, or an NK..A abbreviation (NKA, NKDA, NKFA);
-#:   - a bare "None known" / "Nil known" (or "None or none/not known");
+#:   - a bare "None" / "Nil", or "None known" / "Nil known" (or "None or
+#:     none/not known"), as the whole label (#957 delta 4);
 #:   - a negation (English, German, French, Spanish, Italian) in a label
 #:     that is about allergies, sensitivities, intolerances or reactions.
 #: A negation on any other topic is a name: "None detected", "Nil by mouth",
@@ -320,6 +331,7 @@ _SNOMED_CODE = re.compile(r"[1-9][0-9]{5,17}")
 _ABSENCE_WORDING = re.compile(
     r"\bno known\b|\bnk[a-z]{0,2}a\b"
     r"|^\s*(?:none|nil)(?: or (?:none|not))? known\s*$"
+    r"|^\s*(?:none|nil)\s*$"
     r"|^(?=.*(?:al+erg|sensitiv|intoleran|reaction))"
     r"(?=.*(?:\bno\b|\bnone\b|\bnil\b|\bnot (?:asked|known)\b"
     r"|\bkeine?\b|\baucune?\b|\bsin\b|\bning[uú]n[ao]?\b|\bnessun[ao]?\b))",
