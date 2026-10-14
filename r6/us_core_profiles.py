@@ -5,11 +5,11 @@ field: a URL with a patient's name in its path, an object, a number. So a
 claim leaves the engine only if it is on a closed list, and nothing is copied
 through because an upstream wrote it.
 
-- `CANONICALS` maps each allowed StructureDefinition URL to its IG. Grow it
-  one row at a time with a test, never by prefix.
-- `VERSIONS` lists the published versions per IG. A claim `url|version`
-  keeps its version only if that IG published it; otherwise the bare URL is
-  emitted. Anything whose base is not in `CANONICALS` is dropped.
+- `CANONICALS` maps each allowed StructureDefinition URL to the versions
+  that published it. Grow it one row at a time with a test, never by prefix.
+- A claim `url|version` keeps its version only if that version published
+  that canonical; otherwise the bare URL is emitted. Anything whose base is
+  not in `CANONICALS` is dropped.
 
 We stamp no claims (validate-then-claim is deferred): this only decides which
 claims a record already carries are let through, so an unprofiled record
@@ -20,24 +20,37 @@ exits that never redact, and redaction for every payload, upstream included.
 
 _US_CORE = 'http://hl7.org/fhir/us/core/StructureDefinition/'
 
-CANONICALS = {
-    _US_CORE + 'us-core-patient': 'us-core',
-    _US_CORE + 'us-core-condition-problems-health-concerns': 'us-core',
-    _US_CORE + 'us-core-condition-encounter-diagnosis': 'us-core',
-    _US_CORE + 'us-core-allergyintolerance': 'us-core',
-    _US_CORE + 'us-core-medicationrequest': 'us-core',
-    _US_CORE + 'us-core-immunization': 'us-core',
-    _US_CORE + 'us-core-coverage': 'us-core',
-    # CARIN Digital Insurance Card: not US Core, but the check-in request
-    # accepts it for Coverage (owner ruling, FHI-52).
-    'http://hl7.org/fhir/us/insurance-card/StructureDefinition/'
-    'C4DIC-Coverage': 'c4dic',
-}
-
 VERSIONS = {
     'us-core': frozenset({'3.1.1', '4.0.0', '5.0.1', '6.1.0', '7.0.0',
                           '8.0.0'}),
     'c4dic': frozenset({'1.0.0', '1.1.0'}),
+}
+
+_ALL = VERSIONS['us-core']
+# US Core 5.0.1 split Condition in two; 3.1.1 and 4.0.0 had one profile.
+_SPLIT_CONDITION = frozenset({'5.0.1', '6.1.0', '7.0.0', '8.0.0'})
+_LEGACY_CONDITION = frozenset({'3.1.1', '4.0.0'})
+# us-core-coverage first appeared in 6.0.0.
+_COVERAGE = frozenset({'6.1.0', '7.0.0', '8.0.0'})
+
+# Each canonical with the versions that published it: a claim pairing a
+# canonical with any other version is reduced to the bare URL.
+CANONICALS = {
+    _US_CORE + 'us-core-patient': _ALL,
+    _US_CORE + 'us-core-condition': _LEGACY_CONDITION,
+    _US_CORE + 'us-core-condition-problems-health-concerns': _SPLIT_CONDITION,
+    _US_CORE + 'us-core-condition-encounter-diagnosis': _SPLIT_CONDITION,
+    _US_CORE + 'us-core-allergyintolerance': _ALL,
+    _US_CORE + 'us-core-medicationrequest': _ALL,
+    _US_CORE + 'us-core-immunization': _ALL,
+    _US_CORE + 'us-core-coverage': _COVERAGE,
+    # Payor and prescriber references in a check-in (owner ruling, FHI-52).
+    _US_CORE + 'us-core-organization': _ALL,
+    _US_CORE + 'us-core-practitioner': _ALL,
+    # CARIN Digital Insurance Card: not US Core, but the check-in request
+    # accepts it for Coverage (owner ruling, FHI-52).
+    'http://hl7.org/fhir/us/insurance-card/StructureDefinition/'
+    'C4DIC-Coverage': VERSIONS['c4dic'],
 }
 
 
@@ -46,8 +59,8 @@ def keep_profiles(value):
 
     A non-list, and any element that is not a string, gives nothing. Each
     claim is split once on `|`; the base must match a row exactly (no case
-    folding, no trimming), and a version its IG did not publish is dropped
-    in favour of the bare URL."""
+    folding, no trimming), and a version that did not publish that canonical
+    is dropped in favour of the bare URL."""
     if not isinstance(value, list):
         return []
     kept = set()
@@ -55,10 +68,10 @@ def keep_profiles(value):
         if not isinstance(claim, str):
             continue
         base, sep, version = claim.partition('|')
-        ig = CANONICALS.get(base)
-        if ig is None:
+        published = CANONICALS.get(base)
+        if published is None:
             continue
-        kept.add(claim if sep and version in VERSIONS[ig] else base)
+        kept.add(claim if sep and version in published else base)
     return sorted(kept)
 
 

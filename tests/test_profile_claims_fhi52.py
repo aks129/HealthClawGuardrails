@@ -29,8 +29,10 @@ _INGEST = "/r6/fhir/internal/ingest-bundle"
 _UC = "http://hl7.org/fhir/us/core/StructureDefinition/"
 _PATIENT = _UC + "us-core-patient"
 _PROBLEM = _UC + "us-core-condition-problems-health-concerns"
+_LEGACY_CONDITION = _UC + "us-core-condition"
 _C4DIC = ("http://hl7.org/fhir/us/insurance-card/StructureDefinition/"
           "C4DIC-Coverage")
+_ALL = {"3.1.1", "4.0.0", "5.0.1", "6.1.0", "7.0.0", "8.0.0"}
 
 
 def _upload(client, resources, tenant="test-tenant"):
@@ -60,14 +62,19 @@ def _condition(cid="pc-c-1", profile=None, meta=None):
 
 def test_the_allow_list_is_closed():
     """Pinned row by row: growing it is a reviewed change with a test."""
-    assert set(CANONICALS) == {
-        _PATIENT, _PROBLEM,
-        _UC + "us-core-condition-encounter-diagnosis",
-        _UC + "us-core-allergyintolerance",
-        _UC + "us-core-medicationrequest",
-        _UC + "us-core-immunization",
-        _UC + "us-core-coverage",
-        _C4DIC,
+    assert CANONICALS == {
+        _PATIENT: _ALL,
+        _LEGACY_CONDITION: {"3.1.1", "4.0.0"},
+        _PROBLEM: {"5.0.1", "6.1.0", "7.0.0", "8.0.0"},
+        _UC + "us-core-condition-encounter-diagnosis":
+            {"5.0.1", "6.1.0", "7.0.0", "8.0.0"},
+        _UC + "us-core-allergyintolerance": _ALL,
+        _UC + "us-core-medicationrequest": _ALL,
+        _UC + "us-core-immunization": _ALL,
+        _UC + "us-core-coverage": {"6.1.0", "7.0.0", "8.0.0"},
+        _UC + "us-core-organization": _ALL,
+        _UC + "us-core-practitioner": _ALL,
+        _C4DIC: {"1.0.0", "1.1.0"},
     }
     assert VERSIONS == {
         "us-core": {"3.1.1", "4.0.0", "5.0.1", "6.1.0", "7.0.0", "8.0.0"},
@@ -78,6 +85,8 @@ def test_the_allow_list_is_closed():
 @pytest.mark.parametrize("claim", [
     _PATIENT, _PATIENT + "|7.0.0", _PATIENT + "|3.1.1",
     _C4DIC, _C4DIC + "|1.1.0",
+    _LEGACY_CONDITION, _LEGACY_CONDITION + "|3.1.1",
+    _LEGACY_CONDITION + "|4.0.0", _PROBLEM + "|5.0.1",
 ])
 def test_a_listed_claim_is_kept_as_written(claim):
     assert keep_profiles([claim]) == [claim]
@@ -88,6 +97,11 @@ def test_a_listed_claim_is_kept_as_written(claim):
     _PATIENT + "|1.1.0",       # a C4DIC version, not a US Core one
     _C4DIC + "|7.0.0",         # a US Core version, not a C4DIC one
     _PATIENT + "|",            # empty version
+    # A canonical paired with a version that did not publish it.
+    _LEGACY_CONDITION + "|5.0.1",
+    _LEGACY_CONDITION + "|7.0.0",
+    _PROBLEM + "|4.0.0",
+    _UC + "us-core-coverage|3.1.1",
 ])
 def test_an_unpublished_version_is_reduced_to_the_bare_url(claim):
     assert keep_profiles([claim]) == [claim.split("|")[0]]
@@ -193,10 +207,10 @@ _FIXTURE_CLAIMS = {
 }
 
 
-def test_the_check_in_patient_claims_round_trip(client, tenant_headers):
-    """The six check-in types keep their claim through ingest and read.
-    Organization and Practitioner are not on the list, so they come out
-    unprofiled, as does the fixture's unprofiled second Condition."""
+def test_the_check_in_patient_claims_round_trip(client, tenant_headers,
+                                                auth_headers):
+    """Every claim the fixture carries survives ingest, read and both share
+    profiles intact, and its unprofiled second Condition stays unprofiled."""
     resources = [{"resourceType": rtype, "id": f"fx-{rtype.lower()}",
                   "meta": {"profile": [claim]}}
                  for rtype, claim in _FIXTURE_CLAIMS.items()]
@@ -207,13 +221,22 @@ def test_the_check_in_patient_claims_round_trip(client, tenant_headers):
                          headers=tenant_headers)
         assert got.status_code == 200, (rtype, got.get_data(as_text=True))
         meta = got.get_json()["meta"]
-        if claim in CANONICALS:
-            assert meta["profile"] == [claim], rtype
-        else:
-            assert "profile" not in meta, rtype
+        assert meta["profile"] == [claim], rtype
     got = client.get("/r6/fhir/Condition/fx-condition-2",
                      headers=tenant_headers)
     assert "profile" not in got.get_json()["meta"]
+    for profile in ("intake", "deidentified"):
+        share = client.post("/r6/fhir/$share-bundle",
+                            json={"resource_types": sorted(_FIXTURE_CLAIMS),
+                                  "profile": profile},
+                            headers=auth_headers)
+        assert share.status_code == 200, share.get_data(as_text=True)
+        got = {e["resource"]["id"]: e["resource"]["meta"].get("profile")
+               for e in share.get_json()["entry"]}
+        want = {f"fx-{rtype.lower()}": [claim]
+                for rtype, claim in _FIXTURE_CLAIMS.items()}
+        want["fx-condition-2"] = None
+        assert got == want, profile
 
 
 # --- idempotence across the two layers ----------------------------------------
