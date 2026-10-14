@@ -110,7 +110,7 @@ def test_a_patient_and_a_profiled_condition_go_out(app, client):
 
 
 def test_a_row_without_a_claim_is_not_exported(app, client):
-    """MUTATION: drop the `has_claim` check in _share_bundle_checkin -> red."""
+    """MUTATION: drop the `has_claim` check in r6/checkin.py export -> red."""
     f.seed(app, f.patient(), f.condition('ci-cond-bare', profiled=False))
     resp = f.export(client, f.token(client, ['Patient', 'Condition']),
                     ['Patient', 'Condition'])

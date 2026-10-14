@@ -9,7 +9,22 @@ r6/access.py `_checkin_profile`.
 
 One function, `operation`, builds the token's `op` claim for both the mint
 and the export, so the two cannot disagree on spelling.
+
+The two request handlers live here rather than in r6/routes.py, which is
+pinned to shrink (tests/test_ratchets.py): `mint` is the check-in branch of
+/internal/step-up-token and `export` the check-in branch of $share-bundle.
 """
+
+import json
+import re
+from datetime import datetime, timezone
+
+from flask import Response, jsonify
+
+from models import db
+from r6 import access, stepup
+from r6.audit import add_audit_event
+from r6.models import R6Resource
 
 #: The six items a check-in may ask for. Organization is deliberately absent:
 #: payor Organizations are fetched by the ids the exported Coverage
@@ -34,10 +49,6 @@ MAX_BUNDLE_BYTES = 400_000
 #: The agent id the export audits under. Fixed words: nothing the requester
 #: wrote reaches the audit row.
 AUDIT_AGENT = 'careagents-checkin'
-
-V2_0203 = 'http://terminology.hl7.org/CodeSystem/v2-0203'
-COVERAGE_CLASS = 'http://terminology.hl7.org/CodeSystem/coverage-class'
-NAIC_SYSTEM = 'urn:oid:2.16.840.1.113883.6.300'
 
 _US_CORE = 'http://hl7.org/fhir/us/core/StructureDefinition/'
 
@@ -94,3 +105,124 @@ def has_claim(resource):
         return False
     return any(isinstance(c, str) and c.partition('|')[0] in wanted
                for c in claims)
+
+
+#: The patient a check-in names: the store's own id shape.
+_PATIENT_ID = re.compile(r'[A-Za-z0-9\-.]{1,255}')
+
+
+def mint(tenant_id, body):
+    """The check-in branch of issue_step_up_token (r6/routes.py), behind its
+    `_internal_mint_authorized` gate. A ttl, aud, op or scope in the body is
+    refused, not ignored: a caller who asked for one would otherwise believe
+    they had it."""
+    if body.get('purpose') != 'checkin':
+        return jsonify({'error': 'purpose must be "checkin" or absent'}), 400
+    if set(body) - {'tenant_id', 'purpose', 'resource_types'}:
+        return jsonify({'error': 'a checkin token takes only tenant_id, '
+                                 'purpose and resource_types'}), 400
+    types = parse_types(body.get('resource_types'))
+    if types is None:
+        return jsonify({'error': 'resource_types must be a non-empty array '
+                                 'of: ' + ', '.join(sorted(CHECKIN_TYPES))}), 400
+    try:
+        token = stepup.generate_step_up_token(
+            tenant_id, agent_id=AUDIT_AGENT, ttl_seconds=TOKEN_TTL_SECONDS,
+            scope='read', audience=AUDIENCE, operation=operation(types))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'token': token, 'tenant_id': tenant_id, 'scope': 'read',
+                    'expires_in': TOKEN_TTL_SECONDS})
+
+
+def export(tenant, body):
+    """$share-bundle profile=checkin (FHI-53).
+
+    - Gate: a token minted for exactly this type set (`aud` checkin-export,
+      `op` from r6/checkin.operation), single use. The cached general token
+      has no `aud` and is refused; a subset or superset is refused.
+    - `patient_id` is required, and only that patient's rows go out.
+    - Only rows carrying an allow-listed claim for their own type go out.
+    - Each row goes through r6/access.py _checkin_profile. Payor Organizations
+      are fetched by the ids the exported Coverage references, in this
+      tenant, never by type.
+    - Over MAX_BUNDLE_BYTES: 413 and no bundle. Never truncated.
+    - One AuditEvent, from fixed words.
+    """
+    types = parse_types(body.get('resource_types'))
+    access.require_grant(
+        scope=access.Scope.TENANT_BOUND, tenant=tenant, audience=AUDIENCE,
+        operation=operation(types) if types else NO_OPERATION,
+        consume_nonce=True, absent_status=401, rejected_status=401)
+
+    patient_id = body.get('patient_id')
+    if not (isinstance(patient_id, str)
+            and _PATIENT_ID.fullmatch(patient_id)):
+        return jsonify({'resourceType': 'OperationOutcome', 'issue': [{
+            'severity': 'error', 'code': 'required',
+            'diagnostics': 'profile "checkin" requires patient_id'}]}), 400
+
+    rows = R6Resource.query.filter(
+        R6Resource.tenant_id == tenant.id,
+        R6Resource.is_deleted == False,  # noqa: E712
+        R6Resource.resource_type.in_(types),
+    ).order_by(R6Resource.resource_type, R6Resource.id).all()
+
+    own = f'Patient/{patient_id}'
+    entries = []
+    type_set = set()
+    payor_ids = set()
+    for row in rows:
+        stored = row.to_fhir_json()
+        if row.resource_type == 'Patient':
+            if row.id != patient_id:
+                continue
+        else:
+            ref = next((r.get('reference') for r in (
+                stored.get('subject'), stored.get('patient'),
+                stored.get('beneficiary')) if isinstance(r, dict)), None)
+            if ref != own:
+                continue
+        if not has_claim(stored):
+            continue
+        resource = access._checkin_profile(stored, patient_id=patient_id)
+        entries.append({'resource': resource})
+        type_set.add(row.resource_type)
+        for payor in resource.get('payor') or []:
+            payor_ids.add(payor['reference'].split('/', 1)[1])
+
+    if payor_ids:
+        orgs = R6Resource.query.filter(
+            R6Resource.tenant_id == tenant.id,
+            R6Resource.is_deleted == False,  # noqa: E712
+            R6Resource.resource_type == 'Organization',
+            R6Resource.id.in_(sorted(payor_ids)),
+        ).order_by(R6Resource.id).all()
+        for org in orgs:
+            entries.append({'resource': access._checkin_profile(
+                org.to_fhir_json(), patient_id=patient_id)})
+            type_set.add('Organization')
+
+    bundle = {
+        'resourceType': 'Bundle',
+        'type': 'collection',
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        'entry': entries,
+    }
+    payload = json.dumps(bundle)
+    too_large = len(payload.encode('utf-8')) > MAX_BUNDLE_BYTES
+
+    detail = (f'share-bundle export (profile=checkin): {len(entries)} '
+              f'resources across {len(type_set)} type(s); '
+              f'types={",".join(types)}')
+    if too_large:
+        detail = ('share-bundle export (profile=checkin) refused: over the '
+                  f'size limit; types={",".join(types)}')
+    add_audit_event(
+        'read', resource_type='Bundle', resource_id='share-bundle',
+        agent_id=AUDIT_AGENT, tenant_id=tenant.id, detail=detail)
+    db.session.commit()
+
+    if too_large:
+        return jsonify({'error': 'checkin_too_large'}), 413
+    return Response(payload, status=200, mimetype='application/fhir+json')

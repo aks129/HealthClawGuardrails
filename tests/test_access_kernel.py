@@ -1856,7 +1856,13 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # registered on r6_blueprint read the tenant through the
                      # kernel, behind enforce_tenant_id, which asks it too.
                      'r6/brief/routes.py', 'r6/caregaps/routes.py',
-                     'r6/labs/routes.py', 'r6/quality/routes.py'}
+                     'r6/labs/routes.py', 'r6/quality/routes.py',
+                     # FHI-53: the check-in branch of $share-bundle is born
+                     # on the kernel — require_grant for its single-use,
+                     # audience- and operation-bound token, and
+                     # _checkin_profile beside _intake_profile. It lives
+                     # here rather than in r6/routes.py, which only shrinks.
+                     'r6/checkin.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

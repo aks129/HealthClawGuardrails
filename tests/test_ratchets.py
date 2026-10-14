@@ -524,7 +524,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: same call on /internal/seed, $curatr-apply-fix and /demo/agent-loop
 #: (security re-check of #913, R3-R5). 3739 -> 3733 (#922 B5): $stats takes
 #: its unit in the loop that filters by code; the second loop is gone.
-_GOD_MODULE_LINES = 3733
+#: 3733 -> 3743 (FHI-53): the check-in branch of /internal/step-up-token and
+#: of $share-bundle. Only the dispatch is here; the handlers are r6/checkin.py.
+_GOD_MODULE_LINES = 3743
 
 
 def test_the_god_module_only_shrinks():

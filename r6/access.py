@@ -33,7 +33,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from models import db
 from r6 import audit as _audit_mod
-from r6 import checkin as _checkin
 from r6 import fhir_proxy as _fhir_proxy_mod
 from r6 import health_compliance as _compliance_mod
 from r6 import redaction as _redaction_mod
@@ -1220,6 +1219,10 @@ def _intake_profile(resource):
     return res
 
 
+_V2_0203 = 'http://terminology.hl7.org/CodeSystem/v2-0203'
+_COVERAGE_CLASS = 'http://terminology.hl7.org/CodeSystem/coverage-class'
+_NAIC_SYSTEM = 'urn:oid:2.16.840.1.113883.6.300'
+
 #: A payor reference the check-in keeps: an Organization, by an id the store
 #: could hold. Anything else (a RelatedPerson, a Patient, a URL) is dropped.
 _PAYOR_REF = re.compile(r'Organization/[A-Za-z0-9\-.]{1,255}')
@@ -1233,7 +1236,7 @@ def _is_ssn_identifier(ident):
         return False
     if ident.get('system') in _SSN_SYSTEMS:
         return True
-    return _has_coding(ident.get('type'), _checkin.V2_0203, ('SS',))
+    return _has_coding(ident.get('type'), _V2_0203, ('SS',))
 
 
 def _has_coding(concept, system, codes):
@@ -1295,12 +1298,12 @@ def _checkin_coverage(original, res, patient_id):
     for ident in original.get('identifier') or []:
         if not isinstance(ident, dict) or _is_ssn_identifier(ident):
             continue
-        if not _has_coding(ident.get('type'), _checkin.V2_0203, ('MB', 'SN')):
+        if not _has_coding(ident.get('type'), _V2_0203, ('MB', 'SN')):
             continue
         system, value = ident.get('system'), ident.get('value')
         if isinstance(value, str) and value:
             kept = {'type': {'coding': [_coding_of(
-                ident['type'], _checkin.V2_0203, ('MB', 'SN'))]},
+                ident['type'], _V2_0203, ('MB', 'SN'))]},
                 'value': value}
             if isinstance(system, str):
                 kept['system'] = system
@@ -1313,14 +1316,14 @@ def _checkin_coverage(original, res, patient_id):
     for cls in original.get('class') or []:
         if not isinstance(cls, dict):
             continue
-        if not _has_coding(cls.get('type'), _checkin.COVERAGE_CLASS,
+        if not _has_coding(cls.get('type'), _COVERAGE_CLASS,
                            ('group', 'plan')):
             continue
         value = cls.get('value')
         if isinstance(value, str) and value:
             # class.name is dropped, not left as a truncated stub.
             classes.append({'type': {'coding': [_coding_of(
-                cls['type'], _checkin.COVERAGE_CLASS, ('group', 'plan'))]},
+                cls['type'], _COVERAGE_CLASS, ('group', 'plan'))]},
                 'value': value})
     res.pop('class', None)
     if classes:
@@ -1351,9 +1354,9 @@ def _checkin_organization(original, res):
     name = original.get('name')
     if isinstance(name, str) and name:
         out['name'] = name
-    naic = [{'system': _checkin.NAIC_SYSTEM, 'value': i['value']}
+    naic = [{'system': _NAIC_SYSTEM, 'value': i['value']}
             for i in original.get('identifier') or []
-            if isinstance(i, dict) and i.get('system') == _checkin.NAIC_SYSTEM
+            if isinstance(i, dict) and i.get('system') == _NAIC_SYSTEM
             and isinstance(i.get('value'), str) and i['value']]
     if naic:
         out['identifier'] = naic
