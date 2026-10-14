@@ -45,12 +45,25 @@ SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
                 "you.")
 
 
-def under_banner(text: str) -> str:
+def sample_frame(who: str = "") -> str:
+    """The sample line for these records. `who` is hub.relation_of the
+    person they stand in for ("your parent"), empty for the holder's own:
+    Mom's chat said "not yours" to someone asking about Mom (FHI-44). The
+    line opens every answer, so the model reads it back as history: the
+    relationship only, never the nickname."""
+    if not who:
+        return SAMPLE_FRAME
+    return (f"These are made-up records. Nothing here is about {who}, or "
+            "about you.")
+
+
+def under_banner(text: str, frame: str = SAMPLE_FRAME) -> str:
     """A sample answer as the web chat shows it under its sticky banner:
-    without the worker's leading copy of SAMPLE_FRAME, so the line shows
-    once per view. Only that exact copy on its own line, and never down
-    to nothing. Called only where the banner is rendered on the page."""
-    lead = SAMPLE_FRAME + "\n\n"
+    without the worker's leading copy of `frame` (sample_frame), so the
+    line shows once per view. Only that exact copy on its own line, and
+    never down to nothing. Called only where the banner is rendered on the
+    page."""
+    lead = frame + "\n\n"
     rest = text[len(lead):] if text.startswith(lead) else ""
     return rest if rest.strip() else text
 

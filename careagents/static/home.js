@@ -707,7 +707,7 @@
       const label = btn.dataset.label || "these records";
       const agreed = await askToDelete(
         btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
-        btn.dataset.readers || "");
+        btn.dataset.readers || "", btn.dataset.leaves || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -765,7 +765,7 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label, readers) {
+  function askToDelete(label, readers, leaves) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
@@ -778,6 +778,13 @@
         ? readers + " reads these records and will be deleted too."
         : "";
       who.hidden = !readers;
+    }
+    // The only records of someone the holder cares for: deleting them
+    // takes that person off the hub too, said before the tap (FHI-45).
+    const gone = $("delete-leaves");
+    if (gone) {
+      gone.textContent = leaves || "";
+      gone.hidden = !leaves;
     }
     input.value = "";
     ok.disabled = true;

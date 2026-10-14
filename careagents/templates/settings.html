@@ -123,8 +123,9 @@
      (owner decision D3). assistant_settings.js posts each form. #}
   {% if assistants %}
   <section class="hub-section" id="assistant-settings">
-    <div class="section-head"><h2>Your assistant</h2></div>
     {% set several = assistants | length > 1 %}
+    {# Plural over several, as for someone you care for (FHI-45). #}
+    <div class="section-head"><h2>{{ "Your assistants" if several else "Your assistant" }}</h2></div>
     {% for a in assistants %}
     <form class="assistant-settings hub-card" data-agent="{{ a.id }}">
       <div class="hub-card-name">{{ a.name }}{% if a.person.kind == 'other' %}

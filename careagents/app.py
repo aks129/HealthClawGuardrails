@@ -1859,11 +1859,17 @@ def create_app(config: Config | None = None,
         # A person's primary assistant is not removed, here as on the card
         # (owner decision D5, SEC951-L1): only an older account's extras
         # are. Deleting the account, or the records it reads, still goes.
-        primary = {a["id"] for a in hub_view.assistants(
+        primary = {a["id"]: a["person"] for a in hub_view.assistants(
             svc.list_home(acct.id))["assistants"] if a["is_primary"]}
         if agent_id in primary:
-            return jsonify({"error": "This is your assistant, so it "
-                                     "can't be removed."}), 409
+            # Mom's says so, not "your assistant" (FHI-44). Shown as text
+            # on the page, never sent to a model, so the nickname is fine.
+            person = primary[agent_id]
+            name = person.get("nickname") or hub_view.relation_of(person)
+            return jsonify({"error": (
+                f"This is the assistant for {name}, so it can't be "
+                "removed." if name else
+                "This is your assistant, so it can't be removed.")}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})
@@ -1921,11 +1927,19 @@ def create_app(config: Config | None = None,
             past, history_lost = [], True
         conn = ctx.get("connection") or {}
         sample = conn.get("kind") == "sample"
+        # Someone the holder cares for (FHI-44). `who` is their relationship
+        # ("your parent") for anything a model can read back: the sample
+        # line every answer opens with, and a starter tap. `name` may be
+        # the nickname and is for this page's own words only.
+        person = hub_view.person_of(svc.list_home(acct.id),
+                                    ctx["agent"].get("person_id"))
+        who = hub_view.relation_of(person)
+        frame = beta.sample_frame(who)
         if sample:
             # The banner above the log says the records are made up, so a
             # replayed answer does not say it again (beta.under_banner).
             past = [dict(m, content=beta.under_banner(str(m.get("content")
-                                                          or "")))
+                                                          or ""), frame))
                     if m.get("role") != "user" else m for m in past]
         pending = conn.get("status") == "pending"
         totals = None
@@ -2012,9 +2026,19 @@ def create_app(config: Config | None = None,
                 has_labs = False
         has_records = (any(totals.values()) if totals is not None
                        else bool(conn.get("last_count")))
+        # Intake leads, always: that path ends in an approval, which is
+        # what the product is for (spec section 5). A tap is sent to the
+        # model as the person's message, so someone they care for is named
+        # by relationship, never by nickname (FHI-44).
+        mine = "my " + who[len("your "):] if who.startswith("your ") else (
+            "someone I care for" if who else "")
         starters = [s for s, ok in (
-            ("Make my visit brief", has_records),
-            ("Explain my latest labs", has_labs)) if ok]
+            ((f"Fill out a new doctor's intake form for {mine}" if mine
+              else "Fill out my intake form for a new doctor"), True),
+            ((f"Make a visit brief for {mine}" if mine
+              else "Make my visit brief"), has_records),
+            ((f"Explain the latest labs for {mine}" if mine
+              else "Explain my latest labs"), has_labs)) if ok]
         # The "Open the review" card is a turn event, and history keeps only
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.
@@ -2058,11 +2082,12 @@ def create_app(config: Config | None = None,
                                    and svc.has_passkey(acct.id)),
                                connect_next=_chat_connect_next(acct, sample),
                                link_session=bool(session.get(_VIA_LINK)),
-                               sample_line=(beta.SAMPLE_FRAME
-                                            if sample else None),
+                               sample_line=frame if sample else None,
                                # "Mom's records" when they are not the
                                # holder's own (spec section 5).
-                               whose=_whose(acct, ctx["agent"]))
+                               whose=hub_view.whose_records(person),
+                               # The greeting's words only, never sent.
+                               name=person.get("nickname") or who)
 
     def _whose(acct, agent, mid: bool = False) -> str:
         """Whose records this assistant reads, as the chat header and the
@@ -2099,8 +2124,11 @@ def create_app(config: Config | None = None,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
                                care_gaps_note=_parse_care_gaps_reason(raw),
-                               sample_line=(beta.SAMPLE_FRAME if sample
-                                            else None))
+                               sample_line=(beta.sample_frame(
+                                   hub_view.relation_of(hub_view.person_of(
+                                       svc.list_home(acct.id),
+                                       ctx["agent"].get("person_id"))))
+                                   if sample else None))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 

@@ -91,7 +91,23 @@ def build(home: dict, now: float) -> dict:
             return ""
         return (whose_records(person_of(home, c.get("person_id")))
                 or "Your records")
-    records = [{**_record(c, now), "whose": _whose(c),
+    # Deleting the last source of someone the holder cares for removes them
+    # from the hub too (accounts._drop_empty_other): the dialog says so
+    # before the tap (FHI-45).
+    sources_of: dict = {}
+    for c in conns:
+        sources_of[c.get("person_id")] = sources_of.get(
+            c.get("person_id"), 0) + 1
+
+    def _leaves(c):
+        person = person_of(home, c.get("person_id"))
+        if person.get("kind") != "other" or sources_of[c.get(
+                "person_id")] > 1:
+            return ""
+        name = person.get("nickname") or relation_of(person)
+        return (name[0].upper() + name[1:]
+                + " will be removed from your hub too.")
+    records = [{**_record(c, now), "whose": _whose(c), "leaves": _leaves(c),
                 "readers": ", ".join(readers.get(c["id"], []))}
                for c in conns if c["status"] != "revoked"]
     active = [r for r in records if r["status"] == "active"]
@@ -115,7 +131,7 @@ def build(home: dict, now: float) -> dict:
                           for r in active]),
         "move_choices_by_person": by_person,
         "past": [{**_record(c, now), "whose": _whose(c),
-                  "readers": ", ".join(readers.get(c["id"], []))}
+                  "leaves": _leaves(c), "readers": ", ".join(readers.get(c["id"], []))}
                  for c in conns if c["status"] == "revoked"],
         "connected_kinds": sorted({r["kind"] for r in active}),
         # Any real connection not revoked: one still connecting, or with no
@@ -312,6 +328,18 @@ def for_line(person: dict, several: bool) -> str:
     return "For " + (person.get("nickname")
                      or _FOR_RELATION.get(person.get("relationship"),
                                           _ANYONE))
+
+
+def relation_of(person: dict) -> str:
+    """Who someone the holder cares for is, from the relationship enum
+    alone: "your parent", "someone you care for". Empty for the holder.
+
+    The one person wording that may reach the model: the system prompt, a
+    starter tap and the sample line every answer opens with (FHI-44). The
+    nickname is the holder's own typed text and is never read here."""
+    if person.get("kind") != "other":
+        return ""
+    return _FOR_RELATION.get(person.get("relationship"), _ANYONE)
 
 
 def whose_records(person: dict, mid: bool = False) -> str:

@@ -109,6 +109,34 @@ SAMPLE_STYLE = (
     "call the results a \"partial lab list\".")
 
 
+#: The sample connection of someone the holder cares for (FHI-44). The
+#: records stand in for theirs, so the answer names them, never "the
+#: sample person". `{who}` is hub.relation_of ("your parent"), never the
+#: nickname: the holder's typed text does not reach the model.
+CARED_FOR_SAMPLE_STYLE = (
+    "\n\nThese records are made up. They stand in for the records of "
+    "{who}, someone the person you are talking to cares for. Nothing in "
+    "them is about the person you are talking to, or really about {who}. "
+    "Never say \"you\" or \"your\" about anything in them, except in "
+    "naming {who}, and never say \"the sample person\": say \"in these made-up records\" or "
+    "\"the made-up records for {who}\". Keep every number, date and piece "
+    "of advice as written, including a trend sentence, but say it about "
+    "{who}. The app already shows a line saying these records are made "
+    "up, on the page and at the top of every answer, so do not write your "
+    "own. Say \"doctor\", never \"clinician\", and do not call the "
+    "results a \"partial lab list\".")
+
+
+#: Real records of someone the holder cares for (once owner decision D1
+#: opens them). Whose they are, by relationship only, as above.
+CARED_FOR_STYLE = (
+    "\n\nThese records are not the records of the person you are talking "
+    "to. They belong to {who}, someone that person cares for. Never say "
+    "\"you\" or \"your\" about anything in them, except in naming "
+    "{who}: name {who} instead, "
+    "as in \"the records of {who}\".")
+
+
 #: For a connection whose records have not been seen to land yet (status
 #: `pending`). The stored status can lag a full chart (intake_state.py), so
 #: this never says the records are missing: the tools still decide.
@@ -122,9 +150,11 @@ ARRIVING_STYLE = (
 def system_prompt(agent_name: str, persona_key: str,
                   advisor_key: str | None = None, surface: str = "",
                   sample: bool = False, arriving: bool = False,
-                  routines: str | None = None) -> str:
+                  routines: str | None = None, who: str = "") -> str:
     """`routines` is the assistant's stored routine list; when it is None
-    the legacy `advisor_key` stands in for it (advisors.routines_for)."""
+    the legacy `advisor_key` stands in for it (advisors.routines_for).
+    `who` names someone the holder cares for by relationship
+    (hub.relation_of), empty for the holder's own records."""
     from careagents.advisors import routine_blocks, routines_for
     from careagents.agent import TEXT_SURFACES
     p = PERSONAS.get(persona_key, PERSONAS[DEFAULT_PERSONA])
@@ -142,6 +172,8 @@ def system_prompt(agent_name: str, persona_key: str,
         "that up\"): just answer. " + style
         + routine_blocks(routines_for({"routines": routines,
                                        "advisor": advisor_key}))
-        + (SAMPLE_STYLE if sample else "")
+        + (CARED_FOR_SAMPLE_STYLE.format(who=who) if sample and who
+           else SAMPLE_STYLE if sample
+           else CARED_FOR_STYLE.format(who=who) if who else "")
         + (ARRIVING_STYLE if arriving else "")
     )

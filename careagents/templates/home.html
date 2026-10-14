@@ -267,7 +267,8 @@
           {% endif %}
           <button type="button" class="conn-delete" data-conn="{{ c.id }}"
                   data-label="{{ c.label }}" data-whose="{{ c.whose }}"
-                  data-readers="{{ c.readers }}">Delete</button>
+                  data-readers="{{ c.readers }}"
+                  data-leaves="{{ c.leaves }}">Delete</button>
         </details>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
@@ -379,7 +380,8 @@
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">No new records arrive from this one.</div>
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}"
+                data-leaves="{{ c.leaves }}">Delete</button>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}
