@@ -202,7 +202,9 @@ def test_a_resolver_absence_answer_for_an_unlisted_code_is_never_a_label(
     # is not about allergies is a name, and the closed sets do the rest.
     "None detected", "Nil by mouth",
     "Hantavirus sin nombre Ab [Presence] in Serum",
-    "Sin Nombre virus encephalitis"])
+    "Sin Nombre virus encephalitis",
+    # "None known" counts on its own only as the WHOLE label.
+    "Fever, cause none known"])
 def test_an_ordinary_resolver_answer_is_still_a_label(monkeypatch, label):
     monkeypatch.setattr("r6.terminology_resolver.resolve",
                         lambda s, c: label)
