@@ -1862,10 +1862,10 @@ def create_app(config: Config | None = None,
         primary = {a["id"]: a["person"] for a in hub_view.assistants(
             svc.list_home(acct.id))["assistants"] if a["is_primary"]}
         if agent_id in primary:
-            # Mom's says so, not "your assistant" (FHI-44). Shown as text
-            # on the page, never sent to a model, so the nickname is fine.
-            person = primary[agent_id]
-            name = person.get("nickname") or hub_view.relation_of(person)
+            # Mom's says so, not "your assistant" (FHI-44). By relationship,
+            # never the nickname: a JSON error is a string any client may
+            # one day render raw (security review of #952, I1).
+            name = hub_view.relation_of(primary[agent_id])
             return jsonify({"error": (
                 f"This is the assistant for {name}, so it can't be "
                 "removed." if name else

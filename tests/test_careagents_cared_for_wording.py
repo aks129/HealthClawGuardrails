@@ -85,6 +85,36 @@ def test_the_sample_line_names_the_person_when_they_are_not_the_holder():
     assert beta.under_banner(f"{MOM_FRAME}\n\nHi.") == f"{MOM_FRAME}\n\nHi."
 
 
+def test_an_answer_stored_before_the_person_line_loses_the_old_line_too():
+    """Answers stored before #952 open with the holder's "not yours" line.
+    In Mom's chat it would show under her banner; it goes by the same rule:
+    an exact leading copy only, and never down to nothing (QA/sec L1)."""
+    old = f"{beta.SAMPLE_FRAME}\n\nHi."
+    assert beta.under_banner(old, MOM_FRAME) == "Hi."
+    # Only the exact copy at the start, never a reworded or later one.
+    assert beta.under_banner(f"Note.\n\n{old}", MOM_FRAME) == (
+        f"Note.\n\n{old}")
+    loose = beta.SAMPLE_FRAME.lower() + "\n\nHi."
+    assert beta.under_banner(loose, MOM_FRAME) == loose
+    # An answer that is only the old line is shown, never emptied.
+    assert beta.under_banner(beta.SAMPLE_FRAME + "\n\n", MOM_FRAME) == (
+        beta.SAMPLE_FRAME + "\n\n")
+    assert beta.under_banner(beta.SAMPLE_FRAME, MOM_FRAME) == (
+        beta.SAMPLE_FRAME)
+
+
+def test_moms_replayed_history_drops_the_old_line(cfg, svc, monkeypatch):
+    hc = FakeClient()
+    c, _, hc, _, mom = _with_mom(cfg, svc, monkeypatch, hc=hc)
+    old = f"{beta.SAMPLE_FRAME}\n\nThe A1c is 5.4."
+    hc.recent_messages = lambda *a, **k: [
+        {"role": "user", "content": "How are the labs?"},
+        {"role": "assistant", "content": old}]
+    page = c.get(f"/chat?agent={mom['agent_id']}").get_data(as_text=True)
+    assert "not yours" not in page
+    assert "The A1c is 5.4." in page
+
+
 def test_moms_chat_banner_and_starters_name_her_by_relationship(
         cfg, svc, monkeypatch):
     c, _, _, mine, mom = _with_mom(cfg, svc, monkeypatch)
@@ -155,13 +185,17 @@ def test_the_prompt_says_whose_records_for_someone_you_care_for():
         "Rowan", "calm")
 
 
-def test_refusing_to_remove_moms_assistant_names_mom(cfg, svc, monkeypatch):
+def test_refusing_to_remove_moms_assistant_names_her_by_relationship(
+        cfg, svc, monkeypatch):
+    """By relationship, never the raw nickname: a JSON error is a string
+    any client may one day render (security review of #952, I1)."""
     c, _, _, mine, mom = _with_mom(cfg, svc, monkeypatch)
     r = c.delete(f"/api/agents/{mom['agent_id']}")
     assert r.status_code == 409
     err = r.get_json()["error"]
-    assert "This is your assistant" not in err
-    assert f"the assistant for {NICK}" in err
+    assert err == ("This is the assistant for your parent, so it can't be "
+                   "removed.")
+    assert NICK not in r.get_data(as_text=True)
     r = c.delete(f"/api/agents/{mine}")
     assert r.status_code == 409
     assert r.get_json()["error"].startswith("This is your assistant")

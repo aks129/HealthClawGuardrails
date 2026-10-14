@@ -62,10 +62,17 @@ def under_banner(text: str, frame: str = SAMPLE_FRAME) -> str:
     without the worker's leading copy of `frame` (sample_frame), so the
     line shows once per view. Only that exact copy on its own line, and
     never down to nothing. Called only where the banner is rendered on the
-    page."""
-    lead = frame + "\n\n"
-    rest = text[len(lead):] if text.startswith(lead) else ""
-    return rest if rest.strip() else text
+    page.
+
+    The holder's SAMPLE_FRAME goes by the same rule in every chat: answers
+    stored before sample_frame named the person open with it, and it would
+    show under Mom's banner (QA and security review of #952, L1)."""
+    for line in dict.fromkeys((frame, SAMPLE_FRAME)):
+        lead = line + "\n\n"
+        rest = text[len(lead):] if text.startswith(lead) else ""
+        if rest.strip():
+            return rest
+    return text
 
 
 #: What a real-record assistant answers while its connection's consent is
