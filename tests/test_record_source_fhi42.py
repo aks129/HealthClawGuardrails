@@ -588,7 +588,26 @@ def test_to_fhir_json_never_emits_an_off_list_column_value(app):
                      resource_json=json.dumps(_condition()),
                      resource_id="src-c-1", tenant_id="test-tenant")
     row.__dict__["source"] = "Springfield Clinic"  # past the validator
-    assert _ours(row.to_fhir_json()) == []
+    out = row.to_fhir_json()
+    assert _ours(out) == []
+    # Nor does the carrier redaction re-stamps from: an off-list value never
+    # leaves the model, so no later stamp can be fed it.
+    assert out.record_source is None
+
+
+def test_stamp_refuses_anything_outside_the_set():
+    """The last guard, in front of every stamp: a value outside the set, or
+    not a string, writes nothing, even off a forged carrier.
+
+    MUTATION: let `stamp` take any non-empty value -> red."""
+    from r6.record_source import StoredResource, stamp
+    from r6.redaction import apply_redaction
+
+    for bad in ("Springfield Clinic", "fasten-dr-smith", 1, True, ["fasten"]):
+        assert _ours(stamp({"resourceType": "Condition"}, bad)) == []
+        forged = StoredResource({"resourceType": "Condition", "id": "x"})
+        forged.record_source = bad
+        assert _ours(apply_redaction(forged)) == []
 
 
 def test_redaction_strips_our_system_and_meta_source_from_any_payload():
