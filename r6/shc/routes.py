@@ -268,7 +268,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
         for resource in entries:
             try:
                 result, rid = ingester._ingest_one(
-                    resource, tenant_id, source='health-card')
+                    resource, tenant_id, source='connected-app')
                 if result == 'ok':
                     ingested += 1
                     rt = resource.get('resourceType', '')

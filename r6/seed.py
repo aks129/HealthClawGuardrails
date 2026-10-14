@@ -141,7 +141,8 @@ def _built_in_resources() -> list[dict]:
 # Core seed function (no Flask request context needed)
 # ---------------------------------------------------------------------------
 
-def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None = None) -> int:
+def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None = None,
+                   *, source: str | None = None) -> int:
     """
     Seed a tenant with demo FHIR resources.
 
@@ -152,10 +153,12 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
     Returns:
         Number of resources created
     """
-    # Only the built-in set is ours to call made up. A caller-supplied list
-    # (`/internal/seed` with a bundle) is content somebody else chose, from
-    # no channel we can vouch for, so its rows carry no source (FHI-42).
-    source = 'sample' if resources is None else None
+    # Only content we wrote is ours to call made up. The built-in set always
+    # is. A caller-supplied list is content somebody else chose, so its rows
+    # carry no source (FHI-42) unless a trusted in-process caller (the
+    # `seed-demo-history` CLI) names one. The HTTP route never passes it.
+    if resources is None:
+        source = 'sample'
     if resources is None:
         resources = _built_in_resources()
 

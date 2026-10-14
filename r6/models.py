@@ -13,14 +13,10 @@ from sqlalchemy.orm import validates
 
 from models import db
 from r6.audit_ddl import install_statements
-
-
-# How a record arrived (FHI-42). A closed set of CHANNELS, never a clinic or
-# portal name: those come from upstream text or a connection label, and both
-# can identify a person. Emitted as a code-only meta.tag in our own system;
-# consumers map the code to words from their own table.
-RECORD_SOURCE_SYSTEM = 'https://healthclaw.io/fhir/CodeSystem/record-source'
-RECORD_SOURCES = frozenset({'fasten', 'upload', 'sample', 'health-card'})
+# How a record arrived (FHI-42); the code set and the strip/stamp rules live
+# in r6/record_source.py. Re-exported here for callers that import the model.
+from r6.record_source import (  # noqa: F401
+    RECORD_SOURCE_SYSTEM, RECORD_SOURCES, StoredResource, stamp, strip_all)
 
 
 _AUDIT_OUTCOME_DETAIL_TEXT = {
@@ -139,8 +135,15 @@ class R6Resource(db.Model):
         return value
 
     def to_fhir_json(self):
-        """Return the stored resource with meta envelope."""
-        resource = json.loads(self.resource_json)
+        """Return the stored resource with meta envelope.
+
+        A `StoredResource`: a dict carrying the channel as `record_source`,
+        so redaction can stamp it again after its own strip (see
+        r6/record_source.py)."""
+        resource = StoredResource(json.loads(self.resource_json))
+        # Nested resources (contained[], a contained Bundle's entries) keep
+        # their own meta, so strip our system and meta.source at every depth.
+        strip_all(resource)
         resource['id'] = self.id
         # Replaced wholesale, so nothing an upstream stamped into meta
         # (meta.source, its tags and their displays, meta.security) surfaces.
@@ -148,10 +151,11 @@ class R6Resource(db.Model):
             'versionId': str(self.version_id),
             'lastUpdated': self.last_updated.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         }
-        if self.source is not None:
-            # Code only: no display. The code names a channel, not a place.
-            resource['meta']['tag'] = [
-                {'system': RECORD_SOURCE_SYSTEM, 'code': self.source}]
+        # Code only, no display, and only for a code in the set: the column
+        # is not trusted on read, whatever wrote it.
+        if self.source in RECORD_SOURCES:
+            resource.record_source = self.source
+            stamp(resource, self.source)
         return resource
 
     def update_resource(self, new_json):

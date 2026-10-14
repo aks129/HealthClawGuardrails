@@ -4,7 +4,7 @@ Revision ID: 0011_record_source
 Revises: 0010_fasten_tenant_revocation
 
 FHI-42: one of a closed set of channel codes (fasten, upload, sample,
-health-card), set by the ingest path and emitted as a code-only meta.tag.
+connected-app), set by the ingest path and emitted as a code-only meta.tag.
 Nullable with no backfill: existing rows emit no tag, because inferring a
 channel for them would be a guess. The code set is enforced by the model,
 not by a database constraint, so adding a channel needs no migration.

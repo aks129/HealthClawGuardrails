@@ -88,7 +88,7 @@ def _row(tenant, rtype, rid):
 
 def test_the_code_set_is_closed_and_names_channels_only():
     assert RECORD_SOURCES == frozenset(
-        {"fasten", "upload", "sample", "health-card"})
+        {"fasten", "upload", "sample", "connected-app"})
     assert RECORD_SOURCE_SYSTEM == (
         "https://healthclaw.io/fhir/CodeSystem/record-source")
 
@@ -163,13 +163,16 @@ def test_a_direct_upload_is_tagged_upload(client):
     assert _row("test-tenant", "Condition", "src-c-1").source == "upload"
 
 
-def test_a_health_card_import_is_tagged_health_card(app):
+def test_a_connected_app_import_is_tagged_connected_app(app):
+    """`/shc/ingest` is the SmartHealthConnect bridge (Flexpa, Health
+    Skillz, SMART-on-FHIR pulls), not a signed SMART Health Card."""
     from r6.shc import routes as shc
 
     counts = shc._ingest_bundle(app, [_condition()], "test-tenant",
                                 "flexpa", "job-fhi42")
     assert counts["ingested"] == 1
-    assert _row("test-tenant", "Condition", "src-c-1").source == "health-card"
+    assert _row("test-tenant", "Condition",
+                "src-c-1").source == "connected-app"
 
 
 def test_a_fasten_import_is_tagged_fasten(app, caplog):
@@ -231,6 +234,19 @@ def test_a_seed_bundle_over_http_is_untagged(client, monkeypatch,
     assert _row("test-tenant", "Condition", "seed-c-2").source is None
     got = client.get("/r6/fhir/Condition/seed-c-2", headers=tenant_headers)
     assert "tag" not in got.get_json()["meta"]
+
+
+def test_the_demo_history_cli_tags_its_rows_sample(app):
+    """`flask seed-demo-history` loads our own synthetic BP history in
+    process, a trusted code path, so it says `sample` explicitly.
+
+    MUTATION: drop `source='sample'` from the CLI call -> red."""
+    result = app.test_cli_runner().invoke(
+        args=["seed-demo-history", "--tenant-id", "test-tenant"])
+    assert result.exit_code == 0, result.output
+    db.session.expire_all()
+    rows = R6Resource.query.filter_by(tenant_id="test-tenant").all()
+    assert rows and {r.source for r in rows} == {"sample"}
 
 
 def test_context_builder_rows_stay_untagged(client, auth_headers):
@@ -446,9 +462,9 @@ def test_the_tag_is_code_only(app):
     row = R6Resource(resource_type="Condition",
                      resource_json=json.dumps(_condition()),
                      resource_id="src-c-1", tenant_id="test-tenant",
-                     source="health-card")
+                     source="connected-app")
     assert row.to_fhir_json()["meta"]["tag"] == [
-        {"system": RECORD_SOURCE_SYSTEM, "code": "health-card"}]
+        {"system": RECORD_SOURCE_SYSTEM, "code": "connected-app"}]
 
 
 # --- redaction ----------------------------------------------------------------
@@ -503,3 +519,121 @@ def test_validate_accepts_a_resource_carrying_our_tag(client,
                     data=json.dumps(got.get_json()),
                     content_type="application/json", headers=tenant_headers)
     assert r.status_code == 200, r.get_data(as_text=True)
+
+
+# --- only our own stamping step emits the record-source system (#956 F1-F3) ---
+
+def _ours(obj):
+    """Every tag in our system, at any depth."""
+    found = []
+    if isinstance(obj, list):
+        for item in obj:
+            found += _ours(item)
+    elif isinstance(obj, dict):
+        if obj.get("system") == RECORD_SOURCE_SYSTEM:
+            found.append(obj)
+        for value in obj.values():
+            found += _ours(value)
+    return found
+
+
+def _nested_hostile():
+    """A resource whose own meta, a contained resource and a contained
+    Bundle's entry all claim our system and carry a meta.source URI."""
+    hostile_meta = {"source": _CANARY_URI,
+                    "tag": [{"system": RECORD_SOURCE_SYSTEM,
+                             "code": "fasten-dr-smith"},
+                            {"system": "http://upstream.example/t",
+                             "code": "keep-me"}]}
+    return {
+        "resourceType": "Condition", "id": "src-c-1",
+        "subject": {"reference": "Patient/src-p-1"},
+        "meta": hostile_meta,
+        "contained": [
+            {"resourceType": "Observation", "id": "o1", "status": "final",
+             "meta": json.loads(json.dumps(hostile_meta))},
+            {"resourceType": "Bundle", "id": "b1", "type": "collection",
+             "entry": [{"resource": {
+                 "resourceType": "Observation", "id": "o2",
+                 "status": "final",
+                 "meta": json.loads(json.dumps(hostile_meta))}}]},
+        ],
+    }
+
+
+def test_to_fhir_json_strips_our_system_and_meta_source_at_every_depth(app):
+    """Local exits that never redact (exports, labs, care gaps) still get
+    exactly one record-source tag: ours, from the column.
+
+    MUTATION: drop the nested strip in `to_fhir_json` -> red."""
+    row = R6Resource(resource_type="Condition",
+                     resource_json=json.dumps(_nested_hostile()),
+                     resource_id="src-c-1", tenant_id="test-tenant",
+                     source="upload")
+    out = row.to_fhir_json()
+    assert _ours(out) == [_tag("upload")]
+    assert out["meta"]["tag"] == [_tag("upload")]
+    text = json.dumps(out)
+    assert _CANARY_URI not in text and "fasten-dr-smith" not in text
+    # Only our system is stripped: another system's nested tag stays.
+    assert "keep-me" in text
+
+
+def test_to_fhir_json_never_emits_an_off_list_column_value(app):
+    """The read side does not trust the column: a value outside the set,
+    however it got there, emits no tag.
+
+    MUTATION: stamp any non-NULL column value -> red."""
+    row = R6Resource(resource_type="Condition",
+                     resource_json=json.dumps(_condition()),
+                     resource_id="src-c-1", tenant_id="test-tenant")
+    row.__dict__["source"] = "Springfield Clinic"  # past the validator
+    assert _ours(row.to_fhir_json()) == []
+
+
+def test_redaction_strips_our_system_and_meta_source_from_any_payload():
+    """Upstream data reaches the agent only through redaction, so redaction
+    removes every record-source tag and every meta.source, at every depth,
+    top level included. A plain dict is never re-stamped.
+
+    MUTATION: drop the walker's tag strip, or its meta.source pop -> red."""
+    from r6.redaction import apply_patient_controlled_redaction, apply_redaction
+
+    upstream = _nested_hostile()
+    upstream["meta"]["tag"].append(_tag("fasten"))  # a valid-looking claim
+    for out in (apply_redaction(upstream),
+                apply_patient_controlled_redaction(upstream, "src-p-1")):
+        assert _ours(out) == []
+        text = json.dumps(out)
+        assert _CANARY_URI not in text and "fasten-dr-smith" not in text
+
+
+def test_the_stamp_survives_redaction_only_from_the_store(app):
+    """Redaction re-stamps from the row the store read, never from JSON: a
+    copy of a stored resource, made as a plain dict, carries no trust.
+
+    MUTATION: re-stamp from the top-level JSON tag -> red.
+    MUTATION: drop the re-stamp in either redaction function -> red."""
+    from r6.redaction import apply_patient_controlled_redaction, apply_redaction
+
+    row = R6Resource(resource_type="Condition",
+                     resource_json=json.dumps(_nested_hostile()),
+                     resource_id="src-c-1", tenant_id="test-tenant",
+                     source="fasten")
+    assert _ours(apply_redaction(row.to_fhir_json())) == [_tag("fasten")]
+    shared = apply_patient_controlled_redaction(row.to_fhir_json(), "p")
+    assert _ours(shared) == [_tag("fasten")]
+
+    for copy in (dict(row.to_fhir_json()),
+                 json.loads(json.dumps(row.to_fhir_json()))):
+        assert _ours(apply_redaction(copy)) == []
+        assert _ours(apply_patient_controlled_redaction(copy, "p")) == []
+
+
+def test_the_intake_share_keeps_the_stamp(client, auth_headers):
+    _upload(client, [_condition()])
+    share = client.post("/r6/fhir/$share-bundle",
+                        json={"resource_types": ["Condition"]},
+                        headers=auth_headers)
+    assert share.status_code == 200, share.get_data(as_text=True)
+    assert _ours(share.get_json()) == [_tag("upload")]
