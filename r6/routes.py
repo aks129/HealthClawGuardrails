@@ -41,7 +41,8 @@ from r6.resource_ids import refuse_malformed_resource_id
 from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 _SUPPORTED_SEARCH_PARAMS, classify_search_args,
                                 error_fidelity_outcome, lenient_search_warnings,
-                                search_self_link, unsupported_input_text)
+                                search_self_link, unsupported_input_text,
+                                upstream_entry)
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -771,10 +772,8 @@ def search_resources(resource_type):
                 redacted = apply_redaction(resource_data)
                 redacted = add_disclaimer(redacted, resource_type)
             redacted['_source'] = 'upstream'
-            new_entry = {
-                'fullUrl': entry.get('fullUrl', ''),
-                'resource': redacted,
-            }
+            # Our own fullUrl or none, never the upstream's (#954).
+            new_entry = upstream_entry(request.host_url, redacted)
             # Preserve entry.search so mode="outcome" warnings survive — but
             # allowlist it to scalar mode/score: `search` can carry
             # extensions, and even under mode/score keys a hostile upstream

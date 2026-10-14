@@ -385,3 +385,72 @@ class TestUpstreamLinksNeverPassThrough:
                    '?patient=Patient%2F1&_count=10',
         }]
         assert 'fhir.example' not in resp.get_data(as_text=True)
+
+
+UP_HOST = 'upstream-954.example'
+UP_BASE = f'https://{UP_HOST}/fhir'
+
+
+class TestNoUpstreamHostInAnyResponse:
+    """Every entry's fullUrl is ours, set or unset FHIR_LOCAL_BASE_URL (#954).
+
+    The proxy rewrites upstream URLs only when FHIR_LOCAL_BASE_URL is set,
+    so with it unset an upstream fullUrl named the upstream host. The route
+    now builds each entry's fullUrl itself, like the self link.
+
+    MUTATION: pass the upstream entry.fullUrl through in the route -> red.
+    """
+
+    def _proxy(self, monkeypatch, local_base):
+        monkeypatch.setenv('FHIR_UPSTREAM_URL', UP_BASE)
+        if local_base is None:
+            monkeypatch.delenv('FHIR_LOCAL_BASE_URL', raising=False)
+        else:
+            monkeypatch.setenv('FHIR_LOCAL_BASE_URL', local_base)
+        proxy = fhir_proxy.get_proxy()
+        assert proxy is not None
+        assert proxy.local_base_url == (local_base or '').rstrip('/')
+        condition = {'resourceType': 'Condition', 'id': 'c-954',
+                     'subject': {'reference': 'Patient/p-954'}}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith('/Condition/c-954'):
+                return httpx.Response(200, json=condition)
+            return httpx.Response(200, json={
+                'resourceType': 'Bundle', 'type': 'searchset', 'total': 3,
+                'link': [{'relation': 'next',
+                          'url': f'{UP_BASE}/Condition?_getpages=x'}],
+                'entry': [
+                    {'fullUrl': f'{UP_BASE}/Condition/c-954',
+                     'resource': condition},
+                    {'fullUrl': f'{UP_BASE}/Condition/odd',
+                     'resource': {'resourceType': 'Condition',
+                                  'id': 'not/an/id'}},
+                    {'fullUrl': f'{UP_BASE}/OperationOutcome/w',
+                     'resource': {'resourceType': 'OperationOutcome',
+                                  'issue': []},
+                     'search': {'mode': 'outcome'}},
+                ]})
+
+        proxy._client = httpx.Client(base_url=UP_BASE,
+                                     transport=httpx.MockTransport(handler))
+        return proxy
+
+    @pytest.mark.parametrize('local_base', [None, 'http://localhost/r6/fhir'])
+    def test_read_and_search_never_name_the_upstream_host(
+            self, client, tenant_headers, monkeypatch, local_base):
+        proxy = self._proxy(monkeypatch, local_base)
+        with patch('r6.routes.get_proxy_for_request', return_value=proxy):
+            read = client.get('/r6/fhir/Condition/c-954',
+                              headers=tenant_headers)
+            search = client.get('/r6/fhir/Condition?patient=Patient/p-954',
+                                headers=tenant_headers)
+        assert read.status_code == 200 and search.status_code == 200
+        for resp in (read, search):
+            assert UP_HOST not in resp.get_data(as_text=True)
+        entries = search.get_json()['entry']
+        assert entries[0]['fullUrl'] == (
+            'http://localhost/r6/fhir/Condition/c-954')
+        # An id that is not an id, and an outcome entry, get no fullUrl.
+        assert 'fullUrl' not in entries[1]
+        assert 'fullUrl' not in entries[2]

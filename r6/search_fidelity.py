@@ -14,6 +14,7 @@ quoted back in a response or an audit row; everything else gets a generic
 corrective message (docs/agent-task-guide.md §2).
 """
 
+import re
 from urllib.parse import urlencode
 
 from r6.models import AuditEventRecord
@@ -57,6 +58,27 @@ def search_self_link(host_url, resource_type, values):
              for spec in _SEARCH_PARAMETER_SPECS if values.get(spec['name'])]
     link = f'{host_url.rstrip("/")}/r6/fhir/{resource_type}'
     return f'{link}?{urlencode(pairs)}' if pairs else link
+
+
+_ENTRY_TYPE = re.compile(r'^[A-Z][A-Za-z]{1,63}$')
+_ENTRY_ID = re.compile(r'^[A-Za-z0-9\-.]{1,64}$')
+
+
+def upstream_entry(host_url, resource):
+    """A proxied search entry whose fullUrl is ours, never the upstream's.
+
+    The proxy rewrites upstream URLs only when FHIR_LOCAL_BASE_URL is set,
+    so an upstream fullUrl could name the upstream host (#954). It is built
+    here from the resource's own type and id, like search_self_link, and
+    left out when either is not plain, or for an outcome entry.
+    """
+    entry = {'resource': resource}
+    rtype, rid = resource.get('resourceType'), resource.get('id')
+    if (rtype != 'OperationOutcome'
+            and isinstance(rtype, str) and _ENTRY_TYPE.match(rtype)
+            and isinstance(rid, str) and _ENTRY_ID.match(rid)):
+        entry['fullUrl'] = f'{host_url.rstrip("/")}/r6/fhir/{rtype}/{rid}'
+    return entry
 
 # Query keys are untrusted input too. Only these locally defined semantic
 # aliases may be named in responses or audit evidence; every other unsupported

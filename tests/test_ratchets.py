@@ -525,8 +525,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: (security re-check of #913, R3-R5). 3739 -> 3733 (#922 B5): $stats takes
 #: its unit in the loop that filters by code; the second loop is gone.
 #: 3733 -> 3728 (#954): both search self links come from search_self_link
-#: in r6/search_fidelity.py, not two copies of the builder here.
-_GOD_MODULE_LINES = 3728
+#: in r6/search_fidelity.py, not two copies of the builder here. 3728 ->
+#: 3727 (#954): a proxied entry's fullUrl comes from upstream_entry there.
+_GOD_MODULE_LINES = 3727
 
 
 def test_the_god_module_only_shrinks():
