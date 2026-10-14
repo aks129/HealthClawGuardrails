@@ -244,10 +244,15 @@ def test_a_condition_whose_code_redaction_dropped_reads_unnamed_not_unknown():
     assert field.label == engine.UNLABELLED
 
 
-def test_a_condition_with_no_code_element_still_reads_unknown():
+@pytest.mark.parametrize("code", [None, {"coding": [{}]}, {"coding": []}])
+def test_a_condition_with_nothing_coded_still_reads_unknown(code):
+    """No code element, or codings with neither a code nor a system: there
+    is nothing recorded to name."""
     from r6.brief import engine
     cond = {"resourceType": "Condition", "id": "c",
             "clinicalStatus": {"coding": [{"code": "active"}]}}
+    if code is not None:
+        cond["code"] = code
     [field] = engine.build_problems([apply_redaction(cond)])
     assert field.label == engine.UNKNOWN
 
