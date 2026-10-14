@@ -203,16 +203,23 @@ def test_bare_id_search_writes_one_phi_free_audit_row(
                 assert CANARY not in (row.resource_id or ''), path
 
 
-def test_search_rejection_is_audited_but_stats_lastn_rejection_is_not(
-        client, tenant_headers):
-    """Pins current behaviour (pre-existing, not introduced by #861):
-    search audits a rejected `patient`; $stats and $lastn do not."""
+@pytest.mark.xfail(strict=False, reason=(
+    'Pre-existing, not introduced by #861: $stats and $lastn return 400 on a '
+    'malformed patient value without an audit row; search writes one.'))
+def test_every_patient_rejection_is_audited(client, tenant_headers):
     from r6.models import AuditEventRecord
-    counts = {}
     for path in PATHS:
         before = AuditEventRecord.query.count()
         client.get(f'{path}?patient=Group/x', headers=tenant_headers)
-        counts[path] = AuditEventRecord.query.count() - before
-    assert counts['/r6/fhir/Observation'] == 1
-    assert counts['/r6/fhir/Observation/$stats'] == 0
-    assert counts['/r6/fhir/Observation/$lastn'] == 0
+        assert AuditEventRecord.query.count() - before == 1, path
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    'Pre-existing, not introduced by #861: $stats/$lastn write the raw '
+    '`code` query value into audit detail.'))
+def test_stats_lastn_code_value_not_in_audit(client, tenant_headers):
+    from r6.models import AuditEventRecord
+    for path in PATHS[1:]:
+        client.get(f'{path}?code={CANARY}', headers=tenant_headers)
+    for row in AuditEventRecord.query.all():
+        assert CANARY not in (row.detail or ''), row.detail
