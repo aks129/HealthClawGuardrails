@@ -1425,6 +1425,96 @@ def _patient_identity(original):
     return out
 
 
+#: OMB race and ethnicity categories (CDC Race & Ethnicity code system) and
+#: the two null flavors US Core allows in their place, with OUR label for
+#: each. The label becomes the extension's required `text`; upstream
+#: `text` and `display` are never used (owner ruling 2026-10-14).
+_CDC_RACE_ETHNICITY = 'urn:oid:2.16.840.1.113883.6.238'
+_NULL_FLAVOR = 'http://terminology.hl7.org/CodeSystem/v3-NullFlavor'
+_OMB_LABELS = {
+    'race': {
+        (_CDC_RACE_ETHNICITY, '1002-5'): 'American Indian or Alaska Native',
+        (_CDC_RACE_ETHNICITY, '2028-9'): 'Asian',
+        (_CDC_RACE_ETHNICITY, '2054-5'): 'Black or African American',
+        (_CDC_RACE_ETHNICITY, '2076-8'):
+            'Native Hawaiian or Other Pacific Islander',
+        (_CDC_RACE_ETHNICITY, '2106-3'): 'White',
+        (_NULL_FLAVOR, 'UNK'): 'Unknown',
+        (_NULL_FLAVOR, 'ASKU'): 'Asked but no answer',
+    },
+    'ethnicity': {
+        (_CDC_RACE_ETHNICITY, '2135-2'): 'Hispanic or Latino',
+        (_CDC_RACE_ETHNICITY, '2186-5'): 'Not Hispanic or Latino',
+        (_NULL_FLAVOR, 'UNK'): 'Unknown',
+        (_NULL_FLAVOR, 'ASKU'): 'Asked but no answer',
+    },
+}
+_US_CORE_SD = 'http://hl7.org/fhir/us/core/StructureDefinition/us-core-'
+
+
+def _omb_extension(ext, kind):
+    """A us-core-race/-ethnicity extension rebuilt from its ombCategory
+    codings alone, each in _OMB_LABELS[kind], with `text` set from OUR
+    labels. `detailed` codes and anything unmapped are dropped; with no
+    mapped category left the extension is invalid (text is 1..1), so None.
+    """
+    labels = _OMB_LABELS[kind]
+    kept = []
+    for sub in ext.get('extension') or []:
+        coding = sub.get('valueCoding') if isinstance(sub, dict) else None
+        if (isinstance(sub, dict) and sub.get('url') == 'ombCategory'
+                and isinstance(coding, dict)):
+            key = (coding.get('system'), coding.get('code'))
+            if key in labels and key not in [k for k, _ in kept]:
+                kept.append((key, labels[key]))
+    if not kept:
+        return None
+    subs = [{'url': 'ombCategory', 'valueCoding': {
+        'system': system, 'code': code, 'display': label}}
+        for (system, code), label in kept]
+    subs.append({'url': 'text',
+                 'valueString': ', '.join(label for _, label in kept)})
+    return {'url': _US_CORE_SD + kind, 'extension': subs}
+
+
+def _patient_extensions(original):
+    """Patient.extension for a check-in: race and ethnicity only, rebuilt
+    by _omb_extension. Every other upstream extension is dropped."""
+    out = []
+    for ext in original.get('extension') or []:
+        if not isinstance(ext, dict):
+            continue
+        for kind in ('race', 'ethnicity'):
+            if ext.get('url') == _US_CORE_SD + kind:
+                rebuilt = _omb_extension(ext, kind)
+                if rebuilt:
+                    out.append(rebuilt)
+    return out
+
+
+def _patient_identifiers(original):
+    """Patient.identifier WITH values, for a check-in only (owner ruling
+    2026-10-14: the patient consented to this item). SSN-class identifiers
+    are removed by system and by any `SS` type coding. Each kept identifier
+    carries system, value, use and a code-only type; an identifier without
+    a string value is dropped rather than sent as a stub."""
+    out = []
+    for ident in original.get('identifier') or []:
+        if not isinstance(ident, dict) or _is_ssn_identifier(ident):
+            continue
+        value = ident.get('value')
+        if not (isinstance(value, str) and value):
+            continue
+        kept = {k: ident[k] for k in ('use', 'system')
+                if isinstance(ident.get(k), str)}
+        coded = _codes_only(ident.get('type'))
+        if coded:
+            kept['type'] = coded
+        kept['value'] = value
+        out.append(kept)
+    return out
+
+
 def _checkin_organization(original, res):
     """A payor Organization: its stored `name`, the NAIC identifier, and
     nothing else a front desk does not need (no address, telecom, contact)."""
@@ -1465,9 +1555,16 @@ def _checkin_profile(resource, *, patient_id):
     res = _redaction_mod.apply_redaction(resource)
     rtype = resource.get('resourceType')
     if rtype == 'Patient':
-        for key in ('name', 'birthDate', 'address', 'telecom'):
+        for key in ('name', 'birthDate', 'address', 'telecom', 'identifier',
+                    'extension'):
             res.pop(key, None)
         res.update(_patient_identity(resource))
+        idents = _patient_identifiers(resource)
+        if idents:
+            res['identifier'] = idents
+        exts = _patient_extensions(resource)
+        if exts:
+            res['extension'] = exts
     for key in ('note', 'text', 'conclusion', 'contained'):
         res.pop(key, None)
     idents = res.get('identifier')

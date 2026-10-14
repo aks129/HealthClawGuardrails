@@ -233,3 +233,178 @@ def test_one_export_writes_one_fixed_word_audit_row(app, client):
         'careagents-checkin',
         'share-bundle export (profile=checkin): 4 resources across 4 '
         'type(s); types=Condition,Coverage,Patient')]
+
+
+# --- QA #963: what the wallet needs ---------------------------------------
+
+def _refs(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == 'reference' and isinstance(value, str):
+                yield value
+            else:
+                yield from _refs(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _refs(value)
+
+
+def test_every_entry_has_a_full_url_on_our_host(app, client):
+    """The wallet (careagents/static/checkin_answer.js prepareRecords, #960)
+    keeps only entries with a fullUrl; without one all six items read
+    "unavailable" (QA #963).
+
+    MUTATION: append entries without fullUrl again -> red."""
+    f.seed(app, f.patient(), f.condition(), f.coverage(), f.organization())
+    types = ['Patient', 'Condition', 'Coverage']
+    resp = f.export(client, f.token(client, types), types)
+    entries = resp.get_json()['entry']
+    assert len(entries) == 4
+    for entry in entries:
+        res = entry['resource']
+        assert entry['fullUrl'] == (
+            f"http://localhost/r6/fhir/{res['resourceType']}/{res['id']}")
+
+
+def test_references_between_entries_resolve_as_the_wallet_resolves_them(
+        app, client):
+    """prepareRecords maps a literal `Type/id` reference to the entry whose
+    fullUrl names it. Coverage.payor -> Organization, beneficiary and
+    subject -> Patient must all land on an entry."""
+    f.seed(app, f.patient(), f.condition(), f.coverage(), f.organization())
+    types = ['Patient', 'Condition', 'Coverage']
+    resp = f.export(client, f.token(client, types), types)
+    entries = resp.get_json()['entry']
+    url_of = {f"{e['resource']['resourceType']}/{e['resource']['id']}":
+              e['fullUrl'] for e in entries}
+    refs = [r for e in entries for r in _refs(e['resource'])]
+    assert 'Organization/ci-org-1' in refs and f'Patient/{f.PT}' in refs
+    for ref in refs:
+        assert ref in url_of, f'{ref} resolves to no entry'
+
+
+@pytest.mark.parametrize('bad_id', ['..', '.', 'ci cond', 'ci/cond'])
+def test_an_id_that_could_walk_the_url_is_not_sent(app, client, bad_id):
+    """MUTATION: drop the `rid in ('.', '..')` check in full_url -> red for
+    the dot ids."""
+    f.seed(app, f.patient(), f.condition(bad_id))
+    resp = f.export(client, f.token(client, ['Condition']), ['Condition'])
+    assert resp.status_code == 200
+    assert f.resources(resp, 'Condition') == []
+
+
+# --- QA #963: refusals ----------------------------------------------------
+
+def _outcomes(app):
+    from r6.models import AuditEventRecord
+    with app.app_context():
+        return [(a.outcome, a.detail) for a in AuditEventRecord.query.filter_by(
+            tenant_id=f.TENANT, resource_id='share-bundle').all()]
+
+
+def test_a_400_is_audited_as_a_failure(app, client):
+    """MUTATION: outcome='failure' -> 'success' on the 400 path -> red."""
+    f.seed(app, f.patient())
+    f.export(client, f.token(client, ['Patient']), ['Patient'],
+             patient_id=None)
+    (outcome, _), = _outcomes(app)
+    assert outcome == 'failure'
+
+
+def test_a_413_is_audited_as_a_failure_and_does_not_spend_the_token(
+        app, client, monkeypatch):
+    """MUTATION: drop outcome='failure' on the 413 path -> red.
+    MUTATION: consume the nonce before the size check -> red (the retry
+    answers 401)."""
+    f.seed(app, f.patient(), f.condition())
+    tok = f.token(client, ['Patient'])
+    monkeypatch.setattr(checkin, 'MAX_BUNDLE_BYTES', 50)
+    assert f.export(client, tok, ['Patient']).status_code == 413
+    (outcome, detail), = _outcomes(app)
+    assert outcome == 'failure' and 'over the size limit' in detail
+    monkeypatch.setattr(checkin, 'MAX_BUNDLE_BYTES', 400_000)
+    assert f.export(client, tok, ['Patient']).status_code == 200
+    assert f.export(client, tok, ['Patient']).status_code == 401
+
+
+# --- owner ruling 2026-10-14: a US Core Patient ---------------------------
+
+RACE = 'http://hl7.org/fhir/us/core/StructureDefinition/us-core-race'
+ETHNICITY = 'http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity'
+CDC = 'urn:oid:2.16.840.1.113883.6.238'
+
+
+def _patient_with(app, client, **fields):
+    pt = f.patient()
+    pt.update(fields)
+    f.seed(app, pt)
+    resp = f.export(client, f.token(client, ['Patient']), ['Patient'])
+    out, = f.resources(resp, 'Patient')
+    return out, resp.get_data(as_text=True)
+
+
+def test_patient_identifier_values_go_out_but_never_an_ssn(app, client):
+    """MUTATION: stop restoring identifier values -> red.
+    MUTATION: drop the SSN check in _patient_identifiers -> red."""
+    out, text = _patient_with(app, client, identifier=[
+        {'system': 'https://ehr.example/mrn', 'value': 'MRN-1',
+         'type': {'coding': [{'system': f.V2_0203, 'code': 'MR',
+                              'display': f.CANARY_DISPLAY}],
+                  'text': f.CANARY_DISPLAY},
+         'assigner': {'display': f.CANARY_DISPLAY}},
+        {'system': 'http://hl7.org/fhir/sid/us-ssn', 'value': '999001111'},
+        {'system': 'https://ehr.example/x', 'value': f.CANARY_SSN,
+         'type': {'coding': [{'system': 'http://hl7.org/fhir/v2/0203',
+                              'code': 'SS'}]}},
+        {'system': 'https://ehr.example/stub'},
+    ])
+    assert out['identifier'] == [{
+        'system': 'https://ehr.example/mrn',
+        'type': {'coding': [{'system': f.V2_0203, 'code': 'MR'}]},
+        'value': 'MRN-1'}]
+    for leaked in ('999001111', f.CANARY_SSN, f.CANARY_DISPLAY):
+        assert leaked not in text
+
+
+def test_race_and_ethnicity_carry_our_labels_not_upstream_text(app, client):
+    """MUTATION: copy the upstream `text` sub-extension -> red."""
+    out, text = _patient_with(app, client, extension=[
+        {'url': RACE, 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': CDC, 'code': '2106-3', 'display': f.CANARY_DISPLAY}},
+            {'url': 'detailed', 'valueCoding': {
+                'system': CDC, 'code': '2108-9'}},
+            {'url': 'text', 'valueString': 'CANARY-race-text'}]},
+        {'url': ETHNICITY, 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': CDC, 'code': '2186-5'}},
+            {'url': 'text', 'valueString': 'CANARY-ethnicity-text'}]},
+        {'url': 'https://ehr.example/birthplace',
+         'valueString': 'CANARY-birthplace'},
+    ])
+    assert out['extension'] == [
+        {'url': RACE, 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': CDC, 'code': '2106-3', 'display': 'White'}},
+            {'url': 'text', 'valueString': 'White'}]},
+        {'url': ETHNICITY, 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': CDC, 'code': '2186-5',
+                'display': 'Not Hispanic or Latino'}},
+            {'url': 'text', 'valueString': 'Not Hispanic or Latino'}]},
+    ]
+    assert 'CANARY' not in text
+
+
+def test_an_unmapped_category_takes_the_whole_extension_out(app, client):
+    """`text` is 1..1, and we never borrow it from upstream: with no code we
+    can label, the extension goes rather than leave invalid.
+
+    MUTATION: emit the extension with no `text` when nothing maps -> red."""
+    out, text = _patient_with(app, client, extension=[
+        {'url': RACE, 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': CDC, 'code': '9999-9'}},
+            {'url': 'text', 'valueString': 'CANARY-race-text'}]}])
+    assert 'extension' not in out
+    assert 'CANARY' not in text
