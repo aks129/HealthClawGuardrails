@@ -14,6 +14,8 @@ quoted back in a response or an audit row; everything else gets a generic
 corrective message (docs/agent-task-guide.md §2).
 """
 
+from urllib.parse import urlencode
+
 from r6.models import AuditEventRecord
 
 # Local-search contract: discovery, validation, corrective messages, and self
@@ -42,6 +44,19 @@ _SUPPORTED_SEARCH_PARAMS = frozenset(
     spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
 _SUPPORTED_PARAMS_TEXT = ', '.join(
     spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
+
+
+def search_self_link(host_url, resource_type, values):
+    """A search Bundle's `self` link, on both paths.
+
+    Our host, then the supported parameters present in `values`, in
+    registry order. An unknown key never appears, and neither does a link
+    the upstream server sent (#954).
+    """
+    pairs = [(spec['name'], values.get(spec['name']))
+             for spec in _SEARCH_PARAMETER_SPECS if values.get(spec['name'])]
+    link = f'{host_url.rstrip("/")}/r6/fhir/{resource_type}'
+    return f'{link}?{urlencode(pairs)}' if pairs else link
 
 # Query keys are untrusted input too. Only these locally defined semantic
 # aliases may be named in responses or audit evidence; every other unsupported
