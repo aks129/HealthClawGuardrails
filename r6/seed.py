@@ -203,7 +203,8 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
             try:
                 result, _ = _ingest_one(
                     json.loads(resource_str), tenant_id, agent_id='seed',
-                    detail='seeded via auto-seed on first boot')
+                    detail='seeded via auto-seed on first boot',
+                    source='sample')
             except Exception:
                 # The revive and its audit row share the transaction, so
                 # nothing landed; abort loudly as an audit failure does below.
@@ -227,6 +228,7 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
                 # the resource by it (e.g. GET /Questionnaire/healthclaw-intake).
                 resource_id=rid,
                 tenant_id=tenant_id,
+                source='sample',
             )
             db.session.add(r)
             db.session.flush()

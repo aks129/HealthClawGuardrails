@@ -9,8 +9,18 @@ import uuid
 import hashlib
 import json
 from datetime import datetime, timezone
+from sqlalchemy.orm import validates
+
 from models import db
 from r6.audit_ddl import install_statements
+
+
+# How a record arrived (FHI-42). A closed set of CHANNELS, never a clinic or
+# portal name: those come from upstream text or a connection label, and both
+# can identify a person. Emitted as a code-only meta.tag in our own system;
+# consumers map the code to words from their own table.
+RECORD_SOURCE_SYSTEM = 'https://healthclaw.io/fhir/CodeSystem/record-source'
+RECORD_SOURCES = frozenset({'fasten', 'upload', 'sample', 'health-card'})
 
 
 _AUDIT_OUTCOME_DETAIL_TEXT = {
@@ -48,9 +58,6 @@ class R6Resource(db.Model):
     # (tenant_id, resource_type, id) — matching
     # scripts/migrate_resource_identity.py for live Postgres databases.
     #
-    # W2 (planned, NOT this migration): a `source` column + ingest
-    # Provenance will record which upstream server each row came from, so
-    # the same logical resource pulled via two connections can be told apart.
     tenant_id = db.Column(db.String(64), primary_key=True, index=True)
     resource_type = db.Column(db.String(64), primary_key=True, index=True)
     # Real EHR resource ids (Epic in particular) routinely exceed the FHIR
@@ -71,6 +78,13 @@ class R6Resource(db.Model):
     curation_state = db.Column(db.String(32), nullable=True, default='raw')
     quality_score = db.Column(db.Float, nullable=True)   # 0.0–1.0
     review_needed = db.Column(db.Boolean, default=False)  # issues found
+
+    # The channel this row last arrived through, one of RECORD_SOURCES, set
+    # only by the ingest path (`_ingest_one(source=...)`) and the sample seed.
+    # NULL for rows written before the column existed (no backfill: that
+    # would be inference) and for engine-authored writes. Never read from the
+    # request or the resource's own `meta`.
+    source = db.Column(db.String(16), nullable=True)
 
     # Supported resource types for the showcase
     # Phase 1: Core FHIR resources (R4+)
@@ -103,7 +117,8 @@ class R6Resource(db.Model):
         'Questionnaire', 'QuestionnaireResponse',
     ]
 
-    def __init__(self, resource_type, resource_json, resource_id=None, tenant_id=None):
+    def __init__(self, resource_type, resource_json, resource_id=None, tenant_id=None,
+                 source=None):
         self.id = resource_id or str(uuid.uuid4())
         self.resource_type = resource_type
         self.resource_json = resource_json
@@ -111,15 +126,31 @@ class R6Resource(db.Model):
         self.tenant_id = tenant_id
         self.version_id = 1
         self.last_updated = datetime.now(timezone.utc)
+        self.source = source
+
+    @validates('source')
+    def _validate_source(self, _key, value):
+        # Refused at write time on every ORM path, not only in `_ingest_one`:
+        # an off-list value is how a clinic name would get in.
+        if value is not None and (not isinstance(value, str)
+                                  or value not in RECORD_SOURCES):
+            raise ValueError('source must be one of RECORD_SOURCES or None')
+        return value
 
     def to_fhir_json(self):
         """Return the stored resource with meta envelope."""
         resource = json.loads(self.resource_json)
         resource['id'] = self.id
+        # Replaced wholesale, so nothing an upstream stamped into meta
+        # (meta.source, its tags and their displays, meta.security) surfaces.
         resource['meta'] = {
             'versionId': str(self.version_id),
             'lastUpdated': self.last_updated.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         }
+        if self.source is not None:
+            # Code only: no display. The code names a channel, not a place.
+            resource['meta']['tag'] = [
+                {'system': RECORD_SOURCE_SYSTEM, 'code': self.source}]
         return resource
 
     def update_resource(self, new_json):

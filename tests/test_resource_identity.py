@@ -35,7 +35,7 @@ def _resource(resource_type: str, resource_id: str, marker: str = 'v1') -> dict:
 
 def _ingest(resource: dict, tenant: str) -> tuple:
     from r6.fasten.ingester import _ingest_one
-    result = _ingest_one(resource, tenant)
+    result = _ingest_one(resource, tenant, source="fasten")
     db.session.commit()
     return result
 

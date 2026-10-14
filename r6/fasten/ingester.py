@@ -27,7 +27,7 @@ import httpx
 from models import db
 from r6.audit import add_audit_event
 from r6.fasten.models import connection_revoked, tenant_closed
-from r6.models import R6Resource
+from r6.models import RECORD_SOURCES, R6Resource
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +300,8 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                             continue
                         try:
                             resource = json.loads(line)
-                            result, rid = _ingest_one(resource, tenant_id)
+                            result, rid = _ingest_one(resource, tenant_id,
+                                                      source='fasten')
                             if result == 'ok':
                                 ingested += 1
                                 rt = resource.get('resourceType', '')
@@ -446,6 +447,7 @@ def _ingest_one(resource: dict, tenant_id: str,
                 agent_id: str = 'fasten-connect',
                 detail: str = 'Ingested via Fasten EHI export',
                 allowed_types: frozenset | None = None,
+                *, source: str,
                 ) -> tuple[str, str | None]:
     """
     Ingest a single FHIR resource into the guardrails store.
@@ -468,7 +470,16 @@ def _ingest_one(resource: dict, tenant_id: str,
     explicit clinical-only set so an unauthenticated-adjacent caller cannot
     author AuditEvent/Permission/Consent/Provenance/Bundle resources even
     though the store technically supports storing them.
+
+    `source` is the channel the record arrived through, one of
+    `r6.models.RECORD_SOURCES` (FHI-42). Keyword-only with no default, so a
+    new caller cannot forget it; each caller passes a literal, never a
+    request field. An off-list value raises ValueError before anything is
+    written. Both the new-row and the upsert branch set it: the latest
+    channel wins, as the content does.
     """
+    if source not in RECORD_SOURCES:
+        raise ValueError('source must be one of RECORD_SOURCES')
     resource_type = resource.get('resourceType', '')
 
     if not resource_type or not R6Resource.is_supported_type(resource_type):
@@ -503,6 +514,7 @@ def _ingest_one(resource: dict, tenant_id: str,
         # soft-deleted: a fresh import of the same (tenant, type, id)
         # revives it rather than colliding with the tombstone.
         existing.update_resource(resource_json)
+        existing.source = source
         # Lifting a tombstone is recorded as such (#558): the audit row
         # below says 'update' with the revive named, never a plain create.
         revived = bool(existing.is_deleted)
@@ -514,6 +526,7 @@ def _ingest_one(resource: dict, tenant_id: str,
             resource_json=resource_json,
             resource_id=resource_id,
             tenant_id=tenant_id,
+            source=source,
         )
         db.session.add(new_res)
 
