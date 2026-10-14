@@ -168,6 +168,7 @@ def _setup_fasten_connection(app):
 # POST /r6/fhir/internal/bind-telegram     |     | x |    | x  |    |      |  x   |  x
 # POST /r6/fhir/demo/agent-loop            |     |   |    |    |    |  x*  |  x   |  x
 # POST /r6/fhir/$share-bundle              |  x  | x |    | x  |    |      |  x   |  x
+# POST /r6/fhir/$share-bundle (checkin)    |  x  | x |    | x  |    |      |  x   |  x
 # POST .../QuestionnaireResponse/$extract  |  x  | x | x  | x  |    |      |  x   |  x
 # POST /r6/actions/propose                 |  x  | x |    |    |    |      |  x   |  x
 # POST /r6/actions/rx-transfer/propose     |  x  | x | x  | x  |    |      |  x   |  x
@@ -345,6 +346,22 @@ MATRIX: tuple = (
         note="Mutates nothing; it EXPORTS identified patient data, so it "
              "carries the write gate. In the matrix because its 401 is one "
              "of the three the plan pins alongside create and update.",
+    ),
+    Row(
+        id="share-bundle-checkin",
+        method="POST", path="/r6/fhir/$share-bundle", endpoint="r6.share_bundle",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400,), step_up_missing_status=401,
+        body={"profile": "checkin", "patient_id": "guard-matrix-pt",
+              "resource_types": ["Patient"]},
+        note="The check-in profile (FHI-53) on the same route. Its gate is "
+             "TENANT_BOUND with aud checkin-export, op from the body's types "
+             "and a consumed nonce, so the body IS parsed before the grant — "
+             "silently, to read the profile and the types. "
+             "parses_body_before_step_up stays False because that flag "
+             "measures an unparseable body: it parses to nothing, falls to "
+             "the intake branch, and gets the same 401 as a well-formed one.",
     ),
     Row(
         id="sdc-extract",

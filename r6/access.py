@@ -33,6 +33,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from models import db
 from r6 import audit as _audit_mod
+from r6 import checkin as _checkin
 from r6 import fhir_proxy as _fhir_proxy_mod
 from r6 import health_compliance as _compliance_mod
 from r6 import redaction as _redaction_mod
@@ -1181,6 +1182,7 @@ class Profile(Enum):
     STANDARD = 'standard'                      # r6/redaction.py:22 + add_disclaimer
     PATIENT_CONTROLLED = 'patient-controlled'  # r6/redaction.py:180
     INTAKE = 'intake'                          # r6/routes.py _intake_strip
+    CHECKIN = 'checkin'                        # _checkin_profile (FHI-53)
 
 
 _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn',
@@ -1218,6 +1220,190 @@ def _intake_profile(resource):
     return res
 
 
+#: A payor reference the check-in keeps: an Organization, by an id the store
+#: could hold. Anything else (a RelatedPerson, a Patient, a URL) is dropped.
+_PAYOR_REF = re.compile(r'Organization/[A-Za-z0-9\-.]{1,255}')
+
+
+def _is_ssn_identifier(ident):
+    """An SSN by system, either spelling, or by v2-0203 type `SS` under any
+    system at all: an upstream that invents its own SSN system still says
+    what it is in the type."""
+    if not isinstance(ident, dict):
+        return False
+    if ident.get('system') in _SSN_SYSTEMS:
+        return True
+    return _has_coding(ident.get('type'), _checkin.V2_0203, ('SS',))
+
+
+def _has_coding(concept, system, codes):
+    """True when CodeableConcept `concept` has a coding of `system` with a
+    code in `codes`. Read off the stored record, so every shape is checked."""
+    if not isinstance(concept, dict):
+        return False
+    codings = concept.get('coding')
+    if not isinstance(codings, list):
+        return False
+    return any(isinstance(c, dict) and c.get('system') == system
+               and c.get('code') in codes for c in codings)
+
+
+def _coding_of(concept, system, codes):
+    """The first matching coding as {system, code}: no display, no text."""
+    for c in concept.get('coding'):
+        if (isinstance(c, dict) and c.get('system') == system
+                and c.get('code') in codes):
+            return {'system': system, 'code': c['code']}
+    return None
+
+
+def _drop_related_person_refs(obj):
+    """Remove every Reference to a RelatedPerson, at any depth, in place.
+
+    A RelatedPerson is somebody else: a check-in names the patient and,
+    for Coverage, the patient's own plan, never a relative or a guarantor."""
+    if isinstance(obj, list):
+        obj[:] = [v for v in obj if not _is_related_person_ref(v)]
+        for v in obj:
+            _drop_related_person_refs(v)
+    elif isinstance(obj, dict):
+        for key in [k for k, v in obj.items() if _is_related_person_ref(v)]:
+            obj.pop(key)
+        for v in obj.values():
+            _drop_related_person_refs(v)
+
+
+def _is_related_person_ref(value):
+    return (isinstance(value, dict)
+            and isinstance(value.get('reference'), str)
+            and 'RelatedPerson/' in value['reference'])
+
+
+def _checkin_coverage(original, res, patient_id):
+    """Coverage under `checkin`: start from the redacted copy and restore,
+    from the stored record and by allow-list only, the member and group
+    numbers and the payor references. The payor's NAME comes from its own
+    Organization record (share_bundle's second lookup), never `display`.
+
+    A Coverage reaches this function only when the token's `op` named
+    Coverage, which is the per-item consent; nothing here re-checks it."""
+    subscriber_id = original.get('subscriberId')
+    if isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64:
+        res['subscriberId'] = subscriber_id
+
+    idents = []
+    for ident in original.get('identifier') or []:
+        if not isinstance(ident, dict) or _is_ssn_identifier(ident):
+            continue
+        if not _has_coding(ident.get('type'), _checkin.V2_0203, ('MB', 'SN')):
+            continue
+        system, value = ident.get('system'), ident.get('value')
+        if isinstance(value, str) and value:
+            kept = {'type': {'coding': [_coding_of(
+                ident['type'], _checkin.V2_0203, ('MB', 'SN'))]},
+                'value': value}
+            if isinstance(system, str):
+                kept['system'] = system
+            idents.append(kept)
+    res.pop('identifier', None)
+    if idents:
+        res['identifier'] = idents
+
+    classes = []
+    for cls in original.get('class') or []:
+        if not isinstance(cls, dict):
+            continue
+        if not _has_coding(cls.get('type'), _checkin.COVERAGE_CLASS,
+                           ('group', 'plan')):
+            continue
+        value = cls.get('value')
+        if isinstance(value, str) and value:
+            # class.name is dropped, not left as a truncated stub.
+            classes.append({'type': {'coding': [_coding_of(
+                cls['type'], _checkin.COVERAGE_CLASS, ('group', 'plan'))]},
+                'value': value})
+    res.pop('class', None)
+    if classes:
+        res['class'] = classes
+
+    own = f'Patient/{patient_id}'
+    for key in ('subscriber', 'policyHolder', 'beneficiary'):
+        ref = original.get(key)
+        res.pop(key, None)
+        if isinstance(ref, dict) and ref.get('reference') == own:
+            res[key] = {'reference': own}
+
+    payors = []
+    for ref in original.get('payor') or []:
+        target = ref.get('reference') if isinstance(ref, dict) else None
+        if isinstance(target, str) and _PAYOR_REF.fullmatch(target):
+            payors.append({'reference': target})
+    res.pop('payor', None)
+    if payors:
+        res['payor'] = payors
+    return res
+
+
+def _checkin_organization(original, res):
+    """A payor Organization: its stored `name`, the NAIC identifier, and
+    nothing else a front desk does not need (no address, telecom, contact)."""
+    out = {k: res[k] for k in ('resourceType', 'id', 'meta') if k in res}
+    name = original.get('name')
+    if isinstance(name, str) and name:
+        out['name'] = name
+    naic = [{'system': _checkin.NAIC_SYSTEM, 'value': i['value']}
+            for i in original.get('identifier') or []
+            if isinstance(i, dict) and i.get('system') == _checkin.NAIC_SYSTEM
+            and isinstance(i.get('value'), str) and i['value']]
+    if naic:
+        out['identifier'] = naic
+    return out
+
+
+def _checkin_profile(resource, *, patient_id):
+    """Check-in profile (FHI-53): what a clinic's check-in receives, per
+    resource, for the patient the CareAgents server named.
+
+    The intake rules first: apply_redaction (every upstream `display` and
+    `text` stripped, then relabelled by code), a Patient's name, birthDate,
+    address and telecom verbatim, top-level note/narrative/conclusion gone.
+    Then the check-in rules on top:
+
+    - SSN-class identifiers go by either system spelling AND by v2-0203
+      type `SS` under any system.
+    - Every RelatedPerson reference goes, at any depth, and `contained`
+      goes whole (a contained RelatedPerson is still somebody else).
+    - Coverage restores member and group numbers and payor references by
+      allow-list (_checkin_coverage); an Organization is reduced to the payor
+      name and NAIC id (_checkin_organization).
+
+    Stateless and per-resource, beside _intake_profile, so slice 14 can
+    route it through fhir_response. Which rows reach it (types in the token,
+    the one patient, rows with a claim) is the route's job.
+    """
+    res = _redaction_mod.apply_redaction(resource)
+    rtype = resource.get('resourceType')
+    if rtype == 'Patient':
+        for key in ('name', 'birthDate', 'address', 'telecom'):
+            if key in resource:
+                res[key] = resource[key]
+    for key in ('note', 'text', 'conclusion', 'contained'):
+        res.pop(key, None)
+    idents = res.get('identifier')
+    if isinstance(idents, list):
+        kept = [i for i in idents if not _is_ssn_identifier(i)]
+        if kept:
+            res['identifier'] = kept
+        else:
+            res.pop('identifier', None)
+    if rtype == 'Coverage':
+        res = _checkin_coverage(resource, res, patient_id)
+    elif rtype == 'Organization':
+        res = _checkin_organization(resource, res)
+    _drop_related_person_refs(res)
+    return res
+
+
 def fhir_response(payload, *, profile: Profile, status: int = 200,
                   resource_type: str | None = None, etag: str | None = None,
                   patient_id: str | None = None):
@@ -1252,8 +1438,13 @@ def fhir_response(payload, *, profile: Profile, status: int = 200,
     elif profile is Profile.PATIENT_CONTROLLED:
         body = _redaction_mod.apply_patient_controlled_redaction(
             payload, patient_id)
-    else:
+    elif profile is Profile.INTAKE:
         body = _intake_profile(payload)
+    else:
+        # Profile.CHECKIN is per-resource and needs the exported patient;
+        # $share-bundle calls _checkin_profile itself until slice 14 routes
+        # it here. Refused rather than falling through to another profile.
+        raise ValueError(f'fhir_response does not serve {profile.value} yet')
 
     response = jsonify(body)
     response.status_code = status

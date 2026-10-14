@@ -1589,7 +1589,17 @@ def test_there_is_no_profile_member_meaning_no_redaction():
     MUTATION: add Profile.NONE -> red.
     """
     assert {p.name for p in Profile} == {'STANDARD', 'PATIENT_CONTROLLED',
-                                         'INTAKE'}
+                                         'INTAKE', 'CHECKIN'}
+
+
+def test_fhir_response_refuses_the_checkin_profile_until_it_is_routed():
+    """Profile.CHECKIN must never fall through to another profile's body.
+
+    MUTATION: turn the `elif profile is Profile.INTAKE` in fhir_response
+    back into a bare `else` -> red (CHECKIN would be served as intake).
+    """
+    with pytest.raises(ValueError):
+        fhir_response({'resourceType': 'Patient'}, profile=Profile.CHECKIN)
 
 
 def test_the_standard_profile_strips_upstream_display_and_adds_a_disclaimer(
