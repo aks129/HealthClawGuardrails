@@ -257,6 +257,14 @@ def _landed_of_types(bundle: dict, result: dict, landed: int,
     return min(n, landed)
 
 
+def _nothing_counted_note(bundle: dict, result: dict, landed: int) -> str:
+    """Why an upload that landed added no records: the file held only the
+    person's own details (Patient), or only kinds the card does not count."""
+    if _landed_of_types(bundle, result, landed, ("Patient",)) == landed:
+        return "This file had personal details but no health records."
+    return "This file had no health records of a kind shown here yet."
+
+
 def _documents_landed(bundle: dict, result: dict, landed: int) -> int:
     """How many of an upload's ingested entries are uncounted documents."""
     return _landed_of_types(bundle, result, landed,
@@ -1363,6 +1371,11 @@ def create_app(config: Config | None = None,
         records = _records_landed(bundle, result, landed)
         response["records_added"] = records
         note = _uncounted_note(records, documents, uncounted)
+        if landed and not records and not documents:
+            # Something landed and none of it is a record the card counts.
+            # "No new records added." alone read as a failed upload (QA on
+            # #953), so say what the file held. Only resource types are read.
+            note = _nothing_counted_note(bundle, result, landed)
         if note:
             response["uncounted_note"] = note
         return jsonify(response), 200

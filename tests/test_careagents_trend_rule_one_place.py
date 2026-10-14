@@ -3,8 +3,9 @@
 1. On iMessage the model called an A1c drop "a move in a good direction" and
    an LDL drop "encouraging", 2 runs of 2. #938 told the web timeline not to
    call a change good or bad; the text note never got the sentence. The rule
-   now lives in one constant that both notes are built from, and the tests
-   below go red if either surface loses it or the constant loses its words.
+   now lives in one constant, in the system prompt every turn gets and in
+   every lab tool's note, and the tests below go red if any of them loses
+   it or the constant loses its words.
 2. A chat reopened from history showed the model's markdown as literal
    asterisks: chat.js rendered only live bubbles.
 3. The chart's y-axis rounded to whole numbers, so an A1c chart read
@@ -26,7 +27,7 @@ import subprocess
 
 import pytest
 
-from careagents import agent
+from careagents import agent, personas
 from careagents.agent import _execute_tool
 from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
@@ -48,35 +49,88 @@ def _timeline(hc, topic, surface, tenant="t"):
                                     {"topic": topic}, [], surface=surface))
 
 
-# --- 1. one trend rule, every surface ---------------------------------------
+# --- 1. one trend rule, every turn ------------------------------------------
+#
+# QA on #953: with the rule in the timeline notes only, the follow-up "So is
+# that good news?" got "Partly, yes", "encouraging" and "Moving in a good
+# direction" in 3 of 4 real-model runs. That turn calls get_labs, or no tool
+# at all, and the sunny persona said "Celebrate what's going well". So the
+# rule is in the system prompt every turn gets, and in every lab tool's note.
 
-def test_the_rule_says_not_to_judge_the_change():
+def test_the_rule_says_not_to_judge_a_result_or_a_change():
     """MUTATION: empty the constant, or drop its "good or bad" -> red. The
-    surface tests below would pass on an empty string; this one would not."""
-    rule = agent._TREND_NO_VERDICT
+    inclusion tests below would pass on an empty string; this one would not."""
+    rule = personas.NO_TREND_VERDICT
     assert "good or bad" in rule
-    for word in ("encouraging", "good direction"):
+    for word in ("encouraging", "good direction", "good news"):
         assert word in rule, word
+    # It holds when the person asks for a verdict, which is the QA case.
+    assert "asks" in rule
+
+
+def test_the_tool_notes_use_the_same_rule_as_the_prompt():
+    """One wording, so the two cannot drift as the two notes did."""
+    assert agent._TREND_NO_VERDICT is personas.NO_TREND_VERDICT
+
+
+@pytest.mark.parametrize("persona", sorted(personas.PERSONAS))
+@pytest.mark.parametrize("surface", SURFACES)
+@pytest.mark.parametrize("sample", (False, True))
+def test_every_system_prompt_carries_the_rule(persona, surface, sample):
+    """MUTATION: drop the rule from SAFETY_CORE -> red for every persona,
+    surface and source."""
+    prompt = personas.system_prompt("Juniper", persona, surface=surface,
+                                    sample=sample)
+    assert personas.NO_TREND_VERDICT in prompt
+
+
+def test_the_upbeat_voices_no_longer_ask_to_celebrate_results():
+    """The sunny persona celebrated "what's going well in the records", and
+    the healthy-habits routine "improvements": both read a lab or vital
+    change as a win to cheer. They may still celebrate what the person did."""
+    from careagents.advisors import ADVISORS
+    sunny = personas.PERSONAS["sunny"]["voice"]
+    assert "going well in the records" not in sunny
+    assert "never call a lab" in sunny.lower()
+    habits = ADVISORS["healthy-habits"]["guidance"]
+    assert "improvements" not in habits
+    assert "improved" not in habits
 
 
 @pytest.mark.parametrize("surface", SURFACES)
-def test_every_timeline_surface_carries_the_one_rule(surface):
+def test_every_timeline_surface_carries_the_rule(surface):
     """MUTATION: leave the constant out of the text note, or out of the web
     note -> red for that surface.
 
-    Both are checked by inclusion of the same object, not a copy of its
-    words, so a second, drifting wording cannot satisfy this."""
+    Checked by inclusion of the same object, not a copy of its words, so a
+    second, drifting wording cannot satisfy this."""
     out = _timeline(_LabsHC(), "cholesterol", surface)
     assert out["series"], out
     assert agent._TREND_NO_VERDICT in out["note"]
 
 
-def test_no_note_carries_its_own_copy_of_the_rule():
-    """The drift that caused #942 was two hand-written notes. The words live
-    once in agent.py: in the constant, and nowhere else."""
-    src = pathlib.Path(agent.__file__).read_text()
-    assert src.count("good or bad") == 1, (
-        "the trend rule is written out more than once in agent.py")
+@pytest.mark.parametrize("surface", SURFACES)
+def test_get_labs_carries_the_rule(surface):
+    """The follow-up QA caught reads labs through get_labs.
+
+    MUTATION: drop the rule from get_labs' note -> red."""
+    out = json.loads(_execute_tool(_LabsHC(), "t", "get_labs", {}, [],
+                                   surface=surface))
+    assert agent._TREND_NO_VERDICT in out["note"]
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_the_visit_brief_carries_the_rule(surface):
+    """The brief carries lab trends. MUTATION: drop the rule from the
+    brief's notes -> red."""
+    from tests.test_careagents_brief_lab_trends import _brief_with_trend
+
+    class _HC:
+        def fetch_appointment_brief(self, _t):
+            return _brief_with_trend()
+    out = json.loads(_execute_tool(_HC(), "t", "appointment_brief", {}, [],
+                                   surface=surface))
+    assert agent._TREND_NO_VERDICT in out["note"]
 
 
 # --- 5. only the tests on file are offered ----------------------------------

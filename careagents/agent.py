@@ -23,6 +23,7 @@ from urllib.parse import quote
 from careagents import brief as brief_mod
 from careagents import labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
+from careagents.personas import NO_TREND_VERDICT
 
 MAX_TOOL_ROUNDS = 6
 
@@ -996,17 +997,11 @@ _TREND_NOTE = (
     "doctor promptly, tell the person to contact their doctor promptly.")
 
 
-#: How a change between two lab readings is told, on every surface. One
-#: constant, built into both timeline notes, because the text note was a
-#: hand-written copy that never got this sentence: on iMessage the model
-#: called an A1c drop "a move in a good direction" and an LDL drop
-#: "encouraging" while the web note forbade it (#942).
-_TREND_NO_VERDICT = (
-    "Do not call the change good or bad, and do not use words that judge "
-    "it, such as better, worse, improving, encouraging, reassuring, "
-    "worrying, or a good direction: say only that it is higher, lower or "
-    "unchanged. What the change means for the person is for their "
-    "clinician to say.")
+#: How a lab result, or a change in one, is told. The system prompt's own
+#: rule (personas.NO_TREND_VERDICT), repeated in every lab tool's note: the
+#: text timeline note was a hand-written copy that never got the sentence,
+#: and a follow-up answered from get_labs never saw the timeline's (#942).
+_TREND_NO_VERDICT = NO_TREND_VERDICT
 
 #: What the model may offer to look at next. It offered HDL and
 #: triglycerides after an LDL answer on records that hold neither (#942).
@@ -1235,6 +1230,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 _TREND_NOTE + (
                     " In a text, keep the trend sentence whole even when you "
                     "shorten everything else." if on_text else ""))
+        # A follow-up ("So is that good news?") is answered from here, not
+        # from the timeline's note (QA on #953).
+        out["note"] = ((out["note"] + " ") if out.get("note") else "") + (
+            _TREND_NO_VERDICT)
         return json.dumps(out)
     if name == "show_lab_timeline":
         topic = str(args.get("topic") or "")
@@ -1394,6 +1393,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "no screenings are due.")
         if sections.get("lab-trends"):
             notes.append(_TREND_NOTE)
+        # The brief carries labs and vitals whatever its sections (#942).
+        notes.append(_TREND_NO_VERDICT)
         events.append({"type": "card", "kind": "brief"})
         notes.append("Summarize in a few short lines; a link to the full "
                      "brief is included below your answer."

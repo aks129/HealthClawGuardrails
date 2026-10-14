@@ -18,6 +18,11 @@ Synthetic data only.
 from __future__ import annotations
 
 import json
+import pathlib
+import shutil
+import subprocess
+
+import pytest
 
 from careagents.hub import count_line
 from careagents.models import Connection
@@ -72,25 +77,81 @@ def test_the_upload_line_and_the_card_count_the_same_records(
     assert count_line(_card_count(svc, conn_id)) == "3 records"
 
 
-def test_a_patient_only_upload_adds_no_records(cfg, svc, monkeypatch):
-    """The person themself is not a health record, so an upload of the
-    Patient alone adds none, and says nothing about documents either."""
+def _upload(cfg, svc, monkeypatch, bundle, counted):
     from careagents.app import create_app
     fake = FakeClient()
-    fake.counted = 0
+    fake.counted = counted
     app = create_app(config=cfg, client=fake, accounts=svc)
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn_id = _make_direct_conn(c)
-
     r = c.post(f"/api/connections/{conn_id}/upload",
-               data=json.dumps(_patient_and_observations(0)),
+               data=json.dumps(bundle),
                headers={"Content-Type": "application/fhir+json"})
-    d = r.get_json()
+    assert r.status_code == 200, r.get_data(as_text=True)
+    return r.get_json(), conn_id
+
+
+def test_a_patient_only_upload_adds_no_records_and_says_why(
+        cfg, svc, monkeypatch):
+    """The person themself is not a health record, so an upload of the
+    Patient alone adds none. A bare "No new records added." read as a failed
+    upload (QA on #953), so the line says what the file held.
+
+    MUTATION: drop the reason -> red."""
+    d, conn_id = _upload(cfg, svc, monkeypatch,
+                         _patient_and_observations(0), counted=0)
     assert d["records_added"] == 0
-    assert "uncounted_note" not in d, d
     assert _card_count(svc, conn_id) == 0
+    assert d["uncounted_note"] == (
+        "This file had personal details but no health records.")
+    assert _home_line(0, d["uncounted_note"]) == (
+        "No new records you can read. This file had personal details but "
+        "no health records.")
+
+
+def test_an_upload_of_other_kinds_only_says_why(cfg, svc, monkeypatch):
+    """Landed, and nothing the card counts: say so, without calling an
+    Encounter "personal details"."""
+    bundle = {"resourceType": "Bundle", "type": "collection", "entry": [
+        {"resource": {"resourceType": "Encounter", "id": "e-1",
+                      "status": "finished"}}]}
+    d, _ = _upload(cfg, svc, monkeypatch, bundle, counted=0)
+    assert d["records_added"] == 0
+    assert d["uncounted_note"] == (
+        "This file had no health records of a kind shown here yet.")
+
+
+def test_an_upload_with_records_gets_no_reason(cfg, svc, monkeypatch):
+    d, _ = _upload(cfg, svc, monkeypatch, _patient_and_observations(3),
+                   counted=3)
+    assert d["records_added"] == 3
+    assert "uncounted_note" not in d, d
+
+
+_HOME_JS = (pathlib.Path(__file__).resolve().parents[1]
+            / "careagents" / "static" / "home.js")
+
+_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const a = src.indexOf('function readableCountLine(');
+const b = src.indexOf('\n  }\n', a);
+if (a < 0 || b < 0) throw new Error('readableCountLine not found');
+const f = new Function(src.slice(a, b + 4) + 'return readableCountLine;')();
+process.stdout.write(f(Number(process.argv[2]), process.argv[3] || undefined));
+"""
+
+
+def _home_line(n, note):
+    """The upload line as the hub writes it, from home.js itself."""
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(["node", "-e", _HARNESS, "--", str(_HOME_JS),
+                          str(n), note or ""],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    return out.stdout
 
 
 def test_the_two_counts_agree_against_the_real_engine(cfg, svc, monkeypatch):
