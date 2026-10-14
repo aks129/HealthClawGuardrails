@@ -174,6 +174,20 @@ class OwnershipUnknown(Exception):
 _REVIEW_TAB_BRAND = re.compile(
     r"(<title>[^<]*?)HealthClaw Guardrails(\s*</title>)")
 
+#: The engine's sample review speaks to the account holder: its banner is
+#: the holder's line, and the approved form is "your form ... send it to
+#: your new doctor". In the review of someone the holder cares for, these
+#: exact strings are reworded here, so the engine never learns a person
+#: exists and nothing reaches it (patient test on #952). Each is pinned
+#: against the engine's own template by
+#: tests/test_careagents_cared_for_wording.py.
+_CARED_FOR_REVIEW_WORDS = (
+    ("'Confirmed. Your form is ready. '", "'Confirmed. The form is ready. '"),
+    ("'Open your form (PDF)'", "'Open the form (PDF)'"),
+    ("' to save it, print it or send it to your new doctor.'",
+     "' to save it or print it.'"),
+)
+
 
 def _connection_is_live(ctx: dict) -> bool:
     """Whether an agent context's connection may still reach the tenant's
@@ -1434,8 +1448,18 @@ def create_app(config: Config | None = None,
             }), 502
         # Read before the unlink: deleting a connection deletes the
         # assistants that read it, and the person is told which (#853).
-        gone = [a["name"] for a in svc.list_home(acct.id)["agents"]
+        home = svc.list_home(acct.id)
+        gone = [a["name"] for a in home["agents"]
                 if a["connection_id"] == conn_id]
+        # Whose records, and whether that person leaves the hub with them,
+        # as the dialog said before the tap (patient test on #952).
+        row = next((r for r in hub_view.build(home, time.time())["records"]
+                    if r["id"] == conn_id), {})
+        label = (f"{conn['label']} ({row['whose']})" if row.get("whose")
+                 else conn["label"])
+        left = (hub_view.person_name(hub_view.person_of(
+                    home, conn.get("person_id")))
+                if row.get("leaves") else "")
         svc.delete_connection(acct.id, conn_id)
         # The count is the one the card showed. The engine's resource count
         # includes kinds the card leaves out, so "15 stored items" beside a
@@ -1450,11 +1474,11 @@ def create_app(config: Config | None = None,
             "records_deleted": n,
             "assistants_deleted": gone,
             "audit_retained": True,
-            "message": _deleted_sentence(n, conn["label"], gone),
+            "message": _deleted_sentence(n, label, gone, left),
         })
 
     def _deleted_sentence(n: int | None, label: str,
-                          gone: list[str]) -> str:
+                          gone: list[str], left: str = "") -> str:
         if n is None:
             lead = f"Your records in {label} were deleted."
         elif n == 1:
@@ -1466,6 +1490,8 @@ def create_app(config: Config | None = None,
                      f"{'was' if len(gone) == 1 else 'were'} deleted too, "
                      f"because {'it' if len(gone) == 1 else 'they'} read "
                      "these records.")
+        if left:
+            lead += f" {left} was removed from your hub too."
         return (lead + " We keep a log of who looked at your records, with "
                 "no health details in it, and this deletion is in it.")
 
@@ -1868,7 +1894,8 @@ def create_app(config: Config | None = None,
             name = hub_view.relation_of(primary[agent_id])
             return jsonify({"error": (
                 f"This is the assistant for {name}, so it can't be "
-                "removed." if name else
+                "removed on its own. To remove it, delete their records on "
+                "your hub." if name else
                 "This is your assistant, so it can't be removed.")}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
@@ -2556,7 +2583,7 @@ def create_app(config: Config | None = None,
         # cannot be read is said, and never fails the count above: the
         # pending number is the one a person acts on.
         try:
-            recent = _recent_outcomes(tenants, bool(data["agents"]))
+            recent = _recent_outcomes(tenants, bool(data["agents"]), data)
         except HealthClawError:
             logger.warning("recent outcomes unavailable for account %s",
                            acct.id)
@@ -2570,7 +2597,7 @@ def create_app(config: Config | None = None,
     #: engine's window; the hub shows the newest few.
     _RECENT_SHOWN = 5
 
-    def _recent_outcomes(tenants, has_assistant):
+    def _recent_outcomes(tenants, has_assistant, home):
         """The hub's "done" and "didn't finish" lines (#847), newest first.
 
         Read from the engine on every visit and stored nowhere. A completed
@@ -2593,6 +2620,12 @@ def create_app(config: Config | None = None,
                 # a recipient read as though it had been sent (#853).
                 if a.get("to") and a.get("kind") != "form-fill":
                     item["to"] = a["to"]
+                # Whose, as the pending queues say it (patient test on
+                # #952): "Intake form (Mom's records): Ready."
+                whose = hub_view.whose_records(
+                    hub_view.person_of(home, conn.get("person_id")))
+                if whose:
+                    item["whose"] = whose
                 if agent:
                     item["agent_name"] = agent["name"]
                     item["chat"] = url_for("chat", agent=agent["id"])
@@ -2638,7 +2671,7 @@ def create_app(config: Config | None = None,
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
-    def _form_past_review(tenant, agent_id, action_id):
+    def _form_past_review(tenant, agent_id, action_id, whose=""):
         """A form the engine no longer offers for review: ready with its PDF,
         still being made, or done. The PDF link comes from the action's
         outcome, as the post-approve screen reads it (/api/form)."""
@@ -2668,7 +2701,8 @@ def create_app(config: Config | None = None,
         # (the intake rail, or an engine that names no kind) is "your form".
         is_form = status.get("kind") in (None, "form-fill")
         return render_template("form_done.html", state=shown, link=link,
-                               agent_id=agent_id, is_form=is_form)
+                               agent_id=agent_id, is_form=is_form,
+                               whose=whose)
 
     def _agent_owns_action(agent_id, action_id):
         """The tenant that owns this action, or None if it is not this
@@ -2756,6 +2790,12 @@ def create_app(config: Config | None = None,
         # someone else as "I". Decided from the connection, never the request,
         # and from the same read that resolved the tenant.
         sample = (ctx.get("connection") or {}).get("kind") == "sample"
+        # Someone the holder cares for: their records named on the page,
+        # the nickname escaped and kept here, never sent to the engine.
+        acct = current_account()
+        person = hub_view.person_of(svc.list_home(acct.id),
+                                    ctx["agent"].get("person_id"))
+        whose = hub_view.whose_records(person)
         try:
             status, html = (hc.fetch_review_page(tenant, action_id,
                                                  voice="sample")
@@ -2781,9 +2821,20 @@ def create_app(config: Config | None = None,
                                        message=_REVIEW_UNCHECKABLE), 503
             # Past review. The texted "Your intake form is ready" link lands
             # here after approval, so show the form, not a dead end (#875).
-            return _form_past_review(tenant, agent_id, action_id)
+            return _form_past_review(tenant, agent_id, action_id,
+                                     whose=whose)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
+        if sample and whose:
+            # The person's own line, as on their chat page, then the
+            # approved message about the form, not "your" form.
+            html = html.replace(
+                f'role="note">{beta.SAMPLE_FRAME}</div>',
+                f'role="note">'
+                f'{escape(beta.sample_frame(hub_view.relation_of(person)))}'
+                '</div>', 1)
+            for old, new in _CARED_FOR_REVIEW_WORDS:
+                html = html.replace(old, new, 1)
         # The engine names its own product in the tab; here the page is
         # CareAgents', reached from a CareAgents chat or text.
         return _REVIEW_TAB_BRAND.sub(r"\1CareAgents\2", html, count=1)

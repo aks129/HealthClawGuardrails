@@ -110,19 +110,27 @@ SAMPLE_STYLE = (
 
 
 #: The sample connection of someone the holder cares for (FHI-44). The
-#: records stand in for theirs, so the answer names them, never "the
-#: sample person". `{who}` is hub.relation_of ("your parent"), never the
-#: nickname: the holder's typed text does not reach the model.
+#: made-up person stands in for them, and every finding stays with that
+#: made-up person, as in SAMPLE_STYLE: "Contact your parent's doctor
+#: promptly" under a banner saying nothing here is about your parent read
+#: as a kidney warning about a real mother (patient test on #952). `{who}`
+#: is hub.relation_of ("your parent"), never the nickname: the holder's
+#: typed text does not reach the model.
 CARED_FOR_SAMPLE_STYLE = (
-    "\n\nThese records are made up. They stand in for the records of "
-    "{who}, someone the person you are talking to cares for. Nothing in "
-    "them is about the person you are talking to, or really about {who}. "
-    "Never say \"you\" or \"your\" about anything in them, except in "
-    "naming {who}, and never say \"the sample person\": say \"in these made-up records\" or "
-    "\"the made-up records for {who}\". Keep every number, date and piece "
-    "of advice as written, including a trend sentence, but say it about "
-    "{who}. The app already shows a line saying these records are made "
-    "up, on the page and at the top of every answer, so do not write your "
+    "\n\nThese records are made up. They belong to a made-up sample "
+    "person, who stands in for {who} so the person you are talking to can "
+    "see how this works. Nothing in them is about {who} or about the "
+    "person you are talking to, even when they call the records by a name "
+    "of their own. Never say \"you\" or \"your\" about anything in "
+    "them, and never say it is {who}'s: say \"in these made-up records\" "
+    "or \"the sample person's\". Keep every number, date and piece of "
+    "advice as written, including a trend sentence, but say it about the "
+    "sample person: \"The sample person should contact their doctor\". "
+    "Never tell the person you are talking to to contact a doctor for "
+    "{who}, or anyone, about these results, and never ask them to check "
+    "or compare these records with what they know about {who} or anyone "
+    "real. The app already shows a line saying these records are made up, "
+    "on the page and at the top of every answer, so do not write your "
     "own. Say \"doctor\", never \"clinician\", and do not call the "
     "results a \"partial lab list\".")
 

@@ -855,7 +855,9 @@
   // The one contact address (#856), linked by showRecent.
   const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
-    const what = r.label + (r.to ? " to " + r.to : "") + ": ";
+    // Whose, when not the holder's own (patient test on #952).
+    const what = r.label + (r.whose ? " (" + r.whose + ")" : "") +
+      (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
     if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),

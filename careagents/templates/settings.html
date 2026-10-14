@@ -128,8 +128,9 @@
     <div class="section-head"><h2>{{ "Your assistants" if several else "Your assistant" }}</h2></div>
     {% for a in assistants %}
     <form class="assistant-settings hub-card" data-agent="{{ a.id }}">
-      <div class="hub-card-name">{{ a.name }}{% if a.person.kind == 'other' %}
-        {# hub.for_line, the hub's rule: never "your other". #}
+      <div class="hub-card-name">{{ a.name }}{% if a.for_line %}
+        {# hub.for_line, the hub's rule: never "your other", and "For
+           you" once someone you care for is here. #}
         <span class="hub-card-sub">{{ a.for_line }}</span>{% endif %}</div>
       {# An account from before keeps several assistants (owner decision
          D5): each says which records it reads, so they are told apart. #}
@@ -150,7 +151,7 @@
           {% if r.name in a.routines %}checked{% endif %}><span>{{ r.name }}</span></label>
         {% endfor %}
       </fieldset>
-      <p class="card-note">These change what your assistant pays attention
+      <p class="card-note">These change what {{ a.name }} pays attention
         to, not what it can read.</p>
       <div class="card-actions">
         <button type="submit" class="pill">Save</button>

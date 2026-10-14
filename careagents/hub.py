@@ -104,9 +104,7 @@ def build(home: dict, now: float) -> dict:
         if person.get("kind") != "other" or sources_of[c.get(
                 "person_id")] > 1:
             return ""
-        name = person.get("nickname") or relation_of(person)
-        return (name[0].upper() + name[1:]
-                + " will be removed from your hub too.")
+        return person_name(person) + " will be removed from your hub too."
     records = [{**_record(c, now), "whose": _whose(c), "leaves": _leaves(c),
                 "readers": ", ".join(readers.get(c["id"], []))}
                for c in conns if c["status"] != "revoked"]
@@ -340,6 +338,14 @@ def relation_of(person: dict) -> str:
     if person.get("kind") != "other":
         return ""
     return _FOR_RELATION.get(person.get("relationship"), _ANYONE)
+
+
+def person_name(person: dict) -> str:
+    """Someone the holder cares for as a page names them, starting a
+    sentence: their nickname ("Mom") or relationship ("Your parent").
+    Page text only; never for the model (use relation_of)."""
+    name = person.get("nickname") or relation_of(person)
+    return name[:1].upper() + name[1:]
 
 
 def whose_records(person: dict, mid: bool = False) -> str:

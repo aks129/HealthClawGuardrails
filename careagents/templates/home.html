@@ -253,7 +253,7 @@
         <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
         {% endif %}
         <details class="card-menu source-menu">
-          <summary aria-label="More for {{ c.label }}">More</summary>
+          <summary aria-label="More for {{ c.label }}{% if c.whose %} ({{ c.whose }}){% endif %}">More</summary>
           {% if not paused and c.kind != 'direct' and not c.is_sample and not (c.kind == 'fasten' and c.status == 'pending') %}
           {# Not on a Fasten card still connecting: a Refresh there stored a
              mid-import count (QA940-F1b), and the connect link above is that

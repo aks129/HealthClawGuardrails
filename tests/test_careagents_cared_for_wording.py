@@ -2,9 +2,10 @@
 the hub polish that followed person cards (FHI-45).
 
 FHI-44: Mom's chat said "made-up records, not yours", offered "Make my
-visit brief", answered about "the sample person", and a refused removal
-said "This is your assistant". Each now names the person when they are not
-the account holder. Anything that can reach the model (the system prompt,
+visit brief", and a refused removal said "This is your assistant". Each
+now names the person when they are not the account holder. The made-up
+findings themselves stay the sample person's, who stands in for them: never
+advice about the real person (patient test on #952). Anything that can reach the model (the system prompt,
 a starter tap, the sample line every answer opens with) names them by
 relationship only ("your parent"): the nickname is the holder's own typed
 text and never leaves the page.
@@ -149,10 +150,10 @@ def test_moms_turn_is_prompted_about_your_parent_never_the_nickname(
     assert prompts
     for p in prompts:
         assert NICK not in p
-        assert "say it about your parent" in p
-        # Never told to answer about "the sample person's" records.
-        assert "the sample person's" not in p
-        assert "say it about the sample person" not in p
+        # The findings stay with the sample person (patient test on #952).
+        assert "say it about the sample person" in p
+        assert "say it about your parent" not in p
+        assert "stands in for your parent" in p
     # The line every answer opens with is model-visible history too.
     assert answer.startswith(MOM_FRAME + "\n\n")
     assert NICK not in answer
@@ -181,7 +182,7 @@ def test_the_prompt_says_whose_records_for_someone_you_care_for():
     assert system_prompt("Rowan", "calm", sample=True, who="") == holder
     sample = system_prompt("Rowan", "calm", sample=True, who="your parent")
     assert "your parent" in sample and "made up" in sample
-    assert "the sample person's" not in sample
+    assert "say it about the sample person" in sample
     # Real records for someone you care for (after owner decision D1):
     # whose they are, and nothing about made-up records.
     real = system_prompt("Rowan", "calm", who="your child")
@@ -199,7 +200,8 @@ def test_refusing_to_remove_moms_assistant_names_her_by_relationship(
     assert r.status_code == 409
     err = r.get_json()["error"]
     assert err == ("This is the assistant for your parent, so it can't be "
-                   "removed.")
+                   "removed on its own. To remove it, delete their records "
+                   "on your hub.")
     assert NICK not in r.get_data(as_text=True)
     r = c.delete(f"/api/agents/{mine}")
     assert r.status_code == 409
@@ -302,3 +304,143 @@ def test_moms_review_card_says_whose_records_it_was_filled_from(
     assert f'window.CARE_WHOSE = "{NICK}\\u0027s records";' in page
     own = c.get(f"/chat?agent={mine}").get_data(as_text=True)
     assert 'window.CARE_WHOSE = "";' in own
+
+
+# --- #952 patient test: made-up findings stay with the sample person -------
+
+def test_made_up_findings_for_someone_you_care_for_stay_with_the_sample():
+    """Mom's labs answer said "Contact your parent's doctor promptly" under
+    a banner saying nothing here is about your parent. The made-up records
+    stand in for the person; findings and advice are the sample person's,
+    as in the holder's own sample voice."""
+    p = system_prompt("Rowan", "calm", sample=True, who="your parent")
+    assert "a made-up sample person, who stands in for your parent" in p
+    assert "say it about the sample person" in p
+    assert '"The sample person should contact their doctor"' in p
+    assert ("Never tell the person you are talking to to contact a doctor "
+            "for your parent, or anyone, about these results") in p
+    assert ("never ask them to check or compare these records with what "
+            "they know about your parent") in p
+    # A name the person types ("Mom") does not make the records hers.
+    assert "even when they call the records by a name" in p
+    assert "say it about your parent" not in p
+    assert "made-up records for your parent" not in p
+
+
+# --- #952 patient test: the intake journey in Mom's chat -------------------
+
+_HANDLERS = (pathlib.Path(__file__).resolve().parents[1] / "templates"
+             / "_review_handlers.html").read_text()
+_ENGINE_REVIEW = (pathlib.Path(__file__).resolve().parents[1] / "templates"
+                  / "action_review.html").read_text()
+
+
+def _engine_like_review(action_id):
+    """The engine's sample review, reduced to the strings CareAgents words
+    for someone the holder cares for. Each is pinned against the engine's
+    own template below, so engine drift fails here, not in a browser."""
+    return 200, (
+        "<html><title>Review — HealthClaw Guardrails</title>"
+        '<div class="alert alert-warning mb-3" role="note">'
+        f"{beta.SAMPLE_FRAME}</div>"
+        f"<form action=\"/r6/actions/{action_id}/review\"></form>"
+        "<script>gateMsg.textContent = 'Confirmed. Your form is ready. ';"
+        "a.textContent = 'Open your form (PDF)';"
+        "gateMsg.appendChild(document.createTextNode("
+        "' to save it, print it or send it to your new doctor.'));"
+        "</script></html>")
+
+
+def test_the_strings_moms_review_rewords_are_the_engines_own():
+    from r6 import voice
+    assert voice.SAMPLE_BANNER == beta.SAMPLE_FRAME
+    assert 'role="note">{{ sample_banner }}</div>' in _ENGINE_REVIEW
+    assert "'Confirmed. Your form is ready. '" in _HANDLERS
+    assert "'Open your form (PDF)'" in _HANDLERS
+    assert ("' to save it, print it or send it to your new doctor.'"
+            in _HANDLERS)
+
+
+def test_moms_review_page_names_her_records_not_yours(cfg, svc, monkeypatch):
+    hc = FakeClient()
+    hc.fetch_review_page = lambda tenant, action_id, voice=None: (
+        _engine_like_review(action_id))
+    c, _, hc, mine, mom = _with_mom(cfg, svc, monkeypatch, hc=hc)
+    page = c.get(f"/review/{mom['agent_id']}/act-1").get_data(as_text=True)
+    assert MOM_FRAME in page and "not yours" not in page
+    assert "Confirmed. The form is ready. " in page
+    assert "Open the form (PDF)" in page
+    assert "your new doctor" not in page and "Your form" not in page
+    assert NICK not in page
+    own = c.get(f"/review/{mine}/act-1").get_data(as_text=True)
+    assert beta.SAMPLE_FRAME in own
+    assert "Confirmed. Your form is ready. " in own
+    assert "send it to your new doctor" in own
+
+
+def test_moms_finished_form_page_says_whose_it_is(cfg, svc, monkeypatch):
+    hc = FakeClient()
+    hc.fetch_review_page = lambda tenant, action_id, voice=None: (409, "")
+    hc.action_status = lambda tenant, action_id: {
+        "status": "completed", "kind": "form-fill",
+        "outcome_summary": '{"delivery_link": "https://example.test/f.pdf"}'}
+    c, _, hc, mine, mom = _with_mom(cfg, svc, monkeypatch, hc=hc)
+    page = " ".join(c.get(f"/review/{mom['agent_id']}/act-1").get_data(
+        as_text=True).split())
+    assert "<h1>The form is ready</h1>" in page
+    assert f"From {NICK}&#39;s records. Save it or print it." in page
+    assert "Open the form (PDF)" in page
+    assert "your new doctor" not in page
+    own = " ".join(c.get(f"/review/{mine}/act-1").get_data(
+        as_text=True).split())
+    assert "<h1>Your form is ready</h1>" in own
+    assert "send it to your new doctor" in own
+
+
+def test_the_hubs_recent_line_says_whose_form_it_is(cfg, svc, monkeypatch):
+    hc = FakeClient()
+    hc.recent_actions = lambda tenant: [
+        {"id": "act-9", "kind": "form-fill", "status": "completed",
+         "updated_at": "2026-10-13T12:00:00Z"}]
+    c, _, hc, mine, mom = _with_mom(cfg, svc, monkeypatch, hc=hc)
+    recent = c.get("/api/approvals/count").get_json()["recent"]
+    whose = {r["chat"].split("agent=")[1]: r.get("whose", "")
+             for r in recent}
+    assert whose[mom["agent_id"]] == f"{NICK}'s records"
+    assert whose[mine] == ""          # as the pending queues name it
+    line = _HOME_JS.split("const recentLine = (r) => {")[1][:300]
+    assert '(r.whose ? " (" + r.whose + ")" : "")' in line
+
+
+# --- #952 patient test: polish ---------------------------------------------
+
+def test_deleting_moms_records_says_whose_and_that_she_left_the_hub(
+        cfg, svc, monkeypatch):
+    hc = FakeClient()
+    hc.purge_tenant = lambda tenant: {"deleted": True, "rows_deleted": 3}
+    c, _, hc, _, mom = _with_mom(cfg, svc, monkeypatch, hc=hc)
+    svc.mark_synced(mom["connection_id"], 21)
+    msg = c.delete(f"/api/connections/{mom['connection_id']}",
+                   json={"confirm": "DELETE"}).get_json()["message"]
+    assert msg.startswith(f"All 21 records in Sample records ({NICK}'s "
+                          "records) were deleted.")
+    assert f"{NICK} was removed from your hub too." in msg
+
+
+def test_settings_names_each_assistant_and_says_for_you(
+        cfg, svc, monkeypatch):
+    c, _, _, _, _ = _with_mom(cfg, svc, monkeypatch)
+    page = " ".join(c.get("/settings").get_data(as_text=True).split())
+    assert "your assistant pays attention" not in page
+    assert "These change what Rowan pays attention to" in page
+    assert "These change what Juniper pays attention to" in page
+    juniper = page[page.index("Juniper"):page.index("Rowan")]
+    assert "For you" in juniper
+
+
+def test_each_source_menu_names_whose_records(cfg, svc, monkeypatch):
+    c, _, _, _, _ = _with_mom(cfg, svc, monkeypatch)
+    page = c.get("/home").get_data(as_text=True)
+    assert ('aria-label="More for Sample records (Your records)"' in page)
+    assert (f'aria-label="More for Sample records ({NICK}&#39;s records)"'
+            in page)
