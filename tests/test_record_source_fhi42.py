@@ -196,6 +196,43 @@ def test_seeded_rows_are_tagged_sample_fresh_and_revived(app):
     assert _row("test-tenant", "Patient", patient.id).source == "sample"
 
 
+def test_a_caller_supplied_seed_bundle_is_untagged(app):
+    """Only the built-in demo set is ours to call made up. A bundle a caller
+    hands `/internal/seed` is content somebody else chose: no channel we can
+    vouch for, so no tag — on the fresh row and on the revive.
+
+    MUTATION: tag every seeded row `sample` regardless of `resources` -> red."""
+    from r6.seed import seed_demo_data
+
+    supplied = [_condition("seed-c-1")]
+    assert seed_demo_data("test-tenant", resources=supplied) == 1
+    row = _row("test-tenant", "Condition", "seed-c-1")
+    assert row.source is None
+    assert "tag" not in row.to_fhir_json()["meta"]
+
+    row.is_deleted = True
+    row.source = "upload"
+    db.session.commit()
+    seed_demo_data("test-tenant", resources=supplied)
+    assert _row("test-tenant", "Condition", "seed-c-1").source is None
+
+
+def test_a_seed_bundle_over_http_is_untagged(client, monkeypatch,
+                                             tenant_headers):
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", "fhi42-seed-secret")
+    bundle = {"resourceType": "Bundle", "type": "collection",
+              "entry": [{"resource": _condition("seed-c-2")}]}
+    r = client.post("/r6/fhir/internal/seed",
+                    data=json.dumps({"tenant_id": "test-tenant",
+                                     "bundle": bundle}),
+                    headers={"Content-Type": "application/json",
+                             "X-Internal-Secret": "fhi42-seed-secret"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert _row("test-tenant", "Condition", "seed-c-2").source is None
+    got = client.get("/r6/fhir/Condition/seed-c-2", headers=tenant_headers)
+    assert "tag" not in got.get_json()["meta"]
+
+
 def test_context_builder_rows_stay_untagged(client, auth_headers):
     """`$ingest-context` builds an agent's context envelope; it is not a
     channel a person brought records through, so its rows carry no source."""
@@ -227,6 +264,80 @@ def test_an_upload_re_ingested_through_fasten_says_fasten(client,
     assert _row("test-tenant", "Condition", "src-c-1").source == "fasten"
     got = client.get("/r6/fhir/Condition/src-c-1", headers=tenant_headers)
     assert got.get_json()["meta"]["tag"] == [_tag("fasten")]
+
+
+# --- a rewrite outside ingest clears the tag ----------------------------------
+# The tag never claims a channel we cannot vouch for. Once anything but an
+# ingest rewrites the content, it is no longer what that channel delivered.
+
+def test_a_put_over_an_ingested_row_clears_the_tag(client, auth_headers,
+                                                   tenant_headers):
+    """MUTATION: stop `update_resource` clearing `source` -> red."""
+    from r6.fasten.ingester import _ingest_one
+
+    patient = {"resourceType": "Patient", "id": "src-p-2",
+               "name": [{"family": "Testerson", "given": ["A"]}]}
+    assert _ingest_one(dict(patient), "test-tenant",
+                       source="fasten")[0] == "ok"
+    db.session.commit()
+
+    r = client.put("/r6/fhir/Patient/src-p-2",
+                   data=json.dumps(dict(patient, gender="female")),
+                   content_type="application/json", headers=auth_headers)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert "tag" not in r.get_json()["meta"]
+    assert _row("test-tenant", "Patient", "src-p-2").source is None
+    got = client.get("/r6/fhir/Patient/src-p-2", headers=tenant_headers)
+    assert "tag" not in got.get_json()["meta"]
+
+    # Re-ingest through a channel sets it again.
+    assert _ingest_one(dict(patient), "test-tenant",
+                       source="upload")[0] == "ok"
+    db.session.commit()
+    assert _row("test-tenant", "Patient", "src-p-2").source == "upload"
+
+
+def test_the_demo_loop_rewrite_clears_the_tag(app):
+    from r6.fasten.ingester import _ingest_one
+    from r6.routes import _DEMO_LOOP_PATIENT_ID, _demo_loop_upsert
+
+    patient = {"resourceType": "Patient", "id": _DEMO_LOOP_PATIENT_ID,
+               "name": [{"family": "Demo", "given": ["D"]}]}
+    _ingest_one(dict(patient), "test-tenant", source="sample")
+    db.session.commit()
+
+    _demo_loop_upsert(dict(patient, gender="other"), "test-tenant")
+    db.session.commit()
+    assert _row("test-tenant", "Patient",
+                _DEMO_LOOP_PATIENT_ID).source is None
+
+
+def test_a_curatr_fix_clears_the_tag(app):
+    """The fix writes through a conditional UPDATE, not `update_resource`, so
+    it clears the column itself.
+
+    MUTATION: drop `source=None` from the curatr UPDATE -> red."""
+    from r6.curatr import apply_fix
+    from r6.fasten.ingester import _ingest_one
+
+    record = {"resourceType": "Condition", "id": "src-c-fix",
+              "subject": {"reference": "Patient/src-p-1"},
+              "code": {"coding": [{"system": "http://snomed.info/sct",
+                                   "code": "44054006"}]},
+              "clinicalStatus": {"coding": [{"code": "active"}]}}
+    _ingest_one(record, "test-tenant", source="fasten")
+    db.session.commit()
+
+    result = apply_fix(
+        "Condition", "src-c-fix",
+        [{"field_path": "Condition.clinicalStatus.coding[0].code",
+          "new_value": "resolved"}],
+        "fix it", "test-tenant", action_ref="act-fhi42")
+    assert "error" not in result, result
+    row = _row("test-tenant", "Condition", "src-c-fix")
+    assert row.version_id == 2
+    assert row.source is None
+    assert "tag" not in row.to_fhir_json()["meta"]
 
 
 # --- an upload cannot set or override the tag ---------------------------------

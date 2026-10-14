@@ -447,7 +447,7 @@ def _ingest_one(resource: dict, tenant_id: str,
                 agent_id: str = 'fasten-connect',
                 detail: str = 'Ingested via Fasten EHI export',
                 allowed_types: frozenset | None = None,
-                *, source: str,
+                *, source: str | None,
                 ) -> tuple[str, str | None]:
     """
     Ingest a single FHIR resource into the guardrails store.
@@ -472,14 +472,15 @@ def _ingest_one(resource: dict, tenant_id: str,
     though the store technically supports storing them.
 
     `source` is the channel the record arrived through, one of
-    `r6.models.RECORD_SOURCES` (FHI-42). Keyword-only with no default, so a
-    new caller cannot forget it; each caller passes a literal, never a
-    request field. An off-list value raises ValueError before anything is
-    written. Both the new-row and the upsert branch set it: the latest
-    channel wins, as the content does.
+    `r6.models.RECORD_SOURCES` (FHI-42), or None for content no channel we
+    can vouch for delivered (a caller-supplied seed bundle). Keyword-only
+    with no default, so a new caller cannot forget it; each caller passes a
+    literal, never a request field. An off-list value raises ValueError
+    before anything is written. Both the new-row and the upsert branch set
+    it: the latest channel wins, as the content does.
     """
-    if source not in RECORD_SOURCES:
-        raise ValueError('source must be one of RECORD_SOURCES')
+    if source is not None and source not in RECORD_SOURCES:
+        raise ValueError('source must be one of RECORD_SOURCES or None')
     resource_type = resource.get('resourceType', '')
 
     if not resource_type or not R6Resource.is_supported_type(resource_type):

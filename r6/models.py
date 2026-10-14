@@ -80,10 +80,11 @@ class R6Resource(db.Model):
     review_needed = db.Column(db.Boolean, default=False)  # issues found
 
     # The channel this row last arrived through, one of RECORD_SOURCES, set
-    # only by the ingest path (`_ingest_one(source=...)`) and the sample seed.
-    # NULL for rows written before the column existed (no backfill: that
-    # would be inference) and for engine-authored writes. Never read from the
-    # request or the resource's own `meta`.
+    # only by the ingest path (`_ingest_one(source=...)`) and the built-in
+    # sample seed. NULL for rows written before the column existed (no
+    # backfill: that would be inference), for engine-authored writes, and
+    # after any rewrite that is not an ingest (PUT, demo loop, curatr fix).
+    # Never read from the request or the resource's own `meta`.
     source = db.Column(db.String(16), nullable=True)
 
     # Supported resource types for the showcase
@@ -154,11 +155,17 @@ class R6Resource(db.Model):
         return resource
 
     def update_resource(self, new_json):
-        """Update resource content, incrementing version."""
+        """Update resource content, incrementing version.
+
+        Clears `source`: the tag never claims a channel we cannot vouch for,
+        and rewritten content is no longer what that channel delivered.
+        `_ingest_one` sets it again afterwards when the rewrite IS an ingest.
+        """
         self.resource_json = new_json
         self.sha256 = hashlib.sha256(new_json.encode('utf-8')).hexdigest()
         self.version_id += 1
         self.last_updated = datetime.now(timezone.utc)
+        self.source = None
 
     @classmethod
     def is_supported_type(cls, resource_type):
