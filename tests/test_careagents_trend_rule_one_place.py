@@ -116,7 +116,9 @@ def test_get_labs_carries_the_rule(surface):
     MUTATION: drop the rule from get_labs' note -> red."""
     out = json.loads(_execute_tool(_LabsHC(), "t", "get_labs", {}, [],
                                    surface=surface))
-    assert agent._TREND_NO_VERDICT in out["note"]
+    # Its own key: a fully scored answer carries no `note` at all
+    # (test_labs_with_every_result_scored_carry_no_note).
+    assert out["no_verdict_rule"] == agent._TREND_NO_VERDICT
 
 
 @pytest.mark.parametrize("surface", SURFACES)

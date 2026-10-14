@@ -1231,9 +1231,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                     " In a text, keep the trend sentence whole even when you "
                     "shorten everything else." if on_text else ""))
         # A follow-up ("So is that good news?") is answered from here, not
-        # from the timeline's note (QA on #953).
-        out["note"] = ((out["note"] + " ") if out.get("note") else "") + (
-            _TREND_NO_VERDICT)
+        # from the timeline's note (QA on #953). Its own key, not `note`: a
+        # fully scored answer carries no note, so the one that matters is
+        # not read past as boilerplate.
+        out["no_verdict_rule"] = _TREND_NO_VERDICT
         return json.dumps(out)
     if name == "show_lab_timeline":
         topic = str(args.get("topic") or "")
