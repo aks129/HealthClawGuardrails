@@ -112,3 +112,26 @@ def test_the_new_sentence_reaches_the_caller():
     from r6 import access
     reason = 'Token scope cannot authorize this operation'
     assert access.public_step_up_reason(reason) == reason
+
+
+# --- audience, both ways (#963 security review F1) --------------------------
+
+@pytest.mark.parametrize('require_scope', ['write', None])
+def test_a_gate_without_an_audience_refuses_a_token_with_one(require_scope):
+    """The approval credential and the check-in token are purpose-bound;
+    neither is a general credential for the tenant, read or write.
+
+    MUTATION: put back `if require_audience is not None and ...` -> red."""
+    token = generate_step_up_token(TENANT, audience='action-approval',
+                                   operation='op')
+    assert validate_step_up_token(token, TENANT,
+                                  require_scope=require_scope) == (
+        False, 'Token audience mismatch')
+
+
+def test_a_gate_with_an_audience_still_accepts_exactly_it():
+    token = generate_step_up_token(TENANT, audience='action-approval',
+                                   operation='op')
+    assert validate_step_up_token(
+        token, TENANT, require_audience='action-approval',
+        require_operation='op') == (True, None)

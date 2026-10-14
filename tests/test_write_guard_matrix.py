@@ -912,6 +912,94 @@ def test_step_up_row_refuses_an_unknown_scope(client, app, row, secrets):
         f"scoped 'checkin'; expected {row.step_up_missing_status}")
 
 
+#: Audiences a token can be minted for. 'action-approval' is the one main
+#: mints today (r6/actions/routes.py issue_action_approval_token); the other
+#: stands for any purpose-bound token added after it.
+_FOREIGN_AUDIENCES = ("action-approval", "checkin-export")
+
+
+@pytest.mark.parametrize("audience", _FOREIGN_AUDIENCES)
+@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+def test_step_up_row_refuses_a_token_bound_to_another_audience(
+        client, app, row, audience, secrets):
+    """A token minted for one purpose authorizes that purpose and nothing
+    else (FHI-57, #963 security review F1).
+
+    MUTATION: in r6/stepup.py validate_step_up_token, check the audience
+    only `if require_audience is not None` again. Every row except
+    actions-confirm/decline (which ask for 'action-approval' and refuse on
+    the operation) goes red.
+
+    The token here has no scope claim, the full-capability shape the
+    approval credential is minted with, so the audience is the only thing
+    that can refuse it.
+    """
+    if audience == "action-approval" and row.id in ("actions-confirm",
+                                                    "actions-decline"):
+        pytest.skip(
+            "this IS the row's audience. Its operation binding is "
+            "test_confirm_requires_an_action_bound_single_use_token's; with "
+            "no action seeded the gate binds no operation and the route "
+            "answers 404 Unknown action, which writes nothing")
+    resp = call(client, row,
+                headers={"X-Tenant-Id": PRIVATE_TENANT,
+                         "X-Step-Up-Token": token_for(
+                             PRIVATE_TENANT, audience=audience,
+                             operation="guard-matrix-op")},
+                app=app)
+    assert resp.status_code == row.step_up_missing_status, (
+        f"{row.method} {row.path} answered {resp.status_code} to a token "
+        f"bound to audience {audience!r}; expected "
+        f"{row.step_up_missing_status}")
+
+
+#: Read gates that take a step-up token without asking for an audience:
+#: r6/read_auth.py (instance read and search) and the command center's
+#: session-or-step-up predicate.
+_AUDIENCE_FREE_READS = (
+    "/r6/fhir/Patient/guard-matrix-pt",
+    "/r6/fhir/Condition",
+    f"/command-center/api/system?tenant={PRIVATE_TENANT}",
+)
+
+
+@pytest.mark.parametrize("audience", _FOREIGN_AUDIENCES)
+@pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
+def test_an_audience_bound_token_reads_nothing(client, app, monkeypatch,
+                                               path, audience):
+    """The read half of the same rule. Before it, a check-in token minted
+    for {Patient} read any type and any patient in the tenant for its whole
+    TTL, even after the export had spent it.
+
+    MUTATION: as above. Every case goes red; the control below stays green,
+    which is what shows the audience, not the path, is being measured.
+    """
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
+    resp = client.get(path, headers={
+        "X-Tenant-Id": PRIVATE_TENANT,
+        "X-Step-Up-Token": token_for(PRIVATE_TENANT, scope="read",
+                                     audience=audience,
+                                     operation="guard-matrix-op")})
+    assert resp.status_code == 401, (
+        f"GET {path} answered {resp.status_code} to a token bound to "
+        f"audience {audience!r}")
+
+
+@pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
+def test_a_token_without_an_audience_still_reads(client, app, monkeypatch,
+                                                 path):
+    """Control: tokens minted before audiences existed keep working."""
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
+    resp = client.get(path, headers={
+        "X-Tenant-Id": PRIVATE_TENANT,
+        "X-Step-Up-Token": token_for(PRIVATE_TENANT, scope="read")})
+    assert resp.status_code == 200, (
+        f"GET {path} refused a tenant-bound token with no audience "
+        f"({resp.status_code})")
+
+
 @pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
 def test_the_step_up_gate_runs_before_the_body_is_parsed(client, app, row,
                                                          secrets):

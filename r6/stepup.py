@@ -247,6 +247,8 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
             all (the legacy full-capability shape) or 'write'. Any other
             claim, 'read' or a string nobody planned for, is refused.
         require_audience: Exact audience claim required for this operation.
+            None means the gate serves no audience, so a token that carries
+            one is refused.
         require_operation: Exact operation claim required for this operation.
 
     Returns:
@@ -307,7 +309,12 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
             return False, 'Read-scoped token cannot authorize this operation'
         return False, 'Token scope cannot authorize this operation'
 
-    if require_audience is not None and payload.get('aud') != require_audience:
+    # Audience, both ways (FHI-57, #963 security review F1). A gate that asks
+    # for an audience needs exactly it, and a gate that asks for none refuses
+    # a token that carries one: a token minted for one purpose (an action
+    # approval, a check-in export) is not a general credential for the rest
+    # of the tenant. Tokens minted without `aud` are unaffected.
+    if payload.get('aud') != require_audience:
         return False, 'Token audience mismatch'
 
     if require_operation is not None and payload.get('op') != require_operation:
