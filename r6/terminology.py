@@ -256,6 +256,37 @@ _LABELS: dict[tuple[str, str], str] = {
         "Patient administration",
 }
 
+#: SNOMED "no known allergy": 716186003 and every descendant (tx.fhir.org,
+#: isa/716186003, 2026-10-13). And "patient not asked" (1631000175102), an
+#: allergy-status concept. Their names are statements about allergies, not
+#: names of anything: written as `display`/`text`, "No known allergy" reached
+#: every MCP client as a bare fact about the person that no one attested
+#: (#950). The one source of truth: r6/brief/engine.py imports these, and
+#: careagents/agent.py mirrors them under a parity test.
+NKA_CONCEPTS = frozenset((SNOMED, c) for c in (
+    "716186003", "409137002", "428197003", "428607008", "429625007",
+    "716220001", "1003774007"))
+ALLERGY_STATUS_CONCEPTS = frozenset({(SNOMED, "1631000175102")})
+ABSENCE_CONCEPTS = NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS
+
+#: What label_codings writes as `text` for an absence concept: a record
+#: entry, never a fact. Keyed by code only, so no date or other detail from
+#: the record can enter it. Draft wording, awaiting owner approval (#950).
+_NKA_ENTRY = ("Recorded entry: '{}'. Not a confirmed absence; confirm with "
+              "a clinician.")
+_ABSENCE_TEXT: dict[tuple[str, str], str] = {
+    (SNOMED, "716186003"): _NKA_ENTRY.format("no known allergy"),
+    (SNOMED, "409137002"): _NKA_ENTRY.format("no known drug allergy"),
+    (SNOMED, "428197003"): _NKA_ENTRY.format("no known insect allergy"),
+    (SNOMED, "428607008"): _NKA_ENTRY.format("no known environmental allergy"),
+    (SNOMED, "429625007"): _NKA_ENTRY.format("no known food allergy"),
+    (SNOMED, "716220001"): _NKA_ENTRY.format("no known animal allergy"),
+    (SNOMED, "1003774007"): _NKA_ENTRY.format("no known latex allergy"),
+    (SNOMED, "1631000175102"): (
+        "Recorded entry: 'patient not asked about allergies'. Allergies were "
+        "not checked; confirm with a clinician."),
+}
+
 # Codes seen that we had no label for. Read with unlabelled_codes(); this is how
 # the map grows from evidence instead of guesswork.
 _MISSES: collections.Counter = collections.Counter()
@@ -305,6 +336,27 @@ def lookup(system: str | None, code: str | None) -> str | None:
     return None
 
 
+def _absence_key(system, code) -> tuple[str, str] | None:
+    """(system, code) keyed exactly as lookup keys it, if it is an absence
+    concept: an int code reads as its digits, a bool or list is no code."""
+    if isinstance(code, bool) or not isinstance(code, (str, int)) or code == "":
+        return None
+    key = (canonical_system(system), str(code).strip())
+    return key if key in ABSENCE_CONCEPTS else None
+
+
+def is_absence_coding(coding) -> bool:
+    """True for a Coding of one of ABSENCE_CONCEPTS, in any system spelling."""
+    return (isinstance(coding, dict)
+            and _absence_key(coding_system(coding), coding.get("code")) is not None)
+
+
+def absence_text(system, code) -> str | None:
+    """The qualified entry text for an absence concept, else None."""
+    key = _absence_key(system, code)
+    return _ABSENCE_TEXT.get(key) if key else None
+
+
 def unlabelled_codes(limit: int = 50) -> list[tuple[tuple[str, str], int]]:
     """Most-requested codes we have no label for, most frequent first."""
     return _MISSES.most_common(limit)
@@ -324,6 +376,11 @@ def label_codings(obj):
 
     A CodeableConcept whose codings are all recognised also gets a `text`, since
     that is the field most consumers read first.
+
+    An absence concept (ABSENCE_CONCEPTS) gets no `display`: its name reads as
+    a fact about the person (#950). A concept coded ONLY with absence concepts
+    gets the qualified entry text from _ABSENCE_TEXT instead. Beside any other
+    coding it gets none, since that coding may name a real substance.
     """
     if isinstance(obj, list):
         for item in obj:
@@ -335,13 +392,21 @@ def label_codings(obj):
     codings = obj.get("coding")
     if isinstance(codings, list):
         labels = []
+        absences = []
         for coding in codings:
             if not isinstance(coding, dict):
+                continue
+            entry = absence_text(coding_system(coding), coding.get("code"))
+            if entry:
+                coding.pop("display", None)
+                absences.append(entry)
                 continue
             label = lookup(coding_system(coding), coding.get("code"))
             if label:
                 coding["display"] = label
                 labels.append(label)
+        if absences and len(absences) == len(codings):  # absences only
+            labels = absences
         if labels and not obj.get("text"):
             obj["text"] = labels[0]
 

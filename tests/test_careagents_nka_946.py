@@ -600,12 +600,14 @@ def test_the_brief_never_names_a_record_by_an_absence_concept(
     assert field.label == engine.UNLABELLED
 
 
-def test_the_brief_absence_set_matches_careagents():
-    """The engine and CareAgents share no code, so each holds the set; this
-    holds them equal."""
+def test_the_absence_sets_match_the_engine():
+    """CareAgents imports nothing from the engine, so it mirrors the
+    absence concepts; this holds the mirror equal to the engine's one
+    source, r6.terminology (#950), set by set."""
     from careagents.agent import _ALLERGY_STATUS_CODES, _NKA_CODES
-    from r6.brief import engine
-    assert engine._ABSENCE_CONCEPTS == set(_NKA_CODES) | _ALLERGY_STATUS_CODES
+    from r6 import terminology
+    assert set(_NKA_CODES) == terminology.NKA_CONCEPTS
+    assert _ALLERGY_STATUS_CODES == terminology.ALLERGY_STATUS_CONCEPTS
 
 
 @pytest.mark.parametrize("code", [NKDA, "999999999"])
