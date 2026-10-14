@@ -1,0 +1,151 @@
+"""One rule for what counts as a record, on the upload line and the card (#948).
+
+An upload of 1 Patient and 3 Observations said "4 new records added" while the
+records card under it said "3 records". The card is `record_count`, which sums
+`HealthClawClient.COUNTED_TYPES` — the health records a person can ask about.
+The upload line subtracted documents from the engine's `ingested` and nothing
+else, so the Patient resource, which is the person and not a record about
+them, was counted in one place and not the other.
+
+The rule both now use: an upload adds the landed entries whose type is in
+`COUNTED_TYPES`. These tests pin the two numbers to each other, once against a
+fake engine and once against the real one, since a fake can only prove the
+number is computed, not that the engine's own count agrees with it.
+
+Synthetic data only.
+"""
+
+from __future__ import annotations
+
+import json
+
+from careagents.hub import count_line
+from careagents.models import Connection
+from tests.test_careagents import FakeClient, _login, _make_direct_conn
+from tests.test_careagents import cfg as _cfg_fixture
+from tests.test_careagents import svc as _svc_fixture
+
+cfg = _cfg_fixture
+svc = _svc_fixture
+
+
+def _patient_and_observations(n):
+    entries = [{"resource": {"resourceType": "Patient", "id": "p-1",
+                             "name": [{"family": "Testperson"}]}}]
+    entries += [{"resource": {
+        "resourceType": "Observation", "id": f"o-{i}", "status": "final",
+        "subject": {"reference": "Patient/p-1"},
+        "code": {"coding": [{"system": "http://loinc.org",
+                             "code": "4548-4"}]},
+        "effectiveDateTime": f"2025-0{i + 1}-01",
+        "valueQuantity": {"value": 7 + i, "unit": "%"}}}
+        for i in range(n)]
+    return {"resourceType": "Bundle", "type": "collection", "entry": entries}
+
+
+def _card_count(svc, conn_id):
+    with svc.session() as s:
+        return s.query(Connection).filter_by(id=conn_id).one().last_count
+
+
+def test_the_upload_line_and_the_card_count_the_same_records(
+        cfg, svc, monkeypatch):
+    """MUTATION: count every landed entry that is not a document (the old
+    rule) -> red at 4 against the card's 3."""
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.counted = 3          # what record_count answers: the Observations
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+
+    r = c.post(f"/api/connections/{conn_id}/upload",
+               data=json.dumps(_patient_and_observations(3)),
+               headers={"Content-Type": "application/fhir+json"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    assert d["ingested"] == 4            # the engine's fact, unchanged
+    assert d["records_added"] == 3       # the upload line
+    assert _card_count(svc, conn_id) == 3  # the card
+    assert count_line(_card_count(svc, conn_id)) == "3 records"
+
+
+def test_a_patient_only_upload_adds_no_records(cfg, svc, monkeypatch):
+    """The person themself is not a health record, so an upload of the
+    Patient alone adds none, and says nothing about documents either."""
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.counted = 0
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+
+    r = c.post(f"/api/connections/{conn_id}/upload",
+               data=json.dumps(_patient_and_observations(0)),
+               headers={"Content-Type": "application/fhir+json"})
+    d = r.get_json()
+    assert d["records_added"] == 0
+    assert "uncounted_note" not in d, d
+    assert _card_count(svc, conn_id) == 0
+
+
+def test_the_two_counts_agree_against_the_real_engine(cfg, svc, monkeypatch):
+    """Cross-layer: the real engine's `record_count`, which the card shows,
+    and the upload's `records_added` come out equal for the issue's shape.
+
+    MUTATION: the old rule (`landed - documents`) -> red, 4 against 3.
+    """
+    import requests as _requests
+
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawClient
+    from main import create_app as engine_create_app
+    from models import db
+
+    monkeypatch.setenv("PUBLIC_TENANTS", "test-tenant,ca-count948")
+    engine_app = engine_create_app({
+        "TESTING": True, "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "LEGACY_BOOT_ON_CREATE": False})
+    with engine_app.app_context():
+        db.create_all()
+    engine = engine_app.test_client()
+
+    def _to_requests(resp):
+        r = _requests.Response()
+        r.status_code = resp.status_code
+        r._content = resp.get_data() or b""
+        r.headers.update(resp.headers.to_wsgi_list())
+        return r
+
+    class _Relay:
+        def post(self, url, json=None, headers=None, timeout=None, data=None):
+            return _to_requests(engine.post(url.replace("http://engine", ""),
+                                            json=json, data=data,
+                                            headers=headers or {}))
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            return _to_requests(engine.get(url.replace("http://engine", ""),
+                                           query_string=params or {},
+                                           headers=headers or {}))
+
+    real = HealthClawClient(base="http://engine", mint_secret="unused")
+    real.http = _Relay()
+    real.new_tenant_id = lambda: "ca-count948"
+    app = create_app(config=cfg, client=real, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+
+    r = c.post(f"/api/connections/{conn_id}/upload",
+               data=json.dumps(_patient_and_observations(3)),
+               headers={"Content-Type": "application/fhir+json"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    assert d["ingested"] == 4, d
+    assert _card_count(svc, conn_id) == 3
+    assert d["records_added"] == _card_count(svc, conn_id)
