@@ -4,6 +4,9 @@
   const AGENT = window.CARE_AGENT || "";
   const CONVERSATION = window.CARE_CONVERSATION || "";
   const AGENT_NAME = window.CARE_AGENT_NAME || "Your assistant";
+  // "Mom's records" in the chat of someone the holder cares for, empty in
+  // the holder's own (FHI-44). Page text only, never sent anywhere.
+  const WHOSE = window.CARE_WHOSE || "";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -173,10 +176,12 @@
       c.appendChild(el("p", null,
         "This waits for your answer. Nothing happens until you approve it."));
     } else {
-      c.appendChild(el("h4", null, "Review & approve your intake form"));
+      c.appendChild(el("h4", null, WHOSE ? "Review & approve the intake form"
+                                         : "Review & approve your intake form"));
       c.appendChild(el("p", null,
-        AGENT_NAME + " filled it in from your records. Check each " +
-        "medication and allergy. Nothing is made until you approve."));
+        AGENT_NAME + " filled it in from " + (WHOSE || "your records") +
+        ". Check each medication and allergy. Nothing is made until you " +
+        "approve."));
     }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
@@ -194,7 +199,8 @@
 
   function addPdfCard(url) {
     const c = el("div", "card pdf");
-    c.appendChild(el("h4", null, "Your intake form is ready"));
+    c.appendChild(el("h4", null, WHOSE ? "The intake form is ready"
+                                       : "Your intake form is ready"));
     c.appendChild(el("p", null,
       "You checked it, and the PDF says so. The link works for one day."));
     const a = el("a", "btn-primary", "Open the PDF");

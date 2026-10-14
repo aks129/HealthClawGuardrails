@@ -246,3 +246,20 @@ def test_the_empty_approvals_list_says_assistant(cfg, svc, monkeypatch):
         as_text=True).split())
     assert "When an assistant proposes something on these records" in page
     assert "an agent" not in page
+
+
+def test_moms_review_card_says_whose_records_it_was_filled_from(
+        cfg, svc, monkeypatch):
+    """The card a waiting intake form draws said "filled it in from your
+    records" in Mom's chat. Page text only, never sent to a model."""
+    chat_js = (_STATIC / "static" / "chat.js").read_text()
+    card = chat_js.split("function addReviewCard(")[1].split("\n  }\n")[0]
+    assert '" filled it in from " + (WHOSE || "your records")' in card
+    assert 'WHOSE ? "Review & approve the intake form"' in card
+    pdf = chat_js.split("function addPdfCard(")[1].split("\n  }\n")[0]
+    assert 'WHOSE ? "The intake form is ready"' in pdf
+    c, _, _, mine, mom = _with_mom(cfg, svc, monkeypatch)
+    page = c.get(f"/chat?agent={mom['agent_id']}").get_data(as_text=True)
+    assert f'window.CARE_WHOSE = "{NICK}\\u0027s records";' in page
+    own = c.get(f"/chat?agent={mine}").get_data(as_text=True)
+    assert 'window.CARE_WHOSE = "";' in own

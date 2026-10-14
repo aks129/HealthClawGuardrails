@@ -141,6 +141,7 @@
 window.CARE_AGENT = {{ agent_id|tojson }};
 window.CARE_CONVERSATION = {{ conversation_id|tojson }};
 window.CARE_AGENT_NAME = {{ me.name|tojson }};
+window.CARE_WHOSE = {{ whose|tojson }};
 </script>
 <script src="{{ url_for('static', filename='chat.js') }}"></script>
 {% endblock %}
