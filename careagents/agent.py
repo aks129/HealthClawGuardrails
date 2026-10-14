@@ -283,6 +283,8 @@ _NKA_CODES = {
     ("http://snomed.info/sct", "429625007"): "no known food allergies",
     ("http://snomed.info/sct", "716220001"): "no known animal allergies",
     ("http://snomed.info/sct", "1003774007"): "no known latex allergies",
+    # Inactive predecessor of 716186003, still in legacy feeds (#957).
+    ("http://snomed.info/sct", "160244002"): "no known allergies",
 }
 
 

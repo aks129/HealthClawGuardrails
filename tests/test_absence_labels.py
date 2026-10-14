@@ -31,7 +31,9 @@ from r6.terminology import (ABSENCE_CONCEPTS, ALLERGY_STATUS_CONCEPTS,
                             label_codings)
 
 NKA_CODES = ("716186003", "409137002", "428197003", "428607008",
-             "429625007", "716220001", "1003774007")
+             "429625007", "716220001", "1003774007",
+             # Inactive since 2016-07-31; legacy feeds still carry it.
+             "160244002")
 STATUS = "1631000175102"
 ABSENCE_CODES = NKA_CODES + (STATUS,)
 PENICILLIN = "91936005"
@@ -105,6 +107,74 @@ def test_an_int_code_is_keyed_as_its_digits():
     label_codings(concept)
     assert "display" not in concept["coding"][0]
     assert concept["text"] == _qualified("716186003")
+
+
+def test_an_absence_coding_that_arrives_with_a_display_loses_it():
+    """QA Q1 on #957: apply_redaction strips display first, so only a
+    direct caller of label_codings exercises the pop."""
+    concept = {"coding": [{"system": SNOMED, "code": "716186003",
+                           "display": "No known allergy"}]}
+    label_codings(concept)
+    assert "display" not in concept["coding"][0]
+    assert concept["text"] == terminology.absence_text(SNOMED, "716186003")
+
+
+# --- layer 1: a SNOMED code is a well-formed concept id, or it is not looked up
+
+@pytest.mark.parametrize("code", [
+    "0716186003", "716186003|No known allergy|", "716186003+716186003",
+    "12345", "1234567890123456789", "no known allergies", "71618600３"])
+def test_a_malformed_snomed_code_never_reaches_the_resolver(monkeypatch,
+                                                            code):
+    """tx.fhir.org names "0716186003" and compositional expressions as
+    absences (#957 security F2), and free text sent there leaves the
+    deployment. Neither is looked up, labelled, or counted as a miss."""
+    asked = []
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: asked.append(c) or "No known allergy")
+    terminology.reset_unlabelled()
+    assert terminology.lookup(SNOMED, code) is None
+    concept = {"coding": [{"system": SNOMED, "code": code}]}
+    label_codings(concept)
+    assert "display" not in concept["coding"][0] and "text" not in concept
+    assert asked == []
+    assert terminology.unlabelled_codes() == []
+
+
+def test_a_well_formed_snomed_code_still_reaches_the_resolver(monkeypatch):
+    asked = []
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: asked.append(c) or "Asthma")
+    assert terminology.lookup(SNOMED, " 195967001\n") == "Asthma"
+    assert asked == ["195967001"]
+
+
+# --- layer 3: a resolver answer that reads as an absence is never a label ----
+
+@pytest.mark.parametrize("label", [
+    "No known allergies", "No known drug allergy", "NKDA", "NKA",
+    "Patient not asked", "No drug allergy", "No allergy to latex",
+    "Allergy status not asked"])
+def test_a_resolver_absence_answer_for_an_unlisted_code_is_never_a_label(
+        monkeypatch, label):
+    """A code missing from ABSENCE_CONCEPTS (here a synthetic, well-formed
+    id) that the resolver names as an absence still gets no display and no
+    text: the set can lag SNOMED, the check on the answer cannot."""
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: label)
+    assert terminology.lookup(SNOMED, "999999001") is None
+    concept = {"coding": [{"system": SNOMED, "code": "999999001"}]}
+    label_codings(concept)
+    assert "display" not in concept["coding"][0] and "text" not in concept
+
+
+@pytest.mark.parametrize("label", [
+    "Allergy to penicillin", "Non-allergic rhinitis", "Known allergy",
+    "Nodular goiter"])
+def test_an_ordinary_resolver_answer_is_still_a_label(monkeypatch, label):
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: label)
+    assert terminology.lookup(SNOMED, "999999001") == label
 
 
 @pytest.mark.parametrize("code", [True, ["716186003"], {"c": 1}])

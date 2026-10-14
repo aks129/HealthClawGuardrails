@@ -18,9 +18,13 @@ network:
   compositional grammar with its term) and "716186003+716186003" (an
   expression) all resolve; none is in the set.
 
-Each test here FAILS on dd04203 and passes once the bypass is closed. The
-last block holds controls that already pass (audit detail, share bundle,
-the SDC attestation item, the alias and int spellings).
+These failed on dd04203. They are now closed in three layers
+(r6/terminology.py): a SNOMED code must be a well-formed concept id before
+it is looked up or sent to the resolver; 160244002 is in NKA_CONCEPTS; and
+a resolver answer that reads as an absence or status statement is never
+used as a label. The last block holds controls that held already (audit
+detail, share bundle, the SDC attestation item, the alias and int
+spellings).
 
 Synthetic data only. "Zelda Quornwhistle" is an invented canary name.
 """
@@ -90,27 +94,33 @@ def _allergy(codes, rid="sec957", system=SNOMED):
 
 # --- F1: the inactive legacy concept 160244002 ------------------------------
 
-def test_f1_legacy_nka_concept_is_written_as_a_bare_name():
+def test_f1_legacy_nka_concept_gets_qualified_text_not_a_name():
     concept = {"coding": [{"system": SNOMED, "code": LEGACY_NKA}]}
     label_codings(concept)
     _assert_no_bare_name(concept)
+    assert "display" not in concept["coding"][0]
+    assert concept["text"] == terminology.absence_text(SNOMED, LEGACY_NKA)
 
 
 def test_f1_legacy_nka_beside_a_real_absence_concept():
-    """[716186003, 160244002]: the PR drops the first coding's display, and
-    the second supplies display and text as "No known allergies"."""
+    """[716186003, 160244002]: at dd04203 the second coding supplied
+    display and text as "No known allergies". Both are absences now."""
     out = apply_redaction(_allergy(["716186003", LEGACY_NKA]))
     assert CANARY not in json.dumps(out)
     _assert_no_bare_name(out)
+    assert all("display" not in c for c in out["code"]["coding"])
+    assert out["code"]["text"] == terminology.absence_text(SNOMED, "716186003")
 
 
 # --- F2: code spellings the resolver accepts and the guard does not ---------
 
 @pytest.mark.parametrize("code", VARIANTS)
-def test_f2_code_variant_is_written_as_a_bare_name(code):
+def test_f2_code_variant_gets_no_label_at_all(code):
     out = apply_redaction(_allergy([code]))
     assert CANARY not in json.dumps(out)
     _assert_no_bare_name(out)
+    assert "display" not in out["code"]["coding"][0]
+    assert "text" not in out["code"]
 
 
 @pytest.mark.parametrize("code", BYPASSES)
