@@ -107,12 +107,17 @@ def test_moms_replayed_history_drops_the_old_line(cfg, svc, monkeypatch):
     hc = FakeClient()
     c, _, hc, _, mom = _with_mom(cfg, svc, monkeypatch, hc=hc)
     old = f"{beta.SAMPLE_FRAME}\n\nThe A1c is 5.4."
+    new = f"{MOM_FRAME}\n\nThe LDL is 96."
     hc.recent_messages = lambda *a, **k: [
         {"role": "user", "content": "How are the labs?"},
-        {"role": "assistant", "content": old}]
+        {"role": "assistant", "content": old},
+        {"role": "user", "content": "And the LDL?"},
+        {"role": "assistant", "content": new}]
     page = c.get(f"/chat?agent={mom['agent_id']}").get_data(as_text=True)
     assert "not yours" not in page
-    assert "The A1c is 5.4." in page
+    assert "The A1c is 5.4." in page and "The LDL is 96." in page
+    # Her own line shows once, in the banner, not again in a bubble.
+    assert page.count(MOM_FRAME) == 1
 
 
 def test_moms_chat_banner_and_starters_name_her_by_relationship(
