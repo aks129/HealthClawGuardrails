@@ -1245,6 +1245,41 @@ def _is_ssn_identifier(ident):
         isinstance(c, dict) and c.get('code') == 'SS' for c in codings)
 
 
+#: The second, independent SSN check (#963 security delta D1). The first,
+#: _is_ssn_identifier, knows the two standard systems and the v2-0203 `SS`
+#: code; an upstream that labels an SSN its own way (a local system named
+#: "ssn", a `type.text`, a local code `SSN`) passes it. This one reads the
+#: labels and the value instead, and over-matches on purpose: a dropped
+#: identifier costs one identifier, a missed one leaks an SSN.
+_SSN_LABEL = re.compile(r'ssn|social.?security', re.IGNORECASE)
+_SSN_VALUE = re.compile(r'\d{3}-?\d{2}-?\d{4}')
+
+
+def _looks_like_ssn(ident):
+    """True when the identifier's system, any type coding's code, or its
+    `type.text` reads as an SSN label, or its value has an SSN's shape."""
+    if not isinstance(ident, dict):
+        return False
+    labels = [ident.get('system')]
+    concept = ident.get('type')
+    if isinstance(concept, dict):
+        labels.append(concept.get('text'))
+        codings = concept.get('coding')
+        if isinstance(codings, list):
+            labels.extend(c.get('code') for c in codings
+                          if isinstance(c, dict))
+    if any(isinstance(label, str) and _SSN_LABEL.search(label)
+           for label in labels):
+        return True
+    value = ident.get('value')
+    return isinstance(value, str) and bool(_SSN_VALUE.fullmatch(value.strip()))
+
+
+def _is_ssn_class(ident):
+    """Either check. Every SSN decision in the check-in profile asks this."""
+    return _is_ssn_identifier(ident) or _looks_like_ssn(ident)
+
+
 def _has_coding(concept, system, codes):
     """True when CodeableConcept `concept` has a coding of `system` with a
     code in `codes`. Read off the stored record, so every shape is checked."""
@@ -1293,6 +1328,10 @@ _COVERAGE_STATUS = frozenset({'active', 'cancelled', 'draft',
                               'entered-in-error'})
 
 
+#: A code we pass through: a code, not a sentence (#963 security delta).
+_CODE_SHAPE = re.compile(r'[A-Za-z0-9._-]{1,64}')
+
+
 def _codes_only(concept):
     """A CodeableConcept reduced to its codings' system and code: no
     display, no text, no extension. None when nothing coded is left."""
@@ -1300,7 +1339,8 @@ def _codes_only(concept):
     kept = [{'system': c['system'], 'code': c['code']}
             for c in codings or [] if isinstance(c, dict)
             and isinstance(c.get('system'), str)
-            and isinstance(c.get('code'), str)]
+            and isinstance(c.get('code'), str)
+            and _CODE_SHAPE.fullmatch(c['code'])]
     return {'coding': kept} if kept else None
 
 
@@ -1334,7 +1374,7 @@ def _checkin_coverage(original, res, patient_id):
 
     idents = []
     for ident in original.get('identifier') or []:
-        if not isinstance(ident, dict) or _is_ssn_identifier(ident):
+        if not isinstance(ident, dict) or _is_ssn_class(ident):
             continue
         if not _has_coding(ident.get('type'), _V2_0203, ('MB', 'SN')):
             continue
@@ -1494,6 +1534,10 @@ def _patient_extensions(original):
     return out
 
 
+#: Identifier.use (R4 IdentifierUse), the only values copied.
+_IDENTIFIER_USE = frozenset({'usual', 'official', 'temp', 'secondary', 'old'})
+
+
 def _patient_identifiers(original):
     """Patient.identifier WITH values, for a check-in only (owner ruling
     2026-10-14: the patient consented to this item). SSN-class identifiers
@@ -1502,13 +1546,16 @@ def _patient_identifiers(original):
     a string value is dropped rather than sent as a stub."""
     out = []
     for ident in original.get('identifier') or []:
-        if not isinstance(ident, dict) or _is_ssn_identifier(ident):
+        if not isinstance(ident, dict) or _is_ssn_class(ident):
             continue
         value = ident.get('value')
         if not (isinstance(value, str) and value):
             continue
-        kept = {k: ident[k] for k in ('use', 'system')
-                if isinstance(ident.get(k), str)}
+        kept = {}
+        if ident.get('use') in _IDENTIFIER_USE:
+            kept['use'] = ident['use']
+        if isinstance(ident.get('system'), str):
+            kept['system'] = ident['system']
         coded = _codes_only(ident.get('type'))
         if coded:
             kept['type'] = coded
@@ -1571,7 +1618,7 @@ def _checkin_profile(resource, *, patient_id):
         res.pop(key, None)
     idents = res.get('identifier')
     if isinstance(idents, list):
-        kept = [i for i in idents if not _is_ssn_identifier(i)]
+        kept = [i for i in idents if not _is_ssn_class(i)]
         if kept:
             res['identifier'] = kept
         else:
