@@ -72,12 +72,6 @@ CLAIMS_BY_TYPE = {
 }
 
 
-#: The `op` the export checks when the request names no valid set of types.
-#: No mint produces it (parse_types refuses an empty list), so the grant
-#: refuses such a request exactly as it refuses any other mismatch.
-NO_OPERATION = 'checkin:'
-
-
 def parse_types(value):
     """The requested types as a sorted list, or None if the request is not
     a non-empty JSON array of CHECKIN_TYPES strings."""
@@ -141,7 +135,8 @@ def export(tenant, body):
     - Gate: a token minted for exactly this type set (`aud` checkin-export,
       `op` from r6/checkin.operation), single use. The cached general token
       has no `aud` and is refused; a subset or superset is refused.
-    - `patient_id` is required, and only that patient's rows go out.
+    - `patient_id` and a valid type set are required, checked before the
+      token is spent; a 400 is audited. Only that patient's rows go out.
     - Only rows carrying an allow-listed claim for their own type go out.
     - Each row goes through r6/access.py _checkin_profile. Payor Organizations
       are fetched by the ids the exported Coverage references, in this
@@ -149,18 +144,28 @@ def export(tenant, body):
     - Over MAX_BUNDLE_BYTES: 413 and no bundle. Never truncated.
     - One AuditEvent, from fixed words.
     """
+    # The request is checked BEFORE the grant, so a malformed one does not
+    # spend the single-use token (#963 security review F4). Both checks are
+    # about the request, not the credential, and answer the same to anyone.
     types = parse_types(body.get('resource_types'))
-    access.require_grant(
-        scope=access.Scope.TENANT_BOUND, tenant=tenant, audience=AUDIENCE,
-        operation=operation(types) if types else NO_OPERATION,
-        consume_nonce=True, absent_status=401, rejected_status=401)
-
     patient_id = body.get('patient_id')
-    if not (isinstance(patient_id, str)
-            and _PATIENT_ID.fullmatch(patient_id)):
+    if types is None or not (isinstance(patient_id, str)
+                             and _PATIENT_ID.fullmatch(patient_id)):
+        add_audit_event(
+            'read', resource_type='Bundle', resource_id='share-bundle',
+            agent_id=AUDIT_AGENT, tenant_id=tenant.id, outcome='failure',
+            detail='share-bundle export (profile=checkin) refused: '
+                   'resource_types or patient_id missing or malformed')
+        db.session.commit()
         return jsonify({'resourceType': 'OperationOutcome', 'issue': [{
             'severity': 'error', 'code': 'required',
-            'diagnostics': 'profile "checkin" requires patient_id'}]}), 400
+            'diagnostics': 'profile "checkin" requires resource_types from '
+                           'the check-in set and a patient_id'}]}), 400
+
+    access.require_grant(
+        scope=access.Scope.TENANT_BOUND, tenant=tenant, audience=AUDIENCE,
+        operation=operation(types), consume_nonce=True,
+        absent_status=401, rejected_status=401)
 
     rows = R6Resource.query.filter(
         R6Resource.tenant_id == tenant.id,

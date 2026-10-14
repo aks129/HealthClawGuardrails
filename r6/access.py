@@ -1229,14 +1229,20 @@ _PAYOR_REF = re.compile(r'Organization/[A-Za-z0-9\-.]{1,255}')
 
 
 def _is_ssn_identifier(ident):
-    """An SSN by system, either spelling, or by v2-0203 type `SS` under any
-    system at all: an upstream that invents its own SSN system still says
-    what it is in the type."""
+    """An SSN by identifier system, either spelling, or by ANY type coding
+    whose code is `SS`, whatever system the coding names: an upstream that
+    invents its own SSN system still says what it is in the type, and the
+    v2-0203 URL itself has more than one spelling (the R3
+    http://hl7.org/fhir/v2/0203 among them). Over-matching an `SS` from some
+    other code system costs one identifier; under-matching leaks an SSN."""
     if not isinstance(ident, dict):
         return False
     if ident.get('system') in _SSN_SYSTEMS:
         return True
-    return _has_coding(ident.get('type'), _V2_0203, ('SS',))
+    concept = ident.get('type')
+    codings = concept.get('coding') if isinstance(concept, dict) else None
+    return isinstance(codings, list) and any(
+        isinstance(c, dict) and c.get('code') == 'SS' for c in codings)
 
 
 def _has_coding(concept, system, codes):
@@ -1282,14 +1288,46 @@ def _is_related_person_ref(value):
             and 'RelatedPerson/' in value['reference'])
 
 
+#: Coverage.status values (R4 FinancialResourceStatusCodes).
+_COVERAGE_STATUS = frozenset({'active', 'cancelled', 'draft',
+                              'entered-in-error'})
+
+
+def _codes_only(concept):
+    """A CodeableConcept reduced to its codings' system and code: no
+    display, no text, no extension. None when nothing coded is left."""
+    codings = concept.get('coding') if isinstance(concept, dict) else None
+    kept = [{'system': c['system'], 'code': c['code']}
+            for c in codings or [] if isinstance(c, dict)
+            and isinstance(c.get('system'), str)
+            and isinstance(c.get('code'), str)]
+    return {'coding': kept} if kept else None
+
+
 def _checkin_coverage(original, res, patient_id):
-    """Coverage under `checkin`: start from the redacted copy and restore,
-    from the stored record and by allow-list only, the member and group
-    numbers and the payor references. The payor's NAME comes from its own
-    Organization record (share_bundle's second lookup), never `display`.
+    """Coverage under `checkin`, built from EMPTY (#963 security review F3).
+    Nothing the redacted copy happened to keep (`network`, `dependent`,
+    `costToBeneficiary`, an extension) can leave: only the keys below, each
+    read off the stored record by allow-list. The payor's NAME comes from
+    its own Organization record (the export's second lookup), never
+    `display`.
 
     A Coverage reaches this function only when the token's `op` named
     Coverage, which is the per-item consent; nothing here re-checks it."""
+    res = {k: res[k] for k in ('resourceType', 'id', 'meta') if k in res}
+    if original.get('status') in _COVERAGE_STATUS:
+        res['status'] = original['status']
+    for key in ('type', 'relationship'):
+        coded = _codes_only(original.get(key))
+        if coded:
+            res[key] = coded
+    period = original.get('period')
+    if isinstance(period, dict):
+        kept = {k: period[k] for k in ('start', 'end')
+                if isinstance(period.get(k), str)}
+        if kept:
+            res['period'] = kept
+
     subscriber_id = original.get('subscriberId')
     if isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64:
         res['subscriberId'] = subscriber_id
@@ -1347,6 +1385,46 @@ def _checkin_coverage(original, res, patient_id):
     return res
 
 
+#: The sub-elements a check-in releases from each Patient identity field
+#: (#963 security review F5). Copying the field by key released anything
+#: nested in it: an extension's valueReference.display, an address `text`.
+_HUMAN_NAME_KEYS = ('use', 'family', 'given', 'prefix', 'suffix')
+_ADDRESS_KEYS = ('use', 'type', 'line', 'city', 'district', 'state',
+                 'postalCode', 'country')
+_CONTACT_POINT_KEYS = ('system', 'value', 'use', 'rank')
+
+
+def _element(value, keys):
+    """`value` reduced to `keys` whose values are strings, lists of
+    strings, or (for `rank`) an int. Anything else is dropped."""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in keys:
+        v = value.get(key)
+        if isinstance(v, str) or (key == 'rank' and isinstance(v, int)
+                                  and not isinstance(v, bool)):
+            out[key] = v
+        elif isinstance(v, list) and v and all(isinstance(i, str) for i in v):
+            out[key] = v
+    return out or None
+
+
+def _patient_identity(original):
+    """name, birthDate, address and telecom, element by element."""
+    out = {}
+    for key, keys in (('name', _HUMAN_NAME_KEYS), ('address', _ADDRESS_KEYS),
+                      ('telecom', _CONTACT_POINT_KEYS)):
+        items = original.get(key)
+        kept = [e for e in (_element(i, keys) for i in items or []
+                            if isinstance(items, list)) if e]
+        if kept:
+            out[key] = kept
+    if isinstance(original.get('birthDate'), str):
+        out['birthDate'] = original['birthDate']
+    return out
+
+
 def _checkin_organization(original, res):
     """A payor Organization: its stored `name`, the NAIC identifier, and
     nothing else a front desk does not need (no address, telecom, contact)."""
@@ -1388,8 +1466,8 @@ def _checkin_profile(resource, *, patient_id):
     rtype = resource.get('resourceType')
     if rtype == 'Patient':
         for key in ('name', 'birthDate', 'address', 'telecom'):
-            if key in resource:
-                res[key] = resource[key]
+            res.pop(key, None)
+        res.update(_patient_identity(resource))
     for key in ('note', 'text', 'conclusion', 'contained'):
         res.pop(key, None)
     idents = res.get('identifier')

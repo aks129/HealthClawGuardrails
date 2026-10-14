@@ -31,7 +31,15 @@ def records(app):
 
 
 # --- F1: a check-in token is a general tenant read credential -------------
+# Fixed in the validator by #962 (main-based), not on this stack. Strict, so
+# these go red (XPASS) the moment this branch is rebased onto a main that has
+# #962: delete the marks in that rebase.
+_FIXED_BY_962 = pytest.mark.xfail(
+    strict=True, reason='#962: an audience-bound token is refused by every '
+                        'gate that does not ask for its audience')
 
+
+@_FIXED_BY_962
 def test_F1_a_check_in_token_cannot_read_an_unticked_type(
         client, records, monkeypatch):
     """Minted for {Patient} only, it reads the patient's Condition on the
@@ -44,6 +52,7 @@ def test_F1_a_check_in_token_cannot_read_an_unticked_type(
     assert resp.status_code == 401, resp.status_code
 
 
+@_FIXED_BY_962
 def test_F1_a_check_in_token_cannot_read_another_patient(
         client, records, monkeypatch):
     monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
@@ -54,6 +63,7 @@ def test_F1_a_check_in_token_cannot_read_another_patient(
     assert resp.status_code == 401, resp.status_code
 
 
+@_FIXED_BY_962
 def test_F1_a_spent_check_in_token_reads_nothing(client, records,
                                                   monkeypatch):
     """Single use holds on the export only: after it is spent, the same
