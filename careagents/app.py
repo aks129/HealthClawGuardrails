@@ -1370,6 +1370,9 @@ def create_app(config: Config | None = None,
         documents = _documents_landed(bundle, result, landed)
         records = _records_landed(bundle, result, landed)
         response["records_added"] = records
+        # So the hub says "you can read" only when unreadable documents did
+        # arrive; otherwise the line is "No new records added." (#953 QA).
+        response["documents_added"] = documents
         note = _uncounted_note(records, documents, uncounted)
         if landed and not records and not documents:
             # Something landed and none of it is a record the card counts.

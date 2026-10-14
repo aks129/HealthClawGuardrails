@@ -93,22 +93,27 @@ def _upload(cfg, svc, monkeypatch, bundle, counted):
     return r.get_json(), conn_id
 
 
+
 def test_a_patient_only_upload_adds_no_records_and_says_why(
         cfg, svc, monkeypatch):
     """The person themself is not a health record, so an upload of the
     Patient alone adds none. A bare "No new records added." read as a failed
-    upload (QA on #953), so the line says what the file held.
+    upload (QA on #953), so the line says what the file held, and the hub
+    keeps it on screen: nothing counted landed, so nothing reloads.
 
     MUTATION: drop the reason -> red."""
     d, conn_id = _upload(cfg, svc, monkeypatch,
                          _patient_and_observations(0), counted=0)
     assert d["records_added"] == 0
+    assert d["documents_added"] == 0
     assert _card_count(svc, conn_id) == 0
     assert d["uncounted_note"] == (
         "This file had personal details but no health records.")
-    assert _home_line(0, d["uncounted_note"]) == (
-        "No new records you can read. This file had personal details but "
-        "no health records.")
+    got = _home(d)
+    assert got["line"] == (
+        "No new records added. This file had personal details but no "
+        "health records.")
+    assert got["reloads"] is False
 
 
 def test_an_upload_of_other_kinds_only_says_why(cfg, svc, monkeypatch):
@@ -121,37 +126,96 @@ def test_an_upload_of_other_kinds_only_says_why(cfg, svc, monkeypatch):
     assert d["records_added"] == 0
     assert d["uncounted_note"] == (
         "This file had no health records of a kind shown here yet.")
+    assert _home(d) == {
+        "line": ("No new records added. This file had no health records "
+                 "of a kind shown here yet."),
+        "reloads": False}
 
 
-def test_an_upload_with_records_gets_no_reason(cfg, svc, monkeypatch):
+def test_an_upload_with_records_reloads_and_carries_its_line(
+        cfg, svc, monkeypatch):
     d, _ = _upload(cfg, svc, monkeypatch, _patient_and_observations(3),
                    counted=3)
     assert d["records_added"] == 3
     assert "uncounted_note" not in d, d
+    assert _home(d) == {"line": "3 new records added.", "reloads": True}
+
+
+def test_a_documents_only_upload_keeps_the_document_wording():
+    """"You can read" is true here, and only here: documents arrived."""
+    d = {"ingested": 2, "records_added": 0, "documents_added": 2,
+         "uncounted_note": ("Notes and documents arrived, and they are not "
+                            "readable here yet.")}
+    assert _home(d) == {
+        "line": ("No new records you can read. Notes and documents arrived, "
+                 "and they are not readable here yet."),
+        "reloads": False}
+
+
+@pytest.mark.parametrize("d, reloads", [
+    ({"ingested": 4, "records_added": 3}, True),
+    ({"ingested": 1, "records_added": 1}, True),
+    # The QA case: landed, nothing counted. It used to reload on ingested.
+    ({"ingested": 1, "records_added": 0}, False),
+    ({"ingested": 12, "records_added": 0, "documents_added": 12}, False),
+    ({"ingested": 0, "records_added": 0}, False),
+    # A body without the count is not evidence of records.
+    ({"ingested": 4}, False),
+])
+def test_the_reload_decision_follows_the_record_count(d, reloads):
+    """MUTATION: decide on `ingested > 0` again -> red on the QA case."""
+    assert _home(d)["reloads"] is reloads
+
+
+def test_the_upload_handler_reloads_only_through_the_decision():
+    """The handler must use uploadReloads and carry its line across the
+    reload; no other reload may sit in the upload path."""
+    src = _HOME_JS.read_text()
+    a = src.index('fileInput.addEventListener("change"')
+    b = src.index("// --- what the last action did", a)
+    handler = src[a:b]
+    assert "if (uploadReloads(d))" in handler
+    assert "return carryNotice(parts.join(\" \"));" in handler
+    assert "location.reload" not in handler
+    assert "ing > 0" not in handler
 
 
 _HOME_JS = (pathlib.Path(__file__).resolve().parents[1]
             / "careagents" / "static" / "home.js")
 
+# readableCountLine and uploadReloads, cut out of home.js by name and run
+# under node, so the test cannot drift from what ships.
 _HARNESS = r"""
 const src = require('fs').readFileSync(process.argv[1], 'utf8');
-const a = src.indexOf('function readableCountLine(');
-const b = src.indexOf('\n  }\n', a);
-if (a < 0 || b < 0) throw new Error('readableCountLine not found');
-const f = new Function(src.slice(a, b + 4) + 'return readableCountLine;')();
-process.stdout.write(f(Number(process.argv[2]), process.argv[3] || undefined));
+function cut(name) {
+  const a = src.indexOf('function ' + name + '(');
+  const b = src.indexOf('\n  }\n', a);
+  if (a < 0 || b < 0) throw new Error(name + ' not found');
+  return src.slice(a, b + 4);
+}
+const { readableCountLine, uploadReloads } = new Function(
+  cut('readableCountLine') + cut('uploadReloads')
+  + 'return { readableCountLine, uploadReloads };')();
+const d = JSON.parse(process.argv[2]);
+const readable = typeof d.records_added === 'number'
+  ? d.records_added : (d.ingested | 0);
+process.stdout.write(JSON.stringify({
+  line: readableCountLine(readable, d.uncounted_note, d.documents_added),
+  reloads: uploadReloads(d),
+}));
 """
 
 
-def _home_line(n, note):
-    """The upload line as the hub writes it, from home.js itself."""
+def _home(d):
+    """The upload line and the reload decision, as home.js makes them for
+    the server's answer `d`."""
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     out = subprocess.run(["node", "-e", _HARNESS, "--", str(_HOME_JS),
-                          str(n), note or ""],
+                          json.dumps(d)],
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
-    return out.stdout
+    return json.loads(out.stdout)
 
 
 def test_the_two_counts_agree_against_the_real_engine(cfg, svc, monkeypatch):
