@@ -27,8 +27,13 @@ import pytest
 from r6 import terminology
 from r6.redaction import apply_patient_controlled_redaction, apply_redaction
 from r6.terminology import (ABSENCE_CONCEPTS, ALLERGY_STATUS_CONCEPTS,
-                            NKA_CONCEPTS, SNOMED, is_absence_coding,
-                            label_codings)
+                            LOINC, LOINC_ABSENCE_ANSWERS, NKA_CONCEPTS,
+                            SNOMED, is_absence_coding, label_codings)
+
+#: LOINC answers stating an absence, confirmed by tx.fhir.org $lookup
+#: 2026-10-14 (#957 round 2).
+LOINC_ANSWERS = {"LA10030-7": "none known", "LA9134-3": "none known",
+                 "LA4715-4": "none or not known"}
 
 NKA_CODES = ("716186003", "409137002", "428197003", "428607008",
              "429625007", "716220001", "1003774007",
@@ -70,7 +75,22 @@ def _no_bare_name(obj):
 def test_the_concept_sets_are_the_closed_lists():
     assert NKA_CONCEPTS == {(SNOMED, c) for c in NKA_CODES}
     assert ALLERGY_STATUS_CONCEPTS == {(SNOMED, STATUS)}
-    assert ABSENCE_CONCEPTS == NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS
+    assert LOINC_ABSENCE_ANSWERS == {(LOINC, c) for c in LOINC_ANSWERS}
+    assert ABSENCE_CONCEPTS == (NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS
+                                | LOINC_ABSENCE_ANSWERS)
+
+
+@pytest.mark.parametrize("code,words", sorted(LOINC_ANSWERS.items()))
+def test_a_loinc_absence_answer_gets_qualified_text_and_no_display(
+        monkeypatch, code, words):
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: "None known")
+    concept = {"coding": [{"system": LOINC, "code": code,
+                           "display": "None known"}]}
+    label_codings(concept)
+    assert "display" not in concept["coding"][0]
+    assert concept["text"] == (f"Recorded entry: '{words}'. Not a confirmed "
+                               "absence; confirm with a clinician.")
 
 
 def test_every_absence_concept_has_qualified_text_and_nothing_else_does():
@@ -154,7 +174,11 @@ def test_a_well_formed_snomed_code_still_reaches_the_resolver(monkeypatch):
 @pytest.mark.parametrize("label", [
     "No known allergies", "No known drug allergy", "NKDA", "NKA",
     "Patient not asked", "No drug allergy", "No allergy to latex",
-    "Allergy status not asked"])
+    "Allergy status not asked", "None known", "None or not known",
+    "Nil known allergies", "Allergies: none", "NKFA", "Not known",
+    "Keine bekannten Allergien", "Aucune allergie connue",
+    "Sin alergias conocidas", "Nessuna allergia nota",
+    "Ninguna alergia conocida"])
 def test_a_resolver_absence_answer_for_an_unlisted_code_is_never_a_label(
         monkeypatch, label):
     """A code missing from ABSENCE_CONCEPTS (here a synthetic, well-formed
@@ -170,7 +194,8 @@ def test_a_resolver_absence_answer_for_an_unlisted_code_is_never_a_label(
 
 @pytest.mark.parametrize("label", [
     "Allergy to penicillin", "Non-allergic rhinitis", "Known allergy",
-    "Nodular goiter"])
+    "Nodular goiter", "Nilotinib", "Sinus tachycardia",
+    "Nonsteroidal anti-inflammatory agent", "Ketoconazole"])
 def test_an_ordinary_resolver_answer_is_still_a_label(monkeypatch, label):
     monkeypatch.setattr("r6.terminology_resolver.resolve",
                         lambda s, c: label)

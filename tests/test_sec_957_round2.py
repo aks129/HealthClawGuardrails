@@ -5,12 +5,14 @@ fullmatch [1-9][0-9]{5,17} before lookup, 160244002 is an absence concept,
 and a resolver answer matching _ABSENCE_WORDING is never a label. It also
 drops a malformed SNOMED code in redaction (`_clean_coding`).
 
-R2-F1 (FAILS at 40fd790): LOINC answers that state an absence in words the
-pattern does not cover. tx.fhir.org (live, 2026-10-14) names LA10030-7
+R2-F1 (failed at 40fd790, fixed since): LOINC answers that state an
+absence in words the pattern did not cover. tx.fhir.org (live, 2026-10-14) names LA10030-7
 "None known" and LA9134-3 "None or none known". An Observation for 52571-7
 ("Known allergies or adverse drug reactions [CARE]") answered with either
-one reaches every consumer as "Known allergies ...: None known". That is a
-bare, unqualified "no known allergies" statement.
+one reached every consumer as "Known allergies ...: None known", a
+bare, unqualified "no known allergies" statement. They are now a closed
+set of LOINC absence answers (terminology.LOINC_ABSENCE_ANSWERS) written as
+a qualified entry, and the wording check on resolver answers is broader.
 
 The item-4 block shows that valid SNOMED ids survive redaction and that
 only non-ids are dropped. It passes.
@@ -67,11 +69,14 @@ def _known_allergies_obs(answer):
 # --- R2-F1: absence wording the pattern does not catch -----------------------
 
 @pytest.mark.parametrize("answer", ["LA10030-7", "LA9134-3"])
-def test_r2_f1_loinc_none_known_answer_is_a_bare_absence(answer):
+def test_r2_f1_loinc_none_known_answer_gets_qualified_text(answer):
     out = apply_redaction(_known_allergies_obs(answer))
     assert CANARY not in json.dumps(out)
-    blob = json.dumps(out["valueCodeableConcept"])
+    value = out["valueCodeableConcept"]
+    blob = json.dumps(value)
     assert not _ABSENCE_STATEMENT.search(blob), blob
+    assert "display" not in value["coding"][0]
+    assert value["text"] == terminology.absence_text(LOINC, answer)
 
 
 @pytest.mark.parametrize("answer", ["LA10030-7", "LA9134-3"])
@@ -103,7 +108,7 @@ def test_r2_f1_through_read_and_search(app, client, tenant_id, tenant_headers,
 def test_absence_wording_pattern_covers_paraphrases(wording):
     """Only the first two have been seen from a live resolver. The rest
     are hypothetical today, since the resolver asks for no display
-    language. Any one of them would still pass the label through."""
+    language; the check refuses them all the same."""
     assert terminology._ABSENCE_WORDING.search(wording), wording
 
 

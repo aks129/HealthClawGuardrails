@@ -271,11 +271,18 @@ NKA_CONCEPTS = frozenset((SNOMED, c) for c in (
     "716186003", "409137002", "428197003", "428607008", "429625007",
     "716220001", "1003774007", "160244002"))
 ALLERGY_STATUS_CONCEPTS = frozenset({(SNOMED, "1631000175102")})
-ABSENCE_CONCEPTS = NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS
+#: LOINC answers that state an absence: "None known", "None or none known"
+#: and "None or not known" (tx.fhir.org $lookup, 2026-10-14). An Observation
+#: for 52571-7, known allergies, answered LA10030-7 read back as a bare
+#: "None known" (#957 round 2).
+LOINC_ABSENCE_ANSWERS = frozenset((LOINC, c) for c in (
+    "LA10030-7", "LA9134-3", "LA4715-4"))
+ABSENCE_CONCEPTS = NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS | LOINC_ABSENCE_ANSWERS
 
 #: What label_codings writes as `text` for an absence concept: a record
 #: entry, never a fact. Keyed by code only, so no date or other detail from
-#: the record can enter it. Draft wording, awaiting owner approval (#950).
+#: the record can enter it. Wording owner-approved 2026-10-14 (#950); new
+#: rows follow the approved pattern.
 _NKA_ENTRY = ("Recorded entry: '{}'. Not a confirmed absence; confirm with "
               "a clinician.")
 _ABSENCE_TEXT: dict[tuple[str, str], str] = {
@@ -287,6 +294,9 @@ _ABSENCE_TEXT: dict[tuple[str, str], str] = {
     (SNOMED, "716220001"): _NKA_ENTRY.format("no known animal allergy"),
     (SNOMED, "1003774007"): _NKA_ENTRY.format("no known latex allergy"),
     (SNOMED, "160244002"): _NKA_ENTRY.format("no known allergies"),
+    (LOINC, "LA10030-7"): _NKA_ENTRY.format("none known"),
+    (LOINC, "LA9134-3"): _NKA_ENTRY.format("none known"),
+    (LOINC, "LA4715-4"): _NKA_ENTRY.format("none or not known"),
     (SNOMED, "1631000175102"): (
         "Recorded entry: 'patient not asked about allergies'. Allergies were "
         "not checked; confirm with a clinician."),
@@ -298,9 +308,15 @@ _MISSES: collections.Counter = collections.Counter()
 
 #: A SNOMED CT concept id: 6 to 18 digits, no leading zero.
 _SNOMED_CODE = re.compile(r"[1-9][0-9]{5,17}")
-#: Resolver answers that state an absence or a status, not a name.
+#: Resolver answers that state an absence or a status, not a name. Strict
+#: on purpose: a real substance or finding is never named "none" or "nil",
+#: and a false positive only drops a label (#957 round 2). The last line
+#: holds the German, French, Spanish and Italian negations.
 _ABSENCE_WORDING = re.compile(
-    r"\bno known\b|\bnot asked\b|\bnkd?a\b|\bno\b.*\ballerg", re.IGNORECASE)
+    r"\bno known\b|\bnot (?:asked|known)\b|\bnone\b|\bnil\b"
+    r"|\bnk[a-z]{0,2}a\b|\bno\b.*\ballerg"
+    r"|\bkeine?\b|\baucune?\b|\bsin\b|\bning[uú]n[ao]?\b|\bnessun[ao]?\b",
+    re.IGNORECASE)
 
 
 def canonical_system(system: str | None) -> str:
