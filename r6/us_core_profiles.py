@@ -77,8 +77,17 @@ def keep_profiles(value):
 
 def filter_meta(meta):
     """Replace `meta.profile` with its allow-listed claims, in place; an
-    empty result removes the key."""
-    if not isinstance(meta, dict) or 'profile' not in meta:
+    empty result removes the key.
+
+    Every `_`-prefixed companion element in `meta` goes too, `_profile`
+    first among them: it holds an `id` and `extension` per claim, which is
+    upstream text, and after the sort it would describe the wrong claim.
+    We rebuild none of them."""
+    if not isinstance(meta, dict):
+        return
+    for key in [k for k in meta if isinstance(k, str) and k.startswith('_')]:
+        meta.pop(key)
+    if 'profile' not in meta:
         return
     kept = keep_profiles(meta['profile'])
     if kept:

@@ -200,3 +200,47 @@ def test_a_stored_hostile_profile_never_reaches_read_or_share(
         assert resp.status_code == 200, resp.get_data(as_text=True)
         assert _CANARY not in resp.get_data(as_text=True)
         assert _profiles(resp.get_json()) == [[_PATIENT + "|7.0.0"]] * 3
+
+
+def _underscored(obj):
+    """Every `_`-prefixed key inside any `meta`, at any depth."""
+    found = []
+    if isinstance(obj, list):
+        for item in obj:
+            found += _underscored(item)
+    elif isinstance(obj, dict):
+        meta = obj.get("meta")
+        if isinstance(meta, dict):
+            found += [k for k in meta if k.startswith("_")]
+        for value in obj.values():
+            found += _underscored(value)
+    return found
+
+
+def test_no_meta_companion_element_survives(app):
+    """`meta._profile` and every other `_` companion in `meta` carry
+    upstream `id`/`extension` text. We rebuild none, so all are dropped,
+    whether or not that meta has a `profile` (#961 security review).
+
+    MUTATION: drop the companion pop in `filter_meta` -> red."""
+    shadow = [{"id": _CANARY, "extension": [{"url": _NAME_URL}]}]
+    meta = {"profile": [_PATIENT], "_profile": shadow,
+            "_versionId": {"id": _CANARY}, "_lastUpdated": {"id": _CANARY},
+            "_source": {"extension": [{"url": _NAME_URL}]}}
+    no_profile = {"_profile": shadow, "_source": {"id": _CANARY}}
+    resource = {"resourceType": "Patient", "id": "u-p-1",
+                "meta": json.loads(json.dumps(meta)),
+                "contained": [
+                    {"resourceType": "Coverage", "id": "c1",
+                     "meta": json.loads(json.dumps(meta))},
+                    {"resourceType": "Coverage", "id": "c2",
+                     "meta": json.loads(json.dumps(no_profile))}]}
+    row = R6Resource(resource_type="Patient",
+                     resource_json=json.dumps(resource),
+                     resource_id="u-p-1", tenant_id="test-tenant")
+    for out in (apply_redaction(resource),
+                apply_patient_controlled_redaction(resource, "u-p-1"),
+                row.to_fhir_json()):
+        assert _underscored(out) == []
+        assert _CANARY not in json.dumps(out)
+        assert out["meta"]["profile"] == [_PATIENT]
