@@ -95,9 +95,9 @@ def test_omb_rebuild_keeps_no_upstream_text(app, client):
     out, = f.resources(resp, 'Patient')
     assert out['extension'] == [{'url': RACE, 'extension': [
         {'url': 'ombCategory', 'valueCoding': {
-            'system': CDC, 'code': '2106-3', 'display': 'White'}},
+            'system': CDC, 'code': '2106-3'}},
         {'url': 'ombCategory', 'valueCoding': {
-            'system': CDC, 'code': '2028-9', 'display': 'Asian'}},
+            'system': CDC, 'code': '2028-9'}},
         {'url': 'text', 'valueString': 'White, Asian'}]}]
 
 

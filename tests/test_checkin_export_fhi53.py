@@ -385,12 +385,11 @@ def test_race_and_ethnicity_carry_our_labels_not_upstream_text(app, client):
     assert out['extension'] == [
         {'url': RACE, 'extension': [
             {'url': 'ombCategory', 'valueCoding': {
-                'system': CDC, 'code': '2106-3', 'display': 'White'}},
+                'system': CDC, 'code': '2106-3'}},
             {'url': 'text', 'valueString': 'White'}]},
         {'url': ETHNICITY, 'extension': [
             {'url': 'ombCategory', 'valueCoding': {
-                'system': CDC, 'code': '2186-5',
-                'display': 'Not Hispanic or Latino'}},
+                'system': CDC, 'code': '2186-5'}},
             {'url': 'text', 'valueString': 'Not Hispanic or Latino'}]},
     ]
     assert 'CANARY' not in text
@@ -412,9 +411,9 @@ def test_an_unmapped_category_takes_the_whole_extension_out(app, client):
 
 def test_a_null_flavor_category_carries_the_code_systems_own_display(
         app, client):
-    """The HL7 validator rejects any other display for v3-NullFlavor#ASKU
-    (run on the exported #959 test patient: 4 errors with our own wording,
-    0 against US Core 6.1.0 and 8.0.0 with this one).
+    """The `text` for v3-NullFlavor#ASKU is the code system's own display
+    (an earlier wording drew 4 validator errors as a coding display; check-in
+    output now carries no coding.display at all, ruling B).
 
     MUTATION: label ASKU 'Asked but no answer' again -> red."""
     null_flavor = 'http://terminology.hl7.org/CodeSystem/v3-NullFlavor'
@@ -426,6 +425,79 @@ def test_a_null_flavor_category_carries_the_code_systems_own_display(
     race, = out['extension']
     assert race['extension'] == [
         {'url': 'ombCategory', 'valueCoding': {
-            'system': null_flavor, 'code': 'ASKU',
-            'display': 'asked but unknown'}},
+            'system': null_flavor, 'code': 'ASKU'}},
         {'url': 'text', 'valueString': 'asked but unknown'}]
+
+
+# --- QA recheck: A (Organization.active) and B (our label in text) --------
+
+@pytest.mark.parametrize('active,expected', [(True, True), (False, False),
+                                             ('yes', None)])
+def test_the_payor_keeps_a_boolean_active(app, client, active, expected):
+    """us-core-organization requires `active`.
+
+    MUTATION: drop the `active` copy in _checkin_organization -> red."""
+    org = f.organization()
+    org['active'] = active
+    f.seed(app, f.patient(), f.coverage(), org)
+    resp = f.export(client, f.token(client, ['Coverage']), ['Coverage'])
+    out, = f.resources(resp, 'Organization')
+    assert out.get('active') == expected
+
+
+def _all_displays(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == 'display':
+                yield value
+            yield from _all_displays(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _all_displays(value)
+
+
+def test_check_in_output_has_no_coding_display(app, client):
+    """Ruling B: a validator checks coding.display against the code
+    system's display, and ours differs (CVX 150, RxNorm 314076).
+
+    MUTATION: drop the _codes_with_our_text call -> red."""
+    f.seed(app, f.patient(), f.condition(), f.coverage(), f.organization())
+    types = ['Patient', 'Condition', 'Coverage']
+    resp = f.export(client, f.token(client, types), types)
+    assert list(_all_displays(resp.get_json())) == []
+
+
+def test_our_label_moves_to_codeable_concept_text(app, client):
+    """The label is r6/terminology.py's, keyed by code; upstream text never.
+
+    MUTATION: keep the upstream `text` instead of setting ours -> red."""
+    from r6.terminology import SNOMED, lookup
+    label = lookup(SNOMED, '44054006')
+    assert label
+    f.seed(app, f.patient(), f.condition())
+    resp = f.export(client, f.token(client, ['Condition']), ['Condition'])
+    cond, = f.resources(resp, 'Condition')
+    assert cond['code']['text'] == label
+    assert f.CANARY_DISPLAY not in resp.get_data(as_text=True)
+
+
+def test_an_unrecognised_code_gets_no_text(app, client):
+    """MUTATION: leave `text` alone when nothing is recognised -> red, if
+    redaction or relabelling ever leaves one there."""
+    cond = f.condition('ci-cond-unknown')
+    cond['code'] = {'coding': [{'system': 'https://ehr.example/cs',
+                                'code': 'LOCAL-1',
+                                'display': f.CANARY_DISPLAY}],
+                    'text': f.CANARY_DISPLAY}
+    f.seed(app, f.patient(), cond)
+    resp = f.export(client, f.token(client, ['Condition']), ['Condition'])
+    out, = f.resources(resp, 'Condition')
+    assert out['code'] == {'coding': [{'system': 'https://ehr.example/cs',
+                                       'code': 'LOCAL-1'}]}
+
+
+def test_other_profiles_keep_their_display(app):
+    """Ruling B is check-in only: intake still relabels coding.display."""
+    from r6.access import _intake_profile
+    out = _intake_profile(f.condition())
+    assert out['code']['coding'][0].get('display')

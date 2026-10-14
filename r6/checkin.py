@@ -186,7 +186,8 @@ def export(tenant, body):
                            'the check-in set and a patient_id'}]}), 400
 
     # Checked here without spending; spent only once the bundle is known to
-    # fit, so a 413 leaves the token usable for a narrower retry (QA #963).
+    # fit, so a 413 does not burn it. A narrower retry still needs a newly
+    # minted token: the type set must match the token's `op` exactly.
     grant = dict(scope=access.Scope.TENANT_BOUND, tenant=tenant,
                  audience=AUDIENCE, operation=operation(types),
                  absent_status=401, rejected_status=401)

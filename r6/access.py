@@ -37,6 +37,8 @@ from r6 import fhir_proxy as _fhir_proxy_mod
 from r6 import health_compliance as _compliance_mod
 from r6 import redaction as _redaction_mod
 from r6 import stepup as _stepup_mod
+from r6 import terminology as _terminology_mod
+from r6.safe_read import coding_system as _coding_system
 from r6.models import AuditEventRecord
 from r6.read_auth import TENANT_SESSION_KEY
 
@@ -1467,10 +1469,9 @@ def _patient_identity(original):
 
 #: OMB race and ethnicity categories (CDC Race & Ethnicity code system) and
 #: the two null flavors US Core allows in their place, with OUR label for
-#: each: the code system's own display, which a validator checks the
-#: coding's `display` against. The label is also the extension's required
-#: `text`; upstream `text` and `display` are never used (owner ruling
-#: 2026-10-14).
+#: each: the code system's own display. It is the extension's required
+#: `text`; check-in output carries no `coding.display` (QA ruling B), and
+#: upstream `text` and `display` are never used (owner ruling 2026-10-14).
 _CDC_RACE_ETHNICITY = 'urn:oid:2.16.840.1.113883.6.238'
 _NULL_FLAVOR = 'http://terminology.hl7.org/CodeSystem/v3-NullFlavor'
 _OMB_LABELS = {
@@ -1512,8 +1513,7 @@ def _omb_extension(ext, kind):
     if not kept:
         return None
     subs = [{'url': 'ombCategory', 'valueCoding': {
-        'system': system, 'code': code, 'display': label}}
-        for (system, code), label in kept]
+        'system': system, 'code': code}} for (system, code), _ in kept]
     subs.append({'url': 'text',
                  'valueString': ', '.join(label for _, label in kept)})
     return {'url': _US_CORE_SD + kind, 'extension': subs}
@@ -1564,10 +1564,46 @@ def _patient_identifiers(original):
     return out
 
 
+def _codes_with_our_text(obj):
+    """Check-in output only (QA recheck of #963, ruling B): no `display`
+    anywhere, and each CodeableConcept's `text` is OUR label for its first
+    recognised coding, from r6/terminology.py, or absent.
+
+    The relabel that apply_redaction runs writes our label into
+    `coding.display`, and a validator checks that against the code system's
+    own display (CVX 150, RxNorm 314076 failed). `display` is optional, so
+    it goes; the label moves to `text`, where it is ours to choose. A
+    Reference.display is upstream text and was already stripped; this
+    removes any that remain all the same.
+    """
+    if isinstance(obj, list):
+        for item in obj:
+            _codes_with_our_text(item)
+        return
+    if not isinstance(obj, dict):
+        return
+    obj.pop('display', None)
+    codings = obj.get('coding')
+    if isinstance(codings, list):
+        label = next((lbl for lbl in (
+            _terminology_mod.lookup(_coding_system(c), c.get('code'))
+            for c in codings if isinstance(c, dict)) if lbl), None)
+        if label:
+            obj['text'] = label
+        else:
+            obj.pop('text', None)
+    for value in obj.values():
+        _codes_with_our_text(value)
+
+
 def _checkin_organization(original, res):
-    """A payor Organization: its stored `name`, the NAIC identifier, and
-    nothing else a front desk does not need (no address, telecom, contact)."""
+    """A payor Organization: its stored `name`, `active`, the NAIC
+    identifier, and nothing else a front desk does not need (no address,
+    telecom, contact)."""
     out = {k: res[k] for k in ('resourceType', 'id', 'meta') if k in res}
+    # us-core-organization requires `active` (QA recheck of #963).
+    if isinstance(original.get('active'), bool):
+        out['active'] = original['active']
     name = original.get('name')
     if isinstance(name, str) and name:
         out['name'] = name
@@ -1628,6 +1664,7 @@ def _checkin_profile(resource, *, patient_id):
     elif rtype == 'Organization':
         res = _checkin_organization(resource, res)
     _drop_related_person_refs(res)
+    _codes_with_our_text(res)
     return res
 
 
