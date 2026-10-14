@@ -501,3 +501,20 @@ def test_other_profiles_keep_their_display(app):
     from r6.access import _intake_profile
     out = _intake_profile(f.condition())
     assert out['code']['coding'][0].get('display')
+
+
+def test_a_concept_built_after_the_relabel_still_gets_our_text(app, client):
+    """Coverage.type is rebuilt code-only AFTER apply_redaction relabels, so
+    only _codes_with_our_text can give it a label. A table code is used so
+    the label exists (synthetic: Coverage.type is normally v3-ActCode).
+
+    MUTATION: stop setting `text` from the lookup -> red."""
+    from r6.terminology import SNOMED, lookup
+    cov = f.coverage()
+    cov['type'] = {'coding': [{'system': SNOMED, 'code': '44054006',
+                               'display': f.CANARY_DISPLAY}]}
+    f.seed(app, f.patient(), cov, f.organization())
+    resp = f.export(client, f.token(client, ['Coverage']), ['Coverage'])
+    out, = f.resources(resp, 'Coverage')
+    assert out['type'] == {'coding': [{'system': SNOMED, 'code': '44054006'}],
+                           'text': lookup(SNOMED, '44054006')}
