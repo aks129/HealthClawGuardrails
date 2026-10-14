@@ -17,6 +17,7 @@ from r6.audit_ddl import install_statements
 # in r6/record_source.py. Re-exported here for callers that import the model.
 from r6.record_source import (  # noqa: F401
     RECORD_SOURCE_SYSTEM, RECORD_SOURCES, StoredResource, stamp, strip_all)
+from r6.us_core_profiles import filter_all as filter_profiles
 
 
 _AUDIT_OUTCOME_DETAIL_TEXT = {
@@ -144,6 +145,12 @@ class R6Resource(db.Model):
         # Nested resources (contained[], a contained Bundle's entries) keep
         # their own meta, so strip our system and meta.source at every depth.
         strip_all(resource)
+        # Profile claims likewise, at every depth: only allow-listed canonicals
+        # (r6/us_core_profiles.py, FHI-52). The top-level list is read before
+        # the replace below and is the only thing carried across it.
+        filter_profiles(resource)
+        meta = resource.get('meta')
+        profiles = meta.get('profile') if isinstance(meta, dict) else None
         resource['id'] = self.id
         # Replaced wholesale, so nothing an upstream stamped into meta
         # (meta.source, its tags and their displays, meta.security) surfaces.
@@ -151,6 +158,8 @@ class R6Resource(db.Model):
             'versionId': str(self.version_id),
             'lastUpdated': self.last_updated.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         }
+        if profiles:
+            resource['meta']['profile'] = profiles
         # Code only, no display, and only for a code in the set: the column
         # is not trusted on read, whatever wrote it.
         if self.source in RECORD_SOURCES:
