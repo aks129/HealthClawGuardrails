@@ -1254,7 +1254,19 @@ def _is_ssn_identifier(ident):
 #: labels and the value instead, and over-matches on purpose: a dropped
 #: identifier costs one identifier, a missed one leaks an SSN.
 _SSN_LABEL = re.compile(r'ssn|social.?security', re.IGNORECASE)
-_SSN_VALUE = re.compile(r'\d{3}-?\d{2}-?\d{4}')
+# Searched, not full-matched (#963 security D2): `SSN:555-66-7777`,
+# `444 55 6666` and `444.55.6666` all carry one. The lookarounds keep a
+# longer digit run (a 10-digit member id) from matching.
+_SSN_VALUE = re.compile(r'(?<!\d)\d{3}[\s.-]?\d{2}[\s.-]?\d{4}(?!\d)')
+
+
+def _value_looks_like_ssn(value):
+    """True for a string that contains an SSN's digits or names itself one.
+    Used on identifier values, Coverage.subscriberId and class.value."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return bool(_SSN_VALUE.search(value) or _SSN_LABEL.search(value))
 
 
 def _looks_like_ssn(ident):
@@ -1274,7 +1286,7 @@ def _looks_like_ssn(ident):
            for label in labels):
         return True
     value = ident.get('value')
-    return isinstance(value, str) and bool(_SSN_VALUE.fullmatch(value.strip()))
+    return _value_looks_like_ssn(value)
 
 
 def _is_ssn_class(ident):
@@ -1374,7 +1386,7 @@ def _checkin_coverage(original, res, patient_id):
     # Subscriber ids were historically sometimes SSNs: one with an SSN's
     # shape is dropped, by the same value check as identifiers (#963).
     if (isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64
-            and not _SSN_VALUE.fullmatch(subscriber_id.strip())):
+            and not _value_looks_like_ssn(subscriber_id)):
         res['subscriberId'] = subscriber_id
 
     idents = []
@@ -1403,7 +1415,9 @@ def _checkin_coverage(original, res, patient_id):
                            ('group', 'plan')):
             continue
         value = cls.get('value')
-        if isinstance(value, str) and value:
+        # A group or plan number with an SSN in it is dropped (#963 D2).
+        if (isinstance(value, str) and value
+                and not _value_looks_like_ssn(value)):
             # class.name is dropped, not left as a truncated stub.
             classes.append({'type': {'coding': [_coding_of(
                 cls['type'], _COVERAGE_CLASS, ('group', 'plan'))]},
