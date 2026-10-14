@@ -77,8 +77,7 @@ def _no_bare_name(obj):
 
 def test_the_concept_sets_are_the_closed_lists():
     assert NKA_CONCEPTS == {(SNOMED, c) for c in NKA_CODES}
-    assert ALLERGY_STATUS_CONCEPTS == {(SNOMED, STATUS),
-                                       (LOINC, "LA14761-3")}
+    assert ALLERGY_STATUS_CONCEPTS == {(SNOMED, STATUS)}
     assert LOINC_ABSENCE_ANSWERS == {(LOINC, c) for c in LOINC_ANSWERS}
     assert ABSENCE_CONCEPTS == (NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS
                                 | LOINC_ABSENCE_ANSWERS)
@@ -105,15 +104,28 @@ def test_every_absence_concept_has_qualified_text_and_nothing_else_does():
     assert terminology.absence_text(SNOMED, PENICILLIN) is None
 
 
-def test_loinc_not_asked_is_a_status_entry(monkeypatch):
-    monkeypatch.setattr("r6.terminology_resolver.resolve",
-                        lambda s, c: "Not asked")
-    concept = {"coding": [{"system": LOINC, "code": "LA14761-3"}]}
-    label_codings(concept)
-    assert "display" not in concept["coding"][0]
-    assert concept["text"] == (
-        "Recorded entry: 'not asked about allergies'. Allergies were not "
-        "checked; confirm with a clinician.")
+#: Absence codes that are generic answers, used on questions about anything.
+GENERIC_ABSENCE = [(SNOMED, "260413007"), (LOINC, "LA10030-7"),
+                   (LOINC, "LA9134-3"), (LOINC, "LA4715-4")]
+
+
+@pytest.mark.parametrize("system,code", GENERIC_ABSENCE)
+def test_a_generic_absence_answer_says_nothing_about_allergies(system, code):
+    """These answer any question, so their text must be topic-neutral. On
+    "Smoking status" a sentence about allergies would be false (#957 delta
+    5, where LOINC LA14761-3 "Not asked" was taken back out of the set)."""
+    obs = {"resourceType": "Observation", "id": "o", "status": "final",
+           "code": {"coding": [{"system": LOINC, "code": "72166-2"}]},
+           "valueCodeableConcept": {"coding": [{"system": system,
+                                                "code": code}]}}
+    value = apply_redaction(obs)["valueCodeableConcept"]
+    assert value["text"] == terminology.absence_text(system, code)
+    assert value["text"].startswith("Recorded entry: ")
+    assert "allerg" not in value["text"].lower()
+
+
+def test_a_generic_not_asked_answer_is_not_an_allergy_status():
+    assert (LOINC, "LA14761-3") not in ABSENCE_CONCEPTS
 
 
 def test_patient_not_asked_is_never_worded_as_no_allergies():

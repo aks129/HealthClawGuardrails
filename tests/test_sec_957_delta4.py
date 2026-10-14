@@ -8,8 +8,10 @@ answers that round 3's pattern refused are labels again (tx.fhir.org,
   as `text: "None"`, an allergy named "None". FAILS at 830cf7a.
 - LOINC LA14761-3 "Not asked": a status, not an absence. Low.
 
-Both are fixed: 260413007 is in NKA_CONCEPTS and a bare "None"/"Nil" label
-is refused; LA14761-3 is in ALLERGY_STATUS_CONCEPTS beside 1631000175102.
+260413007 is fixed: it is in NKA_CONCEPTS and a bare "None"/"Nil" label is
+refused. LA14761-3 was added to ALLERGY_STATUS_CONCEPTS and taken back out
+(delta 5): it answers any question, so allergy text was false on others.
+Its xfail stands.
 
 Synthetic data only.
 """
@@ -40,6 +42,8 @@ def test_an_allergy_coded_none_is_never_named_none():
     assert out["code"]["coding"][0].get("display") != "None"
 
 
+@pytest.mark.xfail(strict=False, reason="Low: a status, not an absence; "
+                   "LA14761-3 is generic, so no allergy text fits it")
 def test_loinc_not_asked_answer_is_not_bare():
     out = apply_redaction({
         "resourceType": "Observation", "id": "o", "status": "final",

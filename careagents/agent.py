@@ -267,7 +267,6 @@ ALLERGY_STATUS_STATEMENT = (
 #: codes are not status either: they are _NKA_CODES below.
 _ALLERGY_STATUS_CODES = frozenset({
     ("http://snomed.info/sct", "1631000175102"),  # Patient not asked
-    ("http://loinc.org", "LA14761-3"),  # Not asked (#957 delta 4)
 })
 
 #: "No known allergy" concepts: SNOMED 716186003 and every descendant

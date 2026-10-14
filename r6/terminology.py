@@ -273,9 +273,11 @@ NKA_CONCEPTS = frozenset((SNOMED, c) for c in (
     # "None" (qualifier value): an allergy coded with it read back named
     # "None" (#957 delta 4).
     "260413007"))
+#: Not LOINC LA14761-3 "Not asked": a generic answer used on any question,
+#: so "allergies were not checked" was false on "Smoking status: Not asked"
+#: (#957 delta 5). Only an allergy-specific concept belongs in this set.
 ALLERGY_STATUS_CONCEPTS = frozenset({
     (SNOMED, "1631000175102"),      # Patient not asked
-    (LOINC, "LA14761-3"),           # Not asked (#957 delta 4)
 })
 #: LOINC answers that state an absence: "None known", "None or none known"
 #: and "None or not known" (tx.fhir.org $lookup, 2026-10-14). An Observation
@@ -304,9 +306,6 @@ _ABSENCE_TEXT: dict[tuple[str, str], str] = {
     (LOINC, "LA10030-7"): _NKA_ENTRY.format("none known"),
     (LOINC, "LA9134-3"): _NKA_ENTRY.format("none known"),
     (LOINC, "LA4715-4"): _NKA_ENTRY.format("none or not known"),
-    (LOINC, "LA14761-3"): (
-        "Recorded entry: 'not asked about allergies'. Allergies were not "
-        "checked; confirm with a clinician."),
     (SNOMED, "1631000175102"): (
         "Recorded entry: 'patient not asked about allergies'. Allergies were "
         "not checked; confirm with a clinician."),

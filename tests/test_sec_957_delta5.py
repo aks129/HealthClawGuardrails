@@ -1,6 +1,7 @@
 """Security review of PR #957, delta 830cf7a..96b89a4.
 
-D5-F1 (FAILS at 96b89a4): LOINC LA14761-3 "Not asked" is a generic answer
+D5-F1 (failed at 96b89a4; fixed by taking LA14761-3 back out of
+ALLERGY_STATUS_CONCEPTS): LOINC LA14761-3 "Not asked" is a generic answer
 used on any question. It is now in ALLERGY_STATUS_CONCEPTS, and the engine
 writes "Recorded entry: 'not asked about allergies'. Allergies were not
 checked" on every Observation answered with it. On "Smoking status: Not
