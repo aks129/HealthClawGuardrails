@@ -888,6 +888,31 @@ def test_step_up_row_refuses_an_expired_token(client, app, row, secrets):
 
 
 @pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+def test_step_up_row_refuses_an_unknown_scope(client, app, row, secrets):
+    """A token whose scope claim is not an allow-listed write scope writes
+    nothing (FHI-57).
+
+    MUTATION: put the write gate in r6/stepup.py validate_step_up_token back
+    to `payload.get('scope') == 'read'`, so it refuses read and nothing else.
+    Every row in this parametrization goes red at once.
+
+    The gate used to be a denylist of one. Any scope string but 'read' —
+    'checkin', 'admin', '' — passed every write gate, so the first new scope
+    anybody minted would have been write-capable everywhere. 'checkin' is
+    used because it is the scope string a check-in export would be most
+    tempted to mint.
+    """
+    resp = call(client, row,
+                headers={"X-Tenant-Id": PRIVATE_TENANT,
+                         "X-Step-Up-Token": token_for(PRIVATE_TENANT,
+                                                      scope="checkin")},
+                app=app)
+    assert resp.status_code == row.step_up_missing_status, (
+        f"{row.method} {row.path} answered {resp.status_code} to a token "
+        f"scoped 'checkin'; expected {row.step_up_missing_status}")
+
+
+@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
 def test_the_step_up_gate_runs_before_the_body_is_parsed(client, app, row,
                                                          secrets):
     """A credentialless caller WITH a tenant header still gets the step-up

@@ -37,6 +37,21 @@ READ_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 # server-side carry another subject and keep reading.
 PATIENT_CONNECT_SUBJECT = 'patient-connect'
 
+# The `scope` claims a write gate accepts (FHI-57). An allow-list, not a
+# denylist: None is a token minted without the claim, the historical
+# full-capability shape and the only one any minter writes today; 'write'
+# is the explicit spelling of the same capability, which
+# tests/test_patient_connect_token.py already pins as write-capable.
+# Adding a scope here is a decision, and it gets its own test.
+WRITE_SCOPES = frozenset({None, 'write'})
+
+
+def _is_write_scope(claim):
+    """True only for a claim in WRITE_SCOPES. A list or object claim is
+    refused here rather than raising TypeError on the set lookup."""
+    return (claim is None or isinstance(claim, str)) and claim in WRITE_SCOPES
+
+
 # ---------------------------------------------------------------------------
 # Replay guard (opt-in).
 #
@@ -228,7 +243,9 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
             'write' REJECTS read-scoped tokens, so every existing write call
             site stays strict without modification (fail-safe). Read paths
             pass require_scope=None to accept any valid tenant-bound token.
-            Legacy tokens without a scope claim satisfy 'write' (back-compat).
+            'write' accepts only a scope in WRITE_SCOPES: no scope claim at
+            all (the legacy full-capability shape) or 'write'. Any other
+            claim, 'read' or a string nobody planned for, is refused.
         require_audience: Exact audience claim required for this operation.
         require_operation: Exact operation claim required for this operation.
 
@@ -280,9 +297,15 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
     if payload.get('tid') != tenant_id:
         return False, 'Token tenant mismatch'
 
-    # Scope gate: a read-scoped token can never authorize a write path.
-    if require_scope == 'write' and payload.get('scope') == 'read':
-        return False, 'Read-scoped token cannot authorize this operation'
+    # Scope gate: a write path accepts an allow-listed write scope and
+    # nothing else (FHI-57). It used to refuse 'read' and pass every other
+    # string, so the first new scope anybody minted was write-capable at
+    # every write gate. 'read' keeps its own sentence, which clients know.
+    scope_claim = payload.get('scope')
+    if require_scope == 'write' and not _is_write_scope(scope_claim):
+        if scope_claim == 'read':
+            return False, 'Read-scoped token cannot authorize this operation'
+        return False, 'Token scope cannot authorize this operation'
 
     if require_audience is not None and payload.get('aud') != require_audience:
         return False, 'Token audience mismatch'
