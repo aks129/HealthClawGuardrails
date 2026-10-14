@@ -1427,8 +1427,10 @@ def _patient_identity(original):
 
 #: OMB race and ethnicity categories (CDC Race & Ethnicity code system) and
 #: the two null flavors US Core allows in their place, with OUR label for
-#: each. The label becomes the extension's required `text`; upstream
-#: `text` and `display` are never used (owner ruling 2026-10-14).
+#: each: the code system's own display, which a validator checks the
+#: coding's `display` against. The label is also the extension's required
+#: `text`; upstream `text` and `display` are never used (owner ruling
+#: 2026-10-14).
 _CDC_RACE_ETHNICITY = 'urn:oid:2.16.840.1.113883.6.238'
 _NULL_FLAVOR = 'http://terminology.hl7.org/CodeSystem/v3-NullFlavor'
 _OMB_LABELS = {
@@ -1439,14 +1441,14 @@ _OMB_LABELS = {
         (_CDC_RACE_ETHNICITY, '2076-8'):
             'Native Hawaiian or Other Pacific Islander',
         (_CDC_RACE_ETHNICITY, '2106-3'): 'White',
-        (_NULL_FLAVOR, 'UNK'): 'Unknown',
-        (_NULL_FLAVOR, 'ASKU'): 'Asked but no answer',
+        (_NULL_FLAVOR, 'UNK'): 'unknown',
+        (_NULL_FLAVOR, 'ASKU'): 'asked but unknown',
     },
     'ethnicity': {
         (_CDC_RACE_ETHNICITY, '2135-2'): 'Hispanic or Latino',
         (_CDC_RACE_ETHNICITY, '2186-5'): 'Not Hispanic or Latino',
-        (_NULL_FLAVOR, 'UNK'): 'Unknown',
-        (_NULL_FLAVOR, 'ASKU'): 'Asked but no answer',
+        (_NULL_FLAVOR, 'UNK'): 'unknown',
+        (_NULL_FLAVOR, 'ASKU'): 'asked but unknown',
     },
 }
 _US_CORE_SD = 'http://hl7.org/fhir/us/core/StructureDefinition/us-core-'

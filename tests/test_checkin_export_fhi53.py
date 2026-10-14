@@ -408,3 +408,24 @@ def test_an_unmapped_category_takes_the_whole_extension_out(app, client):
             {'url': 'text', 'valueString': 'CANARY-race-text'}]}])
     assert 'extension' not in out
     assert 'CANARY' not in text
+
+
+def test_a_null_flavor_category_carries_the_code_systems_own_display(
+        app, client):
+    """The HL7 validator rejects any other display for v3-NullFlavor#ASKU
+    (run on the exported #959 test patient: 4 errors with our own wording,
+    0 against US Core 6.1.0 and 8.0.0 with this one).
+
+    MUTATION: label ASKU 'Asked but no answer' again -> red."""
+    null_flavor = 'http://terminology.hl7.org/CodeSystem/v3-NullFlavor'
+    out, _ = _patient_with(app, client, extension=[
+        {'url': RACE, 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': null_flavor, 'code': 'ASKU'}},
+            {'url': 'text', 'valueString': 'CANARY-race-text'}]}])
+    race, = out['extension']
+    assert race['extension'] == [
+        {'url': 'ombCategory', 'valueCoding': {
+            'system': null_flavor, 'code': 'ASKU',
+            'display': 'asked but unknown'}},
+        {'url': 'text', 'valueString': 'asked but unknown'}]
