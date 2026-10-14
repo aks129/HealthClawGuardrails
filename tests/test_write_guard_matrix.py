@@ -986,15 +986,47 @@ def test_an_audience_bound_token_reads_nothing(client, app, monkeypatch,
         f"audience {audience!r}")
 
 
+@pytest.mark.parametrize("claim", ["checkin", "admin", ""])
+@pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
+def test_a_read_gate_refuses_an_unknown_scope(client, app, monkeypatch, path,
+                                              claim):
+    """Read gates keep an allow-list too, READ_SCOPES = {none, read, write}
+    (#962 security review): a narrow scope minted later must not read the
+    whole tenant by default.
+
+    MUTATION: drop the `elif require_scope is None` branch in
+    r6/stepup.py validate_step_up_token -> red.
+    """
+    import base64
+    import hashlib
+    import hmac
+    import os
+    import time
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
+    # Hand-signed: generate_step_up_token omits an empty scope.
+    body = base64.urlsafe_b64encode(json.dumps({
+        "exp": int(time.time()) + 300, "tid": PRIVATE_TENANT, "sub": "t",
+        "nonce": uuid.uuid4().hex, "scope": claim}).encode()).decode()
+    sig = hmac.new(os.environ["STEP_UP_SECRET"].encode(), body.encode(),
+                   hashlib.sha256).hexdigest()
+    resp = client.get(path, headers={"X-Tenant-Id": PRIVATE_TENANT,
+                                     "X-Step-Up-Token": f"{body}.{sig}"})
+    assert resp.status_code == 401, (
+        f"GET {path} answered {resp.status_code} to scope {claim!r}")
+
+
+@pytest.mark.parametrize("claim", [None, "read", "write"])
 @pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
 def test_a_token_without_an_audience_still_reads(client, app, monkeypatch,
-                                                 path):
-    """Control: tokens minted before audiences existed keep working."""
+                                                 path, claim):
+    """Control: tokens minted before audiences existed, with any scope in
+    READ_SCOPES, keep reading."""
     monkeypatch.setenv("READ_AUTH_ENABLED", "true")
     _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
     resp = client.get(path, headers={
         "X-Tenant-Id": PRIVATE_TENANT,
-        "X-Step-Up-Token": token_for(PRIVATE_TENANT, scope="read")})
+        "X-Step-Up-Token": token_for(PRIVATE_TENANT, scope=claim)})
     assert resp.status_code == 200, (
         f"GET {path} refused a tenant-bound token with no audience "
         f"({resp.status_code})")

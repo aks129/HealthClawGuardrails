@@ -135,3 +135,30 @@ def test_a_gate_with_an_audience_still_accepts_exactly_it():
     assert validate_step_up_token(
         token, TENANT, require_audience='action-approval',
         require_operation='op') == (True, None)
+
+
+# --- read gates and malformed payloads (#962 security review) --------------
+
+def test_the_read_allow_list_is_none_read_or_write():
+    assert stepup.READ_SCOPES == frozenset({None, 'read', 'write'})
+
+
+@pytest.mark.parametrize('claim', ['checkin', '', ['read'], {'x': 1}])
+def test_a_read_gate_refuses_an_unknown_scope(claim):
+    token = _signed(_payload(scope=claim))
+    assert validate_step_up_token(token, TENANT, require_scope=None) == (
+        False, 'Token scope cannot authorize this operation')
+
+
+def test_an_unknown_require_scope_refuses_every_token():
+    """MUTATION: drop the final `else` branch of the scope gate -> red."""
+    token = generate_step_up_token(TENANT)
+    assert validate_step_up_token(token, TENANT, require_scope='admin') == (
+        False, 'Token scope cannot authorize this operation')
+
+
+@pytest.mark.parametrize('payload', [[1, 2], 'text', 7, None])
+def test_a_non_object_payload_is_malformed_not_a_crash(payload):
+    """MUTATION: drop the isinstance(payload, dict) check -> AttributeError."""
+    assert validate_step_up_token(_signed(payload), TENANT) == (
+        False, 'Malformed token payload')

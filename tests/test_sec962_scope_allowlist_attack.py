@@ -300,11 +300,18 @@ def test_a_refused_scope_is_not_logged_or_audited_verbatim(app, client,
 # 6. Read gates (Scope.TENANT_BOUND): characterization, not a #962 defect
 # ---------------------------------------------------------------------------
 
-def test_read_gates_still_accept_any_scope_string():
-    """Pins the current behaviour the PR leaves alone. A token scoped
-    'checkin' (or any narrow future scope) reads everything in the tenant
-    at every TENANT_BOUND site, including the full action record at
-    GET /r6/actions/<id>. Same latent shape FHI-57 closed for writes."""
+def test_read_gates_refuse_an_unknown_scope_string():
+    """Was a characterization of the latent read-side gap (any scope string
+    read everything at every TENANT_BOUND site, including the full action
+    record at GET /r6/actions/<id>). #962 now closes it with READ_SCOPES,
+    so this pins the refusal instead.
+
+    MUTATION: drop the `elif require_scope is None` branch in
+    validate_step_up_token -> red."""
     for claim in ('checkin', 'admin', 'wrіte', ['x']):
+        assert validate_step_up_token(_signed(_payload(scope=claim)), TENANT,
+                                      require_scope=None) == (
+            False, 'Token scope cannot authorize this operation')
+    for claim in ('read', 'write'):
         assert validate_step_up_token(_signed(_payload(scope=claim)), TENANT,
                                       require_scope=None) == (True, None)

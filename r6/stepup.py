@@ -45,11 +45,17 @@ PATIENT_CONNECT_SUBJECT = 'patient-connect'
 # Adding a scope here is a decision, and it gets its own test.
 WRITE_SCOPES = frozenset({None, 'write'})
 
+# The `scope` claims a tenant-bound (read) gate accepts: the write scopes and
+# 'read'. Also an allow-list, for the same reason: a narrow scope minted
+# later (a check-in export, say) must not read the whole tenant by default
+# (#962 security review).
+READ_SCOPES = WRITE_SCOPES | {'read'}
 
-def _is_write_scope(claim):
-    """True only for a claim in WRITE_SCOPES. A list or object claim is
+
+def _scope_in(claim, allowed):
+    """True only for a claim in `allowed`. A list or object claim is
     refused here rather than raising TypeError on the set lookup."""
-    return (claim is None or isinstance(claim, str)) and claim in WRITE_SCOPES
+    return (claim is None or isinstance(claim, str)) and claim in allowed
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +248,9 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
         require_scope: Capability the caller is authorizing. The default
             'write' REJECTS read-scoped tokens, so every existing write call
             site stays strict without modification (fail-safe). Read paths
-            pass require_scope=None to accept any valid tenant-bound token.
+            pass require_scope=None, which accepts a scope in READ_SCOPES
+            (none, 'read' or 'write') and refuses any other. Any other
+            require_scope value refuses every token.
             'write' accepts only a scope in WRITE_SCOPES: no scope claim at
             all (the legacy full-capability shape) or 'write'. Any other
             claim, 'read' or a string nobody planned for, is refused.
@@ -290,6 +298,10 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
     except Exception:
         return False, 'Malformed token payload'
+    # Signed JSON that is not an object (a list, a number) is malformed, not
+    # an AttributeError on the next line.
+    if not isinstance(payload, dict):
+        return False, 'Malformed token payload'
 
     # Check expiry
     if payload.get('exp', 0) < time.time():
@@ -304,9 +316,18 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
     # string, so the first new scope anybody minted was write-capable at
     # every write gate. 'read' keeps its own sentence, which clients know.
     scope_claim = payload.get('scope')
-    if require_scope == 'write' and not _is_write_scope(scope_claim):
-        if scope_claim == 'read':
-            return False, 'Read-scoped token cannot authorize this operation'
+    if require_scope == 'write':
+        if not _scope_in(scope_claim, WRITE_SCOPES):
+            if scope_claim == 'read':
+                return False, 'Read-scoped token cannot authorize this operation'
+            return False, 'Token scope cannot authorize this operation'
+    elif require_scope is None:
+        # Tenant-bound reads: any known scope, nothing unplanned.
+        if not _scope_in(scope_claim, READ_SCOPES):
+            return False, 'Token scope cannot authorize this operation'
+    else:
+        # No gate asks for another capability; one that did would otherwise
+        # skip the scope check altogether.
         return False, 'Token scope cannot authorize this operation'
 
     # Audience, both ways (FHI-57, #963 security review F1). A gate that asks
