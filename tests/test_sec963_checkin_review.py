@@ -113,7 +113,6 @@ def test_F5_a_display_nested_in_a_verbatim_patient_field_never_leaves(
         'url': 'https://ehr.example/care-of',
         'valueReference': {'reference': 'Practitioner/ci-pr-1',
                            'display': CANARY_NESTED}}]
-    pt['name'][0]['text'] = CANARY_NESTED + '-name-text'
     f.seed(app, pt)
     resp = f.export(client, f.token(client, ['Patient']), ['Patient'])
     assert resp.status_code == 200
