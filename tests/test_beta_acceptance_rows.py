@@ -66,8 +66,8 @@ class _Browser:
     def post(self, url, json=None, timeout=None, stream=False, **_):
         return _to_requests(self.client.post(self._path(url), json=json))
 
-    def delete(self, url, timeout=None, **_):
-        return _to_requests(self.client.delete(self._path(url)))
+    def delete(self, url, json=None, timeout=None, **_):
+        return _to_requests(self.client.delete(self._path(url), json=json))
 
 
 class Chain:
@@ -173,12 +173,14 @@ def test_care_gaps_brief_row_reports_the_section_it_is_shown(cfg, svc,
                                                              monkeypatch, run):
     """Against the real engine the brief resolves the tenant's one Patient and
     runs the screening review, so the row passes with the sample patient's
-    due screenings, each naming its source record."""
+    due screenings, none showing a record type (#877)."""
     chain = Chain(cfg, svc, monkeypatch)
     assert ba.row_care_gaps(chain.s, BASE, chain.agent, run) is True
     step = _only(run)
     assert step["status"] == "PASS"
-    assert step["due_items"] == 4
+    # Three: the sample's recent cholesterol panel leaves lipid screening
+    # not due (r6/seed.py's dated lab series).
+    assert step["due_items"] == 3
 
 
 def _page_session(page):
@@ -193,14 +195,17 @@ def _page_session(page):
 def test_care_gaps_brief_row_passes_sourced_items_and_an_honest_none(run):
     due = ('<h2>Preventive care due</h2><div class="brief-section">'
            '<div class="brief-field"><span class="brief-label">Screening</span>'
-           '<span class="brief-source">from Observation '
-           '<span class="brief-source-id">o1</span></span></div></div>'
+           '<span class="brief-source">From your records</span>'
+           '</div></div>'
            '<h2>Recent and upcoming visits</h2>')
     assert ba.row_care_gaps(_page_session(due), BASE, "a", run)
     assert run.steps[-1]["due_items"] == 1
     none = ('<h2>Preventive care due</h2><p class="brief-empty">We found no '
             'preventive care items based on your current records.</p>')
     assert ba.row_care_gaps(_page_session(none), BASE, "a", run)
+    # The old markup, record type and id beside the item, fails (#877).
+    leaked = due.replace("From your records", "from Observation o1")
+    assert not ba.row_care_gaps(_page_session(leaked), BASE, "a", run)
 
 
 def test_care_gaps_chat_row_needs_the_tool_and_the_word(run):
@@ -224,16 +229,20 @@ def test_care_gaps_row_never_passes_a_review_that_did_not_run(cfg, svc,
     chain = Chain(cfg, svc, monkeypatch)
     from careagents.healthclaw import HealthClawError
 
-    def outage(tenant):
+    def outage(tenant, **_):
         raise HealthClawError("down", 503)
     monkeypatch.setattr(chain.hc, "fetch_appointment_brief", outage)
     assert ba.row_care_gaps(chain.s, BASE, chain.agent, run) is False
     assert _only(run)["status"] == "UNAVAILABLE"
 
 
-def test_care_gaps_row_fails_an_item_with_no_source(run):
+def test_care_gaps_row_fails_an_item_that_shows_a_record_type(run):
+    """It used to fail an item with no source id. The page no longer shows
+    ids (#877), so a count of them checked a template string; what the row
+    checks now is that no record type is on show."""
     page = ('<h2>Preventive care due</h2><div class="brief-section">'
             '<div class="brief-field"><span class="brief-label">Screening</span>'
+            '<span class="brief-source">from MeasureReport crc</span>'
             '</div></div><h2>Recent and upcoming visits</h2>')
     assert ba.row_care_gaps(_page_session(page), BASE, "a", run) is False
     assert _only(run)["status"] == "FAIL"

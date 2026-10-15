@@ -62,11 +62,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # HealthClaw ~4x/s on a browser's behalf — so more threads is not free, it is
 # more load on the engine that also serves clinicians. Change this with a new
 # measurement. Pinned by tests/test_careagents_container_roles.py.
+#
+# The access log records method and PATH only (%(U)s), never the query
+# string: a texted sign-in link carries its token there (/link?t=...).
+# Pinned by tests/test_careagents_imessage_exploits.py.
 CMD ["sh", "-c", "case \"${CARE_ROLE-web}\" in \
   web) exec gunicorn careagents.wsgi:app \
   --bind 0.0.0.0:${PORT:-8600} --workers ${CARE_WEB_WORKERS:-2} --threads 8 --timeout 180 \
   --access-logfile - --error-logfile - \
-  --access-logformat '%(h)s \"%(r)s\" %(s)s %(M)sms' ;; \
+  --access-logformat '%(h)s \"%(m)s %(U)s\" %(s)s %(M)sms' ;; \
   worker) exec python -m careagents.worker ;; \
   *) printf \"careagents: unknown CARE_ROLE '%s' (expected web or worker)\\n\" \"$CARE_ROLE\" >&2; exit 2 ;; \
 esac"]

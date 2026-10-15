@@ -25,8 +25,9 @@ Rows 7–12 of the #677 checklist follow the first six, in its order:
                        consumer app has no surface for it. The issue says to
                        record that, not to substitute another interface.
   8  care gaps       — two surfaces. The brief's "Preventive care due"
-                       section, read without the model: sourced items, or
-                       its own "unavailable", never reassurance from a
+                       section, read without the model: due items with no
+                       record type or id on show, or its own
+                       "unavailable", never reassurance from a
                        review that did not run (today the brief resolves no
                        patient, so it says unavailable — r6/brief/routes.py).
                        Then a chat turn: the answer must come from the
@@ -97,6 +98,20 @@ _ALLERGY_ROW_RE = re.compile(r'name="allergy-(\d+)"')
 _NKA_INPUT_RE = re.compile(r'<input[^>]*name="nka"[^>]*>')
 _BRIEF_GAPS_RE = re.compile(
     r"<h2>Preventive care due</h2>(?P<body>.*?)(?:<h2>|\Z)", re.S)
+#: Record jargon the brief must not show a person (#877): the resource type
+#: that used to sit beside every item. The id beside it went at the same
+#: time, and an id has no fixed shape to look for, so the type stands in.
+_RECORD_TYPES_RE = re.compile(
+    r"\b(?:Condition|MedicationRequest|Observation|MeasureReport|Encounter)\b")
+
+
+def _shows_record_jargon(page: str) -> bool:
+    """Whether the visible text names a record type. Comments, scripts and
+    tags are not visible, so they are stripped first."""
+    text = re.sub(r"<!--.*?-->|\{#.*?#\}", "", page, flags=re.S)
+    text = re.sub(r"<(script|style)\b.*?</\1>", "", text, flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return bool(_RECORD_TYPES_RE.search(text))
 
 
 class Run:
@@ -257,10 +272,10 @@ def row_smbp(run):
 
 def row_care_gaps(s, base, agent, run):
     """Row 8. The brief's preventive-care section, which is read without the
-    model. Three honest states and one dishonest one: sourced items (PASS),
+    model. Three honest states and one dishonest one: due items (PASS),
     "review unavailable" (UNAVAILABLE — the page said so), "none found"
     (PASS: the page only says it after a review that ran), and anything
-    else, including items with no source, FAIL."""
+    else, including items that show a record type, FAIL (#877)."""
     name = "care gaps on the brief"
     r = s.get(f"{base}/brief", params={"agent": agent}, timeout=30)
     if r.status_code != 200:
@@ -269,16 +284,19 @@ def row_care_gaps(s, base, agent, run):
     if not m:
         return run.step(name, "FAIL", "the brief has no preventive-care section")
     body = m.group("body")
-    if "Screening review unavailable" in body:
+    # The sample's brief words it about the sample person (#908).
+    if ("We couldn't check your screenings just now." in body
+            or "We couldn't check the sample person's screenings just now."
+            in body):
         return run.step(name, "UNAVAILABLE",
                         "the page says the screening review did not run")
     items = body.count('class="brief-field"')
-    sourced = body.count("brief-source-id")
+    if _shows_record_jargon(body):
+        return run.step(name, "FAIL", "the section shows a record type",
+                        due_items=items)
     if items:
-        ok = sourced == items
-        return run.step(name, "PASS" if ok else "FAIL",
-                        f"{items} due item(s), {sourced} naming a source record",
-                        due_items=items, sourced_items=sourced)
+        return run.step(name, "PASS", f"{items} due item(s)",
+                        due_items=items)
     if "We found no preventive care items" in body:
         return run.step(name, "PASS",
                         "review ran and found nothing due", due_items=0)
@@ -504,7 +522,9 @@ def row_delete(s, base, conn, agent, action_id, run):
     connection it never showed would read as gone afterwards."""
     before = s.get(f"{base}/home", timeout=20)
     listed_before = before.status_code == 200 and conn in before.text
-    r = s.delete(f"{base}/api/connections/{conn}", timeout=60)
+    # The typed DELETE the hub sends; the server checks it (#944).
+    r = s.delete(f"{base}/api/connections/{conn}",
+                 json={"confirm": "DELETE"}, timeout=60)
     body = _json(r)
     if r.status_code == 502:
         return run.step("delete: records and connection", "UNAVAILABLE",
@@ -520,7 +540,8 @@ def row_delete(s, base, conn, agent, action_id, run):
              rows_deleted=body.get("rows_deleted"))
     home = s.get(f"{base}/home", timeout=20)
     labs = s.get(f"{base}/api/labs/timeline", params={"agent": agent}, timeout=20)
-    again = s.delete(f"{base}/api/connections/{conn}", timeout=60)
+    again = s.delete(f"{base}/api/connections/{conn}",
+                     json={"confirm": "DELETE"}, timeout=60)
     seen = {"hub": (listed_before and home.status_code == 200
                     and conn not in home.text),
             "labs": labs.status_code == 404,
@@ -620,22 +641,29 @@ def main():
              "the question is on the page" if reopened else
              ("no turn to reopen" if conversation is None else "the earlier turn is not on the page"))
 
-    # 7. The appointment brief: every field it shows names its source record,
-    #    and a missing section says so — never a fabricated negative.
+    # 7. The appointment brief: it shows fields, a missing section says so
+    #    — never a fabricated negative — and no record type is on show
+    #    (#877).
     r = s.get(f"{base}/brief", params={"agent": agent}, timeout=30)
     html = r.text if r.status_code == 200 else ""
-    sourced = html.count("brief-source-id")
-    missing = html.count("Not available from your connected records")
-    unreachable = "could not reach your records" in html
+    fields = html.count('class="brief-field"')
+    # A real brief's words, or the sample's (#908).
+    missing = (html.count("Not available from your connected records")
+               + html.count("Not in these made-up records"))
+    unreachable = ("could not reach your records" in html
+                   or "could not reach these made-up records" in html)
     if r.status_code != 200:
         run.step("appointment brief", "FAIL", f"HTTP {r.status_code}")
     elif unreachable:
         run.step("appointment brief", "UNAVAILABLE", "the brief could not read the records")
+    elif _shows_record_jargon(html):
+        run.step("appointment brief", "FAIL", "the brief shows a record type",
+                 fields=fields)
     else:
-        run.step("appointment brief", "PASS" if sourced else "FAIL",
-                 f"{sourced} sourced fields, {missing} sections honestly missing"
-                 if sourced else "no field on the brief names a source record",
-                 sourced_fields=sourced, missing_sections=missing)
+        run.step("appointment brief", "PASS" if fields else "FAIL",
+                 f"{fields} fields, {missing} sections honestly missing"
+                 if fields else "the brief shows no field",
+                 fields=fields, missing_sections=missing)
 
     # 8. Labs: the timeline is read from records with its disclaimer attached.
     r = s.get(f"{base}/api/labs/timeline", params={"agent": agent}, timeout=30)

@@ -28,6 +28,11 @@ by r6/smbp/triage.py — a patient can be hypertensive (>130/80) yet controlled
 for the measure (<140/90). Both are correct for their purpose.
 """
 
+from r6.safe_read import (
+    as_dict, as_list, codes, coding_code, coding_system, codings, is_number,
+    string_field,
+)
+
 # Control target for the numerator (CMS165 office control threshold).
 CONTROL_SYSTOLIC = 140
 CONTROL_DIASTOLIC = 90
@@ -48,21 +53,22 @@ ESRD_SNOMED = {"46177005", "236434000"}              # ESRD / dependence on dial
 _ACTIVE_STATUSES = {"active", "recurrence", "relapse"}
 
 
+# Stored rows are read through r6/safe_read.py: a `code`, `coding`,
+# `clinicalStatus` or `component` of the wrong shape reads as absent, so one
+# malformed row cannot make $evaluate-measure return 500 (#879).
 def _codings(resource):
-    return (resource.get("code", {}) or {}).get("coding", []) or []
+    return codings(resource.get("code"))
 
 
 def _clinical_active(condition):
-    for c in (condition.get("clinicalStatus", {}) or {}).get("coding", []):
-        if c.get("code") in _ACTIVE_STATUSES:
-            return True
-    return False
+    return any(c in _ACTIVE_STATUSES
+               for c in codes(condition.get("clinicalStatus")))
 
 
 def _matches(condition, icd10_prefixes=(), snomed=frozenset()):
     for coding in _codings(condition):
-        system = (coding.get("system") or "").lower()
-        code = coding.get("code") or ""
+        system = coding_system(coding).lower()
+        code = coding_code(coding) or ""
         if "icd-10" in system or "icd10" in system:
             if any(code.startswith(p) for p in icd10_prefixes):
                 return True
@@ -105,9 +111,12 @@ def _age_at(birth_date, on_date):
 
 def _bp_components(obs):
     sys_v = dia_v = None
-    for c in obs.get("component", []):
-        code = (c.get("code", {}).get("coding", [{}]) or [{}])[0].get("code")
-        val = c.get("valueQuantity", {}).get("value")
+    for c in as_list(obs.get("component")):
+        c = as_dict(c)
+        code = next(iter(codes(c.get("code"))), None)
+        val = as_dict(c.get("valueQuantity")).get("value")
+        if not is_number(val):
+            continue
         if code == "8480-6":
             sys_v = val
         elif code == "8462-4":
@@ -121,7 +130,7 @@ def _most_recent_bp_in_period(observations, period_start, period_end):
     best = None
     best_when = ''
     for obs in observations:
-        when = (obs.get("effectiveDateTime") or "")[:10]
+        when = string_field(obs, "effectiveDateTime")[:10]
         if not when or when < period_start or when > period_end:
             continue
         s, d = _bp_components(obs)

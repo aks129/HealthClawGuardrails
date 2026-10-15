@@ -15,7 +15,7 @@ from flask import g, request, jsonify, session
 from r6 import constant_time
 from r6.access import Scope, Tenant, TenantSource, has_grant
 from r6.read_auth import TENANT_SESSION_KEY
-from r6.runtime_config import resolve_app_env
+from r6.runtime_config import internal_mint_secret, resolve_app_env
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ def _tenant_claim_is_authenticated(tenant_id):
     guard untestable, since the suite runs with no secret set. A limiter that
     is only armed in production is a limiter nobody can prove works.
     """
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    mint_secret = internal_mint_secret()
     if mint_secret and constant_time.equal(
             request.headers.get('X-Internal-Secret', ''), mint_secret):
         return True

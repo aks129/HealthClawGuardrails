@@ -308,7 +308,8 @@ def test_records_delete_uses_the_count_the_card_showed(
     fake = PurgeClient({"resources": 15, "action_events": 7})
     c, _, conn = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     svc.mark_synced(conn, 9)
-    body = c.delete(f"/api/connections/{conn}").get_json()
+    body = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()
     assert body["deleted"] is True
     assert body["records_deleted"] == 9
     assert body["message"].startswith("All 9 records in Sample records "
@@ -324,7 +325,8 @@ def test_records_delete_without_a_count_does_not_invent_one(
     with svc.session() as s:
         from careagents.models import Connection
         s.query(Connection).filter_by(id=conn).update({"last_count": None})
-    body = c.delete(f"/api/connections/{conn}").get_json()
+    body = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()
     assert body["deleted"] is True
     assert body["records_deleted"] is None
     assert body["message"].startswith("Your records in Sample records were "
@@ -335,7 +337,8 @@ def test_records_delete_without_a_count_does_not_invent_one(
 def test_one_record_is_singular(cfg, svc, monkeypatch):
     c, _, conn = _signed_in(_app(cfg, svc, PurgeClient({})), svc, monkeypatch)
     svc.mark_synced(conn, 1)
-    msg = c.delete(f"/api/connections/{conn}").get_json()["message"]
+    msg = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()["message"]
     assert msg.startswith("The 1 record in Sample records was deleted.")
 
 
@@ -344,7 +347,8 @@ def test_records_delete_says_the_assistant_went_with_them(
     """Deleting a connection deletes the assistants that read it. The
     patient tester found the assistant gone with nothing saying so."""
     c, _, conn = _signed_in(_app(cfg, svc, PurgeClient({})), svc, monkeypatch)
-    body = c.delete(f"/api/connections/{conn}").get_json()
+    body = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()
     assert body["assistants_deleted"] == ["Juniper"]
     assert "Juniper was deleted too" in body["message"]
 
@@ -461,7 +465,9 @@ def test_visit_brief_and_smart_health_link_are_explained(cfg, svc, monkeypatch):
     fake = FakeClient()
     c, _, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     html = c.get("/home").get_data(as_text=True)
-    assert "summary of your records to bring to an appointment" in html
+    # The sample's card (#908); a real one is pinned in
+    # tests/test_careagents_sample_framing_rewalk.py.
+    assert "summary of these made-up records, to show how it works" in html
     shl = connectors._BY_ID["shl"]
     assert "QR code" in shl["blurb"] and "SMART Health Link" in shl["blurb"]
 
@@ -530,7 +536,8 @@ def test_a_form_is_not_said_to_have_gone_anywhere(cfg, svc, monkeypatch):
     assert "to" not in item
     js = (ROOT / "careagents" / "static" / "home.js").read_text()
     line = js[js.index("const recentLine"):js.index("function showRecent")]
-    assert '(r.link ? "ready." : "Done.")' in line
+    # Sentence case like the other lines (#884 G7): "Ready.", not "ready."
+    assert '(r.link ? "Ready." : "Done.")' in line
 
 
 @pytest.mark.parametrize("name", ["action_review.html", "action_approve.html"])
@@ -573,9 +580,12 @@ def test_the_shared_link_tile_does_not_promise_what_is_coming_soon():
 
 
 def test_the_hub_lists_at_most_five_recent_requests(cfg, svc, monkeypatch):
+    # Within the last day: an older failure leaves the hub (#876).
+    start = datetime.now(timezone.utc) - timedelta(hours=1)
     recent = [{"id": f"act-{i}", "kind": "sms", "to": "Dr. Lee",
                "status": "failed",
-               "updated_at": f"2026-10-01T10:0{i}:00Z"} for i in range(8)]
+               "updated_at": (start + timedelta(minutes=i)).strftime(
+                   "%Y-%m-%dT%H:%M:%SZ")} for i in range(8)]
     fake = OutcomeClient(pending=[], recent=recent)
     c, _, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     items = c.get("/api/approvals/count").get_json()["recent"]
@@ -601,6 +611,72 @@ const run = new Function('sessionStorage', '$', 'announce',
 run(storage, () => el, (_el, text) => { shown.push(text); });
 process.stdout.write(JSON.stringify({ shown, left: Object.keys(store) }));
 """
+
+
+_RECENT_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+function cut(re) {
+  const m = src.match(re);
+  if (!m) throw new Error('not found: ' + re);
+  return m[0];
+}
+class Node_ {
+  constructor(tag, text) { this.tag = tag; this.kids = []; this.t = text; }
+  get textContent() {
+    return this.tag === '#text' ? this.t
+      : this.kids.map((k) => k.textContent).join('');
+  }
+  set textContent(v) { this.kids = v ? [new Node_('#text', v)] : []; }
+  appendChild(k) { this.kids.push(k); return k; }
+  append(...ks) {
+    ks.forEach((k) => this.kids.push(
+      typeof k === 'string' ? new Node_('#text', k) : k));
+  }
+  get children() { return this.kids.filter((k) => k.tag !== '#text'); }
+}
+const document = {
+  createElement: (tag) => new Node_(tag),
+  createTextNode: (t) => new Node_('#text', t),
+};
+const waiting = new Node_('div');
+const run = new Function('document', 'waiting',
+  cut(/const CONTACT = [^;]+;/) + '\n'
+  + cut(/function linkContact\(el\) \{[\s\S]*?\n  \}\n/)
+  + cut(/const SUPPORT = [^;]+;/) + '\n'
+  + cut(/const recentLine = [\s\S]*?\n  \};\n/)
+  + cut(/function showRecent\(d\) \{[\s\S]*?\n  \}\n/)
+  + 'return showRecent;')(document, waiting);
+run({ recent: [
+  { label: 'Intake form', state: 'needs_review' },
+  { label: 'Reminder', state: 'unknown' },
+] });
+const list = waiting.kids.find((k) => k.tag === 'ul');
+process.stdout.write(JSON.stringify(list.kids.map((li) => ({
+  text: li.textContent,
+  links: li.kids.filter((k) => k.tag === 'a')
+    .map((a) => ({ href: a.href, text: a.textContent })),
+}))));
+"""
+
+
+def test_the_didnt_finish_lines_link_the_one_contact_address():
+    """#853's band said support@; patient-facing copy has one address,
+    tappable (#856 sign-off F5)."""
+    import shutil
+    import subprocess
+    js = ROOT / "careagents" / "static" / "home.js"
+    assert "support@healthclaw.io" not in js.read_text()
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(["node", "-e", _RECENT_HARNESS, "--", str(js)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    lines = json.loads(out.stdout)
+    assert len(lines) == 2
+    for line in lines:
+        assert "contactus@healthclaw.io" in line["text"]
+        assert line["links"] == [{"href": "mailto:contactus@healthclaw.io",
+                                  "text": "contactus@healthclaw.io"}]
 
 
 def test_a_carried_notice_is_shown_once_and_then_cleared():

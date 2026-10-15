@@ -22,6 +22,9 @@ least a shared constant we refuse to let diverge.
 
 from __future__ import annotations
 
+import datetime as _dt
+import re
+
 LOINC = "http://loinc.org"
 
 # An analyte is a SET of codes. The same test arrives under different LOINCs
@@ -30,13 +33,63 @@ LOINC = "http://loinc.org"
 # order.
 ANALYTES = [
     {"key": "total-cholesterol", "name": "Total cholesterol",
-     "codes": ["2093-3"]},
-    {"key": "ldl", "name": "LDL cholesterol", "codes": ["13457-7", "18262-6"]},
-    {"key": "hdl", "name": "HDL cholesterol", "codes": ["2085-9"]},
-    {"key": "triglycerides", "name": "Triglycerides", "codes": ["2571-8"]},
-    {"key": "a1c", "name": "Hemoglobin A1c", "codes": ["4548-4", "17856-6"]},
-    {"key": "glucose", "name": "Glucose", "codes": ["2345-7"]},
+     "codes": ["2093-3"], "unit": "mg/dL"},
+    {"key": "ldl", "name": "LDL cholesterol", "codes": ["13457-7", "18262-6"],
+     "unit": "mg/dL"},
+    {"key": "hdl", "name": "HDL cholesterol", "codes": ["2085-9"], "unit": "mg/dL"},
+    {"key": "triglycerides", "name": "Triglycerides", "codes": ["2571-8"],
+     "unit": "mg/dL"},
+    {"key": "a1c", "name": "Hemoglobin A1c", "codes": ["4548-4", "17856-6"],
+     "unit": "%"},
+    {"key": "glucose", "name": "Glucose", "codes": ["2345-7"], "unit": "mg/dL"},
 ]
+
+#: Each analyte's usual UCUM unit, for when a reading's own coded unit is
+#: missing. Never the reading's free-text `unit`.
+KNOWN_UNITS = {a["key"]: a["unit"] for a in ANALYTES}
+
+#: Units a lab reading may carry to the model or the browser: exact,
+#: case-sensitive tokens. A closed list: any other string, however
+#: unit-shaped, could be a word (R875-3). The same list the visit brief keeps
+#: (r6/brief/engine.py); CareAgents imports nothing from the engine, so it is
+#: repeated. It lives here rather than in agent.py because the chart's series
+#: are built here and agent.py imports this module, not the other way round.
+UCUM_ALLOWED = frozenset({
+    "mg/dL", "g/dL", "ng/mL", "pg/mL", "ng/dL", "ug/dL", "mEq/L",
+    "mmol/L", "umol/L", "µmol/L", "nmol/L", "pmol/L", "mmol/mol",
+    "g/L", "mg/L", "ug/L", "10*9/L", "10^9/L", "10*12/L", "10^12/L",
+    "%", "U/L", "[IU]/L", "IU/L", "mm[Hg]", "mmHg",
+    "mL/min/{1.73_m2}", "mL/min/1.73m2", "10*3/uL", "10^3/uL",
+    "10*6/uL", "10^6/uL", "fL", "pg", "mg/mmol", "mg/g", "[pH]", "pH",
+    # Common lab units real feeds send, found refused by #922 QA (F3).
+    "u[IU]/mL", "m[IU]/mL", "m[IU]/L", "k[IU]/L", "[iU]/L", "mIU/mL",
+    "uIU/mL", "mIU/L", "meq/L", "mosm/kg", "mOsm/kg", "{INR}", "INR",
+    "{ratio}", "{score}", "{titer}", "{index}", "{copies}/mL",
+    "/[HPF]", "/[LPF]", "s", "ms", "mm/h", "mm/[Hg]", "cm[H2O]",
+    "mg/(24.h)", "ng/mL{FEU}", "mg/g{creat}", "K/uL", "x10E3/uL",
+    "x10E6/uL", "fl",
+})
+
+
+def coded_unit(reading: dict, key: str | None,
+               allowed: frozenset = UCUM_ALLOWED) -> str | None:
+    """The unit the reading stated, or None when it stated one we do not
+    recognise; then its number is not passed on either (#884 QA F1).
+
+    - its code (any system, or none) or its unit string is an exact
+      allowlist token: that token. Only a token from the list ever leaves.
+    - neither is present: the analyte's known unit, else "".
+    - anything else: None. The analyte's usual unit used to stand in, which
+      put a number beside a unit it was not measured in.
+    """
+    stated = [v for v in (reading.get("code"), reading.get("unit"))
+              if v is not None and v != ""]
+    for value in stated:
+        if isinstance(value, str) and value in allowed:
+            return value
+    if stated:
+        return None
+    return KNOWN_UNITS.get(key, "")
 
 # Free-text search terms -> analyte keys, so "how's my cholesterol?" narrows to
 # the lipid panel instead of dumping every series into the chat.
@@ -83,6 +136,10 @@ def _loinc_of(resource: dict) -> str | None:
     return None
 
 
+#: v3 ObservationInterpretation flags a chart may show.
+_FLAGS = frozenset({"N", "L", "H", "LL", "HH", "A", "AA"})
+
+
 def _flag_of(resource: dict) -> str:
     """The ENGINE's interpretation code, or IND when it did not assign one.
 
@@ -92,22 +149,49 @@ def _flag_of(resource: dict) -> str:
     for concept in (resource.get("interpretation") or []):
         for coding in ((concept or {}).get("coding") or []):
             if isinstance(coding, dict) and coding.get("code"):
-                return str(coding["code"])
+                # An unscored reading keeps the feed's own interpretation,
+                # whose code can be any text (#922): only a flag passes.
+                code = coding["code"]
+                return code if isinstance(code, str) and code in _FLAGS \
+                    else "IND"
     return "IND"
 
 
+_DATE_PREFIX = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+def parse_date(raw: object) -> str:
+    """The YYYY-MM-DD a FHIR date or dateTime starts with, checked as a real
+    calendar date, or "". Never a cut string: upstream can put anything in
+    the field, and a cut string would pass it on as a date (R875-4)."""
+    m = _DATE_PREFIX.match(raw) if isinstance(raw, str) else None
+    if not m:
+        return ""
+    try:
+        return _dt.date(*(int(g) for g in m.groups())).isoformat()
+    except ValueError:
+        return ""
+
+
 def _date_of(resource: dict) -> str:
-    raw = resource.get("effectiveDateTime") or resource.get("issued") or ""
-    return str(raw)[:10]
+    return parse_date(resource.get("effectiveDateTime")
+                      or resource.get("issued"))
 
 
 def build_series(interpret_bundle: dict,
-                 keys: list[str] | None = None) -> list[dict]:
+                 keys: list[str] | None = None,
+                 keep_withheld: bool = False) -> list[dict]:
     """Per-analyte series from an $interpret return Bundle, oldest first.
 
     Only analytes with at least one numeric reading appear: an empty panel
     tells the person nothing and invites the model to narrate an absence it
     cannot support.
+
+    keep_withheld: also keep an analyte whose every reading was dropped for
+    an unrecognised unit, with no readings and a `withheld` count. The text
+    surface needs it so the model says the readings exist but cannot be
+    shown, instead of saying there are none (#884 QA F1). The chart never
+    asks for it: it has nothing to draw.
     """
     entries = (interpret_bundle or {}).get("entry") or []
     wanted = None if keys is None else set(keys)
@@ -118,6 +202,7 @@ def build_series(interpret_bundle: dict,
             continue
         codes = set(analyte["codes"])
         readings = []
+        withheld = 0
         for entry in entries:
             resource = (entry or {}).get("resource") or {}
             if _loinc_of(resource) not in codes:
@@ -128,16 +213,27 @@ def build_series(interpret_bundle: dict,
             # a clinical claim nobody made onto a chart.
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
+            # Only an allow-listed unit goes on: the series is the
+            # /api/labs/timeline JSON, and upstream can write any text,
+            # a name or an instruction, into `unit` or `code`. A unit stated
+            # but not recognised drops the reading, as a missing number
+            # does: blanking it would let a reader fall back to the usual
+            # unit and put the number beside a unit it was not measured in
+            # (#884 QA F1). With no unit stated it is the analyte's own.
+            unit = coded_unit(quantity, analyte["key"])
+            if unit is None:
+                withheld += 1
+                continue
             readings.append({
                 "date": _date_of(resource),
                 "value": value,
-                "unit": quantity.get("unit") or "",
+                "unit": unit,
                 "flag": _flag_of(resource),
             })
-        if not readings:
+        if not readings and not (keep_withheld and withheld):
             continue
         readings.sort(key=lambda r: r["date"])
-        series.append({
+        one = {
             "key": analyte["key"],
             "name": analyte["name"],
             "unit": next((r["unit"] for r in readings if r["unit"]), ""),
@@ -145,5 +241,8 @@ def build_series(interpret_bundle: dict,
             # One reading has no direction. The surface must not draw a line
             # through it, and the model must not narrate a trend from it.
             "trend_plottable": len([r for r in readings if r["date"]]) >= 2,
-        })
+        }
+        if keep_withheld and withheld:
+            one["withheld"] = withheld
+        series.append(one)
     return series

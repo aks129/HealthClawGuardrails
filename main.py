@@ -22,7 +22,9 @@ from flask import Flask, g, request as flask_request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
 from r6.database_migrations import register_model_metadata, upgrade_database
-from r6.runtime_config import validate_runtime_environment
+from r6.runtime_config import (validate_runtime_environment,
+                               warn_on_padded_secrets)
+from r6.safe_read import StrictJSONProvider
 
 
 logger = logging.getLogger(__name__)
@@ -188,7 +190,8 @@ def _register_lifecycle_cli(flask_app: Flask) -> None:
         from r6.smbp.demo_history import smbp_history_resources
         with flask_app.app_context():
             count = seed_demo_data(tenant_id,
-                                   resources=smbp_history_resources())
+                                   resources=smbp_history_resources(),
+                                   source='sample')
         click.echo(f"Seeded {count} resource(s) into {tenant_id}.")
 
     @flask_app.cli.command("recover-zombies")
@@ -396,12 +399,16 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
     supplied_settings = dict(settings or {})
     app_env = validate_runtime_environment()
     _configure_logging(app_env)
+    warn_on_padded_secrets()
 
     flask_app = Flask(
         __name__,
         template_folder=str(_ROOT_DIR / "templates"),
         static_folder=str(_ROOT_DIR / "static"),
     )
+    # Strict JSON: a stored NaN or Infinity is dropped from the response,
+    # never sent as a bare token a strict parser refuses (#869).
+    flask_app.json = StrictJSONProvider(flask_app)
     flask_app.config.from_mapping(
         APP_ENV=app_env,
         SECRET_KEY=os.environ.get("SESSION_SECRET")

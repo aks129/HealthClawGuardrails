@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 
 from careagents.config import Config
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _beta_app, _login, cfg, svc)
@@ -37,7 +38,7 @@ def test_an_invited_email_can_start_a_real_connection(svc, monkeypatch):  # noqa
     c = app.test_client()
     _login(c, svc, monkeypatch, email="tester@example.org")
     assert _tiers(c)["fasten"] == "live"
-    r = c.post("/api/connections/direct", json={"consent": True})
+    r = c.post("/api/connections/direct", json=consented())
     assert r.status_code == 200, r.get_json()
 
 
@@ -48,7 +49,7 @@ def test_an_uninvited_email_cannot(svc, monkeypatch):  # noqa: F811
     _login(c, svc, monkeypatch, email="stranger@example.org")
     assert _tiers(c)["fasten"] == "soon"
     assert c.post("/api/connections/direct",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
 
 
 def test_the_environment_allowlist_still_works_alongside_the_table(
@@ -61,7 +62,7 @@ def test_the_environment_allowlist_still_works_alongside_the_table(
         c = app.test_client()
         _login(c, svc, monkeypatch, email=email)
         assert c.post("/api/connections/direct",
-                      json={"consent": True}).status_code == 200, email
+                      json=consented()).status_code == 200, email
 
 
 def test_a_revoked_invite_blocks_new_connections_and_keeps_existing_ones(
@@ -72,12 +73,12 @@ def test_a_revoked_invite_blocks_new_connections_and_keeps_existing_ones(
     c = app.test_client()
     _login(c, svc, monkeypatch, email="tester@example.org")
     existing = c.post("/api/connections/direct",
-                      json={"consent": True}).get_json()["id"]
+                      json=consented()).get_json()["id"]
 
     assert svc.revoke_real_records_invite("tester@example.org") is True
 
     assert c.post("/api/connections/direct",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
     assert _tiers(c)["fasten"] == "soon"
     r = c.post(f"/api/connections/{existing}/upload", data=_EMPTY_BUNDLE,
                content_type="application/fhir+json")
@@ -103,7 +104,7 @@ def test_invites_are_never_a_way_around_off(svc, monkeypatch):  # noqa: F811
     _login(c, svc, monkeypatch, email="tester@example.org")
     assert _tiers(c)["fasten"] == "soon"
     assert c.post("/api/connections/direct",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
 
 
 def test_the_config_rule_asks_the_table_only_in_allowlist_mode():

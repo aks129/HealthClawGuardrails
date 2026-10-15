@@ -134,7 +134,7 @@ def test_colorectal_with_no_procedure_does_not_claim_the_patient_is_due():
     assert gap["indeterminate_reason"] == "evidence-not-read"
     note = gap["note"].lower()
     assert "stool" in note, "the note must name what we could not see"
-    assert "clinician" in note, "the patient must still be told to raise it"
+    assert "doctor" in note, "the patient must still be told to raise it"
 
 
 def test_a_rule_with_no_blind_spot_still_reports_a_real_gap():

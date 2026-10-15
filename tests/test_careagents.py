@@ -19,6 +19,8 @@ import pytest
 from careagents.config import Config, ConfigError
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
+from tests.careagents_legacy_helpers import legacy_agent
+from tests.careagents_consent_helpers import consented
 
 
 # --- config: fail-closed ------------------------------------------------------
@@ -407,6 +409,7 @@ def test_send_code_calls_a_lost_answer_unconfirmed_not_failed(monkeypatch):
     class _Cfg:
         resend_api_key = "key"
         resend_from = "codes@example.com"
+        allow_real_mail = True          # the provider is faked below
 
     def sending(raises=None, status=None):
         def _post(*a, **kw):
@@ -538,6 +541,13 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
         "name": "Juniper", "persona": "calm",
         "connection_id": conn["id"]}).get_json()["id"]
     return app, c, fake, agent_id, fake.tenants[-1], conn["id"]
+
+
+def sample_framed(text: str) -> str:
+    """An answer as `_chat_app`'s sample connection finishes it: opened by
+    the made-up-records line (tests/test_careagents_sample_framing.py)."""
+    from careagents import beta
+    return f"{beta.SAMPLE_FRAME}\n\n{text}"
 
 
 def test_log_message_sends_explicit_agent_and_conversation_identity():
@@ -741,7 +751,7 @@ def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [m["role"] for m in stored] == ["user", "assistant"]
     assert stored[0]["content"] == "hi there"
-    assert stored[1]["content"] == "here you go"
+    assert stored[1]["content"] == sample_framed("here you go")
 
 
 def test_chat_route_also_accepts_agent_id_as_the_query_param(cfg, svc,
@@ -809,11 +819,9 @@ def test_two_agents_on_one_connection_have_isolated_transcripts(
         cfg, svc, monkeypatch):
     _app, c, fake, first_agent, tenant, conn_id = _chat_app(
         cfg, svc, monkeypatch)
-    second_agent = c.post("/api/agents", json={
-        "name": "Cedar",
-        "persona": "calm",
-        "connection_id": conn_id,
-    }).get_json()["id"]
+    # Two assistants on one connection: an account from before one
+    # assistant per person (spec PR #943, section 4).
+    second_agent = legacy_agent(svc, conn_id, "Cedar")
 
     _turn(c, first_agent, "only Juniper should see this")
     _turn(c, second_agent, "only Cedar should see this")
@@ -846,7 +854,8 @@ def test_duplicate_inbound_request_runs_the_model_once(cfg, svc, monkeypatch):
 
     assert calls["count"] == 1
     assert '"type": "accepted"' in replay.get_data(as_text=True)
-    assert '"text": "once"' in replay.get_data(as_text=True)
+    assert ('"text": ' + json.dumps(sample_framed("once"))
+            in replay.get_data(as_text=True))
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [message["role"] for message in stored] == ["user", "assistant"]
     assert first.status_code == replay.status_code == 200
@@ -885,7 +894,7 @@ def test_browser_disconnect_reconnect_replays_without_duplicate_inference(
     body = replay.get_data(as_text=True)
 
     assert calls["count"] == 1
-    assert '"text": "durable answer"' in body
+    assert '"text": ' + json.dumps(sample_framed("durable answer")) in body
     assert '"type": "done"' in body
 
 
@@ -1049,8 +1058,10 @@ def test_late_provider_result_is_not_checkpointed_after_lease_loss(
         RunWorker(cfg, fake, svc, "late-worker")._execute(
             run, _RevokedLease())
 
+    # The day's charge (and its marker) precede the model call; nothing
+    # the late provider returned is persisted.
     assert [event["type"] for event in fake.events[run["id"]]] == [
-        "run.queued", "run.started"]
+        "run.queued", "run.started", "agent.charged"]
     assert [message["role"] for message in fake.logged[
         (tenant, fake.conversation_id(agent_id))]] == ["user"]
 
@@ -1869,7 +1880,8 @@ def test_unreadable_record_is_never_summarized_as_nothing():
     items = _summarize_bundle(bundle)
     assert len(items) == 1
     assert items[0]["unreadable"] is True
-    assert "250.00" in items[0]["name"]
+    # Named by its system; the code itself never reaches the model (#922).
+    assert items[0]["name"] == "unlabeled record (ICD-9-CM code)"
 
 
 def test_a_truncated_list_says_so_rather_than_looking_complete():
@@ -1886,8 +1898,8 @@ def test_a_truncated_list_says_so_rather_than_looking_complete():
 
     marker = [i for i in items if i.get("truncated")]
     assert marker, "a truncated list must carry a truncation marker"
-    assert marker[0]["total"] == 30
-    assert marker[0]["shown"] == 12
+    # No counts to quote back at the patient (#939).
+    assert "total" not in marker[0] and "shown" not in marker[0]
     # Must not be mistakable for a record.
     assert "name" not in marker[0] and "type" not in marker[0]
     assert "complete" in marker[0]["note"].lower()
@@ -1914,8 +1926,10 @@ def test_truncation_total_ignores_operation_outcomes():
                              "code": {"text": f"C{i}"}}} for i in range(13)]
     entries.append({"resource": {"resourceType": "OperationOutcome"}})
     items = _summarize_bundle({"entry": entries})
-    marker = [i for i in items if i.get("truncated")][0]
-    assert marker["total"] == 13
+    assert [i for i in items if i.get("truncated")]
+    # Twelve records and an outcome fit: no records are promised.
+    items = _summarize_bundle({"entry": entries[1:]})
+    assert not [i for i in items if i.get("truncated")]
 
 
 def test_safety_core_forbids_presenting_a_truncated_list_as_complete():
@@ -1969,6 +1983,7 @@ class FakeClient:
         # in the session shared one list and a test's assertion on
         # `len(fake.purged)` depended on which tests ran before it.
         self.purged: list[str] = []
+        self.fasten_revoked: list[str] = []
 
         # Consent handoff (spec §13.3, §13.4): the parked request HealthClaw
         # would answer for any request id, the ids asked about, the consents
@@ -2245,7 +2260,7 @@ class FakeClient:
     def care_gaps(self, tenant):
         return {"summary": {}, "consumer": {"due": []}}
 
-    def fetch_appointment_brief(self, tenant):
+    def fetch_appointment_brief(self, tenant, voice=None):
         return None
 
     def start_form_action(self, tenant):
@@ -2271,7 +2286,7 @@ class FakeClient:
     def decline_action(self, tenant, action_id):
         return 200, {"id": action_id, "status": "declined"}
 
-    def fetch_review_page(self, tenant, action_id):
+    def fetch_review_page(self, tenant, action_id, voice=None):
         return 200, f"<html>/r6/actions/{action_id}/review</html>"
 
     def submit_review(self, tenant, action_id, decisions):
@@ -2281,6 +2296,20 @@ class FakeClient:
 
     def tenant_has_records(self, tenant):
         return True
+
+    # Settable: whether a Fasten export is still being written (QA940-F1).
+    importing = False
+
+    def fasten_import_running(self, tenant):
+        return self.importing
+
+    # Settable: the newest Fasten job failed (QA940 round 3).
+    import_failed = False
+
+    def fasten_import_state(self, tenant):
+        if self.importing:
+            return "running"
+        return "failed" if self.import_failed else "none"
 
     # Settable so a test can simulate a refresh pulling additional records.
     counted = 100
@@ -2302,6 +2331,17 @@ class FakeClient:
             raise HealthClawError("purge failed", 500)
         self.purged.append(tenant)
         return {"tenant_id": tenant, "deleted": True, "rows_deleted": 42}
+
+    # The engine-side Disconnect; the tenants it revoked are on
+    # `self.fasten_revoked`.
+    revoke_fasten_fails = False
+
+    def revoke_fasten(self, tenant):
+        if self.revoke_fasten_fails:
+            raise HealthClawError("fasten revoke failed (502)", 502)
+        self.fasten_revoked.append(tenant)
+        return {"tenant_id": tenant, "revoked": True,
+                "already_revoked": False}
 
     def bind_telegram(self, tenant, chat_id):
         self.bound.append((tenant, chat_id))
@@ -2883,11 +2923,12 @@ def test_sample_connection_agent_and_chat_gate(app, svc, monkeypatch):
     r = c.post("/api/connections/sample")
     assert r.status_code == 200 and r.get_json()["status"] == "active"
     conn_id = r.get_json()["id"]
+    # The sample made the assistant; asking again answers with it.
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.get_json()["existing"] is True
     agent_id = r.get_json()["id"]
-    assert b"Ada" in c.get(f"/chat?agent={agent_id}").data
+    assert b"Juniper" in c.get(f"/chat?agent={agent_id}").data
     # unknown agent → redirect to hub
     assert c.get("/chat?agent=nope").status_code == 302
     # chat api rejects an agent that isn't the account's
@@ -2922,7 +2963,7 @@ def test_brief_renders_with_available_records(app, svc, monkeypatch):
     agent_id = r.get_json()["id"]
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: stub_brief)
+                        lambda self, tenant, **_: stub_brief)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     assert b"Hypertension" in resp.data
@@ -2940,14 +2981,15 @@ def test_brief_renders_unavailable_when_fetch_fails(app, svc, monkeypatch):
     """Brief page shows 'Not available' when the engine returns nothing."""
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/sample")
+    # A real connection: the sample words this about the sample (#908).
+    r = c.post("/api/connections/direct", json=consented())
     conn_id = r.get_json()["id"]
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
     agent_id = r.get_json()["id"]
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: None)
+                        lambda self, tenant, **_: None)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     assert b"Not available from your connected records" in resp.data
@@ -2967,12 +3009,14 @@ def test_an_unreachable_engine_does_not_blame_the_patient_s_records(
     """
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    # A real connection: the sample words this about the sample (#908).
+    conn_id = c.post("/api/connections/direct",
+                     json=consented()).get_json()["id"]
     agent_id = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                            "connection_id": conn_id}
                       ).get_json()["id"]
 
-    def _down(self, tenant):
+    def _down(self, tenant, **_):
         raise HealthClawError("appointment brief unavailable (503)", 503)
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief", _down)
@@ -3022,7 +3066,7 @@ def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
 
 _CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
                       "brief-section-care-gaps")
-_UNAVAILABLE_COPY = b"Screening review unavailable"
+_UNAVAILABLE_COPY = b"We couldn't check your screenings just now."
 _NO_GAPS_COPY = b"no preventive care items"
 
 
@@ -3040,8 +3084,11 @@ def _brief_with_care_gaps(status, fields=()):
 
 
 def _agent_for_brief(c, svc, monkeypatch):
+    """A real connection: these tests pin a real brief's wording, and the
+    sample words it about the sample person (#908)."""
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    conn_id = c.post("/api/connections/direct",
+                     json=consented()).get_json()["id"]
     return c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                        "connection_id": conn_id}
                   ).get_json()["id"]
@@ -3052,7 +3099,7 @@ def test_brief_care_gaps_unavailable_is_not_rendered_as_no_gaps(app, svc,
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_care_gaps("unavailable"))
+                        lambda self, tenant, **_: _brief_with_care_gaps("unavailable"))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
@@ -3064,7 +3111,7 @@ def test_brief_care_gaps_evaluated_and_empty_says_no_items(app, svc, monkeypatch
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_care_gaps("ok"))
+                        lambda self, tenant, **_: _brief_with_care_gaps("ok"))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
@@ -3079,7 +3126,7 @@ def test_brief_care_gaps_evaluated_with_gaps_lists_them(app, svc, monkeypatch):
              '"sourceType":"MeasureReport","sourceId":"gap-1"}')
     monkeypatch.setattr(
         FakeClient, "fetch_appointment_brief",
-        lambda self, tenant: _brief_with_care_gaps("ok", fields=[field]))
+        lambda self, tenant, **_: _brief_with_care_gaps("ok", fields=[field]))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert b"Colorectal cancer screening" in resp.data
@@ -3093,7 +3140,7 @@ def test_brief_missing_care_gaps_marker_is_not_reassurance(app, svc, monkeypatch
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: None)
+                        lambda self, tenant, **_: None)
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert _UNAVAILABLE_COPY in resp.data
@@ -3171,7 +3218,7 @@ def test_wearable_connector_soon_by_default_live_when_enabled(svc, monkeypatch):
     c = a.test_client()
     _login(c, svc, monkeypatch, email="wear@example.com")
     r = c.post("/api/connections/wearable",
-               json={"provider": "apple", "consent": True})
+               json=consented(provider="apple"))
     assert r.status_code == 200
     d = r.get_json()
     assert d["status"] == "pending"
@@ -3197,7 +3244,7 @@ def test_agent_requires_own_connection(app, svc, monkeypatch):
 def test_fasten_connection_returns_verified_provider_url(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 200
     d = r.get_json()
     # routes through HealthClaw's own wired-up connect page, not a Fasten URL
@@ -3230,7 +3277,7 @@ def test_refresh_real_connection_returns_reauth_url(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/fasten",
-                  json={"consent": True}).get_json()["id"]
+                  json=consented()).get_json()["id"]
     r = c.post(f"/api/connections/{conn}/refresh")
     assert r.status_code == 200
     d = r.get_json()
@@ -3258,7 +3305,7 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
@@ -3305,7 +3352,7 @@ def _refresh_then_deliver(cfg, svc, monkeypatch, documents_before,
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
@@ -3361,7 +3408,7 @@ def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
     assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
@@ -3426,7 +3473,7 @@ def test_the_hedge_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
     assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
@@ -3520,7 +3567,7 @@ def test_a_connection_with_no_document_baseline_claims_no_arrival(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
@@ -3547,7 +3594,7 @@ def test_the_refresh_baselines_documents_as_well_as_records(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
 
@@ -3649,7 +3696,7 @@ def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
     def down(_tenant):
@@ -3726,7 +3773,8 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     created = c.post("/api/connections/sample").get_json()
     conn = created["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 200
     d = r.get_json()
     assert d["deleted"] is True and d["rows_deleted"] == 42
@@ -3757,7 +3805,7 @@ def test_deleting_the_account_purges_every_tenant_then_removes_the_row(
     _login(c, svc, monkeypatch)
     conn_a = c.post("/api/connections/sample").get_json()["id"]
     conn_b = c.post("/api/connections/direct",
-                    json={"consent": True}).get_json()["id"]
+                    json=consented()).get_json()["id"]
     with c.session_transaction() as sess:
         account_id = sess["account_id"]
     with svc.session() as s:
@@ -3826,7 +3874,8 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 502
     body = r.get_json()
     # #586: the purge raises on any non-200 and on a lost answer, so the
@@ -3877,7 +3926,7 @@ _DIRECT_UPLOAD_ENDPOINT = "/api/connections/{conn}/upload"
 
 def _make_direct_conn(client):
     """Create a `direct` connection via the normal connect+consent flow."""
-    r = client.post("/api/connections/direct", json={"consent": True})
+    r = client.post("/api/connections/direct", json=consented())
     assert r.status_code == 200, r.get_data(as_text=True)
     return r.get_json()["id"]
 
@@ -3914,7 +3963,7 @@ def test_direct_connect_with_consent_creates_empty_connection(
         app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/direct", json={"consent": True})
+    r = c.post("/api/connections/direct", json=consented())
     assert r.status_code == 200
     d = r.get_json()
     assert d["status"] == "empty"
@@ -4346,7 +4395,13 @@ def test_daily_cap_survives_a_service_restart(tmp_path, monkeypatch):
 
 
 def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
+    from careagents import agent as agent_mod
     from careagents.app import create_app
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "hello", [], []
+    # The worker runs the first turn here: never reach a real provider.
+    monkeypatch.setattr(agent_mod.llm, "complete", lambda *a, **k: _Turn())
     monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
     app = create_app(config=cfg, client=FakeClient(), accounts=svc)
     app.config["TESTING"] = True
@@ -4356,7 +4411,9 @@ def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
     agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
                                         "connection_id": conn}).get_json()["id"]
 
-    first = c.post("/api/chat", json={"agent_id": agent, "message": "hi"})
+    # The turn is charged where the model is called, in the worker (#856
+    # sign-off F4), so the first turn runs before the second is admitted.
+    first = _turn(c, agent, "hi")
     assert first.status_code == 200
 
     second = c.post("/api/chat", json={"agent_id": agent, "message": "again"})
@@ -4402,7 +4459,7 @@ def test_consent_is_recorded_with_version(app, svc, monkeypatch):
     from careagents.tester_terms import CONSENT_VERSION
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 200
     with svc.session() as s:
         from careagents.models import Connection
@@ -4525,18 +4582,20 @@ def test_a_gateway_504_never_says_the_form_is_no_longer_awaiting_review(
     agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
                                         "connection_id": conn}).get_json()["id"]
 
-    fake.fetch_review_page = lambda tenant, action_id: (504, "gateway timeout")
+    fake.fetch_review_page = lambda tenant, action_id, **_: (504, "gateway timeout")
     page = c.get(f"/review/{agent}/act-1")
     body = page.get_data(as_text=True)
     assert page.status_code == 503, "a gateway timeout is not a verdict"
     assert "no longer awaiting review" not in body
     assert "Nothing has been approved" in body
 
-    # The engine's own answer still means what it says.
-    fake.fetch_review_page = lambda tenant, action_id: (404, "gone")
+    # The engine's own answer still means what it says: the form is past
+    # review. act-1 is completed in the fake, so the page now shows the
+    # finished form rather than a dead end (#875 V4).
+    fake.fetch_review_page = lambda tenant, action_id, **_: (404, "gone")
     gone = c.get(f"/review/{agent}/act-1")
-    assert gone.status_code == 404
-    assert "no longer awaiting review" in gone.get_data(as_text=True)
+    assert gone.status_code == 200
+    assert "Your form is ready" in gone.get_data(as_text=True)
 
 
 def test_a_dead_socket_on_the_review_path_is_not_a_bare_500(
@@ -4892,12 +4951,12 @@ def test_the_imessage_relay_is_told_to_retry_not_that_the_run_vanished(
                   json={"agent_id": agent_id}).get_json()["code"]
     headers = {"X-Internal-Secret": cfg.mint_secret}
     assert c.post("/api/surfaces/imessage/bind", headers=headers,
-                  json={"code": code, "handle": "im-test-handle"}
+                  json={"code": code, "handle": "+15550100999"}
                   ).status_code == 200
 
     fake.get_agent_run = _unreachable
     r = c.get("/api/surfaces/imessage/runs/run-1", headers=headers,
-              query_string={"handle": "im-test-handle"})
+              query_string={"handle": "+15550100999"})
     assert r.status_code == 503
     assert r.get_json()["error"] == "run service unavailable"
 
@@ -4955,7 +5014,7 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
                       json={"code": code, "handle": "+15559998888"}
                       ).status_code == 200
     assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
-                      json={"code": "bogus", "handle": "+1"}
+                      json={"code": "bogus", "handle": "+15550100998"}
                       ).status_code == 404
 
     # inbound: fake the worker's model turn, assert the reply is relayed back
@@ -4974,10 +5033,69 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
         json={"handle": "+15559998888", "text": "how's my a1c?"})
     assert ok.status_code == 200
     assert "6.1%" in ok.get_json()["reply"]
-    # an unbound handle is not routed (don't answer strangers)
+    # an unbound handle is not routed to anyone's agent: it gets a sign-in
+    # link and no run (text-first onboarding)
+    stranger = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                          json={"handle": "+15550100777", "text": "hi"})
+    assert stranger.status_code == 200
+    assert "/link?t=" in stranger.get_json()["reply"]
+    assert "run_id" not in stranger.get_json()
+    # one we cannot text back (a short code) gets nothing at all
     assert relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
-                      json={"handle": "+1000", "text": "hi"}
+                      json={"handle": "12345", "text": "hi"}
                       ).status_code == 404
+
+
+def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
+    """The cap is charged in the worker, so it holds for the relay too
+    (#862): a turn past it answers the limit sentence without a model."""
+    from careagents import beta
+    from careagents.models import UsageDay
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "Iris", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+    code = c.post("/api/surfaces/imessage",
+                  json={"agent_id": agent}).get_json()["code"]
+    relay = app.test_client()
+    hdrs = {"X-Internal-Secret": cfg.mint_secret}
+    assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
+                      json={"code": code, "handle": "+15550001111"}
+                      ).status_code == 200
+    calls = []
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "model answer", [], []
+    monkeypatch.setattr("careagents.worker.llm.complete",
+                        lambda *a, **k: calls.append(1) or _Turn())
+    monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
+
+    def used():
+        with svc.session() as s:
+            return sum(int(u.turns or 0) for u in s.query(UsageDay).all())
+
+    from careagents.worker import RunWorker
+    runtime = app.extensions["careagents_runtime"]
+    # Both admitted before either runs, so the second meets the cap in the
+    # worker, and the texter reads it through the runs endpoint.
+    runs = [relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                       json={"handle": "+15550001111", "text": t,
+                             "request_id": f"im-{i}"}).get_json()["run_id"]
+            for i, t in enumerate(("hi", "again"))]
+    for _ in runs:
+        RunWorker(runtime["config"], runtime["client"], runtime["accounts"],
+                  "cap-worker").run_once()
+    replies = [relay.get(f"/api/surfaces/imessage/runs/{r}", headers=hdrs,
+                         query_string={"handle": "+15550001111"}
+                         ).get_json()["reply"] for r in runs]
+    assert replies == [sample_framed("model answer"), beta.DAILY_LIMIT_TEXT]
+    assert calls == [1] and used() == 1
+    # Once spent, admission answers it too, without queueing a run.
+    third = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                       json={"handle": "+15550001111", "text": "more"})
+    assert third.status_code == 200
+    assert third.get_json() == {"reply": beta.DAILY_LIMIT_TEXT}
 
 
 def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):
@@ -5114,16 +5232,16 @@ def test_connect_and_reauth_links_never_use_the_internal_base():
     from careagents.healthclaw import HealthClawClient
     client = HealthClawClient("https://internal.up.railway.app/", "m",
                               public_base="https://app.healthclaw.io/")
-    assert client.fasten_connect_url("t-1") == (
-        "https://app.healthclaw.io/connect/t-1")
+    assert client.fasten_connect_url("t-1").startswith(
+        "https://app.healthclaw.io/connect/t-1?src=careagents&sig=")
     assert client.wearables_connect_url("t-1", "oura").startswith(
         "https://app.healthclaw.io/wearables/oauth/start?")
     # Server-to-server stays internal.
     assert client.fhir == "https://internal.up.railway.app/r6/fhir"
     # Without a public base the client behaves as before (tests, dev).
     plain = HealthClawClient("https://internal.up.railway.app", "m")
-    assert plain.fasten_connect_url("t-1") == (
-        "https://internal.up.railway.app/connect/t-1")
+    assert plain.fasten_connect_url("t-1").startswith(
+        "https://internal.up.railway.app/connect/t-1?src=careagents&sig=")
 
 
 def test_the_app_builds_its_client_with_the_public_base(svc):
@@ -5186,11 +5304,8 @@ def test_agent_with_advisor_gets_specialized_prompt(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
-    r = c.post("/api/agents", json={"name": "Meds", "persona": "direct",
-                                    "advisor": "medication-refills",
-                                    "connection_id": conn})
-    assert r.status_code == 200
-    aid = r.get_json()["id"]
+    # A legacy assistant still carrying its advisor (spec PR #943, 2.2).
+    aid = legacy_agent(svc, conn, "Meds", "direct", "medication-refills")
     with svc.session() as s:
         from careagents.models import Account
         acct_id = s.query(Account).filter_by(
@@ -5656,12 +5771,14 @@ def test_the_timeline_endpoint_degrades_rather_than_500ing(
     assert c.get(f"/api/labs/timeline?agent={agent_id}").status_code == 502
 
 
-def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
+def test_show_lab_timeline_emits_a_card_and_gives_first_latest_direction(
         cfg, svc, monkeypatch):
-    """The chart carries the values. Handing them to the model too invites it
-    to restate every number and to narrate a direction from a single point.
+    """The chart carries every value. The model gets the first and latest
+    reading and the direction, worked out here: given only the chart's
+    shape, it would not say how a result changed (#937). Not every value,
+    and never a direction from a single point.
 
-    MUTATION: return the readings in the tool result -> red.
+    MUTATION: return every reading in the tool result -> red.
     """
     import json as _json
 
@@ -5677,9 +5794,13 @@ def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
     assert events == [{"type": "card", "kind": "lab-timeline",
                        "topic": "cholesterol"}]
     assert out["chart_shown"] is True
-    assert out["series"] == [{"name": "Total cholesterol", "readings": 2,
-                              "trend_plottable": True}]
-    assert "244" not in _json.dumps(out), "the tool handed the model raw values"
+    assert out["series"] == [{
+        "name": "Total cholesterol", "readings": 2, "trend_plottable": True,
+        "first": {"date": "2025-01-01", "value": 210, "unit": "mg/dL"},
+        "latest": {"date": "2026-03-01", "value": 244, "unit": "mg/dL"},
+        "direction": "higher"}]
+    assert "readings\": [" not in _json.dumps(out), \
+        "the tool handed the model every reading"
 
 
 def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
@@ -5902,16 +6023,16 @@ def test_real_record_tiles_are_coming_soon_when_the_switch_is_off(
     for tile in _REAL_RECORD_TILES:
         assert f'data-connector="{tile}"' not in body, tile
     assert 'id="explore-sample"' in body
-    assert "Coming for invited testers" in body
+    assert "Coming later in the beta" in body
 
 
 def test_real_record_connect_posts_are_refused_with_503_when_off(
         svc, monkeypatch):
     c = _beta_app(svc).test_client()
     _login(c, svc, monkeypatch, email="tester@example.org")
-    for tile, payload in (("fasten", {"consent": True}),
-                          ("wearable", {"provider": "apple", "consent": True}),
-                          ("direct", {"consent": True})):
+    for tile, payload in (("fasten", consented()),
+                          ("wearable", consented(provider="apple")),
+                          ("direct", consented())):
         r = c.post(f"/api/connections/{tile}", json=payload)
         assert r.status_code == 503, tile
         assert "beta" in r.get_json()["error"], tile
@@ -5936,7 +6057,7 @@ def test_allowlisted_account_sees_and_can_use_real_record_tiles(
     assert cat["direct"]["tier"] == "import"
     for tile in _REAL_RECORD_TILES:
         assert cat[tile].get("requires_consent") is True, tile
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 200 and r.get_json()["status"] == "pending"
     # Not listed: same deployment, tiles closed, POST refused.
     other = app.test_client()
@@ -5946,7 +6067,7 @@ def test_allowlisted_account_sees_and_can_use_real_record_tiles(
     for tile in _REAL_RECORD_TILES:
         assert cat[tile]["tier"] == "soon", tile
     assert other.post("/api/connections/fasten",
-                      json={"consent": True}).status_code == 503
+                      json=consented()).status_code == 503
 
 
 def test_real_records_on_opens_the_tiles_to_every_account(svc, monkeypatch):
@@ -5956,7 +6077,7 @@ def test_real_records_on_opens_the_tiles_to_every_account(svc, monkeypatch):
            c.get("/api/connections/catalog").get_json()["connectors"]}
     assert cat["fasten"]["tier"] == "live"
     assert c.post("/api/connections/direct",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
 
 
 def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
@@ -5970,15 +6091,15 @@ def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     fasten = c.post("/api/connections/fasten",
-                    json={"consent": True}).get_json()
+                    json=consented()).get_json()
     direct = c.post("/api/connections/direct",
-                    json={"consent": True}).get_json()["id"]
+                    json=consented()).get_json()["id"]
     tenant = fasten["connect_url"].rsplit("/connect/", 1)[1]
 
     monkeypatch.setattr(cfg, "real_records", "off")
 
     assert c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
     r = c.post(f"/api/connections/{fasten['id']}/refresh")
     assert r.status_code == 200 and r.get_json()["status"] == "reauth"
     assert c.get(f"/api/connections/{tenant}/poll").status_code == 200
@@ -5986,7 +6107,8 @@ def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
         {"resourceType": "Bundle", "type": "collection", "entry": []}),
         content_type="application/fhir+json")
     assert r.status_code == 200
-    assert c.delete(f"/api/connections/{fasten['id']}").status_code == 200
+    assert c.delete(f"/api/connections/{fasten['id']}",
+                 json={"confirm": "DELETE"}).status_code == 200
 
 
 def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,
@@ -6019,7 +6141,7 @@ def test_the_beta_banner_is_on_the_landing_page_and_the_hub(app, svc,
                          re.S).group(1)
     words = re.sub(r"<[^>]+>", "", sentence).split()
     assert len(words) < 15, words
-    assert "Beta" in sentence and "sample records" in sentence
+    assert "Beta" in sentence and "made-up records" in sentence
 
 
 def test_no_canonical_host_means_no_redirect(app):
@@ -6160,7 +6282,7 @@ def test_allowlist_mode_with_an_empty_list_is_closed_to_everyone(svc,
     c = _beta_app(svc, CARE_REAL_RECORDS="allowlist").test_client()
     _login(c, svc, monkeypatch, email="anyone@example.org")
     assert c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
 
 
 def test_the_tester_guide_matches_what_the_switch_actually_does():
@@ -6354,7 +6476,7 @@ def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
     body = closed.get("/home").get_data(as_text=True)
     assert note not in body
     # The tiles it contradicted are gone; the closed line says it instead.
-    assert "Coming for invited testers" in body
+    assert "Coming later in the beta" in body
 
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
                     CARE_REAL_RECORDS_ALLOWLIST="dr.who@example.org")
@@ -6426,9 +6548,9 @@ def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):
     assert "—" not in msg and "--" not in msg
     c = _beta_app(svc).test_client()
     _login(c, svc, monkeypatch, email="tester@example.org")
-    for tile, payload in (("fasten", {"consent": True}),
-                          ("wearable", {"provider": "apple", "consent": True}),
-                          ("direct", {"consent": True})):
+    for tile, payload in (("fasten", consented()),
+                          ("wearable", consented(provider="apple")),
+                          ("direct", consented())):
         r = c.post(f"/api/connections/{tile}", json=payload)
         assert r.status_code == 503, tile
         assert r.get_json()["error"] == msg, tile

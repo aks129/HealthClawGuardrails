@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from careagents.healthclaw import HealthClawError
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.test_careagents import FakeClient, _login
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
@@ -88,7 +89,7 @@ def test_every_assistants_queue_is_linked_not_only_the_first(
     first = c.post("/api/connections/sample").get_json()["agent_id"]
     other = svc.add_connection(aid, "direct", "ca-other", "Upload",
                                status="active")
-    second = svc.create_agent(aid, "Coach", "calm", other)
+    second = legacy_agent(svc, other, "Coach")
     d = c.get("/api/approvals/count").get_json()
     assert d["count"] == 2
     # Row order is the database's; the queues are compared as a set.

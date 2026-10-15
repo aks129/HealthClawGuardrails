@@ -56,7 +56,7 @@ class _CanaryClient(FakeClient):
         return {"summary": {}, "consumer": {"due": [CANARY],
                                             "lines": [CANARY]}}
 
-    def fetch_appointment_brief(self, tenant):
+    def fetch_appointment_brief(self, tenant, voice=None):
         field = json.dumps({"label": "Medication", "value": CANARY,
                             "sourceType": "MedicationRequest",
                             "sourceId": "m-1"})
@@ -74,7 +74,7 @@ class _CanaryClient(FakeClient):
             {"delivery_link": f"https://x/{CANARY}.pdf"})
         return status
 
-    def fetch_review_page(self, tenant, action_id):
+    def fetch_review_page(self, tenant, action_id, voice=None):
         return 200, (f"<html><p>{CANARY}</p>"
                      f"<form action='/r6/actions/{action_id}/review'>"
                      "</form></html>")

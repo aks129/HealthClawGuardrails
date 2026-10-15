@@ -278,7 +278,8 @@ def _get_step_up_token() -> str:
     non-public tenant (this bot's TENANT_ID) requires X-Internal-Secret.
     """
     headers = {'X-Tenant-ID': TENANT_ID}
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    # Trimmed, as the engine trims its copy (r6/runtime_config.py).
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '').strip()
     if mint_secret:
         headers['X-Internal-Secret'] = mint_secret
     resp = requests.post(

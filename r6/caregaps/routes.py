@@ -8,8 +8,8 @@ supplied, against the tenant's stored Conditions, Observations, Immunizations,
 and Procedures. The `subjectResolution` parameter reports which of those
 happened, and names the failure when neither could.
 """
-import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from flask import request, jsonify
@@ -20,6 +20,7 @@ from r6.models import R6Resource
 from r6.audit import add_audit_event
 from r6.caregaps.evaluate import evaluate_care_gaps
 from r6.caregaps.report import build_caregaps_summary, build_consumer_summary
+from r6.safe_read import as_dict, strict_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,150 @@ def patient_for(subject, tenant_id):
         tenant_id=tenant_id, is_deleted=False).first()
     return row.to_fhir_json() if row else None
 
-def subject_resources(resource_type, subject, tenant_id):
+#: A resource id: the FHIR charset, up to 128 characters. Live Epic Patient
+#: ids reach 109 (#878), past FHIR's nominal 64.
+_ID = r"[A-Za-z0-9\-.]{1,128}"
+_VERSION = rf"(?:/_history/{_ID})?"
+#: Each is matched in full (`fullmatch`): nothing before, nothing after, not
+#: even a trailing newline. A relative reference is exactly Patient/<id>; an
+#: absolute one is a URL whose path ENDS in /Patient/<id>.
+_RELATIVE = re.compile(rf"Patient/({_ID}){_VERSION}")
+_ABSOLUTE = re.compile(rf"https?://[^/\s?#]+(?:/[^/\s?#]+)*/Patient/({_ID}){_VERSION}")
+_URN_UUID = re.compile(rf"urn:uuid:({_ID})")
+
+
+def referenced_patient_id(ref):
+    """The Patient id a reference names, or None.
+
+    Three forms, because real feeds use all three and an exact string test
+    against `Patient/<id>` silently dropped the other two (#867):
+
+      Patient/<id>                     relative, optionally /_history/<v>
+      https://host/.../Patient/<id>    absolute; the id decides, not the host
+      urn:uuid:<id>                    a bundle-local id. The Fasten ingester
+                                       and the upload path keep the upstream
+                                       id as the row id and store no fullUrl,
+                                       so it resolves against that id.
+
+    A `urn:uuid:` names no type, so it is a Patient only when the caller
+    compares it with a Patient's id. Every tenant's rows are already scoped
+    by tenant_id; the host of an absolute URL widens nothing.
+    """
+    if not isinstance(ref, str):
+        return None
+    # A dot-segment can walk a path anywhere ("Patient/../Patient/x",
+    # "https://h/a/../Patient/x"), and "." or ".." is no one's id.
+    if "." in ref and any(seg in (".", "..") for seg in ref.split("/")):
+        return None
+    m = (_RELATIVE.fullmatch(ref) or _ABSOLUTE.fullmatch(ref)
+         or _URN_UUID.fullmatch(ref))
+    # The split above cannot see a `urn:uuid:` form, which has no "/", so
+    # "urn:uuid:.." resolved to the id "..". Refuse it on the captured id,
+    # which covers every form.
+    pid = m.group(1) if m else None
+    return None if pid in (".", "..") else pid
+
+
+def sole_patient_id(tenant_id):
+    """The id of the tenant's only live Patient, or None for none or two+."""
+    rows = R6Resource.query.filter_by(
+        resource_type="Patient", tenant_id=tenant_id,
+        is_deleted=False).limit(2).all()
+    return rows[0].id if len(rows) == 1 else None
+
+
+#: Resource types that name their patient somewhere other than `subject`.
+#: An Immunization has no `subject`; its patient is `Immunization.patient`
+#: (FHIR R4 and R6). Read as `subject`, every Immunization fell to the
+#: no-subject rule below, which on a one-Patient tenant handed that Patient
+#: other people's shots (#880).
+_SUBJECT_FIELD = {"Immunization": "patient"}
+_REFERENCE_FIELDS = ("subject", "patient")
+
+#: Types whose patient reference is required (1..1), so a row without one is
+#: broken data rather than an unattributed record of the tenant's one
+#: Patient. `Immunization.patient` is 1..1 and the write path refuses an
+#: Immunization without it; one that arrives without it anyway closes nobody's
+#: gap, even on a one-Patient tenant (#880).
+_PATIENT_REQUIRED = frozenset({"Immunization"})
+
+
+def subject_field(resource_type):
+    """The element that names the patient on `resource_type`."""
+    return _SUBJECT_FIELD.get(resource_type, "subject")
+
+
+def subject_match(res, patient_id, sole_id, field="subject"):
+    """True when `res` is this patient's, False when it is not, and None when
+    its subject cannot be read at all (malformed, #869).
+
+    `field` is where this resource type names its patient (`subject_field`).
+
+    A resource that names nobody belongs to the tenant's one Patient when the
+    tenant has exactly one and it is the one asked about: a single-patient
+    record set is that person's. With two or more it belongs to nobody we
+    can name, and is left out rather than guessed. "Names nobody" means
+    neither `subject` nor `patient` is present. A resource carrying the field
+    its type does not use, an Immunization with a `subject`, names somebody
+    we do not read, and is unreadable rather than the sole Patient's (#880).
+    """
+    res = as_dict(res)
+    subject = res.get(field)
+    if subject is None:
+        if any(res.get(f) is not None for f in _REFERENCE_FIELDS):
+            return None
+        return sole_id is not None and sole_id == patient_id
+    if not isinstance(subject, dict):
+        return None
+    ref = subject.get("reference")
+    if ref is None:
+        # An identifier-only or display-only subject names no row we hold.
+        return False if "reference" not in subject else None
+    if not isinstance(ref, str):
+        return None
+    return referenced_patient_id(ref) == patient_id
+
+
+def subject_rows(resource_type, subject, tenant_id, limit=None):
+    """(resources, unreadable_count) for the patient `subject` names.
+
+    The one reader labs, care gaps and the brief share, so the three agree
+    about whose result a row is (#867). With `limit`, rows are read newest
+    first by last update, the order the labs fallback uses, and reading
+    stops after `limit` of the patient's own: another person's newer rows
+    do not take this patient's slots.
+
+    A `subject` that is not a Patient reference falls back to the old
+    exact-string comparison rather than to nothing.
+    """
+    patient_id = referenced_patient_id(subject)
+    sole_id = (sole_patient_id(tenant_id)
+               if patient_id and resource_type not in _PATIENT_REQUIRED
+               else None)
+    field = subject_field(resource_type)
+    query = R6Resource.query.filter_by(
+        resource_type=resource_type, tenant_id=tenant_id, is_deleted=False)
+    if limit is not None:
+        query = query.order_by(R6Resource.last_updated.desc(),
+                               R6Resource.id.desc())
+    out, unreadable = [], 0
+    for row in query.yield_per(500):
+        res = row.to_fhir_json()
+        if patient_id is None:
+            ref = res.get(field)
+            match = isinstance(ref, dict) and ref.get("reference") == subject
+        else:
+            match = subject_match(res, patient_id, sole_id, field)
+        if match is None:
+            unreadable += 1
+        elif match:
+            out.append(res)
+            if limit is not None and len(out) >= limit:
+                break
+    return out, unreadable
+
+
+def subject_resources(resource_type, subject, tenant_id, limit=None):
     """The clinical evidence a gap is evaluated against.
 
     The most consequential of the three. These rows are what CLOSES a
@@ -101,16 +245,12 @@ def subject_resources(resource_type, subject, tenant_id):
     soft-deleted row here tells a patient they are covered by a record
     the system considers deleted, which is the failure direction that
     matters: it withholds a due item rather than repeating one.
+
+    Matched through `subject_rows`, so an absolute-URL or `urn:uuid:`
+    reference, or no subject on a one-Patient tenant, counts as the
+    patient's (#867), and a malformed subject is skipped (#869).
     """
-    rows = R6Resource.query.filter_by(
-        resource_type=resource_type, tenant_id=tenant_id,
-        is_deleted=False).all()
-    out = []
-    for row in rows:
-        res = row.to_fhir_json()
-        if res.get("subject", {}).get("reference") == subject:
-            out.append(res)
-    return out
+    return subject_rows(resource_type, subject, tenant_id, limit)[0]
 
 
 def register_caregaps_routes(blueprint, deps):
@@ -216,11 +356,11 @@ def register_caregaps_routes(blueprint, deps):
         return jsonify({
             "resourceType": "Parameters",
             "parameter": [
-                {"name": "summary", "valueString": json.dumps(summary)},
-                {"name": "consumerSummary", "valueString": json.dumps(consumer)},
+                {"name": "summary", "valueString": strict_dumps(summary)},
+                {"name": "consumerSummary", "valueString": strict_dumps(consumer)},
                 {"name": "subjectResolution",
-                 "valueString": json.dumps({"state": state, "subject": subject})},
-                {"name": "detail", "valueString": json.dumps(results)},
+                 "valueString": strict_dumps({"state": state, "subject": subject})},
+                {"name": "detail", "valueString": strict_dumps(results)},
                 {"name": "disclaimer", "valueString": _DISCLAIMER},
             ],
         }), 200

@@ -529,3 +529,66 @@ def test_the_patient_is_told_it_is_unavailable_and_nothing_about_billing():
 def test_the_sync_path_says_unavailable_when_out_of_credit(monkeypatch):
     events = _turn_events(monkeypatch, llm.LLMOutOfCredit("billing"))
     assert events == [{"type": "error", "text": agent.UNAVAILABLE_TEXT}]
+
+
+# --- the answer is not cut off by the thinking it spends ------------------
+
+def _anthropic_fake(monkeypatch, *, stop_reason="end_turn", text="An answer."):
+    captured: dict = {}
+
+    class _Block:
+        def __init__(self, t):
+            self.type, self.text = "text", t
+
+    class _Messages:
+        def create(self, **kw):
+            captured.update(kw)
+            content = [_Block(text)] if text else []
+            return types.SimpleNamespace(content=content,
+                                         stop_reason=stop_reason)
+
+    class _Client:
+        def __init__(self, **_kw):
+            self.messages = _Messages()
+
+    monkeypatch.setitem(__import__("sys").modules, "anthropic",
+                        types.SimpleNamespace(Anthropic=_Client,
+                                              APIError=Exception))
+    cfg = types.SimpleNamespace(
+        provider="anthropic", anthropic_api_key="k", anthropic_model="m",
+        anthropic_oauth_token="", run_deadline_seconds=120,
+        anthropic_max_tokens=8000, anthropic_effort="medium")
+    return cfg, captured
+
+
+def test_the_answer_has_room_beyond_the_models_thinking(monkeypatch):
+    """At max_tokens=1200 a thorough lab answer on Claude Sonnet 5.5 was cut
+    off at every effort level: thinking spends the same budget.
+
+    MUTATION: max_tokens back to 1200, or drop effort -> red."""
+    cfg, captured = _anthropic_fake(monkeypatch)
+    llm.complete(cfg, "sys", [{"role": "user", "content": "hi"}], [])
+    assert captured["max_tokens"] >= 4000
+    assert captured["output_config"] == {"effort": "medium"}
+
+
+def test_a_refusal_is_said_not_left_blank(monkeypatch):
+    cfg, _ = _anthropic_fake(monkeypatch, stop_reason="refusal", text="")
+    turn = llm.complete(cfg, "sys", [{"role": "user", "content": "hi"}], [])
+    assert turn.text == llm.REFUSAL_TEXT
+
+
+def test_a_cut_off_answer_says_it_was_cut_off(monkeypatch):
+    cfg, _ = _anthropic_fake(monkeypatch, stop_reason="max_tokens",
+                             text="The A1c rose and")
+    turn = llm.complete(cfg, "sys", [{"role": "user", "content": "hi"}], [])
+    assert turn.text.endswith(llm.CUT_OFF_TEXT)
+
+
+def test_effort_is_one_of_three_and_defaults_to_medium():
+    from careagents.config import Config
+    base = {"OPENAI_API_KEY": "k"}
+    assert Config(env=base).anthropic_effort == "medium"
+    assert Config(env={**base, "CARE_EFFORT": "low"}).anthropic_effort == "low"
+    assert Config(env={**base, "CARE_EFFORT": "max"}).anthropic_effort == "medium"
+    assert Config(env=base).anthropic_model == "claude-sonnet-5-5"

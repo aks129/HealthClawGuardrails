@@ -11,14 +11,17 @@ SQLite on the VPS, file-locked 0600.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 
-from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
+from sqlalchemy import (Boolean, Column, Float, ForeignKey, Index, Integer,
                         LargeBinary, String, UniqueConstraint, create_engine,
                         inspect, text)
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 def _uid(prefix: str) -> str:
@@ -64,6 +67,56 @@ class Account(Base):
                           cascade="all, delete-orphan")
     surfaces = relationship("Surface", back_populates="account",
                             cascade="all, delete-orphan")
+    people = relationship("Person", back_populates="account",
+                          cascade="all, delete-orphan")
+
+
+#: Who a person is to the account holder (one assistant per person spec,
+#: section 2.1, owner decision D4). NULL for the holder themselves.
+RELATIONSHIPS = ("parent", "child", "partner", "other")
+
+#: The one free-text field on a person, capped (D4).
+NICKNAME_MAX = 24
+
+#: One self person per account: a partial unique index, so `kind="other"`
+#: rows are untouched.
+SELF_PERSON_UNIQUE = "uq_ca_people_one_self"
+
+
+class Person(Base):
+    """Whose records an assistant reads: the account holder ("self"), or
+    someone they care for ("other"). One assistant per person spec,
+    section 2.1.
+
+    A grouping and nothing else. It must never gain a legal name, a date of
+    birth or any clinical field: those stay in the tenant, behind the
+    engine's redaction and audit. The relationship is an enum and the
+    nickname ("Mom") is capped at NICKNAME_MAX characters. The engine never
+    learns a person exists.
+    """
+    __tablename__ = "ca_people"
+    __table_args__ = (Index(SELF_PERSON_UNIQUE, "account_id", unique=True,
+                            sqlite_where=text("kind = 'self'"),
+                            postgresql_where=text("kind = 'self'")),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("person"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"),
+                        nullable=False)
+    kind = Column(String(8), nullable=False, default="self")  # self | other
+    # RELATIONSHIPS. Named `relation` here so it does not shadow
+    # sqlalchemy's relationship() in this class body; the column is
+    # `relationship`, as the spec names it.
+    relation = Column("relationship", String(16), nullable=True)
+    nickname = Column(String(NICKNAME_MAX), nullable=True)
+    # Authority for real records (spec 6.1). Nothing stamps it yet: someone
+    # you care for has made-up records only until owner decision D1.
+    attested_at = Column(Float, nullable=True)
+    attestation_version = Column(String(16), nullable=True)
+    # Set while this person has an assistant, cleared when their last one is
+    # removed: the compare-and-set that keeps it to one assistant per person
+    # (spec 2.2), as Account.first_agent_at is for the first one.
+    agent_at = Column(Float, nullable=True)
+    created_at = Column(Float, default=now)
+    account = relationship("Account", back_populates="people")
 
 
 class Passkey(Base):
@@ -113,6 +166,10 @@ class Connection(Base):
     # arrival from a record that has held notes all along. A plain integer:
     # no patient data, nothing about the record's content.
     last_uncounted = Column(Integer, nullable=True)
+    # Whose records these are (one assistant per person spec, section 2.2).
+    # Always set by the service; nullable in the schema only because neither
+    # SQLite nor Postgres can add a NOT NULL column over existing rows.
+    person_id = Column(String(32), ForeignKey("ca_people.id"), nullable=True)
     account = relationship("Account", back_populates="connections")
     agents = relationship("Agent", back_populates="connection")
 
@@ -124,8 +181,18 @@ class Agent(Base):
     connection_id = Column(String(32), ForeignKey("ca_connections.id"))
     name = Column(String(48), default="Juniper")
     # Capability specialization (advisors.py); persona stays the voice.
+    # Superseded by `routines`, and kept readable for one release (spec 2.2).
     advisor = Column(String(32), nullable=True)
+    # The tone (personas.py), a setting on the assistant.
     persona = Column(String(16), default="calm")
+    # Comma-separated routine ids (advisors.ROUTINES). Prompt blocks only:
+    # a routine changes no access. Empty is the base assistant.
+    routines = Column(String(255), nullable=True)
+    # Whose assistant this is. One per person, kept by the service with
+    # Person.agent_at, not by the schema: accounts from before hold several
+    # (spec section 4), and they are kept. Nullable for the same reason as
+    # Connection.person_id.
+    person_id = Column(String(32), ForeignKey("ca_people.id"), nullable=True)
     created_at = Column(Float, default=now)
     account = relationship("Account", back_populates="agents")
     connection = relationship("Connection", back_populates="agents")
@@ -140,7 +207,73 @@ class Surface(Base):
     handle = Column(String(120), nullable=True)         # chat id / code
     status = Column(String(16), default="pending")      # active|pending
     bound_at = Column(Float, nullable=True)
+    # When a pending pairing code stops working. NULL on a pending row made
+    # before this column existed reads as expired (fail closed).
+    code_exp = Column(Float, nullable=True)
+    # 1 when the next reply on this surface should open with the welcome:
+    # set by a bind that had no message to answer (the sign-in link).
+    welcome_due = Column(Integer, default=0)
+    # iMessage re-verification (#871): a number can be reassigned to someone
+    # else. When the owner last proved the handle is theirs (a bind, or a
+    # re-confirm through /link), when it last texted, and when we first
+    # asked it to re-confirm (NULL while nothing is pending). See
+    # careagents.imessage.reverify_due.
+    verified_at = Column(Float, nullable=True)
+    last_inbound_at = Column(Float, nullable=True)
+    reverify_notified_at = Column(Float, nullable=True)
     account = relationship("Account", back_populates="surfaces")
+
+
+class ImessageLink(Base):
+    """A one-time sign-in link texted to an unbound iMessage handle.
+
+    Only the token's SHA-256 is stored. Used once, then stamped; expires
+    after 30 minutes. The handle is the sender's address (a phone number or
+    an Apple ID email), the same pointer a bound Surface keeps. No PHI.
+    """
+    __tablename__ = "ca_imessage_links"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("iml"))
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    handle = Column(String(120), nullable=False)
+    created_at = Column(Float, default=now)
+    exp = Column(Float, nullable=False)
+    used_at = Column(Float, nullable=True)
+
+
+class ImessageHandleState(Base):
+    """Per-sender counters and the STOP flag, keyed by a SHA-256 of the
+    normalized handle so the sender's address itself is not kept here.
+
+    Counts only: failed pairing codes and links issued, each in a window.
+    """
+    __tablename__ = "ca_imessage_handles"
+    handle_key = Column(String(64), primary_key=True)
+    opted_out_at = Column(Float, nullable=True)
+    fail_count = Column(Integer, default=0)
+    fail_window_start = Column(Float, nullable=True)
+    link_count = Column(Integer, default=0)
+    link_window_start = Column(Float, nullable=True)
+
+
+class SendblueMessage(Base):
+    """One inbound Sendblue text, as pointers: seen once, and the run whose
+    answer the worker owes it.
+
+    `key_hash` is a SHA-256 of Sendblue's message_handle, so a webhook
+    retry is recognised without keeping Sendblue's id. No content, no
+    number: the answer is read from the run when it is sent, and the
+    number from the surface. `surface_id` is a plain pointer, not a foreign
+    key, because STOP and disconnect delete the surface.
+    """
+    __tablename__ = "ca_sendblue_messages"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("sbm"))
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(Float, default=now)
+    surface_id = Column(String(32), nullable=True)
+    run_id = Column(String(64), nullable=True)
+    delivered_at = Column(Float, nullable=True, index=True)
+    # sent | withheld | failed | timeout | unbound | absent
+    outcome = Column(String(16), nullable=True)
 
 
 class Grant(Base):
@@ -167,6 +300,11 @@ class Grant(Base):
     revoked_at = Column(Float, nullable=True)
 
 
+#: The name of the one-row-per-account-and-day rule on `ca_usage_days`: a
+#: constraint on a new table, a unique index on one made before it.
+USAGE_DAY_UNIQUE = "uq_ca_usage_days_acct_day"
+
+
 class UsageDay(Base):
     """Per-account daily LLM turn count — a durable spend ceiling.
 
@@ -176,8 +314,14 @@ class UsageDay(Base):
     and durable: one row per account per UTC day.
 
     Counts only — no message content, nothing PHI-adjacent.
+
+    One row per account and day, enforced (#862 review F5): two racing
+    first-of-day inserts made two rows, and a read saw only one. A table
+    made before the constraint gets it from `_ensure_usage_day_unique`.
     """
     __tablename__ = "ca_usage_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name=USAGE_DAY_UNIQUE),)
     id = Column(String(32), primary_key=True, default=lambda: _uid("use"))
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
@@ -219,6 +363,22 @@ class PageViewDay(Base):
     day = Column(String(10), nullable=False, index=True)    # UTC "YYYY-MM-DD"
     endpoint = Column(String(64), nullable=False, index=True)
     views = Column(Integer, default=0)
+
+
+class ModelUsageDay(Base):
+    """How chat turns were answered, one integer per UTC day per metric.
+
+    The metric is one of careagents/routing.py's fixed names (turns by tier,
+    escalations, advisor consultations, refusals, cut-offs). No account, no
+    conversation, no text: a row cannot be about a person.
+    """
+    __tablename__ = "ca_model_usage_days"
+    __table_args__ = (UniqueConstraint("day", "metric",
+                                       name="uq_ca_model_usage_days_day_metric"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("mu"))
+    day = Column(String(10), nullable=False, index=True)    # UTC "YYYY-MM-DD"
+    metric = Column(String(32), nullable=False)
+    count = Column(Integer, default=0)
 
 
 class RealRecordInvite(Base):
@@ -291,6 +451,31 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+    if "ca_surfaces" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
+        if "code_exp" not in cols:
+            _add_column(engine, "ca_surfaces", "code_exp", "FLOAT")
+        if "welcome_due" not in cols:
+            _add_column(engine, "ca_surfaces", "welcome_due",
+                        "INTEGER DEFAULT 0")
+        for name in ("verified_at", "last_inbound_at",
+                     "reverify_notified_at"):
+            if name not in cols:
+                _add_column(engine, "ca_surfaces", name, "FLOAT")
+        # A binding from before #871 counts as verified when it was bound,
+        # or now if that was never recorded, and as last heard from now:
+        # silence counts from the deploy, so existing testers are not all
+        # asked (and their owners emailed) that day. Idempotent: only NULLs
+        # change.
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE ca_surfaces SET verified_at = COALESCE(bound_at, :t) "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND verified_at IS NULL"), {"t": now()})
+            conn.execute(text(
+                "UPDATE ca_surfaces SET last_inbound_at = :t "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND last_inbound_at IS NULL"), {"t": now()})
     if "ca_grants" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_grants")}
         if "redirect_host" not in cols:
@@ -308,6 +493,10 @@ def _ensure_columns(engine) -> None:
             with engine.begin() as conn:
                 conn.execute(text(
                     "ALTER TABLE ca_agents ADD COLUMN advisor VARCHAR(32)"))
+        if "routines" not in cols:
+            _add_column(engine, "ca_agents", "routines", "VARCHAR(255)")
+        if "person_id" not in cols:
+            _add_column(engine, "ca_agents", "person_id", "VARCHAR(32)")
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:
@@ -331,6 +520,264 @@ def _ensure_columns(engine) -> None:
                     "INTEGER"))
         if "reconsented_at" not in cols:
             _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
+        if "person_id" not in cols:
+            _add_column(engine, "ca_connections", "person_id", "VARCHAR(32)")
+
+
+def _usage_day_is_unique(engine) -> bool:
+    """Is (account_id, day) on ca_usage_days already unique, by constraint
+    (a table created from the model) or by index (one migrated here)?"""
+    insp = inspect(engine)
+    pair = ["account_id", "day"]
+    return (any(c["column_names"] == pair
+                for c in insp.get_unique_constraints("ca_usage_days"))
+            or any(i["unique"] and i["column_names"] == pair
+                   for i in insp.get_indexes("ca_usage_days")))
+
+
+#: Postgres advisory-lock key that serialises the ca_usage_days migration
+#: across processes booting together. Any fixed 64-bit number works, as long
+#: as nothing else in this database takes the same one.
+_USAGE_DAY_LOCK_KEY = 8_620_005
+
+#: Postgres SQLSTATE for a detected deadlock: the transaction was rolled
+#: back and is safe to run again.
+_DEADLOCK = "40P01"
+
+
+def _ensure_usage_day_unique(engine) -> None:
+    """Give a ca_usage_days made before the constraint one row per account
+    and day (#862 review F5), idempotently, on SQLite and Postgres.
+
+    Such a table may already hold duplicates, which would fail the index, so
+    each duplicate group is first collapsed into its oldest-id row with the
+    group's summed turns: a turn charged is never forgotten. Collapse and
+    index run in one transaction. A turn charged by an old process between
+    the two can add a duplicate back and fail the index; that is retried.
+
+    Peers are NOT harmless on Postgres (#862 QA): processes booting together
+    on duplicates each took row locks to collapse and then the index's table
+    lock, and deadlocked; 1 to 3 of 4 boots died. So on Postgres the whole
+    transaction first takes one advisory lock, and checks again under it: a
+    peer that finished first leaves nothing to do. A deadlock is still
+    retried, in case some other writer is involved. SQLite serialises
+    writers itself and needs no lock.
+    """
+    if "ca_usage_days" not in inspect(engine).get_table_names():
+        return
+    if _usage_day_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _USAGE_DAY_LOCK_KEY})
+                    if _usage_day_is_unique(conn):
+                        return              # a peer finished while we waited
+                groups = conn.execute(text(
+                    "SELECT account_id, day, MIN(id), SUM(COALESCE(turns, 0)) "
+                    "FROM ca_usage_days GROUP BY account_id, day "
+                    "HAVING COUNT(*) > 1")).all()
+                for account_id, day, keep, total in groups:
+                    conn.execute(text(
+                        "UPDATE ca_usage_days SET turns = :t WHERE id = :k"),
+                        {"t": int(total), "k": keep})
+                    conn.execute(text(
+                        "DELETE FROM ca_usage_days WHERE account_id = :a "
+                        "AND day = :d AND id <> :k"),
+                        {"a": account_id, "d": day, "k": keep})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {USAGE_DAY_UNIQUE} "
+                    "ON ca_usage_days (account_id, day)"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return                      # a peer made the index first
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            # Said, not swallowed: under the advisory lock this should not
+            # happen, and a test asserts it does not.
+            logger.warning("ca_usage_days migration retried: %s",
+                           "deadlock" if not isinstance(exc, IntegrityError)
+                           else "duplicate added during collapse")
+
+
+#: One active iMessage binding per handle (#866 security F2): a partial
+#: unique index, so pending rows (which carry a pairing code in `handle`)
+#: and other surface kinds are untouched.
+IMESSAGE_HANDLE_UNIQUE = "uq_ca_surfaces_imessage_active_handle"
+
+#: Advisory-lock key for that migration; distinct from the usage-day one.
+_IMESSAGE_HANDLE_LOCK_KEY = 8_660_002
+
+
+def _imessage_handle_is_unique(conn_or_engine) -> bool:
+    return any(i["name"] == IMESSAGE_HANDLE_UNIQUE
+               for i in inspect(conn_or_engine).get_indexes("ca_surfaces"))
+
+
+def _ensure_imessage_handle_unique(engine) -> None:
+    """Create the partial unique index on active iMessage handles,
+    idempotently, on SQLite and Postgres.
+
+    A table from before it may hold one handle active on two rows (the race
+    the index closes). Each such group keeps its newest binding (latest
+    `bound_at`, then highest id) and the rest are deleted, in the same
+    transaction as the index. On Postgres an advisory lock serialises peers
+    booting together, as `_ensure_usage_day_unique` does.
+    """
+    from careagents.imessage import normalize_handle
+    if "ca_surfaces" not in inspect(engine).get_table_names():
+        return
+    if _imessage_handle_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _IMESSAGE_HANDLE_LOCK_KEY})
+                    if _imessage_handle_is_unique(conn):
+                        return
+                # Rows bound before handles were normalized are rewritten to
+                # the normalized form first, so two spellings of one sender
+                # meet in the dedupe below. One that will not normalize keeps
+                # its spelling (still found by the raw-handle fallback).
+                rows = conn.execute(text(
+                    "SELECT id, handle, bound_at FROM ca_surfaces "
+                    "WHERE kind = 'imessage' AND status = 'active'")).all()
+                groups: dict = {}
+                for row_id, handle, bound_at in rows:
+                    norm = normalize_handle(handle) or handle
+                    groups.setdefault(norm, []).append(
+                        (bound_at or 0.0, row_id, handle))
+                for norm, members in groups.items():
+                    members.sort()
+                    keep_bound, keep_id, keep_handle = members[-1]
+                    for _, row_id, _h in members[:-1]:
+                        conn.execute(text(
+                            "DELETE FROM ca_surfaces WHERE id = :i"),
+                            {"i": row_id})
+                    if keep_handle != norm:
+                        conn.execute(text(
+                            "UPDATE ca_surfaces SET handle = :h "
+                            "WHERE id = :i"), {"h": norm, "i": keep_id})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                    f"{IMESSAGE_HANDLE_UNIQUE} ON ca_surfaces (handle) "
+                    "WHERE kind = 'imessage' AND status = 'active'"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            logger.warning("ca_surfaces handle index migration retried")
+
+
+#: Advisory-lock key for the people migration; distinct from the others.
+_PEOPLE_LOCK_KEY = 9_430_001
+
+#: The routine each legacy advisor becomes (spec sections 4 and 7, owner
+#: decision D6). Anything not listed (general, NULL, an unavailable
+#: advisor) becomes no routine: the base assistant.
+LEGACY_ADVISOR_ROUTINES = {"healthy-habits": "habits",
+                           "diet-exercise": "habits",
+                           "care-completion": "care-gaps",
+                           "medication-refills": "refills"}
+
+
+def _people_backfilled(conn) -> bool:
+    """Is there nothing left for `_ensure_people` to do?"""
+    return conn.execute(text(
+        "SELECT "
+        "(SELECT COUNT(*) FROM ca_accounts a WHERE NOT EXISTS ("
+        "SELECT 1 FROM ca_people p WHERE p.account_id = a.id "
+        "AND p.kind = 'self')) + "
+        "(SELECT COUNT(*) FROM ca_connections WHERE person_id IS NULL) + "
+        "(SELECT COUNT(*) FROM ca_agents WHERE person_id IS NULL "
+        "OR routines IS NULL)")).scalar() == 0
+
+
+def _ensure_people(engine) -> None:
+    """Give every account its self person and point every existing
+    connection and assistant at it (one assistant per person spec,
+    section 4). Idempotent, on SQLite and Postgres.
+
+    Every legacy row goes to the SELF person, a second assistant on another
+    connection included. Its records might be someone else's, but marking
+    them so would infer authority from a pointer; the holder says so, never
+    the migration. Nothing is merged: each assistant keeps its transcript,
+    which lives in its tenant under its own id.
+
+    A self person whose account has an assistant starts with `agent_at`
+    set, so one assistant per person holds from the first boot. One whose
+    first assistant was removed starts clear: the holder may ask for one,
+    and `first_agent_at` still keeps a callback from bringing it back. On Postgres an advisory lock serialises web and worker
+    booting together, as `_ensure_usage_day_unique` does.
+    """
+    tables = set(inspect(engine).get_table_names())
+    if not {"ca_accounts", "ca_people", "ca_connections",
+            "ca_agents"} <= tables:
+        return
+    with engine.connect() as conn:
+        if _people_backfilled(conn):
+            return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _PEOPLE_LOCK_KEY})
+                    if _people_backfilled(conn):
+                        return              # a peer finished while we waited
+                missing = conn.execute(text(
+                    "SELECT a.id FROM ca_accounts a "
+                    "WHERE NOT EXISTS (SELECT 1 FROM ca_people p "
+                    "WHERE p.account_id = a.id AND p.kind = 'self')")).all()
+                for (account_id,) in missing:
+                    has_agent = conn.execute(text(
+                        "SELECT 1 FROM ca_agents WHERE account_id = :a"),
+                        {"a": account_id}).first() is not None
+                    conn.execute(text(
+                        "INSERT INTO ca_people (id, account_id, kind, "
+                        "agent_at, created_at) "
+                        "VALUES (:i, :a, 'self', :g, :t)"),
+                        {"i": _uid("person"), "a": account_id,
+                         "g": now() if has_agent else None, "t": now()})
+                for table in ("ca_connections", "ca_agents"):
+                    conn.execute(text(
+                        f"UPDATE {table} SET person_id = ("
+                        "SELECT p.id FROM ca_people p "
+                        f"WHERE p.account_id = {table}.account_id "
+                        "AND p.kind = 'self') WHERE person_id IS NULL"))
+                for advisor, routine in LEGACY_ADVISOR_ROUTINES.items():
+                    conn.execute(text(
+                        "UPDATE ca_agents SET routines = :r "
+                        "WHERE routines IS NULL AND advisor = :a"),
+                        {"r": routine, "a": advisor})
+                conn.execute(text(
+                    "UPDATE ca_agents SET routines = '' "
+                    "WHERE routines IS NULL"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            # A peer inserted the same self person first; the next pass
+            # finds it and skips that account.
+            logger.warning("ca_people migration retried")
 
 
 #: What a peer creating the same table first looks like, by backend. SQLite
@@ -386,6 +833,9 @@ def make_engine(url: str):
                            **pool_kwargs)
     _create_tables(engine)
     _ensure_columns(engine)
+    _ensure_usage_day_unique(engine)
+    _ensure_imessage_handle_unique(engine)
+    _ensure_people(engine)
     return engine
 
 

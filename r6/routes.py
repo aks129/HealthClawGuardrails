@@ -41,11 +41,12 @@ from r6.resource_ids import refuse_malformed_resource_id
 from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 _SUPPORTED_SEARCH_PARAMS, classify_search_args,
                                 error_fidelity_outcome, lenient_search_warnings,
-                                unsupported_input_text)
+                                search_self_link, unsupported_input_text,
+                                upstream_entry, upstream_total)
 from r6.redaction import apply_patient_controlled_redaction
-from r6.redaction import apply_redaction
+from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
-                       require_grant, tenant_from_request)
+                       require_grant, require_open_tenant, tenant_from_request)
 from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -53,7 +54,7 @@ from r6.read_auth import (
     read_auth_enabled as _read_auth_enabled,
     read_auth_required as _read_auth_required,
 )
-from r6.runtime_config import resolve_app_env
+from r6.runtime_config import internal_mint_secret, resolve_app_env
 from r6.version import __version__
 from r6.body_guard import (INGEST_MAX_JSON_DEPTH as _INGEST_MAX_JSON_DEPTH,
                            json_body_within_depth,
@@ -378,6 +379,7 @@ def create_resource(resource_type):
     # hand back verbatim (#478).
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
+    require_open_tenant(tenant)
 
     # Validate before storing (agent proposals must pass $validate before commit)
     validation_result = validator.validate_resource(body)
@@ -540,6 +542,7 @@ def update_resource(resource_type, resource_id):
     # hand back verbatim (#478).
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
+    require_open_tenant(tenant)
 
     # Unlike create, update gates before it parses, so only a token holder
     # reaches this line. That is a smaller blast radius, not a closed one: a
@@ -769,10 +772,8 @@ def search_resources(resource_type):
                 redacted = apply_redaction(resource_data)
                 redacted = add_disclaimer(redacted, resource_type)
             redacted['_source'] = 'upstream'
-            new_entry = {
-                'fullUrl': entry.get('fullUrl', ''),
-                'resource': redacted,
-            }
+            # Our own fullUrl or none, never the upstream's (#954).
+            new_entry = upstream_entry(request.host_url, redacted)
             # Preserve entry.search so mode="outcome" warnings survive — but
             # allowlist it to scalar mode/score: `search` can carry
             # extensions, and even under mode/score keys a hostile upstream
@@ -792,11 +793,14 @@ def search_resources(resource_type):
 
         warning_entries, audit_note, outcome_code = lenient_search_warnings(
             ignored_params, _SUPPORTED_PARAMS_TEXT)
+        # Our own self link, from the parameters forwarded; never the
+        # upstream's links, which point around redaction and audit (#954).
+        self_link = search_self_link(request.host_url, resource_type, params)
         result = {
             'resourceType': 'Bundle',
             'type': 'searchset',
-            'total': bundle.get('total', len(entries)),
-            'link': bundle.get('link', []),
+            'total': upstream_total(bundle.get('total'), len(entries)),
+            'link': [{'relation': 'self', 'url': self_link}],
             'entry': entries + warning_entries,
             '_source': 'upstream',
         }
@@ -965,15 +969,7 @@ def search_resources(resource_type):
         })
 
     # Build self link with search params for transparency
-    search_params = []
-    for spec in _SEARCH_PARAMETER_SPECS:
-        key = spec['name']
-        val = request.args.get(key)
-        if val:
-            search_params.append((key, val))
-    self_link = f'{request.host_url.rstrip("/")}/r6/fhir/{resource_type}'
-    if search_params:
-        self_link += '?' + urlencode(search_params)
+    self_link = search_self_link(request.host_url, resource_type, request.args)
 
     # Lenient handling of an unknown parameter: append a corrective warning
     # entry (search.mode=outcome) naming the ignored parameter + the supported
@@ -1068,6 +1064,7 @@ def ingest_context():
     if _read_auth_enabled():
         require_grant(scope=Scope.WRITE, tenant=tenant, denied_message=(
             'Bundle ingestion requires a tenant-bound write token'))
+    require_open_tenant(tenant)
 
     try:
         from r6.fasten.ingester import skipped_type_summary
@@ -1353,8 +1350,9 @@ def observation_stats():
 
     observations = query.all()
 
-    # Extract numeric values matching the code filter
-    values = []
+    # Extract numeric values matching the code filter, and the unit of the
+    # first of them: not of whatever Observation the tenant stored first
+    values, unit = [], None
     for obs in observations:
         resource = json.loads(obs.resource_json)
         # Filter by code if specified
@@ -1367,6 +1365,7 @@ def observation_stats():
         if isinstance(vq, dict) and 'value' in vq:
             try:
                 values.append(float(vq['value']))
+                unit = unit or vq.get('unit')
             except (ValueError, TypeError):
                 pass
 
@@ -1390,15 +1389,7 @@ def observation_stats():
             {'name': 'mean', 'valueDecimal': stats['mean']},
         ])
 
-    unit = None
-    if values and observations:
-        for obs in observations:
-            resource = json.loads(obs.resource_json)
-            vq = resource.get('valueQuantity', {})
-            if vq.get('unit'):
-                unit = vq['unit']
-                break
-    if unit:
+    if unit and unit_is_shaped(unit):  # stored, unredacted: shape-check
         result['parameter'].append({'name': 'unit', 'valueString': unit})
 
     record_audit_event('read', 'Observation', None,
@@ -1815,7 +1806,7 @@ def _internal_mint_authorized(tenant_id):
     from r6.command_center.access import is_public
     if is_public(tenant_id):
         return True
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    mint_secret = internal_mint_secret()
     if mint_secret:
         provided = request.headers.get('X-Internal-Secret', '')
         return constant_time.equal(provided, mint_secret)
@@ -2055,6 +2046,31 @@ def purge_tenant_route():
     }), 200
 
 
+@r6_blueprint.route('/internal/fasten-revoke', methods=['POST'])
+def fasten_revoke_route():
+    """The engine half of a CareAgents Disconnect; see r6/fasten/revoke.py.
+
+    The internal secret with no public-tenant exemption, like ingest: this
+    decides what may arrive in a tenant, not just who reads it. Checked
+    before the body is read. A repeat answers 200 with already_revoked.
+    """
+    if not _internal_ingest_authorized(None):
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        tenant_id = tenant_from_request(sources=(TenantSource.BODY,)).id
+    except TenantRejected:
+        return jsonify({'error': 'tenant_id is required'}), 400
+    from r6.command_center.access import is_public
+    if is_public(tenant_id):  # never closed; purge leaves them open too
+        return jsonify({'error': 'public tenant cannot be revoked'}), 422
+    from r6.fasten.revoke import revoke_tenant
+    try:
+        return jsonify(revoke_tenant(tenant_id)), 200
+    except Exception:
+        logger.exception('fasten revoke failed for %s', tenant_id)
+        return jsonify({'error': 'revoke failed', 'revoked': False}), 500
+
+
 @r6_blueprint.route('/internal/seed', methods=['POST'])
 def seed_tenant():
     """
@@ -2088,6 +2104,7 @@ def seed_tenant():
     # (fail-closed for non-public tenants) so it can't be a token oracle.
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     # A caller-supplied bundle is INGESTION — the caller chooses what the
     # records say — so it takes the ingest gate, which grants no public-tenant
@@ -2237,6 +2254,7 @@ def ingest_bundle():
         return jsonify({'error': 'invalid tenant_id format'}), 400
     if not _internal_ingest_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     ct_raw = (request.content_type or '').split(';', 1)[0].strip().lower()
     if ct_raw not in _INGEST_BUNDLE_MIME_TYPES:
@@ -2325,7 +2343,7 @@ def ingest_bundle():
                     resource, tenant_id,
                     agent_id='direct-upload',
                     detail='Ingested via patient direct upload',
-                    allowed_types=_INGEST_BUNDLE_ALLOWED_TYPES)
+                    allowed_types=_INGEST_BUNDLE_ALLOWED_TYPES, source='upload')
         except Exception as exc:  # noqa: BLE001
             # NEVER return `str(exc)` — SQL driver messages can echo
             # statements and parameters that carry PHI. Log ONLY the
@@ -2535,6 +2553,7 @@ def demo_agent_loop():
     # authorization rule for a third kind of privileged write.
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     steps = []
 
@@ -2897,6 +2916,7 @@ def curatr_apply_fix(resource_type, resource_id):
         operation=operation if production_approval else None,
         absent_status=403, rejected_status=403,
     )
+    require_open_tenant(tenant)
 
     body = request.get_json(silent=True)
     if not body:

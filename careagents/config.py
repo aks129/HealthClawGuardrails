@@ -69,6 +69,9 @@ class Config:
         self.origin = (e.get("CARE_ORIGIN")
                        or f"https://{self.rp_id}").rstrip("/")
         self.resend_api_key = e.get("RESEND_API_KEY", "")
+        # Real mail leaves only production, unless this is "1"
+        # (careagents/mail.py, real_mail_allowed).
+        self.allow_real_mail = e.get("CARE_ALLOW_REAL_MAIL", "") == "1"
         self.resend_from = e.get("CARE_EMAIL_FROM",
                                  "CareAgents <hello@careagents.cloud>")
         # Fasten (verified-provider real records) — the connect flow runs on
@@ -78,14 +81,86 @@ class Config:
         self.fasten_public_key = e.get("FASTEN_PUBLIC_KEY", "")
         # Telegram deep-link target for surface binding.
         self.telegram_bot = e.get("CARE_TELEGRAM_BOT", "")
-        # iMessage handle (phone/email) the Mac-mini relay sends/receives on —
-        # shown to users as "text your agent here". Empty = surface hidden.
-        self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE", "")
+        # Sendblue, a hosted iMessage line (careagents/sendblue.py). On only
+        # when every required setting is present; the webhook refuses
+        # everything otherwise. Real records must not go over this line
+        # until Sendblue's HIPAA instance and BAA are in place
+        # (docs/runbooks/sendblue-imessage.md).
+        self.sendblue_api_key_id = e.get("SENDBLUE_API_KEY_ID", "")
+        self.sendblue_api_secret = e.get("SENDBLUE_API_SECRET", "")
+        self.sendblue_webhook_secret = e.get("SENDBLUE_WEBHOOK_SECRET", "")
+        # The line is sent as `from_number` and shown in settings, so it is
+        # held as E.164, normalized the way inbound handles are. A value that
+        # is not a phone number switches Sendblue off rather than sending
+        # from a malformed line. Imported here: imessage pulls in the agent.
+        from careagents.imessage import mask, normalize_handle
+        raw_from = (e.get("SENDBLUE_FROM_NUMBER") or "").strip()
+        from_number = normalize_handle(raw_from) if raw_from else None
+        if from_number and "@" in from_number:
+            from_number = None
+        if raw_from and not from_number:
+            logger.warning("SENDBLUE_FROM_NUMBER %s is not a phone number; "
+                           "Sendblue is off", mask(raw_from))
+        self.sendblue_from_number = from_number or ""
+        self.sendblue_api_base = (e.get("SENDBLUE_API_BASE")
+                                  or "https://api.sendblue.co").rstrip("/")
+        # Real-record answers over Sendblue: off unless switched on, and it
+        # must stay off until Sendblue's HIPAA instance and BAA exist. Off,
+        # an agent on a non-sample connection gets no turn and no answer by
+        # text, only a pointer to the app (careagents/sendblue_surface.py).
+        self.sendblue_real_records = (e.get("SENDBLUE_REAL_RECORDS") or ""
+                                      ).strip().lower() in (
+                                          "1", "true", "yes", "on")
+        self.sendblue_enabled = all((
+            self.sendblue_api_key_id, self.sendblue_api_secret,
+            self.sendblue_webhook_secret, self.sendblue_from_number))
+        # iMessage handle (phone/email) shown to users as "text your agent
+        # here": the Mac-mini relay's, or the Sendblue line when that is on.
+        # Empty = surface hidden.
+        self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE") or (
+            self.sendblue_from_number if self.sendblue_enabled else "")
+        # Days a bound iMessage handle is answered before its owner
+        # re-confirms it with a texted link (#871): numbers get reassigned.
+        # At least 1, or a confirm would be stale the moment it is made.
+        try:
+            reverify_days = int(e.get("CARE_IMESSAGE_REVERIFY_DAYS", "60"))
+        except ValueError:
+            logger.warning("CARE_IMESSAGE_REVERIFY_DAYS is not a whole "
+                           "number of days; using 60")
+            reverify_days = 60
+        self.imessage_reverify_days = max(1, reverify_days)
+        # Where a new /beta request is announced (careagents/beta_signup.py).
+        # Unset = no announcement; the request is still saved.
+        self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")
+        # Sign-ups one personal invite link admits (careagents/invites.py).
+        # The operator can set a different cap on one link.
+        try:
+            invite_cap = int(e.get("CARE_INVITE_LINK_CAP", "5"))
+        except ValueError:
+            logger.warning("CARE_INVITE_LINK_CAP is not a whole number; "
+                           "using 5")
+            invite_cap = 5
+        self.invite_link_cap = max(0, invite_cap)
+        # Who may open /admin/funnel (careagents/funnel.py): the owner's own
+        # account emails, comma-separated, case-insensitive. Unset = nobody.
+        # Deliberately not CARE_REAL_RECORDS_ALLOWLIST, which holds testers.
+        self.owner_emails = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_OWNER_EMAILS") or "").split(",")
+            if x.strip())
+        # Where the worker sends the once-a-day funnel digest. Unset = off.
+        self.digest_to = (e.get("CARE_DIGEST_TO") or "").strip()
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
         self.wearables_enabled = e.get(
             "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
+        # "Add someone you care for" (one assistant per person spec,
+        # section 6), made-up records only. Off until the hub renders whose
+        # assistant is whose; before that, a second person reads as a
+        # second identical assistant (#947 QA).
+        self.people_enabled = e.get(
+            "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on
@@ -137,7 +212,20 @@ class Config:
                 f"{self.canonical_host!r})")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
-        self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        # Trimmed, as the engine trims INTERNAL_TOKEN_MINT_SECRET: stray
+        # whitespace on one side only meant no signature ever matched, and
+        # testers silently got the developer connect page.
+        raw_mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        self.mint_secret = raw_mint_secret.strip()
+        if raw_mint_secret and not self.mint_secret:
+            # Never quietly unset (SEC941-F2): refuse to start.
+            raise ConfigError(
+                "HEALTHCLAW_MINT_SECRET is set but contains only whitespace; "
+                "set a real secret or unset it")
+        if raw_mint_secret != self.mint_secret:
+            logger.warning(
+                "HEALTHCLAW_MINT_SECRET has leading or trailing whitespace; "
+                "it is trimmed before use. Remove it from the environment.")
 
         # LLM provider: Anthropic preferred; OpenAI-compatible fallback so the
         # product works before an Anthropic key is provisioned.
@@ -152,7 +240,20 @@ class Config:
         self.openai_api_key = e.get("OPENAI_API_KEY", "")
         self.openai_base = (e.get("OPENAI_BASE_URL")
                             or "https://api.openai.com/v1").rstrip("/")
-        self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5")
+        self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5-5")
+        # Current Claude models always think before answering, and thinking
+        # spends the same max_tokens as the answer: at 1200 a thorough lab
+        # answer was cut off mid-sentence at every effort level. Effort is
+        # the depth control; medium keeps chat brisk without losing care.
+        effort = e.get("CARE_EFFORT", "medium")
+        self.anthropic_effort = (effort if effort in ("low", "medium", "high")
+                                 else "medium")
+        self.anthropic_max_tokens = 8000
+        # CARE_ROUTING=on answers small talk and app questions on Haiku and
+        # everything else on Sonnet with an Opus advisor (careagents/
+        # routing.py). Off, CARE_MODEL answers every turn as before.
+        self.routing = e.get("CARE_ROUTING", "off") == "on"
+        self.advisor = self.routing and e.get("CARE_ADVISOR", "on") != "off"
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
         # With real records open, chat turns carry redacted-but-real health
         # data to the model host, so that host must be vetted: one of the

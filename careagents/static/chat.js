@@ -3,6 +3,7 @@
 (function () {
   const AGENT = window.CARE_AGENT || "";
   const CONVERSATION = window.CARE_CONVERSATION || "";
+  const AGENT_NAME = window.CARE_AGENT_NAME || "Your assistant";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -100,8 +101,11 @@
       list = null;
       appendInline(node, line);
       const next = lines[i + 1];
+      // A newline, not a <br>: .msg is white-space: pre-wrap, so it draws
+      // the same break, and it stays in textContent, so a screen reader or
+      // a copy does not run two paragraphs into one sentence (#878).
       if (next !== undefined && !LIST_ITEM.test(next))
-        node.appendChild(el("br"));
+        node.appendChild(document.createTextNode("\n"));
     });
   }
 
@@ -112,7 +116,29 @@
       .replace(/\*(\S[^*\n]*?)\*/g, "$1");
   }
 
+  // A 429 is two different limits (#862). The burst limiter sends only an
+  // error code, and the pace sentence is true for it. The daily limit sends
+  // its own sentence, and "a few minutes" would be false there.
+  const PACE_TEXT = "You’ve hit the pace limit for now — give it a few minutes.";
+  function limitText(d) {
+    return (d && typeof d.message === "string" && d.message) || PACE_TEXT;
+  }
+
+  // The sample's made-up-records line is the sticky banner above the log,
+  // so a bubble does not say it again. The worker still opens every stored
+  // and texted answer with it; only that exact leading copy is dropped,
+  // only while the banner is on this page, and never down to nothing
+  // (careagents/beta.py under_banner does the same for the history).
+  function withoutFrame(text) {
+    const banner = document.querySelector(".sample-banner");
+    const frame = banner ? banner.textContent.trim() : "";
+    if (!frame || text.indexOf(frame + "\n\n") !== 0) return text;
+    const rest = text.slice(frame.length + 2);
+    return rest.trim() ? rest : text;
+  }
+
   function addAgentText(text) {
+    text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
@@ -149,12 +175,16 @@
     } else {
       c.appendChild(el("h4", null, "Review & approve your intake form"));
       c.appendChild(el("p", null,
-        "Your agent filled it from the records — now every medication and " +
-        "allergy waits for your say-so. Nothing is generated until you approve."));
+        AGENT_NAME + " filled it in from your records. Check each " +
+        "medication and allergy. Nothing is made until you approve."));
     }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
-    a.target = "_blank"; a.rel = "noopener";
+    // Same tab on a phone: a new tab in an in-app browser can lose the
+    // sign-in (#876). A wide screen keeps the chat open beside it.
+    if (window.matchMedia && window.matchMedia("(min-width: 700px)").matches) {
+      a.target = "_blank"; a.rel = "noopener";
+    }
     c.appendChild(a);
     log.appendChild(c); scroll();
     // Only the intake form ends in a PDF; polling for one on any other
@@ -166,7 +196,7 @@
     const c = el("div", "card pdf");
     c.appendChild(el("h4", null, "Your intake form is ready"));
     c.appendChild(el("p", null,
-      "Reviewed by you, provenance-stamped, and delivered over a signed link."));
+      "You checked it, and the PDF says so. The link works for one day."));
     const a = el("a", "btn-primary", "Open the PDF");
     a.href = url; a.target = "_blank"; a.rel = "noopener";
     c.appendChild(a);
@@ -266,7 +296,7 @@
       body.appendChild(el("p", "muted",
         "Couldn't load the chart just now — your records are fine, this " +
         "view isn't. Ask again in a moment."));
-      return;
+      return c;
     }
 
     body.textContent = "";
@@ -276,7 +306,7 @@
       body.appendChild(el("p", "muted",
         "No readings for that test in the records connected here. That's " +
         "not the same as never having had one."));
-      return;
+      return c;
     }
     series.forEach((s) => {
       const panel = el("div", "timeline-series");
@@ -295,6 +325,7 @@
       body.appendChild(el("p", "muted small", data.disclaimer));
     }
     scroll();
+    return c;
   }
 
   function watchForm(actionId) {
@@ -354,20 +385,44 @@
           // `done` here the outer loop reconnects — and because that stream
           // now ends CLEANLY it also resets `reconnectFailures`, so a
           // persistent event-poll failure becomes an unbounded ~2.5 req/s
-          // retry loop that prints a fresh ⚠️ on every pass, aimed at the
+          // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
-          typing.remove(); addAgentText("⚠️ " + ev.text); state.done = true;
+          typing.remove(); addAgentText(ev.text); state.done = true;
+          state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
+          // An answer came: the next step, if the page offers one.
+          if (ev.status === "completed") {
+            const next = document.getElementById("connect-next");
+            if (next) next.hidden = false;
+          }
         }
       }
     }
   }
 
+  // The greeting's "Yes" and the ideas under it. Hidden while a turn runs,
+  // and back under an error, so trying again is one tap.
+  const suggestions = [document.getElementById("quick"), starters]
+    .filter(Boolean);
+  function hideSuggestions() {
+    suggestions.forEach((n) => { n.hidden = true; });
+  }
+  function showSuggestions() {
+    // The greeting's answer goes back to the end of the log; the starters
+    // live above the message box and stay there.
+    suggestions.forEach((n) => {
+      n.hidden = false;
+      if (n !== starters) log.appendChild(n);
+    });
+    scroll();
+  }
+
   async function send(text) {
     if (busy || !text.trim()) return;
     busy = true; sendBtn.disabled = true;
-    if (starters) starters.remove();
+    hideSuggestions();
+    let failed = false;
     addUser(text);
     box.value = "";
     const typing = addTyping();
@@ -401,7 +456,7 @@
           initial = false;
           if (resp.status === 429) {
             typing.remove();
-            addAgentText("You’ve hit the pace limit for now — give it a few minutes.");
+            addAgentText(limitText(await resp.json().catch(() => ({}))));
             return;
           }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
@@ -420,9 +475,12 @@
         if (!state.done) await pause(400);
       }
       if (typing.parentNode) typing.remove();
+      failed = state.failed === true;
+      if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
       addAgentText("Connection hiccup — try that again.");
+      showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();
     }
@@ -436,15 +494,41 @@
   catch (e) { pendingReviews = []; }
   pendingReviews.forEach((r) => addReviewCard(r.id, null, r.form ? null : r.label));
 
+  // A texted answer cannot carry a chart, so it links here with ?chart=
+  // (careagents/imessage.py run_reply). The topic only narrows the series;
+  // the readings still come from /api/labs/timeline under this session.
+  // The server renders the history hidden (data-chart-pending) so it does
+  // not paint at the top first; it is shown once the chart has drawn, or
+  // failed to, with the chart in view.
+  const chartTopic = new URLSearchParams(window.location.search).get("chart");
+  if (chartTopic !== null) {
+    const chartPending = log.hasAttribute("data-chart-pending");
+    // The log scrolls smoothly (careagents.css). On this first render that
+    // animated from the top of the history to the chart, so jump instead,
+    // then give new messages their smooth scroll back.
+    log.style.scrollBehavior = "auto";
+    const reveal = (card) => {
+      if (chartPending) {
+        log.style.visibility = "";
+        log.removeAttribute("data-chart-pending");
+      }
+      if (card) card.scrollIntoView({ block: "start", behavior: "auto" });
+      requestAnimationFrame(() => { log.style.scrollBehavior = ""; });
+    };
+    addLabTimelineCard(chartTopic.slice(0, 64)).then(reveal, () => reveal(null));
+  }
+
   composer.addEventListener("submit", (e) => { e.preventDefault(); send(box.value); });
   document.querySelectorAll(".starter").forEach((b) =>
     b.addEventListener("click", () => send(b.textContent)));
+  document.querySelectorAll(".quick-reply").forEach((b) =>
+    b.addEventListener("click", () => send(b.dataset.ask || b.textContent)));
 
-  fetch("/api/trust").then((r) => r.json()).then((d) => {
-    const pill = document.getElementById("trust-pill");
-    const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "guardrails " + grade;
-  }).catch(() => {});
+  // The ⋯ menu closes on a tap anywhere else, as a phone menu does.
+  const menu = document.querySelector(".chat-menu");
+  if (menu) document.addEventListener("click", (e) => {
+    if (menu.open && !menu.contains(e.target)) menu.open = false;
+  });
 
   box.focus();
 })();

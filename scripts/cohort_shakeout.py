@@ -95,6 +95,15 @@ def code_from_log(log: Path, email: str, timeout: float = 15) -> str:
     raise RuntimeError(f"no sign-in code for {email} in {log}")
 
 
+def consent_body(s, base):
+    """Consent as the hub card sends it: with the terms version the card was
+    rendered with (security review of #904, F4). Read from the page, never
+    from a 428, so a terms change mid-run is refused, not accepted."""
+    page = s.get(f"{base}/home", timeout=10).text
+    m = re.search(r'data-consent-version="([^"]*)"', page)
+    return {"consent": True, "consent_version": m.group(1) if m else ""}
+
+
 def sign_in(base: str, log: Path, email: str) -> requests.Session:
     s = requests.Session()
     r = s.post(f"{base}/api/auth/email", json={"email": email}, timeout=10)
@@ -161,7 +170,7 @@ def run(args) -> int:
         r = s.post(f"{base}/api/connections/direct", json={}, timeout=10)
         check(r.status_code == 428, f"{m['file']} file connection refused without consent",
               why(r))
-        r = s.post(f"{base}/api/connections/direct", json={"consent": True}, timeout=10)
+        r = s.post(f"{base}/api/connections/direct", json=consent_body(s, base), timeout=10)
         if not check(r.status_code == 200 and r.json().get("id"),
                      f"{m['file']} file connection opens with consent", why(r)):
             continue
@@ -215,7 +224,7 @@ def run(args) -> int:
     print("\n== uninvited account")
     try:
         s = sign_in(base, log, f"stranger-{stamp}@example.test")
-        r = s.post(f"{base}/api/connections/direct", json={"consent": True}, timeout=10)
+        r = s.post(f"{base}/api/connections/direct", json=consent_body(s, base), timeout=10)
         check(r.status_code != 200 or r.json().get("soon"), "an uninvited account cannot open a file "
               "connection", why(r))
     except Exception as exc:  # noqa: BLE001
@@ -307,7 +316,7 @@ def run(args) -> int:
               str(r.status_code))
         try:
             s2 = sign_in(base, log, a["email"])
-            r = s2.post(f"{base}/api/connections/direct", json={"consent": True}, timeout=10)
+            r = s2.post(f"{base}/api/connections/direct", json=consent_body(s2, base), timeout=10)
             check(r.ok, "the same email signs up again and connects", why(r))
         except Exception as exc:  # noqa: BLE001
             check(False, "the same email signs up again", str(exc))

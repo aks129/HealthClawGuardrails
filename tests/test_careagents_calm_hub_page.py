@@ -7,6 +7,8 @@ import re
 
 from careagents import connectors
 from careagents import hub as hub_view
+from tests.careagents_legacy_helpers import legacy_agent
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import _beta_app, _login, _make_account
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
@@ -103,8 +105,12 @@ def test_the_assistant_card_has_chat_brief_and_a_menu(app, svc, monkeypatch):
     body = c.get("/home").get_data(as_text=True)
     assert f'href="/chat?agent={agent}">Chat</a>' in body
     assert f'href="/brief?agent={agent}">Visit brief</a>' in body
-    assert "Reads Sample records" in body
-    assert 'class="agent-rename"' in body and 'class="agent-delete"' in body
+    assert "Reads sample records" in body
+    assert 'class="agent-rename"' in body
+    # The one assistant a person has is not removed from its card; only an
+    # older account's extras offer Remove (owner decision D5, #943).
+    assert 'class="agent-delete"' not in body
+    assert 'class="agent-remove"' not in body
     # One active connection: nothing to change records to.
     assert 'class="agent-move"' not in body
     svc.add_connection(aid, "direct", "ca-two", "Upload", status="active")
@@ -126,7 +132,9 @@ def test_an_account_with_records_and_no_assistant_can_start_one(
     fires again, so the hub offers the one way back (QA, calm hub PR 2)."""
     c, aid = _signed_in(app, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()
-    c.delete(f"/api/agents/{conn['agent_id']}")
+    # The hub no longer removes a primary (SEC951-L1); an account from
+    # before could still be left without one, so the service does it here.
+    assert svc.delete_agent(aid, conn["agent_id"])
     body = c.get("/home").get_data(as_text=True)
     assert f'id="start-chat" data-conn="{conn["id"]}"' in body
     # The button's request, as home.js sends it, lands in a chat.
@@ -164,7 +172,7 @@ def test_the_closed_menu_is_one_action_and_one_line(svc, monkeypatch):
     menu = _menu(c.get("/home").get_data(as_text=True))
     assert menu.count('id="explore-sample"') == 1
     assert "Explore with made-up records" in menu
-    assert ("Coming for invited testers: your doctor's records, Apple "
+    assert ("Coming later in the beta: your doctor's records, Apple "
             "Health and wearables, uploading a file from your patient "
             "portal.") in menu
     assert "Coming soon" not in menu and "menu-group" not in menu
@@ -211,7 +219,7 @@ def test_a_crowded_legacy_account_renders_every_row(app, svc, monkeypatch):
                                  status="pending")
     names = ["Juniper", "Ada", "Coach", "Scout"]
     for i, name in enumerate(names):
-        svc.create_agent(aid, name, "calm", samples[i % 2])
+        legacy_agent(svc, samples[i % 2], name)
     r = c.get("/home")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
@@ -226,8 +234,8 @@ def test_a_second_tap_on_find_my_records_reuses_the_pending_connection(
     """Two taps made two identical "Records from your doctor" rows, both
     stuck connecting (PR #843 QA). The second reuses the first."""
     c, aid = _signed_in(app, svc, monkeypatch)
-    first = c.post("/api/connections/fasten", json={"consent": True})
-    second = c.post("/api/connections/fasten", json={"consent": True})
+    first = c.post("/api/connections/fasten", json=consented())
+    second = c.post("/api/connections/fasten", json=consented())
     assert first.status_code == 200 and second.status_code == 200
     a, b = first.get_json(), second.get_json()
     assert b["id"] == a["id"] and b["status"] == "pending"
@@ -243,7 +251,7 @@ def test_a_second_tap_on_find_my_records_reuses_the_pending_connection(
 
 def test_the_reused_connection_still_needs_consent(app, svc, monkeypatch):
     c, _ = _signed_in(app, svc, monkeypatch)
-    c.post("/api/connections/fasten", json={"consent": True})
+    c.post("/api/connections/fasten", json=consented())
     r = c.post("/api/connections/fasten", json={})
     assert r.status_code == 428
     assert "connect_url" not in r.get_json()
@@ -253,11 +261,11 @@ def test_a_connected_provider_does_not_block_another(app, svc, monkeypatch):
     """Only a pending row is reused: once records arrive, a second doctor
     is a second connection."""
     c, aid = _signed_in(app, svc, monkeypatch)
-    first = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    first = c.post("/api/connections/fasten", json=consented()).get_json()
     tenant = svc.get_connection(aid, first["id"])["tenant_id"]
     svc.activate_connection(tenant)
     second = c.post("/api/connections/fasten",
-                    json={"consent": True}).get_json()
+                    json=consented()).get_json()
     assert second["id"] != first["id"]
 
 
@@ -279,7 +287,7 @@ def test_a_pending_wearable_is_not_reused_as_a_doctor_connection(
     c, aid = _signed_in(app, svc, monkeypatch)
     wearable = svc.add_connection(aid, "wearable", "ca-wearable1", "Oura",
                                   status="pending")
-    r = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    r = c.post("/api/connections/fasten", json=consented()).get_json()
     assert r["id"] != wearable
     assert "ca-wearable1" not in r["connect_url"]
     fasten = [x for x in svc.list_home(aid)["connections"]

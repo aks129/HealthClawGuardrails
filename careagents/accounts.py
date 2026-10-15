@@ -16,7 +16,7 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import or_, text, update
+from sqlalchemy import func, or_, text, update
 from sqlalchemy.exc import IntegrityError
 
 import webauthn
@@ -26,9 +26,14 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-from careagents.models import (Account, ActivityDay, Agent, Connection,
-                               EmailToken, Grant, Passkey, RealRecordInvite,
-                               Surface, UsageDay, make_engine,
+# Also puts the beta, invite and funnel tables in Base.metadata before any
+# engine is built.
+from careagents import beta_signup, funnel, invites
+from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
+                               ActivityDay, Agent, Connection, EmailToken,
+                               Grant, ImessageHandleState, ImessageLink,
+                               Passkey, Person, RealRecordInvite,
+                               SendblueMessage, Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,9 @@ RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts
                         # while a recent one is still in flight
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
 SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
+#: People someone can add to care for. Each mints and seeds a sample tenant,
+#: so the number is bounded.
+MAX_OTHER_PEOPLE = 4
 
 
 class AuthError(RuntimeError):
@@ -159,6 +167,7 @@ class AccountService:
         # outcome, let the session commit, then raise afterwards.
         error: str | None = None
         result: _Row | None = None
+        made = False
         with self.session() as s:
             # Fetch the single live code by email (not by hash) so a wrong
             # guess is counted against it and the code can be burned.
@@ -182,6 +191,10 @@ class AccountService:
                 if acct is None:
                     acct = Account(email=email, email_verified_at=now())
                     s.add(acct)
+                    s.flush()
+                    # Every account has its self person from the start.
+                    s.add(Person(account_id=acct.id, kind="self"))
+                    made = True
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
@@ -189,6 +202,50 @@ class AccountService:
                 result = _detach(acct)
         if error:
             raise AuthError(error)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
+        return result
+
+    def has_connections(self, account_id: str) -> bool:
+        """Has this account ever connected anything, sample included?"""
+        with self.session() as s:
+            return s.query(Connection).filter_by(
+                account_id=account_id).first() is not None
+
+    def has_real_connection(self, account_id: str) -> bool:
+        """Any connection that is not the sample, in any state."""
+        with self.session() as s:
+            return s.query(Connection).filter(
+                Connection.account_id == account_id,
+                Connection.kind != "sample").first() is not None
+
+    def first_run_account(self, email: str) -> Account | None:
+        """The account a confirmed beta request signs in to, or None.
+
+        The confirm link proves the mailbox, as an email code does, so the
+        address gets the account a code would give it: made now if there
+        is none, verified, its sign-in stamped. None when the account
+        already has a connection: a forwarded link must never open records
+        that are already there, so that account signs in the usual way."""
+        email = email.strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is not None and s.query(Connection).filter_by(
+                    account_id=acct.id).first() is not None:
+                return None
+            made = acct is None
+            if acct is None:
+                acct = Account(email=email, email_verified_at=now())
+                s.add(acct)
+                s.flush()
+                s.add(Person(account_id=acct.id, kind="self"))
+            elif acct.email_verified_at is None:
+                acct.email_verified_at = now()
+            acct.last_login_at = now()
+            s.flush()
+            result = _detach(acct)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
         return result
 
     def ping(self) -> bool:
@@ -292,37 +349,83 @@ class AccountService:
             raise AuthError("Enter a valid email address.")
         return email
 
+    #: Postgres advisory-lock key that serialises stage 1 invite writes, so
+    #: the count of live invites and the write that depends on it are one
+    #: step. Distinct from the migration keys in models.py.
+    _INVITE_LOCK_KEY = 9_280_001
+
+    def _write_invite(self, email: str, invited_by: str,
+                      reopen: bool) -> str:
+        """Create (or, with `reopen`, reopen) an invite only while fewer than
+        STAGE1_INVITE_CAP are live, as one atomic step (#928 F1). Returns
+        "created", "reopened", "live" (already live, unchanged), "revoked"
+        (revoked and left so) or "full".
+
+        The cap sits inside the writing statement. SQLite takes its write
+        lock when that statement starts, so the count it reads cannot move
+        under it; Postgres first takes an advisory lock for the
+        transaction, and each statement after it reads committed rows.
+        This is the path for the operator's command and for a link join."""
+        from careagents.beta import STAGE1_INVITE_CAP
+        live = ("(SELECT COUNT(*) FROM ca_real_record_invites "
+                "WHERE revoked_at IS NULL)")
+        args = {"e": email, "t": now(), "b": invited_by,
+                "cap": STAGE1_INVITE_CAP}
+        with self.engine.begin() as conn:
+            if self.engine.dialect.name == "postgresql":
+                conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                             {"k": self._INVITE_LOCK_KEY})
+            if conn.execute(text(
+                    "INSERT INTO ca_real_record_invites "
+                    "(email, invited_at, invited_by) "
+                    "SELECT :e, :t, :b WHERE NOT EXISTS ("
+                    "SELECT 1 FROM ca_real_record_invites WHERE email = :e) "
+                    f"AND {live} < :cap"), args).rowcount:
+                return "created"
+            if reopen and conn.execute(text(
+                    "UPDATE ca_real_record_invites SET revoked_at = NULL, "
+                    "invited_at = :t, invited_by = :b "
+                    "WHERE email = :e AND revoked_at IS NOT NULL "
+                    f"AND {live} < :cap"), args).rowcount:
+                return "reopened"
+            row = conn.execute(text(
+                "SELECT revoked_at FROM ca_real_record_invites "
+                "WHERE email = :e"), {"e": email}).first()
+        if row is not None and row[0] is None:
+            return "live"
+        if row is not None and not reopen:
+            return "revoked"
+        return "full"
+
     def invite_real_records(self, email: str, invited_by: str) -> bool:
-        """Invite an email to connect real records. Inviting a revoked email
-        again reopens it. Returns False when it was already invited.
+        """Invite an email to connect real records (the operator's command).
+        Inviting a revoked email again reopens it. Returns False when it was
+        already invited.
 
         Stage 1 holds at most STAGE1_INVITE_CAP active invites; a new or
-        reopened one past that raises ValueError. Two operators racing on
-        the last place can both get in: a hand-run command, not worth a lock.
+        reopened one past that raises ValueError. Atomic: racing callers
+        cannot pass the cap (#928 F1).
         """
         from careagents.beta import STAGE1_INVITE_CAP
         email = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
-        with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            if row is not None and row.revoked_at is None:
-                return False
-            active = (s.query(RealRecordInvite)
-                      .filter(RealRecordInvite.revoked_at.is_(None)).count())
-            if active >= STAGE1_INVITE_CAP:
-                raise ValueError(
-                    f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
-                    "Revoke one first.")
-            if row is None:
-                s.add(RealRecordInvite(email=email, invited_at=now(),
-                                       invited_by=invited_by))
-                return True
-            row.revoked_at = None
-            row.invited_at = now()
-            row.invited_by = invited_by
-            return True
+        outcome = self._write_invite(email, invited_by, reopen=True)
+        if outcome == "full":
+            raise ValueError(
+                f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
+                "Revoke one first.")
+        return outcome != "live"
+
+    def grant_join_invite(self, email: str, invited_by: str) -> str:
+        """A fresh invite for someone who joined through a link, or nothing
+        (#928 F2): an invite that exists in any state, live or revoked by
+        the operator, is left exactly as it is, `invited_by` included.
+        Returns "created", "live", "revoked" or "full"."""
+        email = self._invite_email(email)
+        return self._write_invite(email, (invited_by or "")[:255],
+                                  reopen=False)
 
     def revoke_real_records_invite(self, email: str) -> bool:
         """Revoke an invite. New real connections are refused from now on;
@@ -380,43 +483,172 @@ class AccountService:
             conns = s.query(Connection).filter_by(account_id=account_id).all()
             agents = s.query(Agent).filter_by(account_id=account_id).all()
             surfaces = s.query(Surface).filter_by(account_id=account_id).all()
+            people = (s.query(Person).filter_by(account_id=account_id)
+                      .order_by(Person.created_at.asc()).all())
             return {
                 "connections": [_conn_dict(c) for c in conns],
                 "agents": [_agent_dict(a) for a in agents],
                 "surfaces": [_surf_dict(x) for x in surfaces],
+                "people": [_person_dict(p) for p in people],
             }
+
+    # --- people (one assistant per person spec, section 2) ------------------
+
+    @staticmethod
+    def _self_person_id(s, account_id: str) -> str:
+        """The account's self person, made if an older path left it out.
+
+        Sign-up and the boot migration both make it; this covers a row
+        written by a process still on the code from before. A racing peer
+        that makes it first trips the one-self index, and its row is used.
+        """
+        found = (s.query(Person.id)
+                 .filter_by(account_id=account_id, kind="self").scalar())
+        if found:
+            return found
+        try:
+            with s.begin_nested():
+                p = Person(account_id=account_id, kind="self")
+                s.add(p)
+                s.flush()
+                return p.id
+        except IntegrityError:
+            return (s.query(Person.id)
+                    .filter_by(account_id=account_id, kind="self").scalar())
+
+    def add_person(self, account_id: str, relation: str,
+                   nickname: str | None = None) -> str:
+        """Someone the account holder cares for: a relationship and an
+        optional short nickname, nothing else (D4). No authority is stamped:
+        their records are made-up until owner decision D1.
+
+        Raises ValueError for anything outside that shape, and AuthError
+        past MAX_OTHER_PEOPLE.
+        """
+        if relation not in RELATIONSHIPS:
+            raise ValueError("relationship")
+        if nickname is not None:
+            if not isinstance(nickname, str):
+                raise ValueError("nickname")
+            nickname = nickname.strip() or None
+        if nickname is not None and (len(nickname) > NICKNAME_MAX
+                                     or not nickname.isprintable()):
+            raise ValueError("nickname")
+        with self.session() as s:
+            others = (s.query(Person)
+                      .filter_by(account_id=account_id, kind="other").count())
+            if others >= MAX_OTHER_PEOPLE:
+                raise AuthError("That's as many people as one account can "
+                                "add for now.")
+            p = Person(account_id=account_id, kind="other", relation=relation,
+                       nickname=nickname)
+            s.add(p)
+            s.flush()
+            return p.id
+
+    def remove_empty_person(self, account_id: str, person_id: str) -> None:
+        """Undo an add whose records never arrived. Never the self person,
+        and never one anything points at."""
+        with self.session() as s:
+            self._drop_empty_other(s, account_id, person_id)
+
+    def agent_for_person_of(self, account_id: str,
+                            connection_id: str) -> str | None:
+        """The assistant the person behind this connection already has, or
+        None (also for a connection that is not the account's)."""
+        with self.session() as s:
+            conn = s.query(Connection).filter_by(
+                id=connection_id, account_id=account_id).first()
+            if conn is None or conn.person_id is None:
+                return None
+            a = (s.query(Agent)
+                 .filter_by(account_id=account_id, person_id=conn.person_id)
+                 .order_by(Agent.created_at.asc()).first())
+            return a.id if a else None
+
+    @staticmethod
+    def _drop_empty_other(s, account_id: str, person_id: str | None) -> None:
+        """Remove someone the holder cares for once nothing points at
+        them. Never the self person."""
+        if not person_id:
+            return
+        p = (s.query(Person)
+             .filter_by(id=person_id, account_id=account_id, kind="other")
+             .first())
+        if p is None:
+            return
+        if (s.query(Connection).filter_by(person_id=person_id).first()
+                or s.query(Agent).filter_by(person_id=person_id).first()):
+            return
+        s.delete(p)
+
+    def other_person_connection_ids(self, account_id: str) -> set[str]:
+        """Connections that hold someone else's records, left out of what
+        a third-party app can be granted in the beta (spec 6.3)."""
+        with self.session() as s:
+            return {cid for (cid,) in
+                    s.query(Connection.id)
+                    .join(Person, Person.id == Connection.person_id)
+                    .filter(Connection.account_id == account_id,
+                            Person.kind != "self")}
+
+    def assistant_counts(self) -> dict:
+        """How many accounts hold no, one, or several assistants. Counts
+        only, for the operator (spec section 4)."""
+        with self.session() as s:
+            per = (s.query(Agent.account_id, func.count(Agent.id))
+                   .group_by(Agent.account_id).all())
+            total = s.query(func.count(Account.id)).scalar() or 0
+        one = sum(1 for _, n in per if n == 1)
+        several = sum(1 for _, n in per if n > 1)
+        return {"accounts": total, "none": total - one - several,
+                "one": one, "several": several}
 
     def add_connection(self, account_id: str, kind: str, tenant_id: str,
                        label: str, status: str = "active",
                        provider: str | None = None,
-                       consent_version: str | None = None) -> str:
+                       consent_version: str | None = None,
+                       person_id: str | None = None) -> str:
+        """Record a connection for one person: the account holder unless
+        `person_id` names someone else on this account."""
         with self.session() as s:
+            if person_id is None:
+                person_id = self._self_person_id(s, account_id)
+            elif not s.query(Person).filter_by(
+                    id=person_id, account_id=account_id).first():
+                raise AuthError("That person isn't on your account.")
             c = Connection(account_id=account_id, kind=kind,
                            tenant_id=tenant_id, label=label[:120],
                            status=status, provider=provider,
                            consented_at=now() if consent_version else None,
-                           consent_version=consent_version)
+                           consent_version=consent_version,
+                           person_id=person_id)
             s.add(c)
             s.flush()
             return c.id
 
     def active_sample(self, account_id: str) -> dict | None:
         """The account's oldest active sample, if any. Older accounts can
-        hold several; none is merged or removed (calm hub spec section 5)."""
+        hold several; none is merged or removed (calm hub spec section 5).
+        The holder's own: someone they care for has a sample of their own."""
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(account_id=account_id, kind="sample",
-                            status="active")
+                            status="active",
+                            person_id=self._self_person_id(s, account_id))
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 
-    def pending_connection(self, account_id: str, kind: str) -> dict | None:
+    def pending_connection(self, account_id: str, kind: str,
+                           status: str = "pending") -> dict | None:
         """The account's oldest connection of this kind still waiting for
-        records, if any."""
+        records, if any. `direct` waits as "empty" rather than "pending".
+        The holder's own."""
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(account_id=account_id, kind=kind,
-                            status="pending")
+                            status=status,
+                            person_id=self._self_person_id(s, account_id))
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 
@@ -451,21 +683,60 @@ class AccountService:
         Durable and shared, unlike the in-process burst limiter — a restart or
         a second gunicorn worker must not hand the account a fresh allowance,
         because every turn costs the operator real money.
+
+        Atomic (#862 review F5): the worker charges from several slots at
+        once, and a read-then-write let two of them pass on one count. One
+        conditional UPDATE both checks and charges, so it either adds one
+        under the cap or changes nothing. With no row yet, insert one; the
+        unique (account_id, day) turns a racing insert into a retry of the
+        UPDATE, the same shape as count_activity.
         """
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        turns = func.coalesce(UsageDay.turns, 0)
+        charge = (update(UsageDay)
+                  .where(UsageDay.account_id == account_id,
+                         UsageDay.day == day, turns < cap)
+                  .values(turns=turns + 1)
+                  .execution_options(synchronize_session=False))
+        for _ in range(4):
+            with self.session() as s:
+                if s.execute(charge).rowcount:
+                    # Our row lock holds until commit: this reads our charge.
+                    return True, self._turns_today(s, account_id, day)
+                if s.query(UsageDay.id).filter_by(
+                        account_id=account_id, day=day).first():
+                    used = self._turns_today(s, account_id, day)
+                    if used >= cap:
+                        return False, used
+                    # Under the cap: a peer inserted today's row after our
+                    # UPDATE looked and found none (#862 security G1).
+                    # Charge it, rather than refuse a turn the cap allows.
+                    continue
+            if cap <= 0:
+                return False, 0
+            try:
+                with self.session() as s:
+                    s.add(UsageDay(account_id=account_id, day=day, turns=1))
+                return True, 1
+            except IntegrityError:
+                continue        # a peer made today's row: charge it instead
+        raise RuntimeError("could not charge today's turn")
+
+    @staticmethod
+    def _turns_today(s, account_id: str, day: str) -> int:
+        return int(s.query(func.coalesce(func.sum(UsageDay.turns), 0))
+                   .filter(UsageDay.account_id == account_id,
+                           UsageDay.day == day).scalar())
+
+    def daily_turns_used(self, account_id: str) -> int:
+        """Today's charged turns, read only. Admission asks this; the worker
+        charges with claim_daily_turn where the model is called. A sum, so
+        it reads every row even on a table not yet given the constraint."""
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with self.session() as s:
-            row = (s.query(UsageDay)
-                   .filter_by(account_id=account_id, day=day).first())
-            if row is None:
-                row = UsageDay(account_id=account_id, day=day, turns=0)
-                s.add(row)
-                s.flush()
-            used = int(row.turns or 0)
-            if used >= cap:
-                return False, used
-            row.turns = used + 1
-            return True, used + 1
+            return self._turns_today(s, account_id, day)
 
     _ACTIVITY_FIELDS = ("asked", "approved")
 
@@ -494,8 +765,14 @@ class AccountService:
                 s.execute(stmt)
 
     def set_connection_status(self, tenant_id: str, status: str) -> None:
+        """Move every live row on the tenant. A revoked row is never moved:
+        only the person disconnects, and records landing (a poll, an upload,
+        the chat page settling) must not undo it (security review of #904,
+        F3). Revoking goes through revoke_connection, one row at a time."""
         with self.session() as s:
-            for c in s.query(Connection).filter_by(tenant_id=tenant_id).all():
+            for c in (s.query(Connection)
+                      .filter(Connection.tenant_id == tenant_id,
+                              Connection.status != "revoked").all()):
                 c.status = status
 
     def revoke_connection(self, account_id: str, conn_id: str) -> bool:
@@ -520,8 +797,10 @@ class AccountService:
                  .filter_by(id=conn_id, account_id=account_id).first())
             if c is None:
                 return False
+            people = {c.person_id}
             for agent in s.query(Agent).filter_by(connection_id=conn_id).all():
                 s.query(Surface).filter_by(agent_id=agent.id).delete()
+                people.add(agent.person_id)
                 s.delete(agent)
             # A grant outlives its connection as a record of what was shared
             # and whether it was taken back; detach it rather than lose it
@@ -530,6 +809,10 @@ class AccountService:
             for g in s.query(Grant).filter_by(connection_id=conn_id).all():
                 g.connection_id = None
             s.delete(c)
+            s.flush()
+            for person_id in people:
+                self._release_person_agent(s, person_id)
+                self._drop_empty_other(s, account_id, person_id)
             return True
 
     def delete_account(self, account_id: str) -> bool:
@@ -547,13 +830,21 @@ class AccountService:
             acct = s.get(Account, account_id)
             if acct is None:
                 return False
+            # People last: connections and agents point at them.
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, ActivityDay):
+                          UsageDay, ActivityDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
+            # Its invite link (a foreign key here) and funnel row go too.
+            invites.delete_for_account(s, acct)
+            funnel.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.
             s.query(RealRecordInvite).filter_by(email=acct.email).delete()
+            # So is a beta request (beta onboarding brief section 5),
+            # matched by mailbox since a request keeps its domain in ASCII;
+            # its iMessage spot goes to the oldest waitlisted request.
+            beta_signup.delete_for_account(s, acct.email)
             s.delete(acct)
             return True
 
@@ -672,17 +963,62 @@ class AccountService:
             new = 0 if previous is None else max(0, count - int(previous))
             return {"new": new, "total": count}
 
+    @staticmethod
+    def _claim_person_agent(s, person_id: str) -> bool:
+        """Win the right to give this person their assistant: a
+        compare-and-set on `agent_at`, as ensure_first_agent's is on the
+        account. A second request, or one racing this one, updates zero
+        rows. The one place one-assistant-per-person is decided."""
+        return (s.query(Person)
+                .filter(Person.id == person_id, Person.agent_at.is_(None))
+                .update({"agent_at": now()},
+                        synchronize_session=False)) == 1
+
+    @staticmethod
+    def _release_person_agent(s, person_id: str | None) -> None:
+        """The person's last assistant is gone: they may have one again."""
+        if person_id and not s.query(Agent).filter_by(
+                person_id=person_id).first():
+            (s.query(Person).filter(Person.id == person_id)
+             .update({"agent_at": None}, synchronize_session=False))
+
     def create_agent(self, account_id: str, name: str, persona: str,
                      connection_id: str, advisor: str | None = None) -> str:
+        """The assistant for the person whose records this connection
+        holds: made if they have none, else the one they have (one
+        assistant per person spec, section 3). Never a second one."""
         with self.session() as s:
-            if not s.query(Connection).filter_by(
-                    id=connection_id, account_id=account_id).first():
+            conn = s.query(Connection).filter_by(
+                id=connection_id, account_id=account_id).first()
+            if not conn:
                 raise AuthError("That connection isn't yours.")
+            person_id = conn.person_id or self._self_person_id(s, account_id)
+            if not self._claim_person_agent(s, person_id):
+                have = (s.query(Agent)
+                        .filter_by(account_id=account_id, person_id=person_id)
+                        .order_by(Agent.created_at.asc()).first())
+                if have is None:
+                    raise AuthError("That person already has an assistant.")
+                return have.id
             a = Agent(account_id=account_id, name=name[:48], persona=persona,
-                      connection_id=connection_id, advisor=advisor)
+                      connection_id=connection_id, advisor=advisor,
+                      routines="", person_id=person_id)
             s.add(a)
             s.flush()
             return a.id
+
+    def set_agent_settings(self, account_id: str, agent_id: str,
+                           persona: str, routines: list[str]) -> bool:
+        """Tone and routines, already checked against the fixed sets by
+        the caller. Neither changes what the assistant can read."""
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                return False
+            a.persona = persona
+            a.routines = ",".join(routines)
+            return True
 
     def ensure_first_agent(self, account_id: str,
                            connection_id: str) -> str | None:
@@ -700,6 +1036,11 @@ class AccountService:
                                status="active").first())
             if conn is None:
                 return None
+            # The holder's own records only. Someone they care for is given
+            # an assistant when they are added, never by a callback.
+            me = self._self_person_id(s, account_id)
+            if (conn.person_id or me) != me:
+                return None
             won = (s.query(Account)
                    .filter(Account.id == account_id,
                            Account.first_agent_at.is_(None))
@@ -707,10 +1048,11 @@ class AccountService:
                            synchronize_session=False))
             if won != 1:
                 return None
-            if s.query(Agent).filter_by(account_id=account_id).first():
+            if not self._claim_person_agent(s, me):
                 return None
             a = Agent(account_id=account_id, connection_id=connection_id,
-                      name="Juniper", persona="calm", advisor=None)
+                      name="Juniper", persona="calm", advisor=None,
+                      routines="", person_id=me)
             s.add(a)
             s.flush()
             return a.id
@@ -761,6 +1103,10 @@ class AccountService:
                             status="active").first())
             if c is None:
                 raise AuthError("Those records aren't available.")
+            # An assistant reads its own person's records, never someone
+            # else's: "Your assistant" must not answer about Mom (spec 9).
+            if c.person_id != a.person_id:
+                raise AuthError("Those records aren't available.")
             a.connection_id = c.id
 
     def delete_agent(self, account_id: str, agent_id: str) -> bool:
@@ -773,6 +1119,8 @@ class AccountService:
                 return False
             s.query(Surface).filter_by(agent_id=agent_id).delete()
             s.delete(a)
+            s.flush()
+            self._release_person_agent(s, a.person_id)
             return True
 
     def switch_prompted_at(self, account_id: str) -> float | None:
@@ -830,13 +1178,16 @@ class AccountService:
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
+        from careagents.imessage import CODE_TTL_SECONDS
         with self.session() as s:
             if not s.query(Agent).filter_by(
                     id=agent_id, account_id=account_id).first():
                 raise AuthError("That agent isn't yours.")
             x = Surface(account_id=account_id, agent_id=agent_id, kind=kind,
                         handle=handle, status=status,
-                        bound_at=now() if status == "active" else None)
+                        bound_at=now() if status == "active" else None,
+                        code_exp=(now() + CODE_TTL_SECONDS
+                                  if status == "pending" else None))
             s.add(x)
             s.flush()
             return x.id
@@ -844,20 +1195,30 @@ class AccountService:
     def find_surface_by_code(self, code: str,
                              kind: str = "telegram") -> dict | None:
         with self.session() as s:
-            x = (s.query(Surface)
-                 .filter_by(handle=code, kind=kind, status="pending")
-                 .first())
+            q = s.query(Surface).filter_by(handle=code, kind=kind,
+                                           status="pending")
+            if kind == "imessage":
+                # Codes expire; a row from before the column reads as expired.
+                q = q.filter(Surface.code_exp.isnot(None),
+                             Surface.code_exp > now())
+            x = q.first()
             return _surf_dict(x) | {"account_id": x.account_id} if x else None
 
-    def find_surface_by_handle(self, handle: str,
-                               kind: str = "imessage") -> dict | None:
+    def find_surface_by_handle(self, handle: str, kind: str = "imessage",
+                               also: str | None = None) -> dict | None:
         """Resolve an active surface by the bound external handle — used to
-        route an inbound message to the right agent."""
+        route an inbound message to the right agent. `also` is the handle as
+        it arrived, for a row bound before handles were normalized."""
+        names = {h for h in (handle, also) if h}
+        if not names:
+            return None
         with self.session() as s:
             x = (s.query(Surface)
-                 .filter_by(handle=handle, kind=kind, status="active")
+                 .filter(Surface.handle.in_(names), Surface.kind == kind,
+                         Surface.status == "active")
+                 .order_by(Surface.bound_at.desc())
                  .first())
-            return _surf_dict(x) | {"account_id": x.account_id} if x else None
+            return _surf_dict(x) | _reverify_fields(x) if x else None
 
     def bind_surface(self, surface_id: str, handle: str) -> None:
         with self.session() as s:
@@ -866,6 +1227,322 @@ class AccountService:
                 x.handle = handle
                 x.status = "active"
                 x.bound_at = now()
+
+    # --- iMessage: one handle, one account ----------------------------------
+    # Handles arrive normalized (careagents.imessage.normalize_handle).
+
+    def bind_imessage_handle(self, account_id: str, handle: str,
+                             pending_surface_id: str | None = None,
+                             welcome: bool = False,
+                             also: str | None = None) -> str:
+        """Bind a handle to an account: "connected", "confirmed" or
+        "taken". "confirmed" is the sign-in link re-confirming a handle
+        already bound here (#871): nothing new was connected.
+
+        A handle is bound to at most one account. Bound elsewhere, nothing
+        changes until that binding is undone (STOP, or disconnect on the
+        web). Bound here already, the older binding is replaced, so a new
+        pairing code moves the handle to that code's assistant. `also` is
+        the handle as it arrived, for a row bound before normalization.
+
+        The check below is a read; the partial unique index on active
+        iMessage handles (models._ensure_imessage_handle_unique) is what
+        holds when two binds race, and its refusal reads as "taken".
+        """
+        try:
+            return self._bind_imessage_handle(
+                account_id, handle, pending_surface_id, welcome, also)
+        except IntegrityError:
+            return "taken"
+
+    def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
+                              welcome, also) -> str:
+        names = {h for h in (handle, also) if h}
+        with self.session() as s:
+            bound = (s.query(Surface)
+                     .filter(Surface.kind == "imessage",
+                             Surface.handle.in_(names),
+                             Surface.status == "active").all())
+            if any(x.account_id != account_id for x in bound):
+                return "taken"
+            if bound and not pending_surface_id:
+                # Bound here already: the sign-in link re-confirms (#871).
+                # Refreshed in place, so the handle keeps its assistant.
+                for x in bound:
+                    x.verified_at = x.last_inbound_at = now()
+                    x.reverify_notified_at = None
+                return "confirmed"
+            if pending_surface_id:
+                x = s.get(Surface, pending_surface_id)
+                if x is None or x.account_id != account_id:
+                    return "taken"
+            else:
+                first = (s.query(Agent).filter_by(account_id=account_id)
+                         .order_by(Agent.id).first())
+                x = Surface(account_id=account_id, kind="imessage",
+                            agent_id=first.id if first else None)
+                s.add(x)
+            for old in bound:
+                s.delete(old)
+            # Deleted before the new row takes the handle, or the unique
+            # index sees both at once.
+            s.flush()
+            x.handle = handle
+            x.status = "active"
+            x.bound_at = now()
+            x.code_exp = None
+            x.welcome_due = 1 if welcome else 0
+            x.verified_at = x.last_inbound_at = now()
+            x.reverify_notified_at = None
+            st = self._handle_state(s, handle)
+            st.opted_out_at = None
+            return "connected"
+
+    def imessage_agent_context(self, surface: dict) -> dict | None:
+        """The agent a bound handle talks to. A handle bound by the sign-in
+        link before the account had an assistant gets the account's first
+        one, once it exists."""
+        agent_id = surface.get("agent_id")
+        if not agent_id:
+            with self.session() as s:
+                first = (s.query(Agent)
+                         .filter_by(account_id=surface["account_id"])
+                         .order_by(Agent.id).first())
+                if first is None:
+                    return None
+                agent_id = first.id
+                x = s.get(Surface, surface["id"])
+                if x is not None:
+                    x.agent_id = agent_id
+            surface["agent_id"] = agent_id
+        return self.get_agent_context(surface["account_id"], agent_id)
+
+    def take_imessage_welcome(self, surface_id: str) -> bool:
+        """True once, if this surface's next reply should open with the
+        welcome. A conditional update, so two racing turns welcome once."""
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id,
+                                   Surface.welcome_due == 1)
+                            .values(welcome_due=0))
+            return res.rowcount == 1
+
+    def imessage_note_inbound(self, surface_id: str) -> None:
+        """A bound handle's text was let through: it is not silent."""
+        with self.session() as s:
+            s.execute(update(Surface).where(Surface.id == surface_id)
+                      .values(last_inbound_at=now()))
+
+    def imessage_mark_reverify(self, surface_id: str,
+                               verified_at: float | None) -> bool:
+        """True once per re-verification: the first time it is required.
+        A conditional update, so two racing texts email the owner once.
+        `verified_at` is the value read with the surface: if a confirm has
+        changed it since, nothing is set (compare-and-set)."""
+        same = (Surface.verified_at.is_(None) if verified_at is None
+                else Surface.verified_at == verified_at)
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id, same,
+                                   Surface.reverify_notified_at.is_(None))
+                            .values(reverify_notified_at=now()))
+            return res.rowcount == 1
+
+    def disconnect_imessage(self, account_id: str,
+                            surface_id: str | None = None) -> int:
+        """Remove one iMessage binding on the account (`surface_id`), or
+        every binding and pending code. Each freed handle gets its link
+        allowance back, so its next text is answered with a fresh link
+        rather than silence."""
+        with self.session() as s:
+            q = s.query(Surface).filter_by(account_id=account_id,
+                                           kind="imessage")
+            if surface_id is not None:
+                q = q.filter_by(id=surface_id, status="active")
+            rows = q.all()
+            for x in rows:
+                if x.status == "active" and x.handle:
+                    st = s.get(ImessageHandleState, _handle_key(x.handle))
+                    if st is not None:
+                        st.link_count, st.link_window_start = 0, None
+                s.delete(x)
+            return len(rows)
+
+    def _handle_state(self, s, handle: str) -> ImessageHandleState:
+        key = _handle_key(handle)
+        st = s.get(ImessageHandleState, key)
+        if st is None:
+            st = ImessageHandleState(handle_key=key, fail_count=0,
+                                     link_count=0)
+            s.add(st)
+        return st
+
+    def imessage_stop(self, handle: str, also: str | None = None) -> bool:
+        """Unbind the handle (and the raw spelling `also`, for a row bound
+        before normalization), void its unused sign-in links, and remember
+        the STOP. True if this is news: not already opted out."""
+        names = list({h for h in (handle, also) if h})
+        with self.session() as s:
+            s.query(Surface).filter(
+                Surface.kind == "imessage", Surface.handle.in_(names),
+                Surface.status == "active").delete(synchronize_session=False)
+            s.query(ImessageLink).filter(
+                ImessageLink.handle.in_(names),
+                ImessageLink.used_at.is_(None)).update(
+                    {"used_at": now()}, synchronize_session=False)
+            st = self._handle_state(s, handle)
+            first = st.opted_out_at is None
+            st.opted_out_at = st.opted_out_at or now()
+            return first
+
+    def imessage_opted_out(self, handle: str) -> bool:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.opted_out_at)
+
+    def imessage_opt_in(self, handle: str) -> None:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            if st is not None:
+                st.opted_out_at = None
+
+    def imessage_bind_locked(self, handle: str) -> bool:
+        from careagents.imessage import BIND_ATTEMPTS, WINDOW_SECONDS
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.fail_window_start
+                        and now() - st.fail_window_start < WINDOW_SECONDS
+                        and (st.fail_count or 0) >= BIND_ATTEMPTS)
+
+    def imessage_note_bind_failure(self, handle: str) -> None:
+        from careagents.imessage import WINDOW_SECONDS
+        with self.session() as s:
+            st = self._handle_state(s, handle)
+            if (not st.fail_window_start
+                    or now() - st.fail_window_start >= WINDOW_SECONDS):
+                st.fail_window_start, st.fail_count = now(), 0
+            st.fail_count = (st.fail_count or 0) + 1
+
+    def issue_imessage_link(self, handle: str) -> str | None:
+        """Mint a one-time sign-in link for `handle`; the token is returned
+        once and only its hash is kept. None past the window's allowance."""
+        from careagents.imessage import (LINK_TTL_SECONDS, LINKS_PER_WINDOW,
+                                         WINDOW_SECONDS, hash_token,
+                                         new_link_token)
+        with self.session() as s:
+            st = self._handle_state(s, handle)
+            if (not st.link_window_start
+                    or now() - st.link_window_start >= WINDOW_SECONDS):
+                st.link_window_start, st.link_count = now(), 0
+            if (st.link_count or 0) >= LINKS_PER_WINDOW:
+                return None
+            st.link_count = (st.link_count or 0) + 1
+            token = new_link_token()
+            s.add(ImessageLink(token_hash=hash_token(token), handle=handle,
+                               exp=now() + LINK_TTL_SECONDS))
+            return token
+
+    def peek_imessage_link(self, token: str) -> str | None:
+        """The id of a live (unused, unexpired) link, without spending it."""
+        from careagents.imessage import hash_token
+        with self.session() as s:
+            link = (s.query(ImessageLink)
+                    .filter_by(token_hash=hash_token(token))
+                    .filter(ImessageLink.used_at.is_(None),
+                            ImessageLink.exp > now()).first())
+            return link.id if link else None
+
+    def void_imessage_link(self, link_id: str) -> None:
+        """Spend a link without binding anything ("No, this isn't mine")."""
+        with self.session() as s:
+            s.execute(update(ImessageLink)
+                      .where(ImessageLink.id == link_id,
+                             ImessageLink.used_at.is_(None))
+                      .values(used_at=now()))
+
+    def imessage_link_handle(self, link_id: str) -> str | None:
+        """The handle a live link would bind, for the confirm page."""
+        with self.session() as s:
+            link = s.get(ImessageLink, link_id)
+            if link is None or link.used_at is not None or link.exp <= now():
+                return None
+            return link.handle
+
+    def claim_imessage_link(self, link_id: str, account_id: str) -> str:
+        """Spend a link for a signed-in account and bind its handle:
+        "connected", "confirmed", "taken" or "expired". Spent exactly
+        once."""
+        with self.session() as s:
+            res = s.execute(update(ImessageLink)
+                            .where(ImessageLink.id == link_id,
+                                   ImessageLink.used_at.is_(None),
+                                   ImessageLink.exp > now())
+                            .values(used_at=now()))
+            if res.rowcount != 1:
+                return "expired"
+            handle = s.get(ImessageLink, link_id).handle
+        return self.bind_imessage_handle(account_id, handle, welcome=True)
+
+    def get_surface(self, surface_id: str) -> dict | None:
+        """An active surface by id, with its account, or None."""
+        with self.session() as s:
+            x = s.get(Surface, surface_id)
+            if x is None or x.status != "active":
+                return None
+            return _surf_dict(x) | _reverify_fields(x)
+
+    # --- Sendblue: seen-once inbound texts and owed answers ------------------
+    # Pointers only (models.SendblueMessage). `key` is a hash of Sendblue's
+    # message_handle, made by the caller.
+
+    def sendblue_claim_inbound(self, key: str) -> bool:
+        """True the first time `key` is seen; False for a webhook retry."""
+        try:
+            with self.session() as s:
+                s.add(SendblueMessage(key_hash=key))
+            return True
+        except IntegrityError:
+            return False
+
+    def sendblue_release_inbound(self, key: str) -> None:
+        """Forget `key`, so Sendblue's retry is handled afresh."""
+        with self.session() as s:
+            s.query(SendblueMessage).filter_by(key_hash=key).delete()
+
+    def sendblue_track_run(self, key: str, surface_id: str,
+                           run_id: str) -> None:
+        with self.session() as s:
+            x = s.query(SendblueMessage).filter_by(key_hash=key).first()
+            if x is not None:
+                x.surface_id, x.run_id = surface_id, run_id
+
+    def sendblue_pending(self, limit: int = 50) -> list[dict]:
+        """Owed answers, oldest first."""
+        with self.session() as s:
+            rows = (s.query(SendblueMessage)
+                    .filter(SendblueMessage.run_id.isnot(None),
+                            SendblueMessage.delivered_at.is_(None))
+                    .order_by(SendblueMessage.created_at)
+                    .limit(limit).all())
+            return [{"id": x.id, "surface_id": x.surface_id,
+                     "run_id": x.run_id, "created_at": x.created_at}
+                    for x in rows]
+
+    def sendblue_mark_delivered(self, row_id: str, outcome: str) -> bool:
+        """Close an owed answer. True for the one caller that closed it, so
+        two worker processes never both send it."""
+        with self.session() as s:
+            res = s.execute(update(SendblueMessage)
+                            .where(SendblueMessage.id == row_id,
+                                   SendblueMessage.delivered_at.is_(None))
+                            .values(delivered_at=now(), outcome=outcome))
+            return res.rowcount == 1
+
+    def sendblue_set_outcome(self, row_id: str, outcome: str) -> None:
+        with self.session() as s:
+            x = s.get(SendblueMessage, row_id)
+            if x is not None:
+                x.outcome = outcome
 
 
 # --- detach helpers: return plain dict-ish objects usable after the session --
@@ -886,7 +1563,8 @@ def _conn_dict(c: Connection) -> dict:
             "connected_at": c.connected_at,
             "last_synced_at": c.last_synced_at, "last_count": c.last_count,
             "last_uncounted": c.last_uncounted,
-            "consent_version": c.consent_version}
+            "consent_version": c.consent_version,
+            "person_id": c.person_id}
 
 
 def _grant_dict(g: Grant) -> dict:
@@ -901,7 +1579,14 @@ def _grant_dict(g: Grant) -> dict:
 
 def _agent_dict(a: Agent) -> dict:
     return {"id": a.id, "name": a.name, "persona": a.persona,
-            "advisor": a.advisor, "connection_id": a.connection_id}
+            "advisor": a.advisor, "connection_id": a.connection_id,
+            "routines": a.routines, "person_id": a.person_id,
+            "created_at": a.created_at}
+
+
+def _person_dict(p: Person) -> dict:
+    return {"id": p.id, "kind": p.kind, "relationship": p.relation,
+            "nickname": p.nickname}
 
 
 def _surf_dict(x: Surface) -> dict:
@@ -909,9 +1594,39 @@ def _surf_dict(x: Surface) -> dict:
             "status": x.status, "agent_id": x.agent_id}
 
 
+def _reverify_fields(x: Surface) -> dict:
+    """An active iMessage surface's account and re-verification clocks
+    (#871), for careagents.imessage.reverify_due."""
+    return {"account_id": x.account_id, "bound_at": x.bound_at,
+            "verified_at": x.verified_at,
+            "last_inbound_at": x.last_inbound_at,
+            "reverify_notified_at": x.reverify_notified_at}
+
+
 def _opts_to_dict(options_json: str) -> dict:
     import json
     return json.loads(options_json)
+
+
+def secret_matches(provided: str, expected: str) -> bool:
+    """A shared secret from a request header, compared in constant time.
+
+    Both sides are hashed here first, so `compare_digest` only ever meets
+    two hexdigests this process computed: no caller spelling (non-ASCII, a
+    lone surrogate) can raise inside it (#557). An empty expected secret
+    matches nothing.
+    """
+    if not expected:
+        return False
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(
+            str(value).encode("utf-8", "surrogatepass")).hexdigest()
+    return hmac.compare_digest(digest(provided), digest(expected))
+
+
+def _handle_key(handle: str) -> str:
+    return hashlib.sha256(handle.encode()).hexdigest()
 
 
 def new_binding_code() -> str:

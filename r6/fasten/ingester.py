@@ -26,7 +26,8 @@ import httpx
 
 from models import db
 from r6.audit import add_audit_event
-from r6.models import R6Resource
+from r6.fasten.models import connection_revoked, tenant_closed
+from r6.models import RECORD_SOURCES, R6Resource
 
 logger = logging.getLogger(__name__)
 
@@ -199,12 +200,53 @@ _CURATR_ELIGIBLE = frozenset({
 })
 
 
+def _stopped_by_disconnect(job_id: int, task_id: str, tenant_id: str,
+                           org_connection_id: str) -> bool:
+    """True, with the uncommitted batch dropped, once access is taken back:
+    the tenant disconnected in CareAgents, or this connection revoked at
+    Fasten (patient.authorization_revoked).
+
+    Called before every commit in stream_ingest. The revoke endpoint has
+    usually failed the job already, but this thread holds a stale job
+    object whose next commit would write its own status back over that, so
+    the job is closed by a conditional UPDATE rather than through the
+    object (a purge may also have deleted the row, which matches nothing).
+    """
+    from r6.fasten.models import FastenJob
+    from r6.fasten.reaper import TERMINAL_STATUSES
+
+    if not (tenant_closed(tenant_id)
+            or connection_revoked(org_connection_id)):
+        return False
+    db.session.rollback()
+    (FastenJob.query
+     .filter(FastenJob.id == job_id,
+             FastenJob.status.notin_(TERMINAL_STATUSES))
+     .update({'status': 'failed', 'failure_reason': 'disconnected',
+              'completed_at': datetime.now(timezone.utc)},
+             synchronize_session=False))
+    add_audit_event(
+        event_type='fasten_import_refused',
+        agent_id='fasten-connect',
+        tenant_id=tenant_id,
+        outcome='failure',
+        detail=f'job={task_id} stopped: disconnected',
+    )
+    db.session.commit()
+    logger.info('Fasten job %s stopped: tenant disconnected', task_id)
+    return True
+
+
 def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> None:
     """
     Background worker: stream-download NDJSON export files and ingest FHIR resources.
 
     Runs in a daemon thread via threading.Thread.
     Uses app.app_context() for all DB access.
+
+    Every commit is preceded by a disconnect check, so an ingest that is
+    running when the account holder disconnects stops at its next commit
+    and keeps nothing it had not committed yet.
     """
     from r6.fasten.models import FastenJob  # avoid circular import at module level
 
@@ -213,7 +255,12 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
         if not job:
             logger.error('FastenJob %s not found', job_id)
             return
+        task_id = job.task_id
+        org_connection_id = job.org_connection_id
 
+        if _stopped_by_disconnect(job_id, task_id, tenant_id,
+                                  org_connection_id):
+            return
         job.status = 'downloading'
         db.session.commit()
 
@@ -241,6 +288,9 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 ) as resp:
                     resp.raise_for_status()
 
+                    if _stopped_by_disconnect(job_id, task_id, tenant_id,
+                                              org_connection_id):
+                        return
                     job.status = 'ingesting'
                     db.session.commit()
 
@@ -250,7 +300,8 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                             continue
                         try:
                             resource = json.loads(line)
-                            result, rid = _ingest_one(resource, tenant_id)
+                            result, rid = _ingest_one(resource, tenant_id,
+                                                      source='fasten')
                             if result == 'ok':
                                 ingested += 1
                                 rt = resource.get('resourceType', '')
@@ -282,6 +333,10 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
 
                         total = ingested + skipped + failed
                         if total % _PROGRESS_BATCH == 0:
+                            if _stopped_by_disconnect(job_id, task_id,
+                                                      tenant_id,
+                                                      org_connection_id):
+                                return
                             job.ingested_resources = ingested
                             job.skipped_resources = skipped
                             job.failed_resources = failed
@@ -290,6 +345,9 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                                 'Fasten job %s progress: ingested=%d skipped=%d '
                                 'failed=%d', job.task_id, ingested, skipped, failed)
 
+            if _stopped_by_disconnect(job_id, task_id, tenant_id,
+                                      org_connection_id):
+                return
             job.status = 'complete'
             job.ingested_resources = ingested
             job.skipped_resources = skipped
@@ -389,6 +447,7 @@ def _ingest_one(resource: dict, tenant_id: str,
                 agent_id: str = 'fasten-connect',
                 detail: str = 'Ingested via Fasten EHI export',
                 allowed_types: frozenset | None = None,
+                *, source: str | None,
                 ) -> tuple[str, str | None]:
     """
     Ingest a single FHIR resource into the guardrails store.
@@ -411,7 +470,17 @@ def _ingest_one(resource: dict, tenant_id: str,
     explicit clinical-only set so an unauthenticated-adjacent caller cannot
     author AuditEvent/Permission/Consent/Provenance/Bundle resources even
     though the store technically supports storing them.
+
+    `source` is the channel the record arrived through, one of
+    `r6.models.RECORD_SOURCES` (FHI-42), or None for content no channel we
+    can vouch for delivered (a caller-supplied seed bundle). Keyword-only
+    with no default, so a new caller cannot forget it; each caller passes a
+    literal, never a request field. An off-list value raises ValueError
+    before anything is written. Both the new-row and the upsert branch set
+    it: the latest channel wins, as the content does.
     """
+    if source is not None and source not in RECORD_SOURCES:
+        raise ValueError('source must be one of RECORD_SOURCES or None')
     resource_type = resource.get('resourceType', '')
 
     if not resource_type or not R6Resource.is_supported_type(resource_type):
@@ -446,6 +515,7 @@ def _ingest_one(resource: dict, tenant_id: str,
         # soft-deleted: a fresh import of the same (tenant, type, id)
         # revives it rather than colliding with the tombstone.
         existing.update_resource(resource_json)
+        existing.source = source
         # Lifting a tombstone is recorded as such (#558): the audit row
         # below says 'update' with the revive named, never a plain create.
         revived = bool(existing.is_deleted)
@@ -457,6 +527,7 @@ def _ingest_one(resource: dict, tenant_id: str,
             resource_json=resource_json,
             resource_id=resource_id,
             tenant_id=tenant_id,
+            source=source,
         )
         db.session.add(new_res)
 

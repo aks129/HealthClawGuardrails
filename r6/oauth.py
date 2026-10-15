@@ -28,6 +28,7 @@ from urllib.parse import urlencode, urlsplit
 from flask import request, jsonify, redirect
 from r6.runtime_config import resolve_app_env
 from r6.runtime_config import read_auth_enabled
+from r6.runtime_config import internal_mint_secret
 from r6.constant_time import equal as constant_time_equal
 from r6.internal_auth import internal_secret_authorized
 from r6.stepup import mark_nonce_used
@@ -101,7 +102,7 @@ def _handoff_key():
     """The handoff key, derived from the secret both sides already hold with
     domain separation (§13.3) — the way the confirmation digest derives from
     STEP_UP_SECRET. Absent, the handoff cannot run and says so."""
-    secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '').strip()
+    secret = internal_mint_secret()
     if not secret:
         raise RuntimeError('INTERNAL_TOKEN_MINT_SECRET is required for the consent handoff')
     return hashlib.sha256(b'healthclaw-consent-handoff:' + secret.encode('utf-8')).digest()

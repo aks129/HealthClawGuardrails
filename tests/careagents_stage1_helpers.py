@@ -29,3 +29,12 @@ def approve_terms(monkeypatch, version: str = "2026-10-01") -> None:
     from careagents import tester_terms
     monkeypatch.setattr(tester_terms, "TERMS_VERSION", version)
     monkeypatch.setattr(tester_terms, "CONSENT_VERSION", version)
+
+
+def pend_terms(monkeypatch) -> None:
+    """Act as if #565 were still pending: no terms, base consent version.
+    For the tests that pin what holds before approval."""
+    from careagents import tester_terms
+    monkeypatch.setattr(tester_terms, "TERMS_VERSION", None)
+    monkeypatch.setattr(tester_terms, "CONSENT_VERSION",
+                        tester_terms.BASE_VERSION)

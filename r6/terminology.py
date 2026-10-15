@@ -50,8 +50,10 @@ conditions, and high-frequency maintenance medications.
 from __future__ import annotations
 
 import collections
+import re
 
 from r6 import terminology_resolver as _resolver_mod
+from r6.safe_read import coding_system
 
 # System URIs, canonical form.
 LOINC = "http://loinc.org"
@@ -255,14 +257,94 @@ _LABELS: dict[tuple[str, str], str] = {
         "Patient administration",
 }
 
+#: SNOMED "no known allergy": 716186003 and every descendant (tx.fhir.org,
+#: isa/716186003, 2026-10-13). And "patient not asked" (1631000175102), an
+#: allergy-status concept. Their names are statements about allergies, not
+#: names of anything: written as `display`/`text`, "No known allergy" reached
+#: every MCP client as a bare fact about the person that no one attested
+#: (#950). The one source of truth: r6/brief/engine.py imports these, and
+#: careagents/agent.py mirrors them under a parity test.
+#: 160244002 is the inactive predecessor of 716186003 (retired 2016-07-31,
+#: tx.fhir.org $lookup 2026-10-14): not a descendant, but legacy feeds still
+#: carry it and the resolver still names it "No known allergies" (#957).
+NKA_CONCEPTS = frozenset((SNOMED, c) for c in (
+    "716186003", "409137002", "428197003", "428607008", "429625007",
+    "716220001", "1003774007", "160244002",
+    # "None" (qualifier value): an allergy coded with it read back named
+    # "None" (#957 delta 4).
+    "260413007"))
+#: Not LOINC LA14761-3 "Not asked": a generic answer used on any question,
+#: so "allergies were not checked" was false on "Smoking status: Not asked"
+#: (#957 delta 5). Only an allergy-specific concept belongs in this set.
+ALLERGY_STATUS_CONCEPTS = frozenset({
+    (SNOMED, "1631000175102"),      # Patient not asked
+})
+#: LOINC answers that state an absence: "None known", "None or none known"
+#: and "None or not known" (tx.fhir.org $lookup, 2026-10-14). An Observation
+#: for 52571-7, known allergies, answered LA10030-7 read back as a bare
+#: "None known" (#957 round 2).
+LOINC_ABSENCE_ANSWERS = frozenset((LOINC, c) for c in (
+    "LA10030-7", "LA9134-3", "LA4715-4"))
+ABSENCE_CONCEPTS = NKA_CONCEPTS | ALLERGY_STATUS_CONCEPTS | LOINC_ABSENCE_ANSWERS
+
+#: What label_codings writes as `text` for an absence concept: a record
+#: entry, never a fact. Keyed by code only, so no date or other detail from
+#: the record can enter it. Wording owner-approved 2026-10-14 (#950); new
+#: rows follow the approved pattern.
+_NKA_ENTRY = ("Recorded entry: '{}'. Not a confirmed absence; confirm with "
+              "a clinician.")
+_ABSENCE_TEXT: dict[tuple[str, str], str] = {
+    (SNOMED, "716186003"): _NKA_ENTRY.format("no known allergy"),
+    (SNOMED, "409137002"): _NKA_ENTRY.format("no known drug allergy"),
+    (SNOMED, "428197003"): _NKA_ENTRY.format("no known insect allergy"),
+    (SNOMED, "428607008"): _NKA_ENTRY.format("no known environmental allergy"),
+    (SNOMED, "429625007"): _NKA_ENTRY.format("no known food allergy"),
+    (SNOMED, "716220001"): _NKA_ENTRY.format("no known animal allergy"),
+    (SNOMED, "1003774007"): _NKA_ENTRY.format("no known latex allergy"),
+    (SNOMED, "160244002"): _NKA_ENTRY.format("no known allergies"),
+    (SNOMED, "260413007"): _NKA_ENTRY.format("none"),
+    (LOINC, "LA10030-7"): _NKA_ENTRY.format("none known"),
+    (LOINC, "LA9134-3"): _NKA_ENTRY.format("none known"),
+    (LOINC, "LA4715-4"): _NKA_ENTRY.format("none or not known"),
+    (SNOMED, "1631000175102"): (
+        "Recorded entry: 'patient not asked about allergies'. Allergies were "
+        "not checked; confirm with a clinician."),
+}
+
 # Codes seen that we had no label for. Read with unlabelled_codes(); this is how
 # the map grows from evidence instead of guesswork.
 _MISSES: collections.Counter = collections.Counter()
 
+#: A SNOMED CT concept id: 6 to 18 digits, no leading zero.
+_SNOMED_CODE = re.compile(r"[1-9][0-9]{5,17}")
+#: Resolver answers that state an absence about allergies, not a name. The
+#: closed sets above are the real control; this is the backstop for codes
+#: they lag. A label is refused when it is:
+#:   - "no known ..." anything, or an NK..A abbreviation (NKA, NKDA, NKFA);
+#:   - a bare "None" / "Nil", or "None known" / "Nil known" (or "None or
+#:     none/not known"), as the whole label (#957 delta 4);
+#:   - a negation (English, German, French, Spanish, Italian) in a label
+#:     that is about allergies, sensitivities, intolerances or reactions.
+#: A negation on any other topic is a name: "None detected", "Nil by mouth",
+#: "Sin Nombre virus" (#957 round 3).
+_ABSENCE_WORDING = re.compile(
+    r"\bno known\b|\bnk[a-z]{0,2}a\b"
+    r"|^\s*(?:none|nil)(?: or (?:none|not))? known\s*$"
+    r"|^\s*(?:none|nil)\s*$"
+    r"|^(?=.*(?:al+erg|sensitiv|intoleran|reaction))"
+    r"(?=.*(?:\bno\b|\bnone\b|\bnil\b|\bnot (?:asked|known)\b"
+    r"|\bkeine?\b|\baucune?\b|\bsin\b|\bning[uú]n[ao]?\b|\bnessun[ao]?\b))",
+    re.IGNORECASE)
+
 
 def canonical_system(system: str | None) -> str:
-    """Normalize a code system URI (OIDs and http/https variants all appear)."""
-    if not system:
+    """Normalize a code system URI (OIDs and http/https variants all appear).
+
+    A system that is not a string (a list, an object, a number) reads as
+    absent. Stored as written, one such Coding made every redacted read on
+    the tenant raise here and return 500 (#885).
+    """
+    if not isinstance(system, str) or not system:
         return ""
     return _SYSTEM_ALIASES.get(system.strip(), system.strip())
 
@@ -278,9 +360,18 @@ def lookup(system: str | None, code: str | None) -> str | None:
     so a test can replace `r6.terminology_resolver.resolve` by path and have
     this see it.
     """
-    if not code:
+    # A code is a string; an int (CVX "3" written as 3) still reads as one.
+    # A list, an object or a bool is no code, and is never stringified into
+    # the miss counter (#885).
+    if isinstance(code, bool) or not isinstance(code, (str, int)) or code == "":
         return None
     key = (canonical_system(system), str(code).strip())
+    # A SNOMED code that is not a well-formed concept id is never looked up:
+    # the resolver names "0716186003" and "716186003|No known allergy|" as
+    # absences the guard cannot key (#957), and free text sent to it leaves
+    # the deployment. Not counted as a miss either.
+    if key[0] == SNOMED and not _SNOMED_CODE.fullmatch(key[1]):
+        return None
     label = _LABELS.get(key)
     if label is not None:
         return label
@@ -289,11 +380,43 @@ def lookup(system: str | None, code: str | None) -> str | None:
         label = _resolver_mod.resolve(*key)
     except Exception:  # noqa: BLE001 — a label is never worth failing a read
         label = None
+    # An answer that reads as an absence or status statement is never a
+    # label, whatever the code: ABSENCE_CONCEPTS can lag SNOMED (#957).
+    if label is not None and _ABSENCE_WORDING.search(label):
+        return None
     if label is not None:
         return label
 
     _MISSES[key] += 1
     return None
+
+
+def _absence_key(system, code) -> tuple[str, str] | None:
+    """(system, code) keyed exactly as lookup keys it, if it is an absence
+    concept: an int code reads as its digits, a bool or list is no code."""
+    if isinstance(code, bool) or not isinstance(code, (str, int)) or code == "":
+        return None
+    key = (canonical_system(system), str(code).strip())
+    return key if key in ABSENCE_CONCEPTS else None
+
+
+def malformed_snomed_code(system, code) -> bool:
+    """A string code in SNOMED's system that is not a concept id, such as
+    "716186003|No known allergy|": it carries free text in the code slot."""
+    return (isinstance(code, str) and canonical_system(system) == SNOMED
+            and not _SNOMED_CODE.fullmatch(code.strip()))
+
+
+def is_absence_coding(coding) -> bool:
+    """True for a Coding of one of ABSENCE_CONCEPTS, in any system spelling."""
+    return (isinstance(coding, dict)
+            and _absence_key(coding_system(coding), coding.get("code")) is not None)
+
+
+def absence_text(system, code) -> str | None:
+    """The qualified entry text for an absence concept, else None."""
+    key = _absence_key(system, code)
+    return _ABSENCE_TEXT.get(key) if key else None
 
 
 def unlabelled_codes(limit: int = 50) -> list[tuple[tuple[str, str], int]]:
@@ -315,6 +438,11 @@ def label_codings(obj):
 
     A CodeableConcept whose codings are all recognised also gets a `text`, since
     that is the field most consumers read first.
+
+    An absence concept (ABSENCE_CONCEPTS) gets no `display`: its name reads as
+    a fact about the person (#950). A concept coded ONLY with absence concepts
+    gets the qualified entry text from _ABSENCE_TEXT instead. Beside any other
+    coding it gets none, since that coding may name a real substance.
     """
     if isinstance(obj, list):
         for item in obj:
@@ -326,13 +454,21 @@ def label_codings(obj):
     codings = obj.get("coding")
     if isinstance(codings, list):
         labels = []
+        absences = []
         for coding in codings:
             if not isinstance(coding, dict):
                 continue
-            label = lookup(coding.get("system"), coding.get("code"))
+            entry = absence_text(coding_system(coding), coding.get("code"))
+            if entry:
+                coding.pop("display", None)
+                absences.append(entry)
+                continue
+            label = lookup(coding_system(coding), coding.get("code"))
             if label:
                 coding["display"] = label
                 labels.append(label)
+        if absences and len(absences) == len(codings):  # absences only
+            labels = absences
         if labels and not obj.get("text"):
             obj["text"] = labels[0]
 
