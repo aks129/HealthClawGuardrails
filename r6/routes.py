@@ -42,7 +42,9 @@ from r6.resource_ids import refuse_malformed_resource_id
 from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 _SUPPORTED_SEARCH_PARAMS, classify_search_args,
                                 error_fidelity_outcome, lenient_search_warnings,
-                                unsupported_input_text)
+                                normalize_patient_ref, search_self_link,
+                                unsupported_input_text, upstream_entry,
+                                upstream_total)
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -123,9 +125,6 @@ _VALID_BUNDLE_TYPES = {
     'batch', 'batch-response', 'history', 'searchset', 'collection',
     'subscription-notification',
 }
-
-# Valid FHIR search patient reference pattern
-_PATIENT_REF_PATTERN = re.compile(r'^Patient/[A-Za-z0-9\-.]{1,64}$')
 
 _AUDIT_SEARCH_PARAMETER_SPECS = (
     {'name': 'context-id', 'type': 'token',
@@ -772,10 +771,8 @@ def search_resources(resource_type):
                 redacted = apply_redaction(resource_data)
                 redacted = add_disclaimer(redacted, resource_type)
             redacted['_source'] = 'upstream'
-            new_entry = {
-                'fullUrl': entry.get('fullUrl', ''),
-                'resource': redacted,
-            }
+            # Our own fullUrl or none, never the upstream's (#954).
+            new_entry = upstream_entry(request.host_url, redacted)
             # Preserve entry.search so mode="outcome" warnings survive — but
             # allowlist it to scalar mode/score: `search` can carry
             # extensions, and even under mode/score keys a hostile upstream
@@ -795,11 +792,14 @@ def search_resources(resource_type):
 
         warning_entries, audit_note, outcome_code = lenient_search_warnings(
             ignored_params, _SUPPORTED_PARAMS_TEXT)
+        # Our own self link, from the parameters forwarded; never the
+        # upstream's links, which point around redaction and audit (#954).
+        self_link = search_self_link(request.host_url, resource_type, params)
         result = {
             'resourceType': 'Bundle',
             'type': 'searchset',
-            'total': bundle.get('total', len(entries)),
-            'link': bundle.get('link', []),
+            'total': upstream_total(bundle.get('total'), len(entries)),
+            'link': [{'relation': 'self', 'url': self_link}],
             'entry': entries + warning_entries,
             '_source': 'upstream',
         }
@@ -854,7 +854,8 @@ def search_resources(resource_type):
     # --- patient reference filter ---
     patient_ref = request.args.get('patient')
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.fullmatch(patient_ref):
+        patient_ref = normalize_patient_ref(patient_ref)
+        if patient_ref is None:
             return _reject_local_search(
                 resource_type, agent_id, tenant_id, 'invalid',
                 'Patient reference must match Patient/{id}.',
@@ -968,15 +969,7 @@ def search_resources(resource_type):
         })
 
     # Build self link with search params for transparency
-    search_params = []
-    for spec in _SEARCH_PARAMETER_SPECS:
-        key = spec['name']
-        val = request.args.get(key)
-        if val:
-            search_params.append((key, val))
-    self_link = f'{request.host_url.rstrip("/")}/r6/fhir/{resource_type}'
-    if search_params:
-        self_link += '?' + urlencode(search_params)
+    self_link = search_self_link(request.host_url, resource_type, request.args)
 
     # Lenient handling of an unknown parameter: append a corrective warning
     # entry (search.mode=outcome) naming the ignored parameter + the supported
@@ -1345,7 +1338,8 @@ def observation_stats():
     )
 
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.match(patient_ref):
+        patient_ref = normalize_patient_ref(patient_ref)
+        if patient_ref is None:
             return _operation_outcome('error', 'invalid',
                                       'Patient reference must match Patient/{id}'), 400
         query = query.filter(
@@ -1429,7 +1423,8 @@ def observation_lastn():
     ).order_by(R6Resource.last_updated.desc())
 
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.match(patient_ref):
+        patient_ref = normalize_patient_ref(patient_ref)
+        if patient_ref is None:
             return _operation_outcome('error', 'invalid',
                                       'Patient reference must match Patient/{id}'), 400
         query = query.filter(

@@ -675,7 +675,7 @@ class TestSearchFeatures:
 
     def test_patient_ref_validation(self, client, tenant_headers):
         """Invalid patient reference format should be rejected."""
-        resp = client.get('/r6/fhir/Observation?patient=bad-ref',
+        resp = client.get('/r6/fhir/Observation?patient=Practitioner/bad-ref',
                          headers=tenant_headers)
         assert resp.status_code == 400
         data = resp.get_json()
@@ -880,7 +880,7 @@ class TestSearchFeatures:
     def test_invalid_filters_and_repeated_controls_are_audited(
             self, client, tenant_headers):
         cases = (
-            ('patient=secret-patient-value', 'secret-patient-value'),
+            ('patient=Practitioner/secret-patient-value', 'secret-patient-value'),
             ('_lastUpdated=secret-date-value', 'secret-date-value'),
             ('context-id=secret%20context', 'secret context'),
             ('_sort=_lastUpdated&_sort=-_lastUpdated', None),
@@ -2039,3 +2039,83 @@ class TestPhase2DisclaimersOnNewResources:
                          headers=tenant_headers)
         assert resp.status_code == 200
         assert '_disclaimer' not in resp.get_json()
+
+
+class TestBarePatientIdSearch:
+    """FHIR R4 3.1.1.4.9: a single-target reference parameter accepts
+    [parameter]=[id], read as Patient/[id]. Other forms stay rejected."""
+
+    REJECTED = (
+        'https://other.example/fhir/Patient/sh-2300',
+        'Practitioner/sh-2300',
+        'Patient/',
+        'sh 2300',
+        'sh-2300%0A',
+    )
+
+    def _seed(self, client, auth_headers):
+        headers = {**auth_headers, 'X-Human-Confirmed': 'true'}
+        for obs_id, subject, value in (
+                ('bare-a-1', 'Patient/sh-2300', 90),
+                ('bare-a-2', 'Patient/sh-2300', 110),
+                ('bare-b-1', 'Patient/sh-9999', 300)):
+            client.post('/r6/fhir/Observation',
+                        data=json.dumps({
+                            'resourceType': 'Observation', 'id': obs_id,
+                            'status': 'final',
+                            'code': {'coding': [{'code': '2339-0'}]},
+                            'subject': {'reference': subject},
+                            'valueQuantity': {'value': value, 'unit': 'mg/dL'},
+                        }),
+                        content_type='application/json', headers=headers)
+
+    def test_search_bare_id_matches_prefixed(self, client, auth_headers,
+                                             tenant_headers):
+        self._seed(client, auth_headers)
+        for value in ('sh-2300', 'Patient/sh-2300'):
+            resp = client.get(f'/r6/fhir/Observation?patient={value}',
+                              headers=tenant_headers)
+            assert resp.status_code == 200, value
+            ids = {e['resource']['id'] for e in resp.get_json()['entry']}
+            assert ids == {'bare-a-1', 'bare-a-2'}, value
+
+    def test_stats_bare_id_matches_prefixed(self, client, auth_headers,
+                                            tenant_headers):
+        self._seed(client, auth_headers)
+        for value in ('sh-2300', 'Patient/sh-2300'):
+            resp = client.get(
+                f'/r6/fhir/Observation/$stats?code=2339-0&patient={value}',
+                headers=tenant_headers)
+            assert resp.status_code == 200, value
+            params = {p['name']: p for p in resp.get_json()['parameter']}
+            assert params['count']['valueInteger'] == 2, value
+            assert params['max']['valueDecimal'] == 110.0, value
+
+    def test_lastn_bare_id_matches_prefixed(self, client, auth_headers,
+                                            tenant_headers):
+        self._seed(client, auth_headers)
+        for value in ('sh-2300', 'Patient/sh-2300'):
+            resp = client.get(
+                f'/r6/fhir/Observation/$lastn?code=2339-0&max=5'
+                f'&patient={value}',
+                headers=tenant_headers)
+            assert resp.status_code == 200, value
+            ids = {e['resource']['id'] for e in resp.get_json()['entry']}
+            assert ids == {'bare-a-1', 'bare-a-2'}, value
+
+    def test_other_reference_forms_still_rejected(self, client,
+                                                  tenant_headers):
+        for path in ('/r6/fhir/Observation',
+                     '/r6/fhir/Observation/$stats',
+                     '/r6/fhir/Observation/$lastn'):
+            for value in self.REJECTED:
+                resp = client.get(f'{path}?patient={value}',
+                                  headers=tenant_headers)
+                body = resp.get_json()
+                assert resp.status_code == 400, (path, value)
+                assert body['resourceType'] == 'OperationOutcome'
+                assert body['issue'][0]['code'] == 'invalid'
+                issue = body['issue'][0]
+                message = (issue.get('details', {}).get('text')
+                           or issue.get('diagnostics'))
+                assert 'Patient/{id}' in message, (path, value)

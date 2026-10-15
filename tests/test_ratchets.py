@@ -524,9 +524,14 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: same call on /internal/seed, $curatr-apply-fix and /demo/agent-loop
 #: (security re-check of #913, R3-R5). 3739 -> 3733 (#922 B5): $stats takes
 #: its unit in the loop that filters by code; the second loop is gone.
-#: 3733 -> 3743 (FHI-53): the check-in branch of /internal/step-up-token and
+#: 3733 -> 3728 (#954): both search self links come from search_self_link
+#: in r6/search_fidelity.py, not two copies of the builder here. 3728 ->
+#: 3727 (#954): a proxied entry's fullUrl comes from upstream_entry there.
+#: 3727 -> 3728 (#861): normalize_patient_ref joins that import list, which
+#: wraps onto one more line; the normalizing itself lives in search_fidelity.
+#: 3728 -> 3738 (FHI-53): the check-in branch of /internal/step-up-token and
 #: of $share-bundle. Only the dispatch is here; the handlers are r6/checkin.py.
-_GOD_MODULE_LINES = 3743
+_GOD_MODULE_LINES = 3738
 
 
 def test_the_god_module_only_shrinks():

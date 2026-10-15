@@ -5735,7 +5735,9 @@ def test_the_timeline_endpoint_returns_series_for_the_signed_in_agent(
     body = c.get(f"/api/labs/timeline?agent={agent_id}").get_json()
     names = [s["name"] for s in body["series"]]
     assert "Total cholesterol" in names and "Hemoglobin A1c" in names
-    assert body["disclaimer"] == "Decision support."
+    # The plain footnote, not the engine's clinician wording (#942).
+    from careagents.app import CHART_FOOTNOTE
+    assert body["disclaimer"] == CHART_FOOTNOTE
 
 
 def test_the_timeline_endpoint_narrows_to_the_topic_asked_about(
@@ -5796,8 +5798,8 @@ def test_show_lab_timeline_emits_a_card_and_gives_first_latest_direction(
     assert out["chart_shown"] is True
     assert out["series"] == [{
         "name": "Total cholesterol", "readings": 2, "trend_plottable": True,
-        "first": {"date": "2025-01-01", "value": 210, "unit": "mg/dL"},
-        "latest": {"date": "2026-03-01", "value": 244, "unit": "mg/dL"},
+        "first": {"date": "January 1, 2025", "value": 210, "unit": "mg/dL"},
+        "latest": {"date": "March 1, 2026", "value": 244, "unit": "mg/dL"},
         "direction": "higher"}]
     assert "readings\": [" not in _json.dumps(out), \
         "the tool handed the model every reading"

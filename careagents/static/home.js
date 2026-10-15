@@ -277,12 +277,25 @@
   // The one sentence for "how many records you can now read", shared by the
   // refresh poll and the upload card so the two counters on this page cannot
   // drift again (#226). `note` is the server's uncounted_note, a complete
-  // sentence about documents the number leaves out.
-  function readableCountLine(n, note) {
+  // sentence about documents the number leaves out. `documents`, from the
+  // upload, is how many unreadable documents arrived: "you can read" is
+  // said only when some did, and a file that held only personal details
+  // reads "No new records added." with its reason (#953 QA). The poll does
+  // not pass it and keeps its wording.
+  function readableCountLine(n, note, documents) {
+    const unreadable = documents === undefined ? !!note : documents > 0;
     const lead = n > 0
       ? `${n} new record${n === 1 ? "" : "s"} added.`
-      : note ? "No new records you can read." : "No new records added.";
+      : unreadable ? "No new records you can read." : "No new records added.";
     return lead + (note ? ` ${note}` : "");
+  }
+
+  // Whether an upload redraws the hub: only when it added records the card
+  // counts (the #948 rule), since only then does the card change. A file
+  // that added none keeps its message on screen instead of reloading it
+  // away (#953 QA).
+  function uploadReloads(d) {
+    return typeof d.records_added === "number" && d.records_added > 0;
   }
 
   // Inline message: shown in the page beside what the user touched.
@@ -612,7 +625,8 @@
       const skp = d.skipped | 0;
       const fld = d.failed | 0;
       const readable = typeof d.records_added === "number" ? d.records_added : ing;
-      const parts = [readableCountLine(readable, d.uncounted_note)];
+      const parts = [readableCountLine(readable, d.uncounted_note,
+                                       d.documents_added)];
       // Every part is a whole sentence, because the lead is one.
       if (skp) parts.push(`${skp} not saved (unsupported record types).`);
       if (fld) parts.push(`${fld} could not be saved.`);
@@ -626,13 +640,15 @@
                      + ": " + codes.join(", ") + ".");
         }
       }
+      if (uploadReloads(d)) {
+        // Reload so the card is redrawn from the server with its new count
+        // and the agent picker sees it. The sentence rides across the
+        // reload (carryNotice, #847), so it is never shown beside a card
+        // that still says "No records yet".
+        return carryNotice(parts.join(" "));
+      }
       sayUpload(msg, parts.join(" "),
           (fld || skp) ? "form-warn" : "form-ok");
-      if (ing > 0) {
-        // Reload so the card flips from `empty` to `active` and the
-        // agent picker sees the new record count.
-        setTimeout(() => location.reload(), 1400);
-      }
     });
   }
 
@@ -707,7 +723,7 @@
       const label = btn.dataset.label || "these records";
       const agreed = await askToDelete(
         btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
-        btn.dataset.readers || "");
+        btn.dataset.readers || "", btn.dataset.leaves || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -765,7 +781,7 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label, readers) {
+  function askToDelete(label, readers, leaves) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
@@ -778,6 +794,13 @@
         ? readers + " reads these records and will be deleted too."
         : "";
       who.hidden = !readers;
+    }
+    // The only records of someone the holder cares for: deleting them
+    // takes that person off the hub too, said before the tap (FHI-45).
+    const gone = $("delete-leaves");
+    if (gone) {
+      gone.textContent = leaves || "";
+      gone.hidden = !leaves;
     }
     input.value = "";
     ok.disabled = true;
@@ -848,7 +871,9 @@
   // The one contact address (#856), linked by showRecent.
   const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
-    const what = r.label + (r.to ? " to " + r.to : "") + ": ";
+    // Whose, when not the holder's own (patient test on #952).
+    const what = r.label + (r.whose ? " (" + r.whose + ")" : "") +
+      (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
     if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
