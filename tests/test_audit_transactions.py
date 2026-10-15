@@ -15,7 +15,7 @@ RESOURCE = {
 
 def test_fasten_resource_and_audit_roll_back_together(app):
     with app.app_context():
-        assert _ingest_one(RESOURCE, "atomic-tenant") == (
+        assert _ingest_one(RESOURCE, "atomic-tenant", source="fasten") == (
             "ok", "atomic-audit-observation"
         )
         db.session.rollback()
@@ -32,7 +32,7 @@ def test_fasten_resource_and_audit_roll_back_together(app):
 
 def test_fasten_resource_and_audit_commit_together(app):
     with app.app_context():
-        _ingest_one(RESOURCE, "atomic-tenant")
+        _ingest_one(RESOURCE, "atomic-tenant", source="fasten")
         db.session.commit()
 
         assert db.session.get(
