@@ -27,6 +27,9 @@ on all resource access paths (not just context ingestion).
   with [Redacted]; keep the coded `code` and `system`
 """
 
+from r6.record_source import stamp as _stamp_record_source
+from r6.record_source import strip_meta as _strip_record_source
+
 import json
 import re
 
@@ -49,6 +52,9 @@ def apply_redaction(resource):
     redacted = json.loads(json.dumps(resource))  # Deep copy
     _redact_recursive(redacted)
     label_codings(redacted)
+    # The walker removed every record-source tag; put back only the one the
+    # store vouched for, read off the input object, never out of its JSON.
+    _stamp_record_source(redacted, getattr(resource, 'record_source', None))
 
     return redacted
 
@@ -370,6 +376,10 @@ def _redact_recursive(obj):
         return
 
     _redact_fields(obj, narrative=bool(obj.get('resourceType')))
+    # meta.source is a free URI that can name a patient-specific endpoint, and
+    # a tag in our record-source system is ours alone to set (#956): both go,
+    # at every depth, top level included. Our own stamp is put back after.
+    _strip_record_source(obj.get('meta'))
 
     # A Coding.system is a URI string. Anything else (a list, an object, a
     # number) is not a system, made labelling raise for every read on the
@@ -529,5 +539,7 @@ def apply_patient_controlled_redaction(resource, patient_id):
             'display': 'Patient-controlled deidentification',
         })
     meta['tag'] = tags
+    # As apply_redaction: only the store's own channel, never the JSON's.
+    _stamp_record_source(result, getattr(resource, 'record_source', None))
 
     return result

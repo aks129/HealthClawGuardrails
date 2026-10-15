@@ -93,7 +93,8 @@ def test_context_builder_never_deleted_upsert_is_not_called_a_revive(
 def _ingest(app, tenant_id, rid):
     from r6.fasten.ingester import _ingest_one
     with app.app_context():
-        result, got = _ingest_one(_patient(rid), tenant_id)
+        result, got = _ingest_one(_patient(rid), tenant_id,
+                                  source="fasten")
         db.session.commit()
         return result, got
 
