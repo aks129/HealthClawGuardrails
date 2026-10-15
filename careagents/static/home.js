@@ -278,12 +278,25 @@
   // The one sentence for "how many records you can now read", shared by the
   // refresh poll and the upload card so the two counters on this page cannot
   // drift again (#226). `note` is the server's uncounted_note, a complete
-  // sentence about documents the number leaves out.
-  function readableCountLine(n, note) {
+  // sentence about documents the number leaves out. `documents`, from the
+  // upload, is how many unreadable documents arrived: "you can read" is
+  // said only when some did, and a file that held only personal details
+  // reads "No new records added." with its reason (#953 QA). The poll does
+  // not pass it and keeps its wording.
+  function readableCountLine(n, note, documents) {
+    const unreadable = documents === undefined ? !!note : documents > 0;
     const lead = n > 0
       ? `${n} new record${n === 1 ? "" : "s"} added.`
-      : note ? "No new records you can read." : "No new records added.";
+      : unreadable ? "No new records you can read." : "No new records added.";
     return lead + (note ? ` ${note}` : "");
+  }
+
+  // Whether an upload redraws the hub: only when it added records the card
+  // counts (the #948 rule), since only then does the card change. A file
+  // that added none keeps its message on screen instead of reloading it
+  // away (#953 QA).
+  function uploadReloads(d) {
+    return typeof d.records_added === "number" && d.records_added > 0;
   }
 
   // Inline message: shown in the page beside what the user touched.
@@ -620,7 +633,8 @@
     const skp = d.skipped | 0;
     const fld = d.failed | 0;
     const readable = typeof d.records_added === "number" ? d.records_added : ing;
-    const parts = [readableCountLine(readable, d.uncounted_note)];
+    const parts = [readableCountLine(readable, d.uncounted_note,
+                                     d.documents_added)];
     // Every part is a whole sentence, because the lead is one.
     if (skp) parts.push(`${skp} not saved (unsupported record types).`);
     if (fld) parts.push(`${fld} could not be saved.`);
@@ -634,7 +648,7 @@
                    + ": " + codes.join(", ") + ".");
       }
     }
-    return { ok: true, ing, line: parts.join(" "),
+    return { ok: true, reloads: uploadReloads(d), line: parts.join(" "),
              cls: (fld || skp) ? "form-warn" : "form-ok" };
   }
 
@@ -682,14 +696,15 @@
       btn.disabled = false;
       if (!card) {
         // The new card is drawn by the reload; the sentence rides along.
-        return out.ok ? carryNotice(out.line) : show(out.line, out.cls);
+        return out.reloads ? carryNotice(out.line) : show(out.line, out.cls);
       }
+      // Reload so the card is redrawn from the server with its new count
+      // and the agent picker sees it. The sentence rides across the
+      // reload (carryNotice, #847), so it is never shown beside a card
+      // that still says "No records yet". An upload that added none keeps
+      // its message on screen (#953 QA).
+      if (out.reloads) return carryNotice(out.line);
       show(out.line, out.cls);
-      if (out.ok && out.ing > 0) {
-        // Reload so the card flips from `empty` to `active` and the
-        // agent picker sees the new record count.
-        setTimeout(() => location.reload(), 1400);
-      }
     });
   }
 

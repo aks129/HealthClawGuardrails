@@ -41,8 +41,9 @@ from r6.resource_ids import refuse_malformed_resource_id
 from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 _SUPPORTED_SEARCH_PARAMS, classify_search_args,
                                 error_fidelity_outcome, lenient_search_warnings,
-                                search_self_link, unsupported_input_text,
-                                upstream_entry, upstream_total)
+                                normalize_patient_ref, search_self_link,
+                                unsupported_input_text, upstream_entry,
+                                upstream_total)
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -123,9 +124,6 @@ _VALID_BUNDLE_TYPES = {
     'batch', 'batch-response', 'history', 'searchset', 'collection',
     'subscription-notification',
 }
-
-# Valid FHIR search patient reference pattern
-_PATIENT_REF_PATTERN = re.compile(r'^Patient/[A-Za-z0-9\-.]{1,64}$')
 
 _AUDIT_SEARCH_PARAMETER_SPECS = (
     {'name': 'context-id', 'type': 'token',
@@ -855,7 +853,8 @@ def search_resources(resource_type):
     # --- patient reference filter ---
     patient_ref = request.args.get('patient')
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.fullmatch(patient_ref):
+        patient_ref = normalize_patient_ref(patient_ref)
+        if patient_ref is None:
             return _reject_local_search(
                 resource_type, agent_id, tenant_id, 'invalid',
                 'Patient reference must match Patient/{id}.',
@@ -1338,7 +1337,8 @@ def observation_stats():
     )
 
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.match(patient_ref):
+        patient_ref = normalize_patient_ref(patient_ref)
+        if patient_ref is None:
             return _operation_outcome('error', 'invalid',
                                       'Patient reference must match Patient/{id}'), 400
         query = query.filter(
@@ -1422,7 +1422,8 @@ def observation_lastn():
     ).order_by(R6Resource.last_updated.desc())
 
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.match(patient_ref):
+        patient_ref = normalize_patient_ref(patient_ref)
+        if patient_ref is None:
             return _operation_outcome('error', 'invalid',
                                       'Patient reference must match Patient/{id}'), 400
         query = query.filter(
