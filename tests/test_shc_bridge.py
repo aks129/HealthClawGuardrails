@@ -99,7 +99,7 @@ class TestShcIngest:
         class PoisonedStatementError(Exception):
             pass
 
-        def _boom(resource, tenant_id):
+        def _boom(resource, tenant_id, **kw):
             # Mimic a DBAPIError whose str() echoes the bound parameters.
             raise PoisonedStatementError(
                 "(psycopg2.errors.StringDataRightTruncation) INSERT INTO "

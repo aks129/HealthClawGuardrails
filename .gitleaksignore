@@ -2,3 +2,5 @@
 cd2e7f908a7d59340960f23fbe575fe9964beb0e:tests/test_sec913_revoke_probes.py:generic-api-key:26
 # Synthetic test secret in the #941 security review's exploit tests (commit-tied fingerprint).
 9c247a95bd123b8a6e227efdada40a101fb7f2d1:tests/test_sec941_exploits.py:generic-api-key:24
+# Synthetic mint secret in the #962 security review's attack tests (commit-tied fingerprint).
+2ea7d3ce47167bde5a2cc2d450471c26707c4194:tests/test_sec962_scope_allowlist_attack.py:generic-api-key:28

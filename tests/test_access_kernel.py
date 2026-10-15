@@ -1589,7 +1589,17 @@ def test_there_is_no_profile_member_meaning_no_redaction():
     MUTATION: add Profile.NONE -> red.
     """
     assert {p.name for p in Profile} == {'STANDARD', 'PATIENT_CONTROLLED',
-                                         'INTAKE'}
+                                         'INTAKE', 'CHECKIN'}
+
+
+def test_fhir_response_refuses_the_checkin_profile_until_it_is_routed():
+    """Profile.CHECKIN must never fall through to another profile's body.
+
+    MUTATION: turn the `elif profile is Profile.INTAKE` in fhir_response
+    back into a bare `else` -> red (CHECKIN would be served as intake).
+    """
+    with pytest.raises(ValueError):
+        fhir_response({'resourceType': 'Patient'}, profile=Profile.CHECKIN)
 
 
 def test_the_standard_profile_strips_upstream_display_and_adds_a_disclaimer(
@@ -1846,7 +1856,13 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # registered on r6_blueprint read the tenant through the
                      # kernel, behind enforce_tenant_id, which asks it too.
                      'r6/brief/routes.py', 'r6/caregaps/routes.py',
-                     'r6/labs/routes.py', 'r6/quality/routes.py'}
+                     'r6/labs/routes.py', 'r6/quality/routes.py',
+                     # FHI-53: the check-in branch of $share-bundle is born
+                     # on the kernel — require_grant for its single-use,
+                     # audience- and operation-bound token, and
+                     # _checkin_profile beside _intake_profile. It lives
+                     # here rather than in r6/routes.py, which only shrinks.
+                     'r6/checkin.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

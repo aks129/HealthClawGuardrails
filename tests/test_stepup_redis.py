@@ -82,8 +82,12 @@ def test_step_up_token_can_be_bound_to_audience_and_operation(tenant_id):
         token, tenant_id, require_audience="different"
     ) == (False, "Token audience mismatch")
     assert stepup.validate_step_up_token(
-        token, tenant_id, require_operation="apply-fix:Condition/other"
+        token, tenant_id, require_audience="curatr",
+        require_operation="apply-fix:Condition/other"
     ) == (False, "Token operation mismatch")
+    # A gate that serves no audience refuses an audience-bound token (F1).
+    assert stepup.validate_step_up_token(token, tenant_id) == (
+        False, "Token audience mismatch")
 
 
 # #212: absence of the shared store, as distinct from its failure above. The

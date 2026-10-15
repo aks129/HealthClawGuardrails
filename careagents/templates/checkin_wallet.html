@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{# SMART Health Check-in web wallet (careagents/checkin_wallet.py). A check-in
+   page opens this in a new tab. Sign-in happens here, in place: leaving the
+   page would lose the request. The website is named only by the origin the
+   browser reports, never as a clinic or a provider: that is all we know. #}
+{% block title %}Share for check-in — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# Page-local styles, kept here while the wallet is behind its flag. #}
+{% block head %}
+<style>
+  .checkin-test-note { background: var(--practice-bg); color: var(--practice-ink);
+    border: 1px solid var(--practice-line); border-radius: var(--radius-sm);
+    padding: 8px 12px; font-size: 14px; margin: 0 0 16px; }
+  .checkin-origin { font-family: var(--mono); font-size: 18px; font-weight: 700;
+    overflow-wrap: anywhere; background: var(--surface-2);
+    border-radius: var(--radius-sm); padding: 10px 12px; margin: 8px 0 12px; }
+  .checkin-items { list-style: none; padding: 0; margin: 0 0 16px; }
+  .checkin-item { border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+    padding: 12px; margin: 0 0 8px; }
+  .checkin-item-title { font-weight: 700; }
+  .checkin-item-what { color: var(--ink-soft); font-size: 15px; margin: 2px 0 6px;
+    list-style: none; padding: 0; overflow-wrap: anywhere; }
+  .checkin-choice { display: flex; gap: 20px; }
+  .checkin-choice label { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+</style>
+{% endblock %}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card checkin-wallet" id="wallet"
+       data-signed-in="{{ '1' if signed_in else '0' }}"
+       data-records="{{ url_for('checkin_wallet_test_patient') }}">
+    <p class="checkin-test-note"><b>Test version.</b> This answers from a
+      made-up test patient, never from your records.</p>
+
+    <div id="wallet-err" class="form-error" role="alert" hidden></div>
+
+    <section id="wallet-signin" {% if signed_in %}hidden{% endif %}>
+      <h1>Sign in to answer</h1>
+      {# The website's address is not known yet: it arrives with the request,
+         and the request comes only after sign-in. So say when it will show. #}
+      <p class="setup-sub">A website opened this page to ask for some of
+        your health information. Sign in first. Then you'll see which website
+        it is and exactly what it asks for, and you choose what to share.
+        This tab stays open.</p>
+      <div id="signin-start">
+        <button class="btn-primary btn-block" id="signin-passkey">
+          Sign in with a passkey</button>
+        <div class="or">or use your email</div>
+        <label class="field-label" for="signin-email">Email</label>
+        <input class="field" id="signin-email" type="email" inputmode="email"
+               autocomplete="email" placeholder="you@example.com">
+        <button class="btn-secondary btn-block" id="signin-email-btn">
+          Email me a code</button>
+        <p class="auth-fine">By continuing you agree to the
+          <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and
+          <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
+            policy</a>.</p>
+      </div>
+      <div id="signin-code" hidden>
+        <p class="setup-sub" id="signin-code-note"></p>
+        <label class="field-label" for="signin-code-input">Enter the 8-digit code</label>
+        <input class="field code-input" id="signin-code-input" inputmode="numeric"
+               maxlength="8" placeholder="••••••••" autocomplete="one-time-code">
+        <button class="btn-primary btn-block" id="signin-verify">Continue</button>
+        <button class="btn-secondary btn-block" id="signin-resend">Send a new code</button>
+        <button class="linkish" id="signin-other-email">Use a different email</button>
+      </div>
+    </section>
+
+    <section id="wallet-waiting" hidden>
+      <h1>Waiting for the request</h1>
+      <p class="setup-sub">You're signed in. The website that opened this page
+        is sending its request.</p>
+      <p class="setup-sub" id="wallet-waiting-late" hidden>Nothing has arrived
+        yet. Go back to the website's tab and start check-in again. It will
+        open a new tab like this one, and you can close this one.</p>
+    </section>
+
+    <section id="wallet-direct" hidden>
+      <h1>Nothing to answer</h1>
+      <p class="setup-sub">This page answers check-in requests. Open it from a
+        check-in page, and it will show you what the website asks for.</p>
+    </section>
+
+    <section id="wallet-review" hidden>
+      <h1>A website is asking for your health information</h1>
+      <p class="checkin-origin" id="wallet-origin"></p>
+      <p class="setup-sub" id="wallet-purpose" hidden></p>
+      <p class="setup-sub">Choose what to share. Nothing is shared unless you
+        choose it.</p>
+      <ul class="checkin-items" id="wallet-items"></ul>
+      <button class="btn-primary btn-block" id="wallet-send">Send my choices</button>
+      <button class="btn-secondary btn-block" id="wallet-decline-all">
+        Share nothing</button>
+      <button class="linkish" id="wallet-close">Close without answering</button>
+    </section>
+
+    <section id="wallet-done" hidden>
+      <h1 id="wallet-done-title">Sent</h1>
+      <p class="setup-sub" id="wallet-done-text"></p>
+    </section>
+  </div>
+</main>
+<script type="module" src="{{ url_for('static', filename='checkin_wallet.js') }}"></script>
+{% endblock %}

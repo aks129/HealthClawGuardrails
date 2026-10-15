@@ -109,25 +109,11 @@ SAMPLE_RESULT_NOT_LISTED = "Result not listed in these made-up records"
 
 
 #: SNOMED "no known allergy" (716186003 and its descendants) and "patient
-#: not asked" (1631000175102). Their labels are statements about allergies,
-#: not names: an active Condition coded 716186003 read "No known allergy:
-#: Active" on the brief, a fact about the person no one attested (#949 F3).
-#: Mirrored in careagents/agent.py; a test holds the two equal.
-_ABSENCE_CONCEPTS = frozenset(
-    (terminology.SNOMED, c) for c in (
-        "716186003", "409137002", "428197003", "428607008", "429625007",
-        "716220001", "1003774007", "1631000175102"))
-
-
-def _is_absence(coding) -> bool:
-    """A coding keyed, as terminology.lookup keys it, to one of those."""
-    if not isinstance(coding, dict):
-        return False
-    code = coding.get("code")
-    if isinstance(code, bool) or not isinstance(code, (str, int)):
-        return False
-    return (terminology.canonical_system(coding.get("system")),
-            str(code).strip()) in _ABSENCE_CONCEPTS
+#: not asked" (1631000175102): terminology.ABSENCE_CONCEPTS, the one source
+#: (#950). Their labels are statements about allergies, not names: an active
+#: Condition coded 716186003 read "No known allergy: Active" on the brief, a
+#: fact about the person no one attested (#949 F3).
+_is_absence = terminology.is_absence_coding
 
 
 def _names_an_absence(concept: dict) -> bool:
@@ -166,8 +152,11 @@ def _concept_label(concept) -> str | None:
 
 
 def _has_code(concept) -> bool:
+    """A coding was recorded: a code, or the system redaction leaves when
+    it drops a malformed code (#957). That entry reads "Recorded, name
+    unavailable", never "Unknown", which read like a mystery illness."""
     return isinstance(concept, dict) and any(
-        isinstance(c, dict) and c.get("code")
+        isinstance(c, dict) and (c.get("code") or c.get("system"))
         for c in concept.get("coding") or [])
 
 
