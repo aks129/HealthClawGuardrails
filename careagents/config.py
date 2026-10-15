@@ -155,6 +155,12 @@ class Config:
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
         self.wearables_enabled = e.get(
             "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
+        # "Add someone you care for" (one assistant per person spec,
+        # section 6), made-up records only. Off until the hub renders whose
+        # assistant is whose; before that, a second person reads as a
+        # second identical assistant (#947 QA).
+        self.people_enabled = e.get(
+            "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on

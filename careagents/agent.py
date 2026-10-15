@@ -69,6 +69,23 @@ def failure_text(exc: Exception) -> str:
     return GENERIC_FAILURE_TEXT
 
 
+#: For the model, when a read failed: what it means and what to say. The
+#: exception's own text never goes with it; "search Condition failed (503)"
+#: told the model nothing it could say, and a model with nothing else to go
+#: on told the person no records were connected (2026-10-12).
+READ_FAILED_NOTE = (
+    "These records could not be read just now, on our side. They are not "
+    "absent: never say the person has no records, that nothing is "
+    "connected, or that they have none of this kind. Say plainly that you "
+    "could not read their records this time and offer to try again.")
+
+
+def tool_error_result(exc: Exception) -> str:
+    """The tool result for a tool whose HealthClaw read failed."""
+    return json.dumps({"error": "records_unavailable",
+                       "note": READ_FAILED_NOTE})
+
+
 def _trim_history(history: list) -> None:
     """Drop the oldest turns in place, cutting only at a safe boundary.
 
@@ -238,6 +255,207 @@ def _medication_resolver(hc: HealthClawClient, tenant: str):
     return resolve
 
 
+ALLERGY_STATUS_STATEMENT = (
+    "Your records don't say whether you have allergies.")
+
+#: Explicit SNOMED allergy-status concepts: the record says allergy
+#: information was not collected, not which substance. Keyed by system and
+#: code, never by label, and kept tiny on purpose. Coding-level null flavors
+#: and data-absent-reason codes are NOT here: C-CDA writes an uncoded
+#: allergen as nullFlavor UNK beside free text that redaction strips, so
+#: those are real allergy records (#945 security F3). "No known allergy"
+#: codes are not status either: they are _NKA_CODES below.
+_ALLERGY_STATUS_CODES = frozenset({
+    ("http://snomed.info/sct", "1631000175102"),  # Patient not asked
+})
+
+#: "No known allergy" concepts: SNOMED 716186003 and every descendant
+#: (tx.fhir.org, isa/716186003, 2026-10-13), each with our own words for
+#: it. The words are keyed by code, never taken from the record: the
+#: terminology label ("No known allergy") reached the model as an allergy's
+#: name, a bare fact about the person (#946).
+_NKA_CODES = {
+    ("http://snomed.info/sct", "716186003"): "no known allergies",
+    ("http://snomed.info/sct", "409137002"): "no known drug allergies",
+    ("http://snomed.info/sct", "428197003"): "no known insect allergies",
+    ("http://snomed.info/sct", "428607008"):
+        "no known environmental allergies",
+    ("http://snomed.info/sct", "429625007"): "no known food allergies",
+    ("http://snomed.info/sct", "716220001"): "no known animal allergies",
+    ("http://snomed.info/sct", "1003774007"): "no known latex allergies",
+    # Inactive predecessor of 716186003, still in legacy feeds (#957).
+    ("http://snomed.info/sct", "160244002"): "no known allergies",
+    # "None", which named an allergy "None" (#957 delta 4).
+    ("http://snomed.info/sct", "260413007"): "allergies as none",
+    # LOINC answers stating an absence (r6.terminology.LOINC_ABSENCE_ANSWERS).
+    # Missing here, LA10030-7 read as an ordinary allergy named by the
+    # engine's qualified text, and undated (#957 re-QA).
+    ("http://loinc.org", "LA10030-7"): "allergies as none known",
+    ("http://loinc.org", "LA9134-3"): "allergies as none known",
+    ("http://loinc.org", "LA4715-4"): "allergies as none or not known",
+}
+
+
+#: The spellings of SNOMED's and LOINC's systems the engine reads as each,
+#: mirrored from r6.terminology._SYSTEM_ALIASES (CareAgents imports nothing
+#: from the engine; tests hold the two equal).
+_SNOMED_SYSTEMS = frozenset({"http://snomed.info/sct",
+                             "urn:oid:2.16.840.1.113883.6.96"})
+_LOINC_SYSTEMS = frozenset({"http://loinc.org", "https://loinc.org",
+                            "urn:oid:2.16.840.1.113883.6.1"})
+
+
+def _coding_key(c: object) -> tuple[str, str] | None:
+    """(system, code) as the engine keys a coding before it labels it
+    (r6.terminology.canonical_system and lookup: stripped, the SNOMED OID
+    read as SNOMED, an int code read as its digits), or None when it is not
+    one we can key on. Keyed any other way, a coding the engine labels "No
+    known allergy" missed our sets and its label became a name (#949 F1).
+    Strings only: a list in `code` is unhashable, and ingest stores
+    whatever arrived (#885)."""
+    if not isinstance(c, dict):
+        return None
+    system, code = c.get("system"), c.get("code")
+    if (not isinstance(system, str) or isinstance(code, bool)
+            or not isinstance(code, (str, int))):
+        return None
+    system, code = system.strip(), str(code).strip()
+    if not system or not code:
+        return None
+    if system in _SNOMED_SYSTEMS:
+        system = "http://snomed.info/sct"
+    elif system in _LOINC_SYSTEMS:
+        system = "http://loinc.org"
+    return (system, code)
+
+
+def _coding_keys(res: dict) -> list | None:
+    """The key of every coding, or None when there is none or any one is
+    not a coding we can key on. A coding we cannot key on is still a
+    coding, never a reason to read the record as anything but an allergy
+    (F4)."""
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    if not isinstance(codings, list) or not codings:
+        return None
+    keys = [_coding_key(c) for c in codings]
+    return None if None in keys else keys
+
+
+def _carries_absence_code(res: dict) -> bool:
+    """Any coding at all that keys to a status or "no known allergy"
+    concept, whatever else the record carries. Such a record's text and
+    displays are never its name: the engine writes that concept's label
+    there ("No known allergy", "Patient not asked"), and a record that
+    failed the checks above would hand it to the model as an allergy
+    (#949 F1)."""
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    return isinstance(codings, list) and any(
+        k in _ALLERGY_STATUS_CODES or k in _NKA_CODES
+        for k in map(_coding_key, codings) if k)
+
+
+def _only_absence_codes(res: dict) -> bool:
+    """Every coding keys to a status or "no known allergy" concept, and
+    there is at least one. Any other coding, odd or not, makes it false:
+    such a record stays, unlabeled (the backstop above)."""
+    keys = _coding_keys(res)
+    return bool(keys) and all(
+        k in _ALLERGY_STATUS_CODES or k in _NKA_CODES for k in keys)
+
+
+#: verificationStatus codes that withdraw an entry (FHIR
+#: allergyintolerance-verification). Read from any coding, system or not:
+#: a wrong match here only stops a "no known allergy" entry being quoted.
+_WITHDRAWN = frozenset({"entered-in-error", "refuted"})
+
+
+def _withdrawn(res: dict) -> bool:
+    vs = res.get("verificationStatus")
+    if isinstance(vs, str):  # STU3 wrote a bare code
+        return vs.strip() in _WITHDRAWN
+    codings = vs.get("coding") if isinstance(vs, dict) else None
+    return isinstance(codings, list) and any(
+        isinstance(c, dict) and isinstance(c.get("code"), str)
+        and c["code"].strip() in _WITHDRAWN for c in codings)
+
+
+def _is_allergy_status(res: dict) -> bool:
+    """True only when the record carries at least one explicit status
+    concept and NO other coding of any kind, well formed or not. Penicillin
+    beside a status code is a penicillin allergy (F1). A "no known allergy"
+    coding beside a status code reads as status: a record that also says
+    "not asked" does not say there are none (#946)."""
+    keys = _coding_keys(res)
+    return (bool(keys) and any(k in _ALLERGY_STATUS_CODES for k in keys)
+            and all(k in _ALLERGY_STATUS_CODES or k in _NKA_CODES
+                    for k in keys))
+
+
+def _nka_kinds(res: dict) -> list[str]:
+    """Our words for a "no known allergy" record, or [] when it is not one.
+    Every coding must be in _NKA_CODES, as for status: any other coding
+    makes it an allergy record."""
+    keys = _coding_keys(res)
+    if not keys or not all(k in _NKA_CODES for k in keys):
+        return []
+    return list(dict.fromkeys(_NKA_CODES[k] for k in keys))
+
+
+def _nka_when(item: dict) -> str:
+    """The date clause for an entry: what kind of date it is, said as that."""
+    return {"recorded": f", recorded on {item.get('date')},",
+            "onset": f", dated {item.get('date')},",
+            "last_updated": (", last updated in your records on "
+                             f"{item.get('date')},"),
+            }.get(item.get("date_kind"), "")
+
+
+def _nka_item(res: dict, kinds: list[str]) -> dict:
+    """A "no known allergy" record as what it is: an entry in the records,
+    dated and quoted, never a fact about the person. Never "no known
+    allergies" inferred: this repeats what someone recorded and says when,
+    so a stale entry reads as one (#946)."""
+    item = {"type": "AllergyIntolerance", "no_known_allergy_record": True}
+    # The clinic's dates first. meta.lastUpdated is the engine's own write
+    # time (r6/models.py), when the entry arrived here: said as that, never
+    # as when it was recorded. onsetDateTime only, never onsetString.
+    meta = res.get("meta")
+    for kind, raw in (("recorded", res.get("recordedDate")),
+                      ("onset", res.get("onsetDateTime")),
+                      ("last_updated", meta.get("lastUpdated")
+                       if isinstance(meta, dict) else None)):
+        date = labs_timeline.parse_date(raw)
+        if date:
+            item.update({"date": date, "date_kind": kind})
+            break
+    lists = " and ".join(kinds)
+    if item.get("date_kind") == "last_updated":
+        tail = "; the records don't show when it was first recorded"
+    elif "date" in item:
+        tail = ""
+    else:
+        tail = "; the records don't show when it was recorded"
+    item["statement"] = (f"Your records include an entry{_nka_when(item)} "
+                         f"that lists {lists}{tail}. Please confirm with your "
+                         "doctor or pharmacist.")
+    item["note"] = (
+        "This is an entry in the person's records, not a fact about them: "
+        "someone recorded it, and it may be out of date. Give the statement "
+        "in these plain words, as a dated record. Never say they have no "
+        "allergies, and always tell them to confirm with their doctor or "
+        "pharmacist.")
+    return item
+
+
+#: Records per list the tools hand the model: the engine's search page (50,
+#: r6/routes.py), so a list one search can return is never cut here. At 12,
+#: a 19-condition record lost diabetes, hypertension and atrial
+#: fibrillation, and no follow-up could reach them (#945 patient tester).
+SUMMARY_LIMIT = 50
+
+
 def _summarize_bundle(bundle: dict, limit: int = 12,
                       resolve_ref=None) -> list[dict]:
     """Compact, model-friendly view of a searchset bundle (already redacted).
@@ -259,15 +477,74 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                 if (e.get("resource") or {}).get("resourceType")
                 != "OperationOutcome")
     out = []
+    dropped = 0
+    withdrawn_nka = False
     for entry in entries[:limit]:
         res = entry.get("resource") or {}
         rt = res.get("resourceType")
         if rt == "OperationOutcome":
             continue
         item = {"type": rt}
+        if rt != "AllergyIntolerance" and _only_absence_codes(res):
+            # Coded only as "no known allergy" or "not asked", on a list
+            # that is not allergies: no clinical finding, so not a record of
+            # this kind. Left out, and not counted, so the list does not
+            # read as longer than shown. Never an allergy statement either:
+            # that is AllergyIntolerance's alone (#949 patient tester).
+            dropped += 1
+            continue
+        if rt == "AllergyIntolerance" and _is_allergy_status(res):
+            # Not an allergy: a note that none were recorded. Its label
+            # ("Patient not asked", the terminology service's for SNOMED
+            # 1631000175102) reached a person verbatim as if it were one.
+            # Never read as "no known allergies" either: that is only ever
+            # the person's own attestation.
+            item.update({
+                "not_an_allergy": True,
+                "statement": ALLERGY_STATUS_STATEMENT,
+                "note": ("This record is not an allergy. Tell the person, in "
+                         "these plain words, that their records don't say "
+                         "whether they have allergies. Do not quote the "
+                         "record, and never say they have no allergies.")})
+            out.append(item)
+            continue
+        nka = _nka_kinds(res) if rt == "AllergyIntolerance" else []
+        if nka and _withdrawn(res):
+            # Entered in error or refuted: the entry says nothing either
+            # way (#949 F2), so it is not sent at all. Sent with a "do not
+            # mention it" note, the model mentioned it and disclosed the
+            # note (#949 real-model QA): what must not reach the person is
+            # never handed to the model. Not counted either. A withdrawn
+            # REAL allergy is kept: dropping it would let a "no known
+            # allergies" entry beside it be quoted.
+            dropped += 1
+            withdrawn_nka = True
+            continue
+        if nka:
+            # Before the name below: that is where the resolver's label
+            # "No known allergy" became an allergy's name (#946).
+            out.append(_nka_item(res, nka))
+            continue
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
-        text = code.get("text") or " ".join(
-            c.get("display", "") for c in (code.get("coding") or [])[:1])
+        # Ingest stores whatever arrived: a string `code` or `coding`
+        # raised here and failed the whole turn (#949 security round 4).
+        # Malformed reads as an unreadable record, never a name or absence.
+        if not isinstance(code, dict):
+            code = {}
+        if not isinstance(code.get("coding"), list):
+            code = {**code, "coding": []}
+        first = (code["coding"] or [None])[0]
+        text = code.get("text") or (
+            first.get("display") if isinstance(first, dict) else "")
+        text = text if isinstance(text, str) else ""
+        if _carries_absence_code(res):
+            # Backstop: whatever the checks above made of it, a record
+            # with a status or "no known allergy" coding is never named by
+            # its text, which holds that concept's label (#949 F1). Every
+            # type, not allergies alone: feeds put "No known allergy" on
+            # the problem list too, and it read as a fact beside an empty
+            # allergy list (#949 F3). It stays an unlabeled record.
+            text = ""
         lookup_reason = None
         if not text and resolve_ref is not None:
             # No inline code — the name may live behind medicationReference.
@@ -353,21 +630,105 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         date = labs_timeline.parse_date(res.get("effectiveDateTime"))
         if date:
             item["date"] = date
+        if item.get("unreadable") and "note" not in item:
+            # A coded record we cannot name. "I couldn't read it... I can't
+            # rule anything out" read to people as a mystery illness (#949
+            # patient tester): it is one entry to ask about, no more.
+            entry = f"one entry from {date}" if date else "one entry"
+            item["note"] = (
+                f"Say plainly that {entry} has no readable name here, and "
+                "that their doctor can say what it is. It is still a real "
+                "record, never absent. Do not guess what it is or suggest it "
+                "could be serious, and never say you can't rule anything "
+                "out.")
         out.append(item)
 
+    # The bundle's total, when the engine gives one: the entries are one page
+    # (50 by default), so counting them calls a longer list complete.
+    stated = bundle.get("total")
+    if isinstance(stated, int) and not isinstance(stated, bool):
+        total = max(total, stated)
+    total -= dropped
+    if total > len(out) or any(i.get("type") == "AllergyIntolerance"
+                               and not i.get("not_an_allergy") for i in out):
+        # "Your records don't say whether you have allergies" holds only for
+        # a list known in full to be status records alone. A recorded
+        # allergy in this list (#945 security F2), or a cut list whose rest
+        # we have not seen (F5), makes it false. Then the status records
+        # are not sent at all: sent with a "do not mention" note, such an
+        # entry was mentioned and the note disclosed (#949 real-model QA).
+        # Taken off the total too, so the list does not read as cut for
+        # them, and a list cut before stays cut.
+        status = [i for i in out if i.get("not_an_allergy")]
+        out = [i for i in out if not i.get("not_an_allergy")]
+        total -= len(status)
+    # A "no known allergy" entry is quoted only from a list known in full
+    # with no allergy in it. Beside a recorded allergy, the allergy wins and
+    # the entry is a disagreement to confirm; in a cut list, the rest may
+    # hold an allergy. Either way it never says "no known" (#946).
+    conflict = any(i.get("type") == "AllergyIntolerance"
+                   and not i.get("not_an_allergy")
+                   and not i.get("no_known_allergy_record") for i in out)
+    for i in out:
+        if not i.get("no_known_allergy_record"):
+            continue
+        if conflict:
+            i["statement"] = (
+                f"Your records also include an entry{_nka_when(i)} that "
+                "disagrees with the allergies listed. Please confirm your "
+                "allergies with your doctor or pharmacist.")
+            i["note"] = (
+                "The records disagree: they list an allergy, and this entry "
+                "says otherwise. The allergy listed wins: never say the "
+                "person has no known allergies. Say plainly that their "
+                "records disagree, name the allergies listed, and tell them "
+                "to confirm with their doctor or pharmacist.")
+        elif total > len(out):
+            i["statement"] = (
+                "Your allergy list is longer than can be shown here, so it "
+                "can't be read as complete. Please confirm your allergies "
+                "with your doctor or pharmacist.")
+            i["note"] = (
+                "More allergy records are on file than are listed, and any "
+                "of them may be an allergy. Never say the person has no "
+                "known allergies and do not quote this entry. Say their "
+                "allergy list is longer than you can show in this chat, that "
+                "the full list is in their patient portal, and tell them to "
+                "confirm with their doctor or pharmacist.")
     if total > len(out):
         # Deliberately shaped so it cannot be mistaken for a record: no
         # "type", no "name". The instruction is carried in the payload rather
         # than left to the system prompt alone, because this is the one place
         # the model can tell complete from partial.
+        #
+        # No counts in it: handed "12 of 19", the model told a patient "I
+        # could only see part of the records (12 of 19)", which reads as
+        # being blocked from their own records (#939).
         out.append({
             "truncated": True,
-            "shown": len(out),
-            "total": total,
-            "note": (f"Only {len(out)} of {total} records are shown. Do not "
-                     f"describe this list as complete or as all the person "
-                     f"has; say more exist and offer to narrow the search."),
+            #
+            # And no offer to narrow it or show the rest: no tool can, and
+            # the engine has no offset to page with. "Show me the rest"
+            # returned the same list (#945 patient tester).
+            "note": ("This list is longer than you can show here: more "
+                     "records of this kind are on file than are listed. Do "
+                     "not describe it as complete, do not count it, and do "
+                     "not say how many you were shown. Answer from what is "
+                     "here, then say plainly that their list is longer than "
+                     "you can show in this chat and that the full list is in "
+                     "their patient portal. Do not offer to show the rest "
+                     "or to look again: you cannot."),
         })
+    elif withdrawn_nka and not any(i.get("type") == "AllergyIntolerance"
+                                   for i in out):
+        # Only withdrawn entries were here, and none is sent. An empty
+        # allergy list must not read as no allergies; every word below is
+        # one the person may hear, and none says why the list is empty.
+        out.append({"note": (
+            "No allergy entries can be shown here. That does not mean they "
+            "have no allergies: say their records here show no allergy "
+            "entries, and ask them to confirm their allergies with their "
+            "doctor or pharmacist.")})
     return out
 
 
@@ -680,14 +1041,77 @@ def _timeline_in_words(series: dict) -> dict:
     return out
 
 
+def records_arriving(hc: HealthClawClient, tenant: str,
+                     connection: dict) -> bool:
+    """Whether this connection's records may still be arriving.
+
+    The stored status cannot say: the chat page settles a connection to
+    `active` as soon as anything lands, so a first answer mid-import was
+    never told the rest was on its way (QA945-F1). The engine's Fasten job
+    list can (#940). A look that fails answers True: "may still be
+    loading" is true either way, and silence read as "that is all".
+    Made-up records never arrive, so they cost no look.
+    """
+    if connection.get("kind") == "sample":
+        return False
+    try:
+        state = hc.fasten_import_state(tenant)
+    except HealthClawError:
+        return True
+    # "none" with a pending connection: connected, and the job not yet made.
+    return state == "running" or (
+        state == "none" and connection.get("status") == "pending")
+
+
+def _empty_summary_note(hc: HealthClawClient, tenant: str,
+                        arriving: bool = False) -> str:
+    """Why four empty lists are empty, for the model.
+
+    Empty from "nothing here" and empty from "nothing here yet" are the same
+    four lists, and a model handed them told a person with records that none
+    were connected. The count is the one the hub uses (totals only, no
+    resources) and is taken only when every list came back empty. A count
+    that fails says nothing either way, as on the chat page
+    (careagents/intake_state.py): unknown is never zero.
+    """
+    try:
+        total = hc.record_count(tenant)
+    except HealthClawError:
+        return ("Nothing came back, and we could not check whether records "
+                "are on file. Never say the person has no records or that "
+                "nothing is connected: say you could not read their records "
+                "just now and offer to try again.")
+    if total > 0 and arriving:
+        return ("No conditions, medications or allergies came back yet, but "
+                "some records are on file for this person, and more are "
+                "still loading. Say plainly that their records are still "
+                "loading and they can ask again shortly. Never say they "
+                "have no records, no conditions, medications or allergies, "
+                "or that nothing is connected. Offer to look at what has "
+                "arrived.")
+    if total > 0:
+        return ("No conditions, medications or allergies came back, but "
+                "some records are on file for this person. Never say they "
+                "have no records or that nothing is connected. Say these "
+                "lists are empty in what you can read, and offer to look at "
+                "their other records.")
+    return ("No records have arrived here yet. Say plainly that their records "
+            "are not here yet: if they connected them recently, they are "
+            "still loading, which can take up to 45 minutes, and they can "
+            "ask again shortly. Never say they have no conditions, "
+            "medications or allergies.")
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
-                  surface: str = "", origin: str = "") -> str:
+                  surface: str = "", origin: str = "",
+                  arriving: bool = False) -> str:
     on_text = surface in TEXT_SURFACES
     origin = (origin or "").rstrip("/")
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
+        failed = False
         # Statements get their own key and are never folded into
         # "medications": a merged list needs a dedup rule that code cannot
         # supply (#377, docs/2026-08-05-medicationstatement-support-decision.md).
@@ -695,9 +1119,25 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                         ("MedicationRequest", "medications"),
                         ("MedicationStatement", "medication_statements"),
                         ("AllergyIntolerance", "allergies")):
-            parts[key] = _summarize_bundle(
-                hc.search(tenant, rt),
-                resolve_ref=med_resolver if rt in _MEDICATION_TYPES else None)
+            # One failed search used to raise out of the whole tool, and the
+            # three that worked went with it.
+            try:
+                parts[key] = _summarize_bundle(
+                    hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                    resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
+                                 else None))
+            except HealthClawError:
+                parts[key] = {"could_not_read": True}
+                failed = True
+        if failed:
+            parts["note"] = (
+                "A list marked could_not_read could not be read just now, on "
+                "our side. It is not absent: never say the person has none "
+                "of that kind, or that nothing is connected. Give what the "
+                "other lists show, say plainly which part you could not read "
+                "this time, and offer to try again.")
+        elif not any(parts.values()):
+            parts["note"] = _empty_summary_note(hc, tenant, arriving)
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
@@ -872,7 +1312,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
         return json.dumps(_summarize_bundle(
-            hc.search(tenant, rt),
+            hc.search(tenant, rt), limit=SUMMARY_LIMIT,
             resolve_ref=(_medication_resolver(hc, tenant)
                          if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
@@ -910,9 +1350,15 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 {"label": f.get("label"), "value": f.get("value")}
                 for f in fields[:MAX_BRIEF_FIELDS] if isinstance(f, dict)]
             if len(fields) > MAX_BRIEF_FIELDS:
-                notes.append(f"Only {MAX_BRIEF_FIELDS} of {len(fields)} "
-                             f"{section} items are shown; do not describe "
-                             "that list as complete.")
+                # No counts, as in _summarize_bundle's marker: a model
+                # handed "6 of 9" reads it to the person (#939).
+                notes.append(
+                    f"The {section.replace('-', ' ')} list is not complete: "
+                    "more items are on file. Do not describe it as "
+                    "complete, do not count it, and do not say how many "
+                    "you were shown. Say in plain words that there are "
+                    "more and that the full list is on their Visit brief "
+                    "page. Do not offer to show the rest here: you cannot.")
         if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
             notes.append("The screening review did not complete. Do not say "
                          "no screenings are due.")
@@ -988,7 +1434,7 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
                                        call.arguments, side_events,
                                        agent_id=agent_id)
             except HealthClawError as exc:
-                result = json.dumps({"error": str(exc)})
+                result = tool_error_result(exc)
             history.append({"role": "tool", "tool_call_id": call.id,
                             "content": result})
             for ev in side_events:

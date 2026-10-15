@@ -402,26 +402,6 @@ def upstream_unreachable_outcome(exc: Exception) -> tuple[dict, int]:
     }, 502
 
 
-def _absolute_links(links) -> list:
-    """Keep only Bundle.link entries whose url is an absolute http(s) URL.
-
-    FHIR requires absolute paging links. Some servers send `""` or a bare
-    query fragment such as `&_offset=10`; passed through, a client follows
-    that to a URL that does not exist. Dropping it is the honest choice:
-    `total` still shows that more records exist.
-    """
-    if not isinstance(links, list):
-        return []
-    kept = []
-    for link in links:
-        if not isinstance(link, dict) or not isinstance(link.get('url'), str):
-            continue
-        parts = urlsplit(link['url'])
-        if parts.scheme in ('http', 'https') and parts.netloc:
-            kept.append(link)
-    return kept
-
-
 class FHIRUpstreamProxy:
     """
     HTTP client that proxies FHIR requests to an upstream server.
@@ -557,7 +537,10 @@ class FHIRUpstreamProxy:
                 # searchset. Treat anything else as a malformed response.
                 logger.warning(f'Upstream search {resource_type} returned a non-Bundle 200 body')
                 return malformed if malformed is not None else malformed_upstream_response_outcome()
-            data['link'] = _absolute_links(data.get('link'))
+            # No upstream Bundle.link reaches the client (#954): a link to the
+            # upstream server is a link around redaction and audit, and it
+            # names the upstream host. The route publishes its own `self`.
+            data['link'] = []
             return data, 200
         logger.warning(f'Upstream search {resource_type} returned {resp.status_code}')
         return sanitize_upstream_error(resp, caller_auth=self.caller_auth)

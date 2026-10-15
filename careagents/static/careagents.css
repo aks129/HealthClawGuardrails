@@ -1149,3 +1149,56 @@ textarea:focus-visible {
 .inline-msg.is-next a { color: var(--accent-ink); font-weight: 600; }
 /* Empty for a moment while announce() reveals it: no tinted bar. */
 .inline-msg.is-next:empty { background: none; padding: 0; }
+
+/* Settings: an assistant's tone and what it focuses on. One choice per
+   row, the whole row the tap target, so nothing wraps mid-name at 375px. */
+.assistant-settings { display: block; margin-bottom: 16px; }
+.choice-group { border: 0; margin: 16px 0 0; padding: 0; min-width: 0; }
+.choice-group legend { padding: 0; margin-bottom: 6px; font-size: 15px;
+  font-weight: 600; color: var(--ink); }
+.choice-row { display: flex; align-items: center; gap: 12px; width: 100%;
+  min-height: 44px; padding: 8px 12px; box-sizing: border-box;
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  margin-top: 6px; font-size: 16px; cursor: pointer; }
+.choice-row span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.choice-row input { flex: none; width: 22px; height: 22px; margin: 0;
+  accent-color: var(--accent); }
+.choice-row:has(input:checked) { border-color: var(--accent); }
+.assistant-settings .card-actions { margin-top: 12px; flex-wrap: wrap; }
+.assistant-remove-confirm { margin-top: 12px; }
+.assistant-remove-confirm p { margin: 0 0 8px; }
+
+/* Hub cards, one assistant per person (spec PR #943, section 4): whose it
+   is, its tone and what it focuses on, so no two cards read alike. An
+   older account's extra assistant is quieter than its primary. */
+.agent-for { font-size: 16px; font-weight: 600; color: var(--accent-ink);
+  overflow-wrap: anywhere; }
+.agent-traits { display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 12px; margin: 8px 0 0; font-size: 15px; color: var(--ink-soft); }
+.agent-traits span { overflow-wrap: anywhere; }
+.agent-traits a { display: inline-flex; align-items: center; min-height: 44px;
+  color: var(--accent-ink); font-weight: 600; }
+.agent-card.is-extra { background: var(--surface-2); }
+.agent-card.is-waiting { border-style: dashed; }
+.chat-id > div { min-width: 0; }
+.chat-whose { font-size: 15px; font-weight: 600; color: var(--accent-ink);
+  overflow-wrap: anywhere; }
+/* Add someone you care for: a closed row like the made-up drawer, then
+   one choice per row and a nickname field. */
+.add-person { margin-top: 12px; }
+.add-person > summary { cursor: pointer; min-height: 44px; list-style: none;
+  display: inline-flex; align-items: center; gap: 8px; padding: 0 14px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 16px;
+  font-weight: 600; }
+.add-person > summary::-webkit-details-marker { display: none; }
+.add-person > summary::before { content: "+"; font-size: 20px;
+  color: var(--accent-ink); }
+.add-person > summary:hover { border-color: var(--accent);
+  color: var(--accent-ink); }
+.add-person-form { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 4px 16px 16px; margin-top: 8px; }
+.add-person-form .field-label { margin-top: 16px; }
+.add-person-form .field { width: 100%; box-sizing: border-box; }
+.add-person-form .btn-block { margin-top: 12px; }
+.field-optional { font-weight: 400; color: var(--ink-soft); }

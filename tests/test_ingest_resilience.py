@@ -62,7 +62,7 @@ def test_fasten_ingest_still_accepts_real_epic_shaped_long_ids(client, tenant_id
     assert len(long_id) > 64
     resource = {"resourceType": "Observation", "id": long_id, "status": "final"}
 
-    result, rid = _ingest_one(resource, tenant_id)
+    result, rid = _ingest_one(resource, tenant_id, source="fasten")
 
     assert result == "ok" and rid == long_id, (
         f"real Epic-shaped id (len={len(long_id)}) was refused as "
@@ -185,7 +185,7 @@ def test_a_blank_resource_id_is_refused_as_invalid_id(client, tenant_id):
 
     result, rid = _ingest_one(
         {"resourceType": "Observation", "id": "", "status": "final"},
-        tenant_id)
+        tenant_id, source="fasten")
 
     assert (result, rid) == ("invalid_id", None)
     assert "invalid_id" in REFUSED_OUTCOMES
@@ -199,7 +199,8 @@ def test_an_absent_resource_id_gets_a_uuid_and_is_stored(client, tenant_id):
     from r6.fasten.ingester import _ingest_one
 
     result, rid = _ingest_one(
-        {"resourceType": "Observation", "status": "final"}, tenant_id)
+        {"resourceType": "Observation", "status": "final"}, tenant_id,
+        source="fasten")
 
     assert result == "ok"
     assert uuid.UUID(rid)  # a well-formed UUID, not "" or "None"
@@ -215,7 +216,7 @@ def test_an_integer_resource_id_keeps_coercing_to_a_string(client, tenant_id):
 
     result, rid = _ingest_one(
         {"resourceType": "Observation", "id": 123, "status": "final"},
-        tenant_id)
+        tenant_id, source="fasten")
 
     assert (result, rid) == ("ok", "123")
     assert R6Resource.query.filter_by(
@@ -237,7 +238,7 @@ def test_any_other_non_string_resource_id_is_refused(client, tenant_id):
     for bad in (True, False, 1.5, {"a": 1}, [1]):
         result, rid = _ingest_one(
             {"resourceType": "Observation", "id": bad, "status": "final"},
-            tenant_id)
+            tenant_id, source="fasten")
         assert (result, rid) == ("invalid_id", None), repr(bad)
 
     assert R6Resource.query.filter_by(
@@ -265,7 +266,7 @@ def test_an_explicit_json_null_id_mints_a_uuid_rather_than_being_refused(
 
     result, rid = _ingest_one(
         {"resourceType": "Observation", "id": None, "status": "final"},
-        tenant_id)
+        tenant_id, source="fasten")
 
     assert result == "ok"
     assert uuid.UUID(rid)  # minted, not "" and not the string "None"

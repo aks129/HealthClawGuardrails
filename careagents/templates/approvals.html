@@ -6,7 +6,8 @@
   <div class="hub-head">
     <div>
       <h1>Waiting for you</h1>
-      <p class="hub-sub">Requests proposed on {{ me.name }}'s records. Nothing on
+      {# Whose records, never the assistant's name (spec 5 and 9, #951). #}
+      <p class="hub-sub">Requests for {{ whose or "your records" }}. Nothing on
         this list has happened yet; each one waits for your answer.</p>
     </div>
     <a class="pill" href="/chat?agent={{ agent_id }}">← back to {{ me.name }}</a>

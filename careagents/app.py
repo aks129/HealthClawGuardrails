@@ -44,7 +44,7 @@ from careagents import beta_signup, feedback, funnel, invites
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
-                                   HealthClawUnconfirmed)
+                                   HealthClawUnconfirmed, acting_for)
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,12 @@ _parse_brief_sections = brief_mod.parse_sections
 _care_gaps_marker = brief_mod.care_gaps_marker
 _CARE_GAPS_OK = brief_mod.CARE_GAPS_OK
 
+
+#: Default names for the assistant of someone the holder cares for, in
+#: order; the first one no assistant on the account already has. Fixed
+#: words only: an assistant's name is part of the model's prompt, so a
+#: nickname is never used (#951 F4).
+_CARE_NAMES = ("Rowan", "Hazel", "Linden", "Willow", "Aspen", "Cedar")
 
 #: What a pending request is called on the approvals page, by engine kind.
 _KIND_LABELS = {
@@ -403,7 +409,10 @@ def create_app(config: Config | None = None,
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
                 return redirect(url_for("auth"))
-            return fn(*a, **k)
+            # The engine's audit trail names the account that asked
+            # (one assistant per person spec, section 6.2).
+            with acting_for(session.get("account_id")):
+                return fn(*a, **k)
         return wrapper
 
     def full_sign_in_required(fn):
@@ -538,7 +547,15 @@ def create_app(config: Config | None = None,
             stale_consent=stale_consent,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
             invited=invited,
-            hub=view, text_tile=beta_signup.text_tile(
+            hub=view,
+            # Person, tone and routines per assistant, and whether the
+            # account kept several (one assistant per person spec, 4 and
+            # 8), for the hub card to render.
+            people_view=hub_view.assistants(data),
+            # "Add someone you care for", made-up records only (owner
+            # decision D1), behind CARE_PEOPLE as /api/people is.
+            people_enabled=cfg.people_enabled,
+            text_tile=beta_signup.text_tile(
                 cfg, view, svc.session, acct.email),
             # "Connected" only once a real connection is active; has_real
             # also counts one still connecting. "Made-up", as on /beta.
@@ -649,6 +666,7 @@ def create_app(config: Config | None = None,
     def settings():
         acct = current_account()
         data = svc.list_home(acct.id)
+        assistants = hub_view.assistants(data)["assistants"]
         # A link is a lasting power to sign people up, so it is made and
         # shown only after a full sign-in (#928 F6), as full_sign_in_required
         # holds for the routes that widen an account.
@@ -666,7 +684,14 @@ def create_app(config: Config | None = None,
             passkeys=svc.list_passkeys(acct.id),
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
-            first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
+            # Pairing a phone binds the holder's own assistant, never the
+            # one for someone they care for (spec section 5).
+            first_agent=next(
+                (a["id"] for a in assistants
+                 if a["is_primary"] and a["person"]["kind"] == "self"), ""),
+            assistants=assistants,
+            tones=list(PERSONAS.items()),
+            routine_catalog=advisors.routine_catalog(),
             imessage_handle=cfg.imessage_handle,
             # Every connected phone, masked, each with its own Disconnect.
             imessage_connected=[
@@ -805,8 +830,11 @@ def create_app(config: Config | None = None,
     def _offered_connections(acct):
         real_open = _real_records_open(acct)
         conns = svc.list_home(acct.id)["connections"]
+        # Someone the holder cares for is never offered to a third-party
+        # app in the beta (one assistant per person spec, 6.3).
+        others = svc.other_person_connection_ids(acct.id)
         return [c for c in conns
-                if c["status"] != "revoked"
+                if c["status"] != "revoked" and c["id"] not in others
                 and (c["kind"] == "sample" or real_open)], real_open
 
     @app.get("/authorize")
@@ -880,7 +908,8 @@ def create_app(config: Config | None = None,
 
         acct = current_account()
         conn = svc.get_connection(acct.id, str(body.get("connection_id") or ""))
-        if conn is None or conn["status"] == "revoked":
+        if (conn is None or conn["status"] == "revoked"
+                or conn["id"] in svc.other_person_connection_ids(acct.id)):
             return jsonify({"error": "unknown connection"}), 404
         if conn["kind"] != "sample" and not _real_records_open(acct):
             return jsonify({"error": "Sharing real records is not open for "
@@ -1141,7 +1170,8 @@ def create_app(config: Config | None = None,
             session[_VIA_LINK] = True
         # Already signed in here as this address: that session, full or
         # link, stays as it is; never downgraded (#920 QA Low 1).
-        answer = app.make_response(_sample_tap(acct, {}))
+        with acting_for(acct.id):
+            answer = app.make_response(_sample_tap(acct, {}))
         landing = (answer.get_json(silent=True) or {}).get("redirect")
         if answer.status_code == 200 and landing:
             return landing
@@ -1674,6 +1704,9 @@ def create_app(config: Config | None = None,
     @app.post("/api/agents")
     @login_required
     def create_agent():
+        """The assistant for the person whose records `connection_id` holds.
+        One per person (spec section 3): when they already have one, that
+        one is the answer, `existing` set, and nothing is made."""
         acct = current_account()
         body = request.get_json(silent=True) or {}
         name = (body.get("name") or "Juniper").strip()[:48] or "Juniper"
@@ -1689,13 +1722,109 @@ def create_app(config: Config | None = None,
             if not spec["available"]:
                 return jsonify({"error": "advisor_not_available",
                                 "note": spec.get("note", "")}), 400
+        conn_id = str(body.get("connection_id") or "")
+        had = svc.agent_for_person_of(acct.id, conn_id)
+        if had:
+            return jsonify({"id": had, "existing": True})
         try:
-            aid = svc.create_agent(acct.id, name, persona,
-                                   body.get("connection_id", ""),
+            aid = svc.create_agent(acct.id, name, persona, conn_id,
                                    advisor=advisor)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
+        if aid and advisor:
+            svc.set_agent_settings(
+                acct.id, aid, persona,
+                advisors.routines_for({"routines": None, "advisor": advisor}))
         return jsonify({"id": aid})
+
+    @app.post("/api/agents/<agent_id>/settings")
+    @login_required
+    def agent_settings(agent_id):
+        """Tone and routines (spec section 7). Both are checked against the
+        fixed sets here; neither changes what the assistant can read."""
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        ctx = svc.get_agent_context(acct.id, agent_id)
+        if ctx is None:
+            return jsonify({"error": "unknown agent"}), 404
+        if "persona" not in body and "routines" not in body:
+            return jsonify({"error": "nothing to change"}), 400
+        persona = body.get("persona", ctx["agent"]["persona"])
+        # A string first: a list or object is unhashable, not a tone.
+        if not isinstance(persona, str) or persona not in PERSONAS:
+            return jsonify({"error": "unknown tone"}), 400
+        if "routines" in body:
+            asked = body["routines"]
+            if (not isinstance(asked, list)
+                    or not all(isinstance(r, str) and r in advisors.ROUTINES
+                               for r in asked)):
+                return jsonify({"error": "unknown routine"}), 400
+            # Stored in the catalog's order, once each.
+            routines = [r for r in advisors.ROUTINES if r in asked]
+        else:
+            routines = advisors.routines_for(ctx["agent"])
+        svc.set_agent_settings(acct.id, agent_id, persona, routines)
+        return jsonify({"id": agent_id, "persona": persona,
+                        "routines": routines})
+
+    @app.post("/api/people")
+    @login_required
+    @full_sign_in_required
+    def add_person():
+        """"Add someone you care for", on made-up records only (spec 6,
+        owner decision D1). A relationship and an optional nickname; the
+        body is read for nothing else, so there is no path here to real
+        records. Their own sample tenant, their own assistant."""
+        if not cfg.people_enabled:
+            # Behind CARE_PEOPLE until the hub renders people (#947 QA).
+            return jsonify({"error": "not found"}), 404
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
+        # The sample tap's lease: one tenant mint at a time per account.
+        if not svc.claim_sample_start(acct.id):
+            return jsonify({"status": "connecting",
+                            "error": "Made-up records are on their way. "
+                                     "Try again in a moment."}), 409
+        try:
+            try:
+                person = svc.add_person(acct.id, body.get("relationship"),
+                                        body.get("nickname"))
+            except ValueError:
+                return jsonify({"error": "Choose who they are to you, and "
+                                         "a nickname of up to 24 "
+                                         "characters if you like."}), 400
+            except AuthError as exc:
+                return jsonify({"error": str(exc)}), 409
+            plan = connectors.start("sample", None, cfg, hc)
+            try:
+                hc.seed(plan["tenant"])
+            except HealthClawError:
+                svc.remove_empty_person(acct.id, person)
+                return jsonify({"error": "records service unavailable"}), 503
+            cid = svc.add_connection(acct.id, "sample", plan["tenant"],
+                                     plan["label"], status="active",
+                                     provider=plan.get("provider"),
+                                     person_id=person)
+            try:
+                svc.mark_synced(cid, hc.record_count(plan["tenant"]))
+            except HealthClawError:
+                logger.warning("record count after sample seed failed for %s",
+                               cid)
+            # A name of their own, so two cards are not both "Juniper"
+            # (#951 F4). From a fixed list, never the nickname: the name
+            # goes into the model's prompt ("You are ...").
+            taken = {a["name"] for a in svc.list_home(acct.id)["agents"]}
+            name = next((n for n in _CARE_NAMES if n not in taken),
+                        _CARE_NAMES[0])
+            aid = svc.create_agent(acct.id, name, DEFAULT_PERSONA, cid)
+            return jsonify({"person_id": person, "connection_id": cid,
+                            "agent_id": aid,
+                            "redirect": url_for("chat", agent=aid)})
+        finally:
+            svc.release_sample_start(acct.id)
 
     @app.post("/api/agents/<agent_id>/rename")
     @login_required
@@ -1727,6 +1856,14 @@ def create_app(config: Config | None = None,
     @login_required
     def delete_agent(agent_id):
         acct = current_account()
+        # A person's primary assistant is not removed, here as on the card
+        # (owner decision D5, SEC951-L1): only an older account's extras
+        # are. Deleting the account, or the records it reads, still goes.
+        primary = {a["id"] for a in hub_view.assistants(
+            svc.list_home(acct.id))["assistants"] if a["is_primary"]}
+        if agent_id in primary:
+            return jsonify({"error": "This is your assistant, so it "
+                                     "can't be removed."}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})
@@ -1922,7 +2059,18 @@ def create_app(config: Config | None = None,
                                connect_next=_chat_connect_next(acct, sample),
                                link_session=bool(session.get(_VIA_LINK)),
                                sample_line=(beta.SAMPLE_FRAME
-                                            if sample else None))
+                                            if sample else None),
+                               # "Mom's records" when they are not the
+                               # holder's own (spec section 5).
+                               whose=_whose(acct, ctx["agent"]))
+
+    def _whose(acct, agent, mid: bool = False) -> str:
+        """Whose records this assistant reads, as the chat header and the
+        approvals page name them; empty for the holder's own. Rendered by
+        the template only: the nickname is never passed to the model, a
+        log line or the engine."""
+        return hub_view.whose_records(hub_view.person_of(
+            svc.list_home(acct.id), agent.get("person_id")), mid=mid)
 
     @app.get("/brief")
     @login_required
@@ -2046,8 +2194,13 @@ def create_app(config: Config | None = None,
             "message": "Chat is temporarily unavailable. Try again soon.",
         }), 503
 
-    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0):
-        """Replay durable UI events. Disconnecting only stops this projection."""
+    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
+                    account_id: str | None = None):
+        """Replay durable UI events. Disconnecting only stops this projection.
+
+        The body runs after login_required has returned, so each read names
+        the account itself (spec 6.2), scoped to that one call: a block held
+        across a yield would outlive the request on this thread."""
         cursor = max(0, after)
         started = time.monotonic()
         # #575: the wait after a page with events is the base; after the k-th
@@ -2060,8 +2213,9 @@ def create_app(config: Config | None = None,
             "next_cursor": cursor}) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
             try:
-                page = hc.agent_run_events(tenant, run_id, after=cursor,
-                                           limit=100)
+                with acting_for(account_id):
+                    page = hc.agent_run_events(tenant, run_id, after=cursor,
+                                               limit=100)
             except HealthClawError:
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
@@ -2174,7 +2328,7 @@ def create_app(config: Config | None = None,
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(
-            tenant, agent["id"], run["id"], after),
+            tenant, agent["id"], run["id"], after, account_id=acct.id),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no",
@@ -2202,7 +2356,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown run"}), 404
         after = _parse_cursor(request.args.get("after") or
                               request.headers.get("Last-Event-ID"))
-        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after),
+        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after,
+                                    account_id=acct.id),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})
@@ -2303,7 +2458,9 @@ def create_app(config: Config | None = None,
                                    message=_APPROVALS_UNCHECKABLE), 503
         return render_template("approvals.html", me=ctx["agent"],
                                agent_id=agent_id, pending=pending,
-                               kind_labels=_KIND_LABELS)
+                               kind_labels=_KIND_LABELS,
+                               # "Requests for Mom's records" (#951 F3).
+                               whose=_whose(acct, ctx["agent"], mid=True))
 
     @app.get("/api/approvals/count")
     @login_required
@@ -2342,16 +2499,22 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
+            # Each queue says whose records it is when they are not the
+            # holder's own (spec section 5): the connection's person, the
+            # same person its assistant is for.
+            whose = hub_view.whose_records(
+                hub_view.person_of(data, conn.get("person_id")))
+            named = {"whose": whose} if whose else {}
             if n and agent:
                 queues.append({"agent_id": agent["id"], "name": agent["name"],
-                               "count": n,
+                               "count": n, **named,
                                "href": url_for("approvals",
                                                agent_id=agent["id"])})
             elif n:
                 # Whether any assistant exists decides the next step: with
                 # one, it is switched to these records ("Change records");
                 # with none, the hub's Start a chat is the way in (#847).
-                queues.append({"name": conn["label"], "count": n,
+                queues.append({"name": conn["label"], "count": n, **named,
                                "needs_assistant": True,
                                "has_assistant": bool(data["agents"])})
         out = {"count": total}

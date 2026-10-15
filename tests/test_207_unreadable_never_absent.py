@@ -52,6 +52,8 @@ def test_unknown_code_survives_redaction_as_unreadable_summary():
         display="Chromosomal finding for Jane Secret",
     ))
 
+    # The note says what to tell the person (#949 patient tester).
+    assert "no readable name" in summary[0].pop("note")
     assert summary == [{
         "type": "Condition",
         "name": "unlabeled record (ICD-10-CM code)",
@@ -125,6 +127,7 @@ def test_agent_turn_receives_unreadable_record_and_never_emits_bare_no(
 
         assert messages[-1]["role"] == "tool"
         result = json.loads(messages[-1]["content"])
+        assert "no readable name" in result[0].pop("note")
         assert result == [{
             "type": "Condition",
             "name": "unlabeled record (ICD-10-CM code)",

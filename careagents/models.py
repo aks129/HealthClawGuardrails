@@ -15,7 +15,7 @@ import logging
 import secrets
 import time
 
-from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
+from sqlalchemy import (Boolean, Column, Float, ForeignKey, Index, Integer,
                         LargeBinary, String, UniqueConstraint, create_engine,
                         inspect, text)
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
@@ -67,6 +67,56 @@ class Account(Base):
                           cascade="all, delete-orphan")
     surfaces = relationship("Surface", back_populates="account",
                             cascade="all, delete-orphan")
+    people = relationship("Person", back_populates="account",
+                          cascade="all, delete-orphan")
+
+
+#: Who a person is to the account holder (one assistant per person spec,
+#: section 2.1, owner decision D4). NULL for the holder themselves.
+RELATIONSHIPS = ("parent", "child", "partner", "other")
+
+#: The one free-text field on a person, capped (D4).
+NICKNAME_MAX = 24
+
+#: One self person per account: a partial unique index, so `kind="other"`
+#: rows are untouched.
+SELF_PERSON_UNIQUE = "uq_ca_people_one_self"
+
+
+class Person(Base):
+    """Whose records an assistant reads: the account holder ("self"), or
+    someone they care for ("other"). One assistant per person spec,
+    section 2.1.
+
+    A grouping and nothing else. It must never gain a legal name, a date of
+    birth or any clinical field: those stay in the tenant, behind the
+    engine's redaction and audit. The relationship is an enum and the
+    nickname ("Mom") is capped at NICKNAME_MAX characters. The engine never
+    learns a person exists.
+    """
+    __tablename__ = "ca_people"
+    __table_args__ = (Index(SELF_PERSON_UNIQUE, "account_id", unique=True,
+                            sqlite_where=text("kind = 'self'"),
+                            postgresql_where=text("kind = 'self'")),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("person"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"),
+                        nullable=False)
+    kind = Column(String(8), nullable=False, default="self")  # self | other
+    # RELATIONSHIPS. Named `relation` here so it does not shadow
+    # sqlalchemy's relationship() in this class body; the column is
+    # `relationship`, as the spec names it.
+    relation = Column("relationship", String(16), nullable=True)
+    nickname = Column(String(NICKNAME_MAX), nullable=True)
+    # Authority for real records (spec 6.1). Nothing stamps it yet: someone
+    # you care for has made-up records only until owner decision D1.
+    attested_at = Column(Float, nullable=True)
+    attestation_version = Column(String(16), nullable=True)
+    # Set while this person has an assistant, cleared when their last one is
+    # removed: the compare-and-set that keeps it to one assistant per person
+    # (spec 2.2), as Account.first_agent_at is for the first one.
+    agent_at = Column(Float, nullable=True)
+    created_at = Column(Float, default=now)
+    account = relationship("Account", back_populates="people")
 
 
 class Passkey(Base):
@@ -116,6 +166,10 @@ class Connection(Base):
     # arrival from a record that has held notes all along. A plain integer:
     # no patient data, nothing about the record's content.
     last_uncounted = Column(Integer, nullable=True)
+    # Whose records these are (one assistant per person spec, section 2.2).
+    # Always set by the service; nullable in the schema only because neither
+    # SQLite nor Postgres can add a NOT NULL column over existing rows.
+    person_id = Column(String(32), ForeignKey("ca_people.id"), nullable=True)
     account = relationship("Account", back_populates="connections")
     agents = relationship("Agent", back_populates="connection")
 
@@ -127,8 +181,18 @@ class Agent(Base):
     connection_id = Column(String(32), ForeignKey("ca_connections.id"))
     name = Column(String(48), default="Juniper")
     # Capability specialization (advisors.py); persona stays the voice.
+    # Superseded by `routines`, and kept readable for one release (spec 2.2).
     advisor = Column(String(32), nullable=True)
+    # The tone (personas.py), a setting on the assistant.
     persona = Column(String(16), default="calm")
+    # Comma-separated routine ids (advisors.ROUTINES). Prompt blocks only:
+    # a routine changes no access. Empty is the base assistant.
+    routines = Column(String(255), nullable=True)
+    # Whose assistant this is. One per person, kept by the service with
+    # Person.agent_at, not by the schema: accounts from before hold several
+    # (spec section 4), and they are kept. Nullable for the same reason as
+    # Connection.person_id.
+    person_id = Column(String(32), ForeignKey("ca_people.id"), nullable=True)
     created_at = Column(Float, default=now)
     account = relationship("Account", back_populates="agents")
     connection = relationship("Connection", back_populates="agents")
@@ -429,6 +493,10 @@ def _ensure_columns(engine) -> None:
             with engine.begin() as conn:
                 conn.execute(text(
                     "ALTER TABLE ca_agents ADD COLUMN advisor VARCHAR(32)"))
+        if "routines" not in cols:
+            _add_column(engine, "ca_agents", "routines", "VARCHAR(255)")
+        if "person_id" not in cols:
+            _add_column(engine, "ca_agents", "person_id", "VARCHAR(32)")
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:
@@ -452,6 +520,8 @@ def _ensure_columns(engine) -> None:
                     "INTEGER"))
         if "reconsented_at" not in cols:
             _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
+        if "person_id" not in cols:
+            _add_column(engine, "ca_connections", "person_id", "VARCHAR(32)")
 
 
 def _usage_day_is_unique(engine) -> bool:
@@ -614,6 +684,102 @@ def _ensure_imessage_handle_unique(engine) -> None:
             logger.warning("ca_surfaces handle index migration retried")
 
 
+#: Advisory-lock key for the people migration; distinct from the others.
+_PEOPLE_LOCK_KEY = 9_430_001
+
+#: The routine each legacy advisor becomes (spec sections 4 and 7, owner
+#: decision D6). Anything not listed (general, NULL, an unavailable
+#: advisor) becomes no routine: the base assistant.
+LEGACY_ADVISOR_ROUTINES = {"healthy-habits": "habits",
+                           "diet-exercise": "habits",
+                           "care-completion": "care-gaps",
+                           "medication-refills": "refills"}
+
+
+def _people_backfilled(conn) -> bool:
+    """Is there nothing left for `_ensure_people` to do?"""
+    return conn.execute(text(
+        "SELECT "
+        "(SELECT COUNT(*) FROM ca_accounts a WHERE NOT EXISTS ("
+        "SELECT 1 FROM ca_people p WHERE p.account_id = a.id "
+        "AND p.kind = 'self')) + "
+        "(SELECT COUNT(*) FROM ca_connections WHERE person_id IS NULL) + "
+        "(SELECT COUNT(*) FROM ca_agents WHERE person_id IS NULL "
+        "OR routines IS NULL)")).scalar() == 0
+
+
+def _ensure_people(engine) -> None:
+    """Give every account its self person and point every existing
+    connection and assistant at it (one assistant per person spec,
+    section 4). Idempotent, on SQLite and Postgres.
+
+    Every legacy row goes to the SELF person, a second assistant on another
+    connection included. Its records might be someone else's, but marking
+    them so would infer authority from a pointer; the holder says so, never
+    the migration. Nothing is merged: each assistant keeps its transcript,
+    which lives in its tenant under its own id.
+
+    A self person whose account has an assistant starts with `agent_at`
+    set, so one assistant per person holds from the first boot. One whose
+    first assistant was removed starts clear: the holder may ask for one,
+    and `first_agent_at` still keeps a callback from bringing it back. On Postgres an advisory lock serialises web and worker
+    booting together, as `_ensure_usage_day_unique` does.
+    """
+    tables = set(inspect(engine).get_table_names())
+    if not {"ca_accounts", "ca_people", "ca_connections",
+            "ca_agents"} <= tables:
+        return
+    with engine.connect() as conn:
+        if _people_backfilled(conn):
+            return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _PEOPLE_LOCK_KEY})
+                    if _people_backfilled(conn):
+                        return              # a peer finished while we waited
+                missing = conn.execute(text(
+                    "SELECT a.id FROM ca_accounts a "
+                    "WHERE NOT EXISTS (SELECT 1 FROM ca_people p "
+                    "WHERE p.account_id = a.id AND p.kind = 'self')")).all()
+                for (account_id,) in missing:
+                    has_agent = conn.execute(text(
+                        "SELECT 1 FROM ca_agents WHERE account_id = :a"),
+                        {"a": account_id}).first() is not None
+                    conn.execute(text(
+                        "INSERT INTO ca_people (id, account_id, kind, "
+                        "agent_at, created_at) "
+                        "VALUES (:i, :a, 'self', :g, :t)"),
+                        {"i": _uid("person"), "a": account_id,
+                         "g": now() if has_agent else None, "t": now()})
+                for table in ("ca_connections", "ca_agents"):
+                    conn.execute(text(
+                        f"UPDATE {table} SET person_id = ("
+                        "SELECT p.id FROM ca_people p "
+                        f"WHERE p.account_id = {table}.account_id "
+                        "AND p.kind = 'self') WHERE person_id IS NULL"))
+                for advisor, routine in LEGACY_ADVISOR_ROUTINES.items():
+                    conn.execute(text(
+                        "UPDATE ca_agents SET routines = :r "
+                        "WHERE routines IS NULL AND advisor = :a"),
+                        {"r": routine, "a": advisor})
+                conn.execute(text(
+                    "UPDATE ca_agents SET routines = '' "
+                    "WHERE routines IS NULL"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            # A peer inserted the same self person first; the next pass
+            # finds it and skips that account.
+            logger.warning("ca_people migration retried")
+
+
 #: What a peer creating the same table first looks like, by backend. SQLite
 #: and Postgres both say "already exists"; Postgres can instead trip the
 #: unique index on its type catalogue when two CREATE TABLEs overlap.
@@ -669,6 +835,7 @@ def make_engine(url: str):
     _ensure_columns(engine)
     _ensure_usage_day_unique(engine)
     _ensure_imessage_handle_unique(engine)
+    _ensure_people(engine)
     return engine
 
 
