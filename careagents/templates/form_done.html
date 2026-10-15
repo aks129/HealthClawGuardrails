@@ -6,7 +6,13 @@
    opens this page after approval, so it shows the form. #}
 <main class="setup-wrap">
   <div class="setup-card">
-    {% if state == "ready" and is_form %}
+    {% if state == "ready" and is_form and whose %}
+    {# Someone the holder cares for (patient test on #952). #}
+    <h1>The form is ready</h1>
+    <p class="setup-sub">From {{ whose }}. Save it or print it.</p>
+    <a class="btn-primary btn-block" href="{{ link }}" target="_blank"
+       rel="noopener">Open the form (PDF)</a>
+    {% elif state == "ready" and is_form %}
     <h1>Your form is ready</h1>
     <p class="setup-sub">Save it, print it or send it to your new doctor.</p>
     <a class="btn-primary btn-block" href="{{ link }}" target="_blank"

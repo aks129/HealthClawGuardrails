@@ -182,6 +182,43 @@ def test_action_confirmation_payload_digest_migration_is_reversible(tmp_path):
     engine.dispose()
 
 
+def test_record_source_migration_is_reversible_and_keeps_rows(tmp_path):
+    """FHI-42: a nullable column, no backfill. A row written before the
+    migration survives it with source NULL (it emits no tag), and a second
+    upgrade is a no-op."""
+    url = f"sqlite:///{tmp_path / 'record-source.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    def columns():
+        return {c["name"]: c for c in inspect(engine).get_columns("r6_resources")}
+
+    command.upgrade(config, "0010_fasten_tenant_revocation")
+    assert "source" not in columns()
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO r6_resources (id, resource_type, version_id, "
+            "last_updated, resource_json, sha256, tenant_id) VALUES "
+            "('pre-1', 'Condition', 1, CURRENT_TIMESTAMP, '{}', "
+            "'" + "0" * 64 + "', 'tenant-1')"))
+
+    command.upgrade(config, "head")
+    column = columns()["source"]
+    assert column["nullable"] is True
+    assert column["type"].length == 16
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT source FROM r6_resources WHERE id = 'pre-1'"
+        )).scalar_one() is None
+    command.upgrade(config, "head")  # re-run: no-op, no 'duplicate column'
+
+    command.downgrade(config, "0010_fasten_tenant_revocation")
+    assert "source" not in columns()
+    command.upgrade(config, "head")
+    assert "source" in columns()
+    engine.dispose()
+
+
 def _audit_statements_refused(engine, event_id: str) -> dict[str, bool]:
     """Try an UPDATE and a DELETE on one audit row; report which failed."""
     from sqlalchemy.exc import DBAPIError
@@ -292,7 +329,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0010_fasten_tenant_revocation"
+    assert revision == "0011_record_source"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -417,9 +454,9 @@ def test_postgres_fresh_install_and_v1_8_upgrade_path():
             for col in schema.get_columns("r6_resources")
         }
         assert r6_columns["id"] == 255
-        assert {"curation_state", "quality_score", "review_needed"} <= set(
-            r6_columns
-        )
+        assert {"curation_state", "quality_score", "review_needed",
+                "source"} <= set(r6_columns)
+        assert r6_columns["source"] == 16
         fasten_columns = {
             col["name"]: getattr(col["type"], "length", None)
             for col in schema.get_columns("fasten_connections")
@@ -435,6 +472,13 @@ def test_postgres_fresh_install_and_v1_8_upgrade_path():
             assert connection.execute(
                 text("SELECT resource_json FROM r6_resources")
             ).scalar_one() == "{}"
+            # FHI-42: no backfill. The legacy row keeps no source.
+            assert connection.execute(
+                text("SELECT source FROM r6_resources")
+            ).scalar_one() is None
+        # A second run over the migrated database is a no-op.
+        command.upgrade(config, "head")
+        command.check(config)
     finally:
         with engine.begin() as connection:
             connection.execute(text("DROP SCHEMA public CASCADE"))
@@ -464,11 +508,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0010_fasten_tenant_revocation"
+    assert revision == "0011_record_source"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0010_fasten_tenant_revocation"
+    assert upgrade_database(engine) == "0011_record_source"
 
 
 def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
@@ -504,7 +548,7 @@ def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
 
     revision = upgrade_database(engine)
 
-    assert revision == "0010_fasten_tenant_revocation"
+    assert revision == "0011_record_source"
     inspector = inspect(engine)
     assert {
         "action_confirmations", "action_events", "proposed_actions",
@@ -552,7 +596,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0010_fasten_tenant_revocation"
+    assert revision == "0011_record_source"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -595,9 +639,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0010_fasten_tenant_revocation"
+        assert revision == "0011_record_source"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0010_fasten_tenant_revocation"  # idempotent
+        assert upgrade_database(engine) == "0011_record_source"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
