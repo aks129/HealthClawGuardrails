@@ -263,9 +263,12 @@ def test_the_requester_is_a_website_never_a_clinic(wallet):
 def test_no_known_allergy_codes_match_the_chat():
     from careagents.agent import _NKA_CODES
     src = (STATIC / "checkin_answer.js").read_text()
-    block = re.search(r"NKA_CODES = \[(.*?)\]", src, re.S).group(1)
-    js = set(re.findall(r'"(\d+)"', block))
-    assert js == {code for _, code in _NKA_CODES}
+    def listed(name):
+        block = re.search(name + r" = \[(.*?)\]", src, re.S).group(1)
+        return set(re.findall(r'"([^"]+)"', block))
+    js = ({("http://snomed.info/sct", c) for c in listed("NKA_CODES")}
+          | {("http://loinc.org", c) for c in listed("NKA_LOINC")})
+    assert js == set(_NKA_CODES)
 
 
 def test_review_names_follow_the_engine_terminology_table():

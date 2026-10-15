@@ -17,12 +17,17 @@ import { selectEntries, selects } from "./vendor/smart-health-checkin-client/0.4
 const FHIR_JSON = "application/fhir+json";
 const SNOMED = ["http://snomed.info/sct", "urn:oid:2.16.840.1.113883.6.96"];
 
-// SNOMED 716186003 "no known allergy" and its descendants. The same set as
-// careagents/agent.py _NKA_CODES; tests/test_checkin_wallet.py holds them equal.
+// SNOMED 716186003 "no known allergy" and its descendants, its inactive
+// predecessor 160244002, and 260413007 "None". With NKA_LOINC, the same set
+// as careagents/agent.py _NKA_CODES; tests/test_checkin_wallet.py holds them
+// equal.
 export const NKA_CODES = [
   "716186003", "409137002", "428197003", "428607008",
-  "429625007", "716220001", "1003774007",
+  "429625007", "716220001", "1003774007", "160244002", "260413007",
 ];
+const LOINC = "http://loinc.org";
+// LOINC answers that state an absence (r6.terminology.LOINC_ABSENCE_ANSWERS).
+export const NKA_LOINC = ["LA10030-7", "LA9134-3", "LA4715-4"];
 
 // Words that state an absence rather than name an allergen: "No known
 // allergies", "NKDA", "None", "Nil known". Feeds write these in code.text or
@@ -46,6 +51,7 @@ function isNoKnownAllergy(resource) {
   const codings = Array.isArray(code.coding) ? code.coding : [];
   return readsAsAbsence(code.text) || codings.some((c) => c && (
     (SNOMED.includes(c.system) && NKA_CODES.includes(String(c.code))) ||
+    (c.system === LOINC && NKA_LOINC.includes(String(c.code))) ||
     readsAsAbsence(c.display)));
 }
 
