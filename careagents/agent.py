@@ -283,14 +283,26 @@ _NKA_CODES = {
     ("http://snomed.info/sct", "429625007"): "no known food allergies",
     ("http://snomed.info/sct", "716220001"): "no known animal allergies",
     ("http://snomed.info/sct", "1003774007"): "no known latex allergies",
+    # Inactive predecessor of 716186003, still in legacy feeds (#957).
+    ("http://snomed.info/sct", "160244002"): "no known allergies",
+    # "None", which named an allergy "None" (#957 delta 4).
+    ("http://snomed.info/sct", "260413007"): "allergies as none",
+    # LOINC answers stating an absence (r6.terminology.LOINC_ABSENCE_ANSWERS).
+    # Missing here, LA10030-7 read as an ordinary allergy named by the
+    # engine's qualified text, and undated (#957 re-QA).
+    ("http://loinc.org", "LA10030-7"): "allergies as none known",
+    ("http://loinc.org", "LA9134-3"): "allergies as none known",
+    ("http://loinc.org", "LA4715-4"): "allergies as none or not known",
 }
 
 
-#: The spellings of SNOMED's system the engine reads as SNOMED, mirrored
-#: from r6.terminology._SYSTEM_ALIASES (CareAgents imports nothing from
-#: the engine; a test holds the two equal).
+#: The spellings of SNOMED's and LOINC's systems the engine reads as each,
+#: mirrored from r6.terminology._SYSTEM_ALIASES (CareAgents imports nothing
+#: from the engine; tests hold the two equal).
 _SNOMED_SYSTEMS = frozenset({"http://snomed.info/sct",
                              "urn:oid:2.16.840.1.113883.6.96"})
+_LOINC_SYSTEMS = frozenset({"http://loinc.org", "https://loinc.org",
+                            "urn:oid:2.16.840.1.113883.6.1"})
 
 
 def _coding_key(c: object) -> tuple[str, str] | None:
@@ -310,8 +322,11 @@ def _coding_key(c: object) -> tuple[str, str] | None:
     system, code = system.strip(), str(code).strip()
     if not system or not code:
         return None
-    return ("http://snomed.info/sct" if system in _SNOMED_SYSTEMS
-            else system, code)
+    if system in _SNOMED_SYSTEMS:
+        system = "http://snomed.info/sct"
+    elif system in _LOINC_SYSTEMS:
+        system = "http://loinc.org"
+    return (system, code)
 
 
 def _coding_keys(res: dict) -> list | None:

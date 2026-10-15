@@ -34,7 +34,7 @@ import json
 import re
 
 from r6.safe_read import code_shape, is_coding_shaped
-from r6.terminology import label_codings
+from r6.terminology import label_codings, malformed_snomed_code
 
 
 def apply_redaction(resource):
@@ -359,7 +359,10 @@ def _clean_coding(coding, *, in_coding_list):
             coding['code'] = kept
         else:
             coding.pop('code')
-    elif shape == 'bad':
+    elif shape == 'bad' or malformed_snomed_code(coding.get('system'),
+                                                 coding['code']):
+        # A SNOMED "code" that is no concept id can carry its own term
+        # ("716186003|No known allergy|", #957): free text, so dropped.
         coding.pop('code')
 
 
