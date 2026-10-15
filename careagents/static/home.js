@@ -723,7 +723,7 @@
       const label = btn.dataset.label || "these records";
       const agreed = await askToDelete(
         btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
-        btn.dataset.readers || "");
+        btn.dataset.readers || "", btn.dataset.leaves || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -781,7 +781,7 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label, readers) {
+  function askToDelete(label, readers, leaves) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
@@ -794,6 +794,13 @@
         ? readers + " reads these records and will be deleted too."
         : "";
       who.hidden = !readers;
+    }
+    // The only records of someone the holder cares for: deleting them
+    // takes that person off the hub too, said before the tap (FHI-45).
+    const gone = $("delete-leaves");
+    if (gone) {
+      gone.textContent = leaves || "";
+      gone.hidden = !leaves;
     }
     input.value = "";
     ok.disabled = true;
@@ -864,7 +871,9 @@
   // The one contact address (#856), linked by showRecent.
   const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
-    const what = r.label + (r.to ? " to " + r.to : "") + ": ";
+    // Whose, when not the holder's own (patient test on #952).
+    const what = r.label + (r.whose ? " (" + r.whose + ")" : "") +
+      (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
     if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
