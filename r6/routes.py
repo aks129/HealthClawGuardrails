@@ -2343,7 +2343,7 @@ def ingest_bundle():
                     resource, tenant_id,
                     agent_id='direct-upload',
                     detail='Ingested via patient direct upload',
-                    allowed_types=_INGEST_BUNDLE_ALLOWED_TYPES)
+                    allowed_types=_INGEST_BUNDLE_ALLOWED_TYPES, source='upload')
         except Exception as exc:  # noqa: BLE001
             # NEVER return `str(exc)` — SQL driver messages can echo
             # statements and parameters that carry PHI. Log ONLY the
