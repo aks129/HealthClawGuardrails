@@ -213,7 +213,8 @@ class Scope(Enum):
 
     TENANT_BOUND maps to validate_step_up_token(require_scope=None) and
     accepts a read-scoped token. WRITE maps to require_scope='write' and
-    rejects one. The names say what the check does, not what the caller
+    accepts only a scope in r6.stepup.WRITE_SCOPES, so it rejects a
+    read-scoped token and any scope it does not know (FHI-57). The names say what the check does, not what the caller
     wishes it did — the exact mistake behind _RESOURCE_ID_PATTERN.
     """
 
@@ -319,6 +320,7 @@ _PUBLIC_REASONS = frozenset({
     'Invalid token signature',
     'Step-up token expired',
     'Read-scoped token cannot authorize this operation',
+    'Token scope cannot authorize this operation',
     'Token audience mismatch',
     'Token operation mismatch',
     'Token already used (replay)',
