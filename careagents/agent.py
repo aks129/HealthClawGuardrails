@@ -17,11 +17,13 @@ raw bundles, to keep turns small and grounded.
 from __future__ import annotations
 
 import json
+import datetime
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
 from careagents import labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
+from careagents.personas import NO_TREND_VERDICT
 
 MAX_TOOL_ROUNDS = 6
 
@@ -1010,6 +1012,34 @@ _TREND_NOTE = (
     "doctor promptly, tell the person to contact their doctor promptly.")
 
 
+#: How a lab result, or a change in one, is told. The system prompt's own
+#: rule (personas.NO_TREND_VERDICT), repeated in every lab tool's note: the
+#: text timeline note was a hand-written copy that never got the sentence,
+#: and a follow-up answered from get_labs never saw the timeline's (#942).
+_TREND_NO_VERDICT = NO_TREND_VERDICT
+
+#: What the model may offer to look at next. It offered HDL and
+#: triglycerides after an LDL answer on records that hold neither (#942).
+_ONLY_TESTS_ON_FILE = (
+    "If you offer to look at another test, offer only one named in "
+    "other_tests_on_file. Never suggest a test that is not listed there: "
+    "these records may not have it.")
+
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December")
+
+
+def _date_in_words(iso: str) -> str:
+    """"April 21, 2025" for a real YYYY-MM-DD, so the model never reads a
+    person "2025-04-21" (#942); anything else unchanged. A fixed month list,
+    not strftime, which follows the process locale."""
+    try:
+        d = datetime.date.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return iso
+    return f"{_MONTHS[d.month - 1]} {d.day}, {d.year}"
+
+
 def _timeline_in_words(series: dict) -> dict:
     """What a text needs instead of a chart: the first and latest reading
     and the direction, worked out here so the model never computes one.
@@ -1031,10 +1061,10 @@ def _timeline_in_words(series: dict) -> dict:
     # (#884 QA F1).
     if first_unit is None or latest_unit is None or first_unit != latest_unit:
         return out
-    out["first"] = {"date": first["date"], "value": first["value"],
-                    "unit": first_unit}
-    out["latest"] = {"date": latest["date"], "value": latest["value"],
-                     "unit": latest_unit}
+    out["first"] = {"date": _date_in_words(first["date"]),
+                    "value": first["value"], "unit": first_unit}
+    out["latest"] = {"date": _date_in_words(latest["date"]),
+                     "value": latest["value"], "unit": latest_unit}
     out["direction"] = ("higher" if latest["value"] > first["value"]
                         else "lower" if latest["value"] < first["value"]
                         else "unchanged")
@@ -1215,6 +1245,11 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 _TREND_NOTE + (
                     " In a text, keep the trend sentence whole even when you "
                     "shorten everything else." if on_text else ""))
+        # A follow-up ("So is that good news?") is answered from here, not
+        # from the timeline's note (QA on #953). Its own key, not `note`: a
+        # fully scored answer carries no note, so the one that matters is
+        # not read past as boilerplate.
+        out["no_verdict_rule"] = _TREND_NO_VERDICT
         return json.dumps(out)
     if name == "show_lab_timeline":
         topic = str(args.get("topic") or "")
@@ -1227,6 +1262,12 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         if any(s["readings"] for s in series):
             events.append({"type": "card", "kind": "lab-timeline",
                            "topic": topic})
+        # The other charted tests these records hold, by the chart's own
+        # names: what the model may offer next (_ONLY_TESTS_ON_FILE).
+        shown = {s["name"] for s in series}
+        others = [s["name"] for s in labs_timeline.build_series(
+                      labs.get("bundle") or {}, None, keep_withheld=True)
+                  if s["name"] not in shown]
         if on_text:
             # A text thread cannot show the chart, so the words have to
             # carry it: first, latest and direction per plottable series.
@@ -1234,6 +1275,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             return json.dumps({
                 "chart_shown": False,
                 "series": [_timeline_in_words(s) for s in series],
+                "other_tests_on_file": others,
                 "note": ("The chart cannot be shown in a text message. "
                          "Describe the trend in words in one or two "
                          "sentences, using first, latest and direction; a "
@@ -1246,7 +1288,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "it. A series with readings_unit_unconfirmed "
                          "has that many readings whose unit could not be "
                          "confirmed: say they are on file but give no "
-                         "numbers for them."
+                         "numbers for them. " + _TREND_NO_VERDICT + " "
+                         + _ONLY_TESTS_ON_FILE
                          if series else
                          "No lab series matched in the CONNECTED records. "
                          "That is not the same as the person never having "
@@ -1262,20 +1305,22 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps({
             "chart_shown": any(s["readings"] for s in series),
             "series": [_timeline_in_words(s) for s in series],
+            "other_tests_on_file": others,
             "note": ("A chart is now visible to the person. Answer the "
                      "question in plain words in one or two sentences: for "
                      "each series with a direction, say it went from its "
                      "first reading to its latest, with dates, and whether "
                      "that is higher, lower or unchanged; then invite a "
-                     "question. Do not list every value, and do not call the "
-                     "change good or bad. A series with trend_plottable "
+                     "question. Do not list every value. A series with "
+                     "trend_plottable "
                      "false has a single reading — say so, and never describe "
                      "it as rising or falling. A plottable series with no "
                      "direction has readings whose units differ or could not "
                      "be confirmed: give no numbers and no direction for it. "
                      "A series with readings_unit_unconfirmed has readings on "
                      "file whose unit could not be confirmed, so they are not "
-                     "charted: say they exist, give no numbers."
+                     "charted: say they exist, give no numbers. "
+                     + _TREND_NO_VERDICT + " " + _ONLY_TESTS_ON_FILE
                      if series else
                      "No lab series matched in the CONNECTED records. That is "
                      "not the same as the person never having had this test — "
@@ -1364,6 +1409,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "no screenings are due.")
         if sections.get("lab-trends"):
             notes.append(_TREND_NOTE)
+        # The brief carries labs and vitals whatever its sections (#942).
+        notes.append(_TREND_NO_VERDICT)
         events.append({"type": "card", "kind": "brief"})
         notes.append("Summarize in a few short lines; a link to the full "
                      "brief is included below your answer."
