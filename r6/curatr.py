@@ -1301,7 +1301,7 @@ def apply_fix(
     # that committed between our load and this statement — another approved
     # fix, an ordinary update — changes the version, this UPDATE matches no
     # row, and the whole transaction is abandoned. The version sequence and
-    # last_updated are set exactly as update_resource() sets them.
+    # last_updated (and source) are set exactly as update_resource() sets them.
     from sqlalchemy import update as _update
     written = db.session.execute(
         _update(R6Resource)
@@ -1313,7 +1313,10 @@ def apply_fix(
         .values(resource_json=new_json,
                 sha256=hashlib.sha256(new_json.encode("utf-8")).hexdigest(),
                 version_id=loaded_version + 1,
-                last_updated=datetime.now(timezone.utc))
+                last_updated=datetime.now(timezone.utc),
+                # As update_resource does: the fixed record is no longer
+                # what its channel delivered, so it claims none (FHI-42).
+                source=None)
         .execution_options(synchronize_session=False)
     ).rowcount
     if written != 1:

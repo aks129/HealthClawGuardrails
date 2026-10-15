@@ -402,7 +402,7 @@ def test_per_entry_exception_never_leaks_str_exc_to_caller(client,
     calls = {"n": 0}
 
     def _boom(resource, tenant_id, agent_id=None, detail=None,
-              allowed_types=None):
+              allowed_types=None, *, source):
         calls["n"] += 1
         raise _BadExc("INSERT INTO x VALUES ('SSN=123-45-6789','john@a.com')")
 
@@ -440,11 +440,11 @@ def test_savepoint_isolates_a_mid_bundle_failure(client, app, monkeypatch):
 
     def _sometimes_boom(resource, tenant_id, agent_id='fasten-connect',
                         detail='Ingested via Fasten EHI export',
-                        allowed_types=None):
+                        allowed_types=None, *, source):
         if resource.get('id') == 'atom-boom':
             raise RuntimeError('driver blew up on this row')
         return real(resource, tenant_id, agent_id=agent_id, detail=detail,
-                    allowed_types=allowed_types)
+                    allowed_types=allowed_types, source=source)
 
     monkeypatch.setattr('r6.fasten.ingester._ingest_one', _sometimes_boom)
 
