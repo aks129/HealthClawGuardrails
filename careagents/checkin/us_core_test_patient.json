@@ -1,0 +1,604 @@
+{
+  "resourceType": "Bundle",
+  "id": "checkin-us-core-test-patient",
+  "meta": {
+    "tag": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+        "code": "HTEST",
+        "display": "test health data"
+      }
+    ]
+  },
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "https://example.org/fhir/Patient/checkin-test-patient",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "checkin-test-patient",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "extension": [
+          {
+            "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race",
+            "extension": [
+              {
+                "url": "ombCategory",
+                "valueCoding": {
+                  "system": "http://terminology.hl7.org/CodeSystem/v3-NullFlavor",
+                  "code": "ASKU",
+                  "display": "asked but unknown"
+                }
+              },
+              {
+                "url": "text",
+                "valueString": "Asked but no answer"
+              }
+            ]
+          },
+          {
+            "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity",
+            "extension": [
+              {
+                "url": "ombCategory",
+                "valueCoding": {
+                  "system": "http://terminology.hl7.org/CodeSystem/v3-NullFlavor",
+                  "code": "ASKU",
+                  "display": "asked but unknown"
+                }
+              },
+              {
+                "url": "text",
+                "valueString": "Asked but no answer"
+              }
+            ]
+          }
+        ],
+        "identifier": [
+          {
+            "system": "https://healthclaw.io/fhir/sid/synthetic-test-patient",
+            "value": "FAKE-MRN-0000001"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "family": "Testpatient",
+            "given": [
+              "Casey",
+              "Synthetic"
+            ]
+          }
+        ],
+        "telecom": [
+          {
+            "system": "phone",
+            "value": "555-0142",
+            "use": "mobile"
+          },
+          {
+            "system": "email",
+            "value": "casey.testpatient@example.test"
+          }
+        ],
+        "gender": "unknown",
+        "birthDate": "1985-07-04",
+        "address": [
+          {
+            "use": "home",
+            "line": [
+              "100 Synthetic Test Way"
+            ],
+            "city": "Testville",
+            "state": "WI",
+            "postalCode": "00000",
+            "country": "US"
+          }
+        ],
+        "communication": [
+          {
+            "language": {
+              "coding": [
+                {
+                  "system": "urn:ietf:bcp:47",
+                  "code": "en",
+                  "display": "English"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Condition/checkin-test-condition-htn",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "checkin-test-condition-htn",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-condition-problems-health-concerns"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active",
+              "display": "Active"
+            }
+          ]
+        },
+        "verificationStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-ver-status",
+              "code": "confirmed",
+              "display": "Confirmed"
+            }
+          ]
+        },
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+                "code": "problem-list-item",
+                "display": "Problem List Item"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "38341003",
+              "display": "Hypertensive disorder, systemic arterial"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/checkin-test-patient"
+        },
+        "onsetDateTime": "2021-03-15",
+        "recordedDate": "2021-03-15"
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Condition/checkin-test-condition-unprofiled",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "checkin-test-condition-unprofiled",
+        "meta": {
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active",
+              "display": "Active"
+            }
+          ]
+        },
+        "verificationStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-ver-status",
+              "code": "confirmed",
+              "display": "Confirmed"
+            }
+          ]
+        },
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+                "code": "problem-list-item",
+                "display": "Problem List Item"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "195967001",
+              "display": "Asthma"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/checkin-test-patient"
+        },
+        "onsetDateTime": "2012-09-01",
+        "recordedDate": "2012-09-01"
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/AllergyIntolerance/checkin-test-allergy-penicillin",
+      "resource": {
+        "resourceType": "AllergyIntolerance",
+        "id": "checkin-test-allergy-penicillin",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-allergyintolerance"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
+              "code": "active",
+              "display": "Active"
+            }
+          ]
+        },
+        "verificationStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification",
+              "code": "confirmed",
+              "display": "Confirmed"
+            }
+          ]
+        },
+        "category": [
+          "medication"
+        ],
+        "criticality": "high",
+        "code": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "7980",
+              "display": "penicillin G"
+            }
+          ]
+        },
+        "patient": {
+          "reference": "Patient/checkin-test-patient"
+        },
+        "recordedDate": "2019-05-20",
+        "reaction": [
+          {
+            "manifestation": [
+              {
+                "coding": [
+                  {
+                    "system": "http://snomed.info/sct",
+                    "code": "271807003",
+                    "display": "Eruption of skin"
+                  }
+                ]
+              }
+            ],
+            "severity": "moderate"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/MedicationRequest/checkin-test-medreq-lisinopril",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "checkin-test-medreq-lisinopril",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-medicationrequest"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "status": "active",
+        "intent": "order",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/medicationrequest-category",
+                "code": "community",
+                "display": "Community"
+              }
+            ]
+          }
+        ],
+        "reportedBoolean": false,
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "314076",
+              "display": "lisinopril 10 MG Oral Tablet"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/checkin-test-patient"
+        },
+        "authoredOn": "2025-11-02",
+        "requester": {
+          "reference": "Practitioner/checkin-test-prescriber"
+        },
+        "dosageInstruction": [
+          {
+            "text": "Take 1 tablet by mouth once daily",
+            "timing": {
+              "repeat": {
+                "frequency": 1,
+                "period": 1,
+                "periodUnit": "d"
+              }
+            },
+            "doseAndRate": [
+              {
+                "doseQuantity": {
+                  "value": 1,
+                  "unit": "tablet",
+                  "system": "http://terminology.hl7.org/CodeSystem/v3-orderableDrugForm",
+                  "code": "TAB"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Immunization/checkin-test-immunization-flu",
+      "resource": {
+        "resourceType": "Immunization",
+        "id": "checkin-test-immunization-flu",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-immunization"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "status": "completed",
+        "vaccineCode": {
+          "coding": [
+            {
+              "system": "http://hl7.org/fhir/sid/cvx",
+              "code": "150",
+              "display": "Influenza, split virus, quadrivalent, PF"
+            }
+          ]
+        },
+        "patient": {
+          "reference": "Patient/checkin-test-patient"
+        },
+        "occurrenceDateTime": "2025-10-01",
+        "primarySource": true
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Coverage/checkin-test-coverage",
+      "resource": {
+        "resourceType": "Coverage",
+        "id": "checkin-test-coverage",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-coverage"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "type": {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+                  "code": "MB",
+                  "display": "Member Number"
+                }
+              ]
+            },
+            "system": "https://healthclaw.io/fhir/sid/synthetic-member-id",
+            "value": "FAKE-MEMBER-0000001"
+          }
+        ],
+        "status": "active",
+        "type": {
+          "coding": [
+            {
+              "system": "https://nahdo.org/sopt",
+              "code": "5",
+              "display": "PRIVATE HEALTH INSURANCE"
+            }
+          ]
+        },
+        "subscriberId": "FAKE-MEMBER-0000001",
+        "beneficiary": {
+          "reference": "Patient/checkin-test-patient"
+        },
+        "relationship": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/subscriber-relationship",
+              "code": "self",
+              "display": "Self"
+            }
+          ]
+        },
+        "period": {
+          "start": "2026-01-01",
+          "end": "2026-12-31"
+        },
+        "payor": [
+          {
+            "reference": "Organization/checkin-test-payer"
+          }
+        ],
+        "class": [
+          {
+            "type": {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/coverage-class",
+                  "code": "group",
+                  "display": "Group"
+                }
+              ]
+            },
+            "value": "FAKE-GROUP-0001",
+            "name": "Synthetic Test Group"
+          },
+          {
+            "type": {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/coverage-class",
+                  "code": "plan",
+                  "display": "Plan"
+                }
+              ]
+            },
+            "value": "FAKE-PLAN-01",
+            "name": "Synthetic Test Plan"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Organization/checkin-test-payer",
+      "resource": {
+        "resourceType": "Organization",
+        "id": "checkin-test-payer",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-organization"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://healthclaw.io/fhir/sid/synthetic-payer-id",
+            "value": "FAKE-PAYER-0001"
+          }
+        ],
+        "active": true,
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/organization-type",
+                "code": "pay",
+                "display": "Payer"
+              }
+            ]
+          }
+        ],
+        "name": "Synthetic Test Health Plan",
+        "telecom": [
+          {
+            "system": "phone",
+            "value": "555-0199",
+            "use": "work"
+          }
+        ],
+        "address": [
+          {
+            "line": [
+              "1 Synthetic Plaza"
+            ],
+            "city": "Testville",
+            "state": "WI",
+            "postalCode": "00000",
+            "country": "US"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Practitioner/checkin-test-prescriber",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "checkin-test-prescriber",
+        "meta": {
+          "profile": [
+            "http://hl7.org/fhir/us/core/StructureDefinition/us-core-practitioner"
+          ],
+          "tag": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+              "code": "HTEST",
+              "display": "test health data"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://healthclaw.io/fhir/sid/synthetic-practitioner-id",
+            "value": "FAKE-PRACT-0001"
+          }
+        ],
+        "name": [
+          {
+            "family": "Testprescriber",
+            "given": [
+              "Riley"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
