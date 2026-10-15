@@ -141,7 +141,8 @@ def _built_in_resources() -> list[dict]:
 # Core seed function (no Flask request context needed)
 # ---------------------------------------------------------------------------
 
-def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None = None) -> int:
+def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None = None,
+                   *, source: str | None = None) -> int:
     """
     Seed a tenant with demo FHIR resources.
 
@@ -152,6 +153,12 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
     Returns:
         Number of resources created
     """
+    # Only content we wrote is ours to call made up. The built-in set always
+    # is. A caller-supplied list is content somebody else chose, so its rows
+    # carry no source (FHI-42) unless a trusted in-process caller (the
+    # `seed-demo-history` CLI) names one. The HTTP route never passes it.
+    if resources is None:
+        source = 'sample'
     if resources is None:
         resources = _built_in_resources()
 
@@ -203,7 +210,8 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
             try:
                 result, _ = _ingest_one(
                     json.loads(resource_str), tenant_id, agent_id='seed',
-                    detail='seeded via auto-seed on first boot')
+                    detail='seeded via auto-seed on first boot',
+                    source=source)
             except Exception:
                 # The revive and its audit row share the transaction, so
                 # nothing landed; abort loudly as an audit failure does below.
@@ -227,6 +235,7 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
                 # the resource by it (e.g. GET /Questionnaire/healthclaw-intake).
                 resource_id=rid,
                 tenant_id=tenant_id,
+                source=source,
             )
             db.session.add(r)
             db.session.flush()

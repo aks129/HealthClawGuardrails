@@ -28,6 +28,7 @@ from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError, act_as,
                                    acting_for)
+from careagents.hub import relation_of
 from careagents.personas import system_prompt
 
 logger = logging.getLogger(__name__)
@@ -363,10 +364,13 @@ class RunWorker:
         # a text thread gets the texting style (careagents/personas.py).
         # From the engine's import, not the stored status (QA945-F1).
         arriving = records_arriving(self.hc, tenant, context["connection"])
+        # Someone the holder cares for, by relationship ("your parent"),
+        # in the prompt and the sample line alike (FHI-44).
+        who = relation_of(context.get("person") or {})
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
             surface=str(run.get("surface") or ""), sample=sample,
-            arriving=arriving, routines=agent.get("routines"))
+            arriving=arriving, routines=agent.get("routines"), who=who)
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -446,7 +450,7 @@ class RunWorker:
             self.hc.append_agent_run_event(
                 run_id, self.worker_id, CHARGED_EVENT, {})
 
-        lead = beta.SAMPLE_FRAME if sample else ""
+        lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
