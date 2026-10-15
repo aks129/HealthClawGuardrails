@@ -1262,16 +1262,40 @@ _SSN_VALUE = re.compile(r'(?<!\d)\d{3}[\s.-]?\d{2}[\s.-]?\d{4}(?!\d)')
 
 def _value_looks_like_ssn(value):
     """True for a string that contains an SSN's digits or names itself one.
-    Used on identifier values, Coverage.subscriberId and class.value."""
+    The strict screen, for Patient identifier values."""
     if not isinstance(value, str):
         return False
     value = value.strip()
     return bool(_SSN_VALUE.search(value) or _SSN_LABEL.search(value))
 
 
-def _looks_like_ssn(ident):
+#: Coverage values only (owner ruling 2026-10-14, QA #963): member, group
+#: and plan numbers are often a bare 9 digits, so a Coverage value is
+#: dropped as an SSN only when it is labelled one or written in SSN form
+#: with BOTH separators. Patient identifiers keep the strict _SSN_VALUE.
+_SSN_SEPARATED = re.compile(r'(?<!\d)\d{3}[\s.-]\d{2}[\s.-]\d{4}(?!\d)')
+
+
+def _coverage_value_looks_like_ssn(value):
+    """A Coverage subscriberId, MB/SN identifier value or class.value that
+    names itself an SSN or contains a separated SSN."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return bool(_SSN_SEPARATED.search(value) or _SSN_LABEL.search(value))
+
+
+def _coverage_identifier_is_ssn(ident):
+    """The Coverage MB/SN restore's screen: the standard SSN labels, a local
+    SSN label, or a Coverage value that looks like an SSN by the rule above.
+    """
+    return (_is_ssn_identifier(ident) or _ssn_labelled(ident)
+            or _coverage_value_looks_like_ssn(ident.get('value')))
+
+
+def _ssn_labelled(ident):
     """True when the identifier's system, any type coding's code, or its
-    `type.text` reads as an SSN label, or its value has an SSN's shape."""
+    `type.text` reads as an SSN label."""
     if not isinstance(ident, dict):
         return False
     labels = [ident.get('system')]
@@ -1282,11 +1306,16 @@ def _looks_like_ssn(ident):
         if isinstance(codings, list):
             labels.extend(c.get('code') for c in codings
                           if isinstance(c, dict))
-    if any(isinstance(label, str) and _SSN_LABEL.search(label)
-           for label in labels):
-        return True
-    value = ident.get('value')
-    return _value_looks_like_ssn(value)
+    return any(isinstance(label, str) and _SSN_LABEL.search(label)
+               for label in labels)
+
+
+def _looks_like_ssn(ident):
+    """Patient identifiers (strict): an SSN label, or an SSN anywhere in the
+    value, bare 9 digits included."""
+    if not isinstance(ident, dict):
+        return False
+    return _ssn_labelled(ident) or _value_looks_like_ssn(ident.get('value'))
 
 
 def _is_ssn_class(ident):
@@ -1386,12 +1415,12 @@ def _checkin_coverage(original, res, patient_id):
     # Subscriber ids were historically sometimes SSNs: one with an SSN's
     # shape is dropped, by the same value check as identifiers (#963).
     if (isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64
-            and not _value_looks_like_ssn(subscriber_id)):
+            and not _coverage_value_looks_like_ssn(subscriber_id)):
         res['subscriberId'] = subscriber_id
 
     idents = []
     for ident in original.get('identifier') or []:
-        if not isinstance(ident, dict) or _is_ssn_class(ident):
+        if not isinstance(ident, dict) or _coverage_identifier_is_ssn(ident):
             continue
         if not _has_coding(ident.get('type'), _V2_0203, ('MB', 'SN')):
             continue
@@ -1417,7 +1446,7 @@ def _checkin_coverage(original, res, patient_id):
         value = cls.get('value')
         # A group or plan number with an SSN in it is dropped (#963 D2).
         if (isinstance(value, str) and value
-                and not _value_looks_like_ssn(value)):
+                and not _coverage_value_looks_like_ssn(value)):
             # class.name is dropped, not left as a truncated stub.
             classes.append({'type': {'coding': [_coding_of(
                 cls['type'], _COVERAGE_CLASS, ('group', 'plan'))]},
