@@ -17,6 +17,10 @@ Usage:
 
     # With a custom bundle file
     python scripts/seed_demo_tenant.py --bundle-file exports/healthex-2026-04-08.json
+
+    # The synthetic US Core test patient for SMART Health Check-in (FHI-51)
+    python scripts/seed_demo_tenant.py --db-mode --tenant-id checkin-test \\
+        --bundle-file careagents/checkin/us_core_test_patient.json
 """
 
 import argparse

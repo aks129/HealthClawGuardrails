@@ -97,30 +97,29 @@
        is now a true total, so the label has to be true too. One line per
        paragraph: .msg draws every newline and indent (pre-wrap). #}
     <div class="msg agent">
-      {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in {{ 'these made-up' if sample_line else 'your' }} records. Want me to walk through what they show?</p>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in {{ 'these made-up' if sample_line else 'these' if name else 'your' }} records. Want me to walk through what they show?</p>
       {#- -#}</div>
     {# The greeting asks a question: one tap answers it. What it sends
        names the records, since the greeting is not in the model's history. #}
     <div class="quick-replies" id="quick">
-      <button type="button" class="quick-reply" data-ask="Walk me through what {{ 'these made-up' if sample_line else 'my' }} records show.">Yes, walk me through</button>
+      <button type="button" class="quick-reply" data-ask="Walk me through what {{ 'these made-up' if sample_line else 'these' if name else 'my' }} records show.">Yes, walk me through</button>
     </div>
     {% else %}
     <div class="msg agent">
-      {#- -#}<p>Hi — I'm {{ me.name }}. I can read the health records in this space, explain labs in plain language, check what preventive care is due, and fill out your new-patient intake form — though you'll approve every line of that yourself.</p>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I can read the health records in this space, explain labs in plain language, check what preventive care is due, and fill out {{ 'a new-patient intake form for ' ~ name if name else 'your new-patient intake form' }} — though you'll approve every line of that yourself.</p>
       {#- -#}<p>What would you like to know?</p>
       {#- -#}</div>
     {% endif %}
   </div>
 
-  {# One block for every first visit. Intake comes first: that path ends
-     in an approval, which is what the product is for (spec section 5).
-     Then the taps the records can answer (app.py chat: labs only when some
-     are known to be there). Just above the message box, outside the
+  {# One block for every first visit, built in app.py chat: intake
+     first, then the taps the records can answer (labs only when some are
+     known to be there), each naming someone the holder cares for by
+     relationship (FHI-44). Just above the message box, outside the
      scrolling log, so all of them show on a short phone screen (patient
      tester recheck on #944). A returning visit has it hidden: chat.js
      shows it after an error, so the next try is one tap. #}
   <div class="starters" id="starters"{% if past %} hidden{% endif %}>
-    <button type="button" class="starter">Fill out my intake form for a new doctor</button>
     {% for s in starters %}
     <button type="button" class="starter">{{ s }}</button>
     {% endfor %}
@@ -142,6 +141,7 @@
 window.CARE_AGENT = {{ agent_id|tojson }};
 window.CARE_CONVERSATION = {{ conversation_id|tojson }};
 window.CARE_AGENT_NAME = {{ me.name|tojson }};
+window.CARE_WHOSE = {{ whose|tojson }};
 </script>
 <script src="{{ url_for('static', filename='chat.js') }}"></script>
 {% endblock %}

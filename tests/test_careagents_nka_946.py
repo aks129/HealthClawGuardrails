@@ -26,6 +26,7 @@ from tests.test_sec_945_first_answer import (
     _turn_capturing)
 
 SNOMED = "http://snomed.info/sct"
+LOINC = "http://loinc.org"
 NKA = "716186003"
 NKDA = "409137002"
 STATUS = "1631000175102"
@@ -192,6 +193,48 @@ def test_snomed_spellings_match_the_engine():
         k for k, v in terminology._SYSTEM_ALIASES.items()
         if v == terminology.SNOMED}
     assert terminology.SNOMED == SNOMED
+
+
+def test_loinc_spellings_match_the_engine():
+    from careagents.agent import _LOINC_SYSTEMS
+    from r6 import terminology
+    assert _LOINC_SYSTEMS == {
+        k for k, v in terminology._SYSTEM_ALIASES.items()
+        if v == terminology.LOINC}
+    assert terminology.LOINC == LOINC
+
+
+#: LOINC answers that state an absence (the engine's LOINC_ABSENCE_ANSWERS),
+#: each with the words our own table gives it.
+LOINC_NONE = {"LA10030-7": "allergies as none known",
+              "LA9134-3": "allergies as none known",
+              "LA4715-4": "allergies as none or not known"}
+
+
+@pytest.mark.parametrize("system", [LOINC, "urn:oid:2.16.840.1.113883.6.1",
+                                    " https://loinc.org"])
+@pytest.mark.parametrize("code,words", sorted(LOINC_NONE.items()))
+def test_a_loinc_none_known_record_is_a_dated_entry_not_a_name(
+        system, code, words):
+    """#957 re-QA: an AllergyIntolerance coded LOINC LA10030-7 missed the
+    absence sets, so the engine's qualified text became its name and the
+    model said it had no date, though recordedDate was set."""
+    res = {"resourceType": "AllergyIntolerance", "id": "l1",
+           "recordedDate": "2021-09-14",
+           "code": {"coding": [{"system": system, "code": code}],
+                    "text": "Recorded entry: 'none known'. Not a confirmed "
+                            "absence; confirm with a clinician."}}
+    [item] = _summarize_bundle(_bundle(res))
+    assert item["no_known_allergy_record"] is True
+    assert "name" not in item
+    assert item["statement"] == (
+        f"Your records include an entry, recorded on 2021-09-14, that lists "
+        f"{words}. {CONFIRM}")
+    assert item["date"] == "2021-09-14"
+    assert item["date_kind"] == "recorded"
+    note = item["note"].lower()
+    assert "never say they have no allergies" in note
+    assert "doctor or pharmacist" in note
 
 
 @pytest.mark.parametrize("coding", [
@@ -456,6 +499,25 @@ def test_real_engine_nka_reaches_the_model_as_a_dated_entry(
     assert "No known allergy" not in json.dumps(out)
 
 
+def test_real_engine_loinc_none_known_reaches_the_model_as_a_dated_entry(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """The QA reproduction, through the real engine and its qualified text."""
+    chain = Chain(cfg, svc, monkeypatch)
+    _resolver(monkeypatch)
+    _plant(chain, {"resourceType": "AllergyIntolerance", "id": "loinc-957",
+                   "recordedDate": "2021-09-14",
+                   "patient": {"reference": "Patient/demo-patient-rivera"},
+                   "code": {"coding": [{"system": LOINC,
+                                        "code": "LA10030-7"}]}})
+    out, _system = _first_turn(chain, monkeypatch)
+    [item] = out["allergies"]
+    assert item["no_known_allergy_record"] is True
+    assert item["statement"] == (
+        "Your records include an entry, recorded on 2021-09-14, that lists "
+        f"allergies as none known. {CONFIRM}")
+    assert "Recorded entry" not in json.dumps(out)
+
+
 def test_real_engine_nka_without_a_clinic_date_uses_the_arrival_date_as_such(
         cfg, svc, monkeypatch):  # noqa: F811
     chain = Chain(cfg, svc, monkeypatch)
@@ -600,12 +662,20 @@ def test_the_brief_never_names_a_record_by_an_absence_concept(
     assert field.label == engine.UNLABELLED
 
 
-def test_the_brief_absence_set_matches_careagents():
-    """The engine and CareAgents share no code, so each holds the set; this
-    holds them equal."""
+def test_the_absence_sets_match_the_engine():
+    """CareAgents imports nothing from the engine, so it mirrors the
+    absence concepts; this holds the mirror equal to the engine's one
+    source, r6.terminology (#950), set by set."""
     from careagents.agent import _ALLERGY_STATUS_CODES, _NKA_CODES
-    from r6.brief import engine
-    assert engine._ABSENCE_CONCEPTS == set(_NKA_CODES) | _ALLERGY_STATUS_CODES
+    from r6 import terminology
+    assert set(_NKA_CODES) == (terminology.NKA_CONCEPTS
+                               | terminology.LOINC_ABSENCE_ANSWERS)
+    assert _ALLERGY_STATUS_CODES == terminology.ALLERGY_STATUS_CONCEPTS
+    # Every absence code the engine writes qualified text for, in any
+    # system: a code only the engine knows reached the model as an
+    # ordinary allergy named by that text (#957 re-QA, LOINC LA10030-7).
+    assert set(_NKA_CODES) | _ALLERGY_STATUS_CODES == (
+        terminology.ABSENCE_CONCEPTS)
 
 
 @pytest.mark.parametrize("code", [NKDA, "999999999"])
