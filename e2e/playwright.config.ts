@@ -123,6 +123,10 @@ export default defineConfig({
         // the open path while its name still says closed.
         CARE_REAL_RECORDS: '',
         CARE_REAL_RECORDS_ALLOWLIST: '',
+        // The check-in wallet (FHI-54), off by default, on here so
+        // careagents-checkin-wallet.spec.ts can reach it. It answers only
+        // from the synthetic test patient.
+        CARE_CHECKIN_WALLET: '1',
       },
     },
     {

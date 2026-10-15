@@ -161,6 +161,12 @@ class Config:
         # second identical assistant (#947 QA).
         self.people_enabled = e.get(
             "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
+        # SMART Health Check-in web wallet (careagents/checkin_wallet.py).
+        # Off unless asked for: off, its routes are never registered and
+        # answer 404. While on, it answers only from the synthetic test
+        # patient, never from an account's records (FHI-54).
+        self.checkin_wallet_enabled = e.get(
+            "CARE_CHECKIN_WALLET", "").lower() in ("1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on
