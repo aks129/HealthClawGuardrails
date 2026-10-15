@@ -17,6 +17,9 @@
     {# Filled by home.js when an assistant reads these records: deleting
        the connection deletes that assistant too (#853). #}
     <p class="delete-warn" id="delete-readers" hidden></p>
+    {# Filled by home.js when these are the only records of someone the
+       holder cares for: they leave the hub too (FHI-45). #}
+    <p class="delete-warn" id="delete-leaves" hidden></p>
     {% endif %}
     <p class="delete-warn">We keep a log of who looked at your records, with
       no health details in it.</p>

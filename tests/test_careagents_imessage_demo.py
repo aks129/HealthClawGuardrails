@@ -73,7 +73,7 @@ def test_on_text_the_timeline_tool_says_no_chart_can_be_shown():
     [series] = out["series"]
     # Words need something to say: the first and latest reading and the
     # direction, worked out here rather than by the model.
-    assert series["first"] == {"date": "2025-01-01", "value": 210,
+    assert series["first"] == {"date": "January 1, 2025", "value": 210,
                                "unit": "mg/dL"}
     assert series["latest"]["value"] == 244
     assert series["direction"] == "higher"

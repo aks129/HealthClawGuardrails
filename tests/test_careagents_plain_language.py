@@ -550,9 +550,11 @@ def test_the_review_card_names_the_assistant(cfg, svc, monkeypatch):  # noqa: F8
     page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
     assert 'window.CARE_AGENT_NAME = "Juniper";' in page
     js = (ROOT / "careagents" / "static" / "chat.js").read_text()
-    assert ('AGENT_NAME + " filled it in from your records. Check each " +\n'
-            '        "medication and allergy. Nothing is made until you '
-            'approve."') in js
+    # The holder's words are unchanged; someone they care for is named
+    # instead of "your records" (FHI-44).
+    assert ('AGENT_NAME + " filled it in from " + (WHOSE || "your records") +'
+            '\n        ". Check each medication and allergy. Nothing is made '
+            'until you " +\n        "approve."') in js
 
 
 def test_chat_bubbles_carry_no_stray_whitespace(cfg, svc, monkeypatch):  # noqa: F811

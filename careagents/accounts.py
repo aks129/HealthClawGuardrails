@@ -1171,9 +1171,17 @@ class AccountService:
             # The connection and the pause flag let the worker refuse a turn
             # before it reads anything (beta spec 4.3 and 4.6).
             acct = s.get(Account, a.account_id)
+            # Whose records, for the prompt and the sample line (FHI-44):
+            # the kind and relationship only. The nickname is the holder's
+            # typed text and stays out of the worker altogether.
+            p = (s.query(Person).filter_by(id=a.person_id,
+                                            account_id=a.account_id).first()
+                 if a.person_id else None)
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
                     "account_id": a.account_id,
                     "connection": _conn_dict(conn),
+                    "person": ({"kind": p.kind, "relationship": p.relation}
+                               if p else {"kind": "self"}),
                     "paused": bool(acct and acct.real_paused_at is not None)}
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,

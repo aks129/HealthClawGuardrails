@@ -190,7 +190,8 @@ def _register_lifecycle_cli(flask_app: Flask) -> None:
         from r6.smbp.demo_history import smbp_history_resources
         with flask_app.app_context():
             count = seed_demo_data(tenant_id,
-                                   resources=smbp_history_resources())
+                                   resources=smbp_history_resources(),
+                                   source='sample')
         click.echo(f"Seeded {count} resource(s) into {tenant_id}.")
 
     @flask_app.cli.command("recover-zombies")
