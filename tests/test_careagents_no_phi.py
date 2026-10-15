@@ -173,6 +173,12 @@ def test_no_record_content_reaches_a_careagents_table_on_any_surface(
     for name, resp in pages.items():
         body = resp.get_data(as_text=True)
         assert resp.status_code == 200, (name, resp.status_code, body[:300])
+        if name == "labs":
+            # The chart's footnote is CareAgents' own sentence now, not the
+            # engine's disclaimer (#942), so no upstream text reaches this
+            # page to carry the canary. It still has to render.
+            assert CANARY not in body, body[:300]
+            continue
         assert CANARY in body, f"{name} did not carry the record to the person"
     assert c.get("/home").status_code == 200
 

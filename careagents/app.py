@@ -111,6 +111,16 @@ _ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
 # here quickly or lands cleanly.
 _UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 
+# The footnote under the chat's lab chart. The engine's disclaimer is written
+# for a clinician ("Advisory decision support... the performing lab's own
+# reference range takes precedence"); this says the same three things in
+# plain words (#942). The engine's wording still reaches the model with the
+# labs it reads (careagents/agent.py get_labs).
+CHART_FOOTNOTE = ("This chart is not a diagnosis. Each result is compared "
+                  "with typical adult ranges, and ranges differ by lab, age "
+                  "and sex. If your lab report shows a different range, go "
+                  "by your lab's range.")
+
 # FHIR R4 §3.2 SHALL support `application/fhir+json`; the two legacy
 # variants ride the same accept-list so a real FHIR client, a plain-JSON
 # hand-crafted body, and older exporters all land.
@@ -240,13 +250,14 @@ def _uncounted_note(new_records: int, new_documents: int | None,
     return None
 
 
-def _documents_landed(bundle: dict, result: dict, landed: int) -> int:
-    """How many of an upload's ingested entries are uncounted documents.
+def _landed_of_types(bundle: dict, result: dict, landed: int,
+                     types: tuple[str, ...]) -> int:
+    """How many of an upload's ingested entries are one of `types`.
 
     The engine reports one `ingested` total, and an `errors[]` row with the
     `index` of every entry it did not store. Entries without an error row
-    landed; of those, count the types `record_count` leaves out. Only the
-    resourceType string is read — nothing from the record is kept.
+    landed; of those, count the ones of `types`. Only the resourceType
+    string is read — nothing from the record is kept.
     """
     refused = {e.get("index") for e in (result.get("errors") or [])
                if isinstance(e, dict)}
@@ -255,10 +266,32 @@ def _documents_landed(bundle: dict, result: dict, landed: int) -> int:
         if idx in refused or not isinstance(entry, dict):
             continue
         res = entry.get("resource")
-        if (isinstance(res, dict) and res.get("resourceType")
-                in HealthClawClient.UNCOUNTED_TYPES):
+        if isinstance(res, dict) and res.get("resourceType") in types:
             n += 1
     return min(n, landed)
+
+
+def _nothing_counted_note(bundle: dict, result: dict, landed: int) -> str:
+    """Why an upload that landed added no records: the file held only the
+    person's own details (Patient), or only kinds the card does not count."""
+    if _landed_of_types(bundle, result, landed, ("Patient",)) == landed:
+        return "This file had personal details but no health records."
+    return "This file had no health records of a kind shown here yet."
+
+
+def _documents_landed(bundle: dict, result: dict, landed: int) -> int:
+    """How many of an upload's ingested entries are uncounted documents."""
+    return _landed_of_types(bundle, result, landed,
+                            HealthClawClient.UNCOUNTED_TYPES)
+
+
+def _records_landed(bundle: dict, result: dict, landed: int) -> int:
+    """How many of an upload's ingested entries are records, by the rule the
+    records card counts with (`record_count`, `COUNTED_TYPES`). The Patient
+    is the person, not a record about them, so "4 new records added" sat
+    above a card saying 3 (#948)."""
+    return _landed_of_types(bundle, result, landed,
+                            HealthClawClient.COUNTED_TYPES)
 
 
 def create_app(config: Config | None = None,
@@ -1345,11 +1378,21 @@ def create_app(config: Config | None = None,
         response = {k: v for k, v in result.items() if k != "tenant_id"}
         response["connection_id"] = conn_id
         # `ingested` counts documents nothing can open, so the card used to
-        # say "17 records added" where a refresh then said 5 (#226). Report
-        # what the patient can reach, and the same sentence the poll uses.
+        # say "17 records added" where a refresh then said 5 (#226), and the
+        # Patient, which the records card never counts (#948). Report the
+        # records the card counts, and the same sentence the poll uses.
         documents = _documents_landed(bundle, result, landed)
-        response["records_added"] = landed - documents
-        note = _uncounted_note(landed - documents, documents, uncounted)
+        records = _records_landed(bundle, result, landed)
+        response["records_added"] = records
+        # So the hub says "you can read" only when unreadable documents did
+        # arrive; otherwise the line is "No new records added." (#953 QA).
+        response["documents_added"] = documents
+        note = _uncounted_note(records, documents, uncounted)
+        if landed and not records and not documents:
+            # Something landed and none of it is a record the card counts.
+            # "No new records added." alone read as a failed upload (QA on
+            # #953), so say what the file held. Only resource types are read.
+            note = _nothing_counted_note(bundle, result, landed)
         if note:
             response["uncounted_note"] = note
         return jsonify(response), 200
@@ -2481,7 +2524,7 @@ def create_app(config: Config | None = None,
         return jsonify({
             "series": labs_timeline_mod.build_series(labs.get("bundle") or {},
                                                      keys),
-            "disclaimer": labs.get("disclaimer") or "",
+            "disclaimer": CHART_FOOTNOTE,
         })
 
     # --- pending approvals (#215) --------------------------------------------

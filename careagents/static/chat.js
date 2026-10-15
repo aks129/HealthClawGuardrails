@@ -64,7 +64,9 @@
       if (m.index > last)
         parent.appendChild(document.createTextNode(text.slice(last, m.index)));
       const a = el("a", null, m[0]);
-      a.href = m[0] === "your hub" ? "/home" : "mailto:" + m[0];
+      // Both hrefs are fixed strings, never built from the matched text:
+      // a replayed bubble's text comes from the page (CodeQL 124).
+      a.href = m[0] === "your hub" ? "/home" : "mailto:contactus@healthclaw.io";
       parent.appendChild(a);
       last = LINKS.lastIndex;
     }
@@ -150,6 +152,19 @@
     });
   }
 
+  // A chat reopened from history arrives as the server's plain text
+  // (chat.html), so its markdown showed as literal asterisks (#942). The
+  // same renderer lays it out and adds back the same two links. A bubble
+  // with nothing to lay out is left as written: the greetings carry their
+  // own <strong>, which re-rendering from text would drop.
+  function renderReplayed(bubble) {
+    const text = bubble.textContent;
+    BOLD_OR_ITALIC.lastIndex = 0;
+    if (!BOLD_OR_ITALIC.test(text) &&
+        !text.split("\n").some((line) => LIST_ITEM.test(line))) return;
+    renderMarkdown(bubble, text);
+  }
+
   function addChip(label) {
     let chips = log.lastElementChild;
     if (!chips || !chips.classList.contains("chips")) {
@@ -224,6 +239,29 @@
     return node;
   }
 
+  // The three y-axis labels, top to bottom, with the fewest decimals (up to
+  // two) that keep them apart. Whole numbers read an A1c chart as
+  // "9 / 9 / 8" (#942).
+  function axisLabels(lo, hi) {
+    const values = [hi, (hi + lo) / 2, lo];
+    let labels = [];
+    for (let digits = 0; digits <= 2; digits++) {
+      labels = values.map((v) => v.toFixed(digits));
+      if (new Set(labels).size === labels.length) break;
+    }
+    return labels;
+  }
+
+  // "Apr 21, 2025" for a real YYYY-MM-DD, anything else as it came. A fixed
+  // month list, so the words do not change with the browser's locale.
+  const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
+                        "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function shortDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    if (!m || +m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31) return iso;
+    return SHORT_MONTHS[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
+  }
+
   function drawSeries(series) {
     const W = 520, H = 150, padL = 40, padR = 10, padT = 12, padB = 22;
     const pts = series.readings.filter((r) => r.date);
@@ -244,12 +282,13 @@
     const x = (t) => padL + ((t - t0) / (t1 - t0)) * (W - padL - padR);
     const y = (v) => padT + ((hi - v) / (hi - lo)) * (H - padT - padB);
 
-    [0, 0.5, 1].forEach((frac) => {
+    const yLabels = axisLabels(lo, hi);
+    [0, 0.5, 1].forEach((frac, i) => {
       const gy = padT + frac * (H - padT - padB);
       svg.appendChild(svgEl("line", {
         class: "spark-grid", x1: padL, x2: W - padR, y1: gy, y2: gy }));
       const label = svgEl("text", { class: "spark-axis", x: 2, y: gy + 3 });
-      label.textContent = (hi - frac * (hi - lo)).toFixed(0);
+      label.textContent = yLabels[i];
       svg.appendChild(label);
     });
 
@@ -266,7 +305,7 @@
         class: "spark-pt " + (p.flag || "IND"),
         cx: x(times[i]).toFixed(1), cy: y(p.value).toFixed(1), r: 4 });
       const title = document.createElementNS(SVG_NS, "title");
-      title.textContent = p.date + ": " + p.value + " " + (p.unit || "") +
+      title.textContent = shortDate(p.date) + ": " + p.value + " " + (p.unit || "") +
         " (" + (p.flag || "IND") + ")";
       dot.appendChild(title);
       svg.appendChild(dot);
@@ -276,7 +315,7 @@
       const label = svgEl("text", {
         class: "spark-axis", x: x(pair[0]), y: H - 5,
         "text-anchor": pair[1] === "end" ? "end" : "start" });
-      label.textContent = new Date(pair[0]).toISOString().slice(0, 10);
+      label.textContent = shortDate(new Date(pair[0]).toISOString().slice(0, 10));
       svg.appendChild(label);
     });
     return svg;
@@ -491,6 +530,9 @@
       busy = false; sendBtn.disabled = false; box.focus();
     }
   }
+
+  // The answers replayed from history, laid out as they were live (#942).
+  log.querySelectorAll(".msg.agent").forEach(renderReplayed);
 
   // Requests still waiting when the page loaded, read from the engine by
   // the server: history keeps only text, so without this a reload lost the
