@@ -1237,3 +1237,8 @@ textarea:focus-visible {
 .flag-status { font-size: 15px; color: var(--critical-ink); margin-top: 6px; }
 .flag-status:empty { display: none; }
 .flag-done { font-size: 15px; color: var(--ink-soft); padding: 10px 4px; }
+/* "Report a problem" beside a failed chat turn: the same quiet weight. */
+.report-link { align-self: flex-start; margin-top: -6px; padding: 10px 4px;
+  min-height: 44px; box-sizing: border-box; font-size: 15px;
+  color: var(--ink-soft); text-underline-offset: 3px; }
+.report-link:hover { color: var(--accent-ink); }

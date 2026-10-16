@@ -517,8 +517,9 @@ def test_only_a_model_answer_gets_the_control():
     src = CHAT_JS.read_text()
     assert 'addAgentText(ev.text, state.runId);' in src
     calls = re.findall(r"(?<!function )addAgentText\(([^;{]*)\);", src)
-    with_run = [c for c in calls if "runId" in c]
-    assert with_run == ["ev.text, state.runId"]
+    # A run id with no failure code is the flag; only the answer frame.
+    flagged = [c for c in calls if "runId" in c and c.count(",") == 1]
+    assert flagged == ["ev.text, state.runId"]
 
 
 # --- the digest -------------------------------------------------------------------
@@ -572,3 +573,214 @@ def test_a_detail_kind_survives_racing_inserts(made):  # noqa: F811
 
 def test_uuid_shape_is_what_the_engine_mints():
     assert feedback._RUN_ID.match(str(uuid.uuid4()))
+
+
+def test_the_raw_note_cap_holds_even_when_cleaning_would_shrink_it(
+        made, sent, monkeypatch):  # noqa: F811
+    # Control characters are dropped by clean(); measured raw, they still
+    # count, so a padded note cannot slip a big body past the cap.
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    padded = "\x00" * (feedback.RAW_NOTE_MAX + 1) + "short"
+    assert _flag(c, note=padded).get_json() == {"error": "too_long"}
+    assert sent == []
+
+
+# --- slice 1 additions: the tester's walk ----------------------------------
+
+def test_a_405_gets_the_same_plain_page(made):  # noqa: F811
+    app, _ = made()
+    r = app.test_client().get("/logout")
+    assert r.status_code == 405
+    body = r.get_data(as_text=True)
+    assert "That page isn't here." in _visible(body)
+    assert "screen=not_found&amp;error=405" in body
+    assert "POST" in r.headers.get("Allow", "")
+
+
+def test_a_json_route_keeps_a_json_405(made):  # noqa: F811
+    app, _ = made()
+    r = app.test_client().get("/api/chat")
+    assert r.status_code == 405
+    assert r.get_json() == {"error": "method_not_allowed"}
+
+
+def test_chat_error_codes_are_on_the_list(made):  # noqa: F811
+    app, _ = made()
+    body = app.test_client().get(
+        f"/feedback?screen=chat&error=chat_error&run_id={RUN}"
+    ).get_data(as_text=True)
+    assert 'data-ctx-error="chat_error"' in body
+
+
+def _fail(text=None):
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    return {"role": "assistant", "content": text or GENERIC_FAILURE_TEXT}
+
+
+def _ask(q):
+    return {"role": "user", "content": q}
+
+
+def test_a_wall_of_failed_turns_replays_once():
+    from careagents.agent import RATE_LIMITED_TEXT
+    from careagents.errors import collapse_failed_turns
+    good = {"role": "assistant", "content": "Here is what I found."}
+    past = [_ask("q1"), good, _ask("q2"), _fail(), _ask("q3"), _fail(),
+            _ask("q4"), _fail(RATE_LIMITED_TEXT), _fail(), _ask("q5"), good]
+    out = collapse_failed_turns(past)
+    assert [m["content"] for m in out] == [
+        "q1", good["content"], "q4", RATE_LIMITED_TEXT, "q5", good["content"]]
+    assert [bool(m.get("failed")) for m in out] == [
+        False, False, False, True, False, False]
+    assert collapse_failed_turns([_fail(), _fail()]) == [
+        dict(_fail(), failed=True)]
+
+
+def test_the_chat_replays_one_failure_with_a_report_link(
+        made, monkeypatch):  # noqa: F811
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    app, svc = made()
+    fake = app.extensions["careagents_runtime"]["client"]
+    c = _signed_in(app, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()
+    past = [_ask("first try"), _fail(), _ask("second try"), _fail()]
+    monkeypatch.setattr(fake, "recent_messages", lambda *a, **k: past)
+    page = c.get(f"/chat?agent={conn['agent_id']}").get_data(as_text=True)
+    assert page.count(GENERIC_FAILURE_TEXT) == 1
+    assert "first try" not in page and "second try" in page
+    assert ('class="report-link" href="/feedback?screen=chat&amp;'
+            'error=chat_error"') in page
+    # The suggestion chips are still offered.
+    assert 'id="starters"' in page
+
+
+def test_the_live_error_bubble_gets_a_report_link_not_a_flag():
+    src = CHAT_JS.read_text()
+    assert 'addAgentText(ev.text, state.runId, "chat_error");' in src
+    assert 'null, "connection");' in src
+    body = src[src.index("function addReport"):]
+    body = body[:body.index("\n  }\n")]
+    assert 'screen: "chat"' in body and "run_id" in body
+    # Pointers only: nothing from the bubble goes in the link.
+    assert "textContent" not in body
+    assert body.count("bubble") == 2        # the parameter, and placement
+
+
+def test_a_signed_out_tester_may_leave_an_address_for_a_reply(made, sent):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    form = c.get("/feedback").get_data(as_text=True)
+    assert 'name="reply_email"' in form and "(optional)" in form
+    r = c.post("/feedback", json={"stuck": "hi",
+                                  "reply_email": " tester@example.test "},
+               headers={"X-Real-IP": "203.0.113.40"})
+    assert r.status_code == 200
+    (msg,) = sent
+    assert msg["reply_to"] == "tester@example.test"
+    assert "left an address" in msg["text"]
+    assert "tester@example.test" not in msg["text"]
+    for name, rows in _all_rows(svc).items():
+        assert "tester@example.test" not in rows, name
+
+
+@pytest.mark.parametrize("bad", [
+    "not-an-email", "a@b", "x@example.test\r\nBcc: evil@example.com",
+    "two@@example.test", 5, ["a@example.test"], "a" * 250 + "@example.test"])
+def test_a_bad_reply_address_is_refused(made, sent, bad):  # noqa: F811
+    app, _ = made(RESEND_API_KEY="re_test")
+    r = app.test_client().post("/feedback", json={
+        "stuck": "hi", "reply_email": bad},
+        headers={"X-Real-IP": "203.0.113.41"})
+    assert r.status_code == 400 and r.get_json() == {"error": "bad_email"}
+    assert sent == []
+
+
+def test_a_signed_in_tester_is_never_asked_for_an_address(
+        made, sent, monkeypatch):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    assert 'name="reply_email"' not in c.get("/feedback").get_data(
+        as_text=True)
+    r = c.post("/feedback", json={"stuck": "hi",
+                                  "reply_email": "other@example.test"})
+    assert r.status_code == 200
+    assert sent[0]["reply_to"] == "gene@example.com"
+
+
+def test_a_reply_address_is_never_logged(made, monkeypatch, caplog):  # noqa: F811
+    from careagents import mail
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        class R:
+            status_code = 500
+        return R()
+    monkeypatch.setattr(mail.requests, "post", fake_post)
+    app, _ = made(RESEND_API_KEY="re_test")
+    with caplog.at_level(logging.DEBUG):
+        app.test_client().post("/feedback", json={
+            "stuck": "hi", "reply_email": f"{MARKER}@example.test"},
+            headers={"X-Real-IP": "203.0.113.42"})
+    assert MARKER not in caplog.text
+
+
+def test_the_thanks_page_says_when_they_will_hear_back(made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    anon = app.test_client().get("/feedback/thanks").get_data(as_text=True)
+    assert "We read every note." in _visible(anon)
+    assert "within a day" not in anon
+    left = app.test_client().get("/feedback/thanks?reply=1")
+    assert "usually reply within a day" in _visible(left.get_data(
+        as_text=True))
+    c = _signed_in(app, svc, monkeypatch)
+    assert "usually reply within a day" in c.get(
+        "/feedback/thanks").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("back,href,label", [
+    ("/chat?agent=agent_abc", "/chat?agent=agent_abc", "Back to your chat"),
+    ("/brief?agent=agent_abc", "/brief?agent=agent_abc",
+     "Back to your visit brief"),
+    ("/agents/agent_abc/approvals", "/agents/agent_abc/approvals",
+     "Back to where you were"),
+    ("/home", "/home", "Back to your hub"),
+    ("https://evil.example/chat", "/home", "Back to your hub"),
+    ("//evil.example/chat", "/home", "Back to your hub"),
+    ("javascript:alert(1)", "/home", "Back to your hub"),
+    ("/chat?agent=x&q=okapi", "/chat?agent=x", "Back to your chat"),
+    ("/chat?agent=<script>", "/chat", "Back to your chat"),
+    ("/admin/funnel", "/home", "Back to your hub")])
+def test_the_thanks_page_goes_back_where_they_came_from(
+        made, monkeypatch, back, href, label):  # noqa: F811
+    from urllib.parse import quote
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    body = c.get(f"/feedback/thanks?back={quote(back, safe='')}").get_data(
+        as_text=True)
+    m = re.search(r'id="feedback-back" href="([^"]*)">([^<]*)<', body)
+    assert m and m.group(1).replace("&amp;", "&") == href
+    assert m.group(2) == label
+    assert "evil" not in body and "okapi" not in body
+    assert "<script>" not in body
+
+
+def test_the_form_learns_where_the_tester_came_from(made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    body = c.get("/feedback", headers={
+        "Referer": "http://localhost/chat?agent=agent_abc&x=okapi"}
+    ).get_data(as_text=True)
+    assert 'data-back="/chat?agent=agent_abc"' in body
+    assert "okapi" not in body
+    other = c.get("/feedback", headers={
+        "Referer": "https://evil.example/chat"}).get_data(as_text=True)
+    assert "data-back" not in other
+
+
+def test_the_visit_brief_links_the_form(made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()
+    r = c.get(f"/brief?agent={conn['agent_id']}")
+    assert r.status_code == 200
+    assert '<a href="/feedback">Tell us</a>' in r.get_data(as_text=True)

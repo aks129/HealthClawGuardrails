@@ -142,17 +142,30 @@
     return rest.trim() ? rest : text;
   }
 
-  // `runId` is set only for a model's answer, which then gets "This
-  // wasn't right" under it once it has finished typing.
-  function addAgentText(text, runId) {
+  // `runId` alone marks a model's answer, which then gets "This wasn't
+  // right" under it once it has finished typing. With `failed` (an error
+  // code) the bubble is a failure, and gets "Report a problem" instead.
+  function addAgentText(text, runId, failed) {
     text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
       renderMarkdown(m, text);
-      if (runId) addFlag(m, runId);
+      if (failed) addReport(m, runId, failed);
+      else if (runId) addFlag(m, runId);
       scroll();
     });
+  }
+
+  // "Report a problem" beside a failed turn: /feedback with the screen,
+  // the error code and the run id. Pointers only; the server checks each
+  // against its fixed lists (careagents/feedback.py read_context).
+  function addReport(bubble, runId, code) {
+    const q = new URLSearchParams({ screen: "chat", error: code });
+    if (runId) q.set("run_id", runId);
+    const a = el("a", "report-link", "Report a problem");
+    a.href = "/feedback?" + q.toString();
+    bubble.insertAdjacentElement("afterend", a);
   }
 
   // --- "This wasn't right" (careagents/feedback.py feedback_flag) --------
@@ -528,7 +541,8 @@
           // persistent event-poll failure becomes an unbounded ~2.5 req/s
           // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
-          typing.remove(); addAgentText(ev.text); state.done = true;
+          typing.remove(); addAgentText(ev.text, state.runId, "chat_error");
+          state.done = true;
           state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
@@ -620,7 +634,7 @@
       if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
-      addAgentText("Connection hiccup — try that again.");
+      addAgentText("Connection hiccup — try that again.", null, "connection");
       showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();

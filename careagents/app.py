@@ -2012,6 +2012,8 @@ def create_app(config: Config | None = None,
             past = [dict(m, content=beta.under_banner(str(m.get("content")
                                                           or ""), frame))
                     if m.get("role") != "user" else m for m in past]
+        # Retries of a broken chat replay as one failure, not a wall.
+        past = errors.collapse_failed_turns(past)
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is

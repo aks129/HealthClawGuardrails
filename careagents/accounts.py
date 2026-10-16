@@ -677,7 +677,8 @@ class AccountService:
             (s.query(Account).filter(Account.id == account_id)
              .update({"sample_claim_at": None}, synchronize_session=False))
 
-    def claim_daily_turn(self, account_id: str, cap: int) -> tuple[bool, int]:
+    def claim_daily_turn(self, account_id: str, cap: int,
+                         day: str | None = None) -> tuple[bool, int]:
         """Count one chat turn against today's cap. Returns (allowed, used).
 
         Durable and shared, unlike the in-process burst limiter — a restart or
@@ -690,9 +691,13 @@ class AccountService:
         under the cap or changes nothing. With no row yet, insert one; the
         unique (account_id, day) turns a racing insert into a retry of the
         UPDATE, the same shape as count_activity.
+
+        `day` is today's UTC day by default. The worker passes the day it
+        records on the run, so a refund gives back that day's turn and
+        never a later day's (refund_daily_turn).
         """
         from datetime import datetime, timezone
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         turns = func.coalesce(UsageDay.turns, 0)
         charge = (update(UsageDay)
                   .where(UsageDay.account_id == account_id,
@@ -722,6 +727,27 @@ class AccountService:
             except IntegrityError:
                 continue        # a peer made today's row: charge it instead
         raise RuntimeError("could not charge today's turn")
+
+    def refund_daily_turn(self, account_id: str, day: str) -> bool:
+        """Give back one turn charged on `day`, for a turn that failed on
+        our side. Returns whether a turn was given back.
+
+        One conditional UPDATE on one row: it takes one off only while the
+        count is above zero, so a refund can never make a negative count or
+        hand the account more than the cap. Exactly-once per run is the
+        caller's (worker.py marks the run before it refunds)."""
+        with self.session() as s:
+            row = (s.query(UsageDay.id)
+                   .filter(UsageDay.account_id == account_id,
+                           UsageDay.day == day, UsageDay.turns > 0)
+                   .first())
+            if row is None:
+                return False
+            return bool(s.execute(
+                update(UsageDay)
+                .where(UsageDay.id == row.id, UsageDay.turns > 0)
+                .values(turns=UsageDay.turns - 1)
+                .execution_options(synchronize_session=False)).rowcount)
 
     @staticmethod
     def _turns_today(s, account_id: str, day: str) -> int:

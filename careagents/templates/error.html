@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ "Page not found" if status == 404 else "Something broke" }} — CareAgents{% endblock %}
+{% block title %}{{ "Page not found" if status in (404, 405) else "Something broke" }} — CareAgents{% endblock %}
 {% block bodyclass %}page-setup{% endblock %}
 {# The 404 and 500 pages (careagents/errors.py). Plain words, a way home,
    and "Report a problem" with the screen and the code filled in. The link
@@ -7,7 +7,7 @@
 {% block content %}
 <main class="setup-wrap">
   <div class="setup-card error-page">
-    {% if status == 404 %}
+    {% if status in (404, 405) %}
     <h1>That page isn't here.</h1>
     <p class="setup-sub">The link may be old, or the address may have a typo.</p>
     {% else %}

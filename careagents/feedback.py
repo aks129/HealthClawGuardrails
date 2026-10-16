@@ -7,7 +7,8 @@ type some in spite of the note on the page, so the text goes into one email
 and is never written to a table or a log. It is untrusted: each answer is
 capped, the HTML part escapes it, and no answer reaches a header. The
 subject and recipient are fixed; the reply-to is the signed-in account's
-own address, and is left out when nobody is signed in.
+own address. Signed out, a tester may leave an address to be answered at;
+it must pass `valid_email`, becomes the reply-to, and is kept nowhere.
 
 JSON only, as every form here: a cross-site page cannot send it without a
 preflight, which is the CSRF guard. Sends are rate-limited per account, or
@@ -19,6 +20,10 @@ endpoint name of this app, never a URL), the last error code, and a chat
 answer's run id (a UUID, which cannot spell words). The server adds its
 own build and the time; it takes neither from the page. The email puts
 the context in its own block, apart from the tester's words.
+
+After Send the thank-you page leads back where the tester came from: the
+Referer of the form, rebuilt from a fixed list of our own pages
+(`safe_back`), never echoed.
 
 "This wasn't right" on a chat answer (POST /feedback/flag) goes the same
 way: the answer's run id, a reason code and an optional short note. Never
@@ -36,6 +41,7 @@ import threading
 import time
 import unicodedata
 from collections import OrderedDict, deque
+from urllib.parse import parse_qs, urlsplit
 
 from flask import jsonify, render_template, request, session
 from markupsafe import escape
@@ -66,12 +72,19 @@ RAW_ANSWER_MAX = 2 * ANSWER_MAX
 #: The largest request body read: four answers at RAW_ANSWER_MAX, every
 #: character escaped in JSON as \uXXXX (six bytes), and room for the keys
 #: and the context.
-BODY_MAX = 4 * RAW_ANSWER_MAX * 6 + 2048
+BODY_MAX = 4 * RAW_ANSWER_MAX * 6 + 4096
+
+#: The pages a thank-you may lead back to, and the one query parameter a
+#: return may keep (which assistant). Anything else goes back to the hub.
+_BACK_PATHS = ("/", "/home", "/chat", "/brief", "/settings", "/safety")
+_BACK_AGENT = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
+_APPROVALS = re.compile(r"\A/agents/[A-Za-z0-9_-]{1,64}/approvals\Z")
 
 #: The context a report may carry, each checked by `read_context`.
 CONTEXT_FIELDS = ("screen", "error", "run_id")
 #: The error codes a page may report: the statuses our pages show.
-ERROR_CODES = ("400", "403", "404", "500", "503")
+ERROR_CODES = ("400", "403", "404", "405", "500", "503",
+               "chat_error", "connection")
 #: An engine run id is str(uuid.uuid4()) (r6/agent_runs/models.py).
 _RUN_ID = re.compile(
     r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
@@ -175,10 +188,35 @@ def _stamp(context: dict, build: str) -> dict:
                 "%Y-%m-%d %H:%M:%S")}
 
 
-def _who(signed_in: bool) -> str:
-    return ("From a signed-in tester. Reply to this email to answer them."
-            if signed_in else
-            "From someone not signed in, so there is no address to reply to.")
+def safe_back(raw, host: str) -> str | None:
+    """A return path to one of our own pages, rebuilt from checked parts,
+    or None. Never the raw value: it may come from a Referer header."""
+    if not isinstance(raw, str) or not raw or len(raw) > 512:
+        return None
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return None
+    if parts.netloc and parts.netloc != host:
+        return None
+    if parts.scheme not in ("", "http", "https"):
+        return None
+    path = parts.path or "/"
+    if path not in _BACK_PATHS and not _APPROVALS.match(path):
+        return None
+    agent = (parse_qs(parts.query).get("agent") or [""])[0]
+    if agent and _BACK_AGENT.match(agent):
+        return f"{path}?agent={agent}"
+    return path
+
+
+def _who(signed_in: bool, reply_to: str | None = None) -> str:
+    if signed_in:
+        return "From a signed-in tester. Reply to this email to answer them."
+    if reply_to:
+        return ("From someone not signed in who left an address. Reply to "
+                "this email to answer them.")
+    return "From someone not signed in, so there is no address to reply to."
 
 
 def _wrap(title: str, who: str, context: dict,
@@ -210,12 +248,29 @@ def _wrap(title: str, who: str, context: dict,
 
 
 def compose(answers: dict, signed_in: bool, context: dict | None = None,
-            build: str = "unknown") -> tuple[str, str]:
+            build: str = "unknown",
+            reply_to: str | None = None) -> tuple[str, str]:
     """(html, text) for the email. Only the body carries answer text."""
     words = [(question, answers[name] or "(no answer)")
              for name, question in QUESTIONS]
-    return _wrap("Tester feedback", _who(signed_in),
+    return _wrap("Tester feedback", _who(signed_in, reply_to),
                  _stamp(context or {}, build), words)
+
+
+def read_reply_email(body) -> tuple[str | None, str | None]:
+    """(address or None, None), or (None, "bad_email"). The address a
+    signed-out tester may leave to be answered at. Optional."""
+    raw = body.get("reply_email") if isinstance(body, dict) else None
+    if raw is None or raw == "":
+        return None, None
+    if not isinstance(raw, str):
+        return None, "bad_email"
+    value = raw.strip()
+    if not value:
+        return None, None
+    if not valid_email(value):
+        return None, "bad_email"
+    return value, None
 
 
 def read_flag(body) -> tuple[dict | None, str | None]:
@@ -313,12 +368,24 @@ def register(app, svc, cfg) -> None:
         return render_template("feedback.html", done=False,
                                questions=QUESTIONS, answer_max=ANSWER_MAX,
                                signed_in=_account() is not None,
-                               context=context_from_args(app, request.args))
+                               context=context_from_args(app, request.args),
+                               back=safe_back(request.referrer, request.host))
 
     @app.get("/feedback/thanks")
     def feedback_thanks():
-        return render_template("feedback.html", done=True,
-                               signed_in=_account() is not None)
+        signed_in = _account() is not None
+        back = (safe_back(request.args.get("back"), request.host)
+                or ("/home" if signed_in else "/"))
+        path = back.split("?")[0]
+        label = ("Back to your chat" if path == "/chat" else
+                 "Back to your visit brief" if path == "/brief" else
+                 "Back to your hub" if path == "/home" else
+                 "Back to CareAgents" if path == "/" else
+                 "Back to where you were")
+        return render_template(
+            "feedback.html", done=True, signed_in=signed_in,
+            back=back, back_label=label,
+            will_reply=signed_in or request.args.get("reply") == "1")
 
     @app.post("/feedback")
     def feedback_submit():
@@ -343,15 +410,22 @@ def register(app, svc, cfg) -> None:
         if error:
             return jsonify({"error": error}), 400
         acct = _account()
+        # Signed out, the address a tester left to be answered at; signed
+        # in, the account's own. Checked before the rate limit is spent.
+        reply_to = None
+        if acct is None:
+            reply_to, error = read_reply_email(body)
+            if error:
+                return jsonify({"error": error}), 400
         key = f"acct:{acct.id}" if acct else f"ip:{_client_key()}"
         if not _allow(key):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return jsonify({"error": "rate_limited"}), 429
-        reply_to = None
         if acct and valid_email(acct.email or ""):
             reply_to = acct.email
         html, text = compose(answers, signed_in=acct is not None,
-                             context=context, build=cfg.build_sha)
+                             context=context, build=cfg.build_sha,
+                             reply_to=reply_to)
         if not _send(SUBJECT, html, text, reply_to):
             # Nothing left, so the page keeps the answers and says so.
             _refund(key)

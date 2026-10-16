@@ -4,8 +4,10 @@ Without these a missing page or a crash showed Flask's bare page: no way
 back, nothing a tester could report, and nothing the digest counted.
 
 A JSON route (`/api/...`) keeps answering JSON, since a page in place of
-the body it parses would break the caller. Only 404 and 500 are handled
-here; every other status keeps the body its route chose.
+the body it parses would break the caller. Only 404, 405 and 500 are
+handled here; every other status keeps the body its route chose. A 405 (a
+link that only a form may use, say /logout) reads as a missing page: to a
+person it is one.
 
 A 500 is counted by the endpoint name, which the code fixes, and only
 when it is one of this app's own endpoints. Never the URL, its query
@@ -24,6 +26,8 @@ import logging
 from flask import jsonify, render_template, request, session
 
 from careagents import funnel
+from careagents.agent import (GENERIC_FAILURE_TEXT, RATE_LIMITED_TEXT,
+                              UNAVAILABLE_TEXT)
 
 logger = logging.getLogger("careagents.errors")
 
@@ -38,6 +42,39 @@ def _wants_json() -> bool:
 
 def _home() -> str:
     return "/home" if session.get("account_id") else "/"
+
+
+#: The sentences a failed chat turn leaves in the transcript (agent.py).
+FAILURE_TEXTS = frozenset({GENERIC_FAILURE_TEXT, RATE_LIMITED_TEXT,
+                           UNAVAILABLE_TEXT})
+
+
+def collapse_failed_turns(past: list[dict]) -> list[dict]:
+    """The replayed history with each run of failed turns shown once.
+
+    A tester who retried a broken chat came back to a wall of the same
+    "Something went wrong" bubble. A failed turn is a question answered by
+    one of FAILURE_TEXTS; of consecutive failed turns only the last is
+    kept, and a failure bubble right after another is dropped. The kept
+    failure is marked `failed`, so the page can offer "Report a problem".
+    Nothing is deleted anywhere: this is only what the page shows.
+    """
+    def failure(m):
+        return (m.get("role") != "user"
+                and str(m.get("content") or "").strip() in FAILURE_TEXTS)
+
+    out: list[dict] = []
+    for m in past:
+        if not failure(m):
+            out.append(m)
+            continue
+        if out and failure(out[-1]):
+            continue                            # the same wall, once
+        if (len(out) >= 3 and out[-1].get("role") == "user"
+                and failure(out[-2]) and out[-3].get("role") == "user"):
+            del out[-3:-1]      # question, failure, question: keep the last
+        out.append(dict(m, failed=True))
+    return out
 
 
 def known_endpoint(app, endpoint) -> str | None:
@@ -56,6 +93,16 @@ def register(app, svc, cfg) -> None:
             return jsonify({"error": "not_found"}), 404
         return render_template("error.html", status=404, home=_home(),
                                screen=NOT_FOUND_SCREEN), 404
+
+    @app.errorhandler(405)
+    def method_not_allowed(exc):
+        # Werkzeug's Allow header goes with it, as the status requires.
+        methods = getattr(exc, "valid_methods", None)
+        allow = {"Allow": ", ".join(methods)} if methods else {}
+        if _wants_json():
+            return jsonify({"error": "method_not_allowed"}), 405, allow
+        return render_template("error.html", status=405, home=_home(),
+                               screen=NOT_FOUND_SCREEN), 405, allow
 
     @app.errorhandler(500)
     def server_error(_exc):

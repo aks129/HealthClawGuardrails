@@ -88,6 +88,11 @@
     <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
       {#- -#}<p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
       {#- -#}</div>
+    {# A failed turn, once (errors.collapse_failed_turns): a way to tell us,
+       with the screen and the code. History keeps no run id. #}
+    {% if m.failed %}
+    <a class="report-link" href="{{ url_for('feedback_page', screen='chat', error='chat_error') }}">Report a problem</a>
+    {% endif %}
     {% endfor %}
     {% elif summary_counts %}
     {# First visit with connected records: show real counts so the user sees
