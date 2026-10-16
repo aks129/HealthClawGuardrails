@@ -63,8 +63,10 @@ class Conversation(db.Model):
 #: The channel was checked for length only, and it is copied into AuditEvent
 #: detail, so a caller could write any 32 characters into the audit trail.
 #: "unknown" is the route's own default for a write that names none.
+#: "voice" is a CareAgents web turn that started as speech.
 KNOWN_CHANNELS = frozenset({
-    "web", "imessage", "telegram", "sms", "mcp", "api", "worker", "unknown"})
+    "web", "imessage", "telegram", "sms", "voice", "mcp", "api", "worker",
+    "unknown"})
 
 
 def audit_channel(channel) -> str:
