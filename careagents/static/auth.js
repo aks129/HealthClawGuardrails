@@ -78,19 +78,54 @@
     //           not know, so we say we do not know.
     let lede = "We sent an 8-digit code to";
     let note = "";
+    stopCountdown();
     if (res.d.sent === false) {
       lede = "We sent a code moments ago to";
-      note = `Check your inbox and spam folder. You can request a new one in ${res.d.retry_after} seconds.`;
+      countdown(res.d.retry_after);
     } else if (res.d.sent !== true) {
       lede = "We couldn't confirm the code reached";
       note = res.d.notice || "";
     }
     $("code-lede").textContent = lede;
-    $("code-note").textContent = note;
-    $("code-note").hidden = !note;
+    if (res.d.sent !== false) {
+      $("code-note").textContent = note;
+      $("code-note").hidden = !note;
+    }
     show("step-code"); $("code").focus();
   });
-  $("back-btn").addEventListener("click", () => { clear(); show("step-start"); });
+
+  // The resend wait, counted down where the person can see it, and then
+  // the way to a new code: the screen never stops at "in 22 seconds".
+  let tick = null;
+  function stopCountdown() { clearInterval(tick); tick = null; }
+  function countdown(seconds) {
+    let left = Math.max(0, Math.ceil(Number(seconds) || 0));
+    const note = $("code-note");
+    const say = () => {
+      note.textContent = left > 0
+        ? `Check your inbox and spam folder. You can request a new one in ${left} seconds.`
+        : "Check your inbox and spam folder. You can ask for a new code now.";
+      note.hidden = false;
+      $("resend-code").hidden = left > 0;
+    };
+    say();
+    if (left <= 0) return;
+    tick = setInterval(() => {
+      left -= 1;
+      say();
+      if (left <= 0) stopCountdown();
+    }, 1000);
+  }
+  // The same send as "Email me a code", to the same address.
+  $("resend-code").addEventListener("click", () => {
+    $("email").value = pendingEmail;
+    $("code").value = "";
+    $("email-btn").click();
+  });
+  $("back-btn").addEventListener("click", () => {
+    clear(); stopCountdown(); $("resend-code").hidden = true;
+    show("step-start");
+  });
 
   $("verify-btn").addEventListener("click", async () => {
     clear();

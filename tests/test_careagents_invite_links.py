@@ -430,7 +430,9 @@ def test_a_link_passes_on_real_records_only_from_an_inviter_who_has_them(
     assert invites.join_outcome(svc.session, "late@example.com") == "none"
     assert _invite_row(svc, "late@example.com") is None
     hub = c.get("/home").get_data(as_text=True)
-    assert "For now you can use made-up records" in hub
+    # The kinder words the empty hub uses (patient re-walk on #979).
+    assert ("For now you&#39;re using made-up records. Connecting your own "
+            "records is coming later in the beta.") in hub
 
 
 def test_a_confirm_link_session_of_the_owner_gets_no_funnel_page(
