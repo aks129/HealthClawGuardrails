@@ -1748,6 +1748,10 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
     elif rtype == 'Organization':
         res = _checkin_organization(resource, res)
     _drop_related_person_refs(res)
+    # FHI-66 slot: a per-resource element allow-list belongs here, the one
+    # step both checkin and ktc (_ktc_profile) run through. Redaction above
+    # is a deny-list, so an element it does not name (a top-level
+    # `patientName`, `code.Text`) still leaves.
     _codes_with_our_text(res)
     # After _codes_with_our_text, which removes every display: this one is
     # ours, and the code system's own.
