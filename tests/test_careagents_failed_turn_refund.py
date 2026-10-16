@@ -184,6 +184,44 @@ def test_a_refund_that_fails_never_breaks_the_failure_answer(
     assert run["status"] == "failed"
 
 
+def test_a_turn_that_failed_after_a_model_round_counts(
+        cfg, svc, monkeypatch):  # noqa: F811
+    # The model answered one round (a tool call), then the tool failed:
+    # the model call was paid for, so the turn is not given back.
+    app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+
+    class _Call:
+        id, name, arguments = "call-1", "search_records", {}
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "", [_Call()], []
+    monkeypatch.setattr(worker_mod.llm, "complete", lambda *a, **k: _Turn())
+
+    def tool_breaks(*a, **k):
+        raise RuntimeError("synthetic tool failure")
+    monkeypatch.setattr(RunWorker, "_execute_durable_tool", tool_breaks)
+    assert _post(c, agent_id, "a-1") == 200
+    _work(c)
+    (run,) = fake.runs.values()
+    assert run["status"] == "failed"
+    assert _events(fake, "agent.checkpoint")
+    assert _used(svc) == 1
+    assert _events(fake, REFUNDED_EVENT) == []
+
+
+def test_at_most_three_failed_turns_a_day_are_given_back(
+        cfg, svc, monkeypatch):  # noqa: F811
+    from careagents.models import REFUNDS_PER_DAY
+    assert REFUNDS_PER_DAY == 3
+    app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    _model_fails(monkeypatch)
+    for i in range(5):
+        assert _post(c, agent_id, f"cap-{i}") == 200
+        _work(c)
+    # Five failures: three given back, two count.
+    assert _used(svc) == 2
+
+
 # --- refund_daily_turn -----------------------------------------------------
 
 def _acct(svc):  # noqa: F811
@@ -212,6 +250,70 @@ def test_a_refund_gives_back_only_its_own_day(svc):  # noqa: F811
     with svc.session() as s:
         rows = {u.day: u.turns for u in s.query(UsageDay).all()}
     assert rows == {"2026-10-15": 0, "2026-10-16": 1}
+
+
+def test_the_daily_refund_limit_is_per_account_and_day(svc):  # noqa: F811
+    from careagents.models import REFUNDS_PER_DAY, RefundDay
+    aid = _acct(svc)
+    for _ in range(REFUNDS_PER_DAY + 2):
+        svc.claim_daily_turn(aid, 50, day="2026-10-15")
+    given = [svc.refund_daily_turn(aid, "2026-10-15")
+             for _ in range(REFUNDS_PER_DAY + 2)]
+    assert given == [True] * REFUNDS_PER_DAY + [False, False]
+    assert _used(svc) == 2
+    # Another day has its own limit.
+    svc.claim_daily_turn(aid, 50, day="2026-10-16")
+    assert svc.refund_daily_turn(aid, "2026-10-16") is True
+    with svc.session() as s:
+        rows = {r.day: r.count for r in s.query(RefundDay).all()}
+    assert rows == {"2026-10-15": REFUNDS_PER_DAY, "2026-10-16": 1}
+
+
+def test_a_refund_with_nothing_to_give_back_spends_no_refund(svc):  # noqa: F811
+    from careagents.models import RefundDay
+    aid = _acct(svc)
+    assert svc.refund_daily_turn(aid, "2026-10-15") is False
+    with svc.session() as s:
+        assert s.query(RefundDay).count() == 0
+
+
+def test_racing_refunds_never_pass_the_limit(tmp_path, monkeypatch):
+    import threading
+
+    from careagents.accounts import AccountService
+    from careagents.models import REFUNDS_PER_DAY
+    from tests.test_careagents_beta_signup import _cfg
+    cfg_ = _cfg(CARE_DATABASE_URL=f"sqlite:///{tmp_path / 'race.db'}")
+    svc_ = AccountService(cfg_)
+    aid = _acct(svc_)
+    for _ in range(10):
+        svc_.claim_daily_turn(aid, 50, day="2026-10-15")
+    results, gate = [], threading.Barrier(8)
+
+    def refund():
+        gate.wait()
+        try:
+            results.append(svc_.refund_daily_turn(aid, "2026-10-15"))
+        except Exception as exc:  # noqa: BLE001 - recorded, then asserted
+            results.append(exc)
+    threads = [threading.Thread(target=refund) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results.count(True) <= REFUNDS_PER_DAY
+    assert _used(svc_) == 10 - results.count(True)
+    svc_.engine.dispose()
+
+
+def test_an_account_and_its_refund_rows_go_together(svc):  # noqa: F811
+    from careagents.models import RefundDay
+    aid = _acct(svc)
+    svc.claim_daily_turn(aid, 5, day="2026-10-15")
+    svc.refund_daily_turn(aid, "2026-10-15")
+    assert svc.delete_account(aid) is True
+    with svc.session() as s:
+        assert s.query(RefundDay).count() == 0
 
 
 @pytest.mark.parametrize("cap", [1, 3])

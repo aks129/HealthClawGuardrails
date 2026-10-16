@@ -68,6 +68,20 @@ def _all_rows(svc):
                 for t in Base.metadata.sorted_tables}
 
 
+def _own_run(app, svc, c, run_id=RUN):
+    """A run of this tester's own assistant, in the fake engine, with the
+    engine's UUID shape. Returns (agent_id, tenant)."""
+    conn = c.post("/api/connections/sample").get_json()
+    agent_id = conn["agent_id"]
+    with c.session_transaction() as sess:
+        account_id = sess["account_id"]
+    tenant = svc.get_agent_context(account_id, agent_id)["tenant"]
+    fake = app.extensions["careagents_runtime"]["client"]
+    fake.runs[run_id] = {"id": run_id, "tenant_id": tenant,
+                         "agent_id": agent_id, "status": "completed"}
+    return agent_id, tenant
+
+
 def _flag(client, **over):
     body = {"run_id": RUN, "reason": "wrong", "note": ""}
     body.update(over)
@@ -231,6 +245,7 @@ def test_the_email_puts_the_context_apart_from_the_testers_words(
         made, sent, monkeypatch):  # noqa: F811
     app, svc = made(RESEND_API_KEY="re_test")
     c = _signed_in(app, svc, monkeypatch)
+    _own_run(app, svc, c)
     r = c.post("/feedback", json={
         "stuck": "The chat froze", "change": "", "trust": "", "real": "",
         "context": {"screen": "chat", "error": "500", "run_id": RUN}})
@@ -302,6 +317,7 @@ def test_a_flag_needs_a_sign_in(made, sent):  # noqa: F811
 def test_a_flag_is_emailed_and_counted_by_reason(made, sent, monkeypatch):  # noqa: F811
     app, svc = made(RESEND_API_KEY="re_test")
     c = _signed_in(app, svc, monkeypatch)
+    _own_run(app, svc, c)
     r = _flag(c, reason="unsafe", note="It told me to stop a pill")
     assert r.status_code == 200 and r.get_json() == {"ok": True}
     (msg,) = sent
@@ -312,7 +328,7 @@ def test_a_flag_is_emailed_and_counted_by_reason(made, sent, monkeypatch):  # no
     words_at = text.index("== In the tester's own words ==")
     block = text[:words_at]
     assert f"Chat answer (run id): {RUN}" in block
-    assert "Reason: unsafe" in block
+    assert "Reason: Felt unsafe or worrying (unsafe)" in block
     assert "It told me to stop a pill" in text[words_at:]
     assert "It told me to stop a pill" not in block
     today = funnel.utc_day()
@@ -432,6 +448,7 @@ class Node {
   remove() { if (this.parent) this.parent.children.splice(
     this.parent.children.indexOf(this), 1); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
+  scrollIntoView() {}
   addEventListener(k, fn) { this.listeners[k] = fn; }
   set className(v) { this.cls = v; }
   get textContent() { return this._text + this.children.map(
@@ -485,10 +502,11 @@ def _run_flag_js(**args):
 def test_the_flag_sends_the_run_id_reason_and_note_only():
     answer = f"Your A1c is 7.9 {MARKER}-answer"
     question = f"What is my A1c? {MARKER}-question"
-    out = _run_flag_js(run=RUN, label="Unclear", note="Too long",
+    out = _run_flag_js(run=RUN, label="Confusing", note="Too long",
                        answer=answer, question=question)
     body = json.loads(out["body"])
-    assert body == {"run_id": RUN, "reason": "unclear", "note": "Too long"}
+    assert body == {"run_id": RUN, "reason": "confusing",
+                    "note": "Too long"}
     assert MARKER not in out["body"]
     # The control sits beside the bubble; the answer's text is untouched.
     assert out["after"] is True
@@ -550,7 +568,8 @@ def test_the_digest_lists_yesterdays_errors_by_route_and_flags_by_reason(
                   text.index("Flagged answers by reason")]
     assert errors.split("\n")[1:3] == ["chat: 3", "home: 1"]
     flags = text[text.index("Flagged answers by reason"):]
-    for line in ("wrong: 2", "unclear: 0", "unsafe: 1", "other: 0"):
+    for line in ("Wrong: 2", "Confusing: 0", "Didn't do what I asked: 0",
+                 "Felt unsafe or worrying: 1", "Something else: 0"):
         assert line in flags
     assert "server_error: 4" in text and "answer_flagged: 3" in text
 
@@ -560,7 +579,7 @@ def test_a_quiet_day_says_none(made):  # noqa: F811
     report = funnel.daily(svc.session, days=1)
     text = funnel.digest_text(report, report["days"][0]["day"])
     assert "Server errors by route\nnone" in text
-    assert "wrong: 0" in text
+    assert "Wrong: 0" in text
 
 
 def test_a_detail_kind_survives_racing_inserts(made):  # noqa: F811
@@ -788,3 +807,156 @@ def test_the_visit_brief_links_the_form(made, monkeypatch):  # noqa: F811
     r = c.get(f"/brief?agent={conn['agent_id']}")
     assert r.status_code == 200
     assert '<a href="/feedback">Tell us</a>' in r.get_data(as_text=True)
+
+
+# --- review round on #980 ------------------------------------------------------
+
+def _account_id(c):
+    with c.session_transaction() as sess:
+        return sess["account_id"]
+
+
+def _block(text):
+    return text.split("== In the tester's own words ==")[0]
+
+
+def test_both_mails_carry_the_account_id_and_never_its_address(
+        made, sent, monkeypatch):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    aid = _account_id(c)
+    assert c.post("/feedback", json={"stuck": "hi"}).status_code == 200
+    assert _flag(c).status_code == 200
+    report, flag = sent
+    for msg in (report, flag):
+        block = _block(msg["text"])
+        assert f"Account: {aid}" in block
+        assert "gene@example.com" not in block
+        assert "gene@example.com" not in msg["text"]
+        assert msg["reply_to"] == "gene@example.com"
+        assert aid not in str(msg["subject"])
+
+
+def test_a_signed_out_report_has_no_account_line(made, sent):  # noqa: F811
+    app, _ = made(RESEND_API_KEY="re_test")
+    app.test_client().post("/feedback", json={"stuck": "hi"},
+                           headers={"X-Real-IP": "203.0.113.50"})
+    assert "Account:" not in sent[0]["text"]
+
+
+def test_a_flag_on_someone_elses_run_drops_the_run_id(
+        made, sent, monkeypatch):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    other = _signed_in(app, svc, monkeypatch, email="other@example.com")
+    _own_run(app, svc, other)                    # RUN is the other's
+    c = _signed_in(app, svc, monkeypatch)
+    c.post("/api/connections/sample")
+    r = _flag(c, reason="wrong", note="Not right")
+    assert r.status_code == 200 and r.get_json() == {"ok": True}
+    (msg,) = sent
+    assert RUN not in msg["text"] and RUN not in msg["html"]
+    assert "Not right" in msg["text"]
+    assert "Reason: Wrong (wrong)" in msg["text"]
+    assert _details(svc) == [(funnel.utc_day(), "answer_flagged", "wrong", 1)]
+
+
+def test_a_report_on_someone_elses_run_drops_the_run_id(
+        made, sent, monkeypatch):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    other = _signed_in(app, svc, monkeypatch, email="other@example.com")
+    _own_run(app, svc, other)
+    c = _signed_in(app, svc, monkeypatch)
+    r = c.post("/feedback", json={"stuck": "broke", "context": {
+        "screen": "chat", "error": "chat_error", "run_id": RUN}})
+    assert r.status_code == 200
+    block = _block(sent[0]["text"])
+    assert RUN not in sent[0]["text"]
+    assert "Screen: chat" in block and "Error code: chat_error" in block
+
+
+def test_a_signed_out_report_never_carries_a_run_id(made, sent):  # noqa: F811
+    app, _ = made(RESEND_API_KEY="re_test")
+    r = app.test_client().post("/feedback", json={
+        "stuck": "broke", "context": {"run_id": RUN, "screen": "chat"}},
+        headers={"X-Real-IP": "203.0.113.51"})
+    assert r.status_code == 200
+    assert RUN not in sent[0]["text"]
+
+
+def test_a_run_of_the_same_tenant_but_another_agent_is_dropped(
+        made, sent, monkeypatch):  # noqa: F811
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    _, tenant = _own_run(app, svc, c)
+    fake = app.extensions["careagents_runtime"]["client"]
+    fake.runs[RUN]["agent_id"] = "agent_someone_else"
+    assert _flag(c).status_code == 200
+    assert RUN not in sent[0]["text"]
+
+
+def test_an_engine_that_cannot_answer_drops_the_run_id(
+        made, sent, monkeypatch):  # noqa: F811
+    from careagents.healthclaw import HealthClawError
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    _own_run(app, svc, c)
+    fake = app.extensions["careagents_runtime"]["client"]
+
+    def down(*a, **k):
+        raise HealthClawError("engine down", 0)
+    monkeypatch.setattr(fake, "get_agent_run", down)
+    r = _flag(c, note="still goes")
+    assert r.status_code == 200
+    assert RUN not in sent[0]["text"] and "still goes" in sent[0]["text"]
+
+
+def test_the_run_lookup_is_labelled_with_the_account(made, sent, monkeypatch):  # noqa: F811
+    from careagents import healthclaw
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    _own_run(app, svc, c)
+    fake = app.extensions["careagents_runtime"]["client"]
+    real, seen = fake.get_agent_run, []
+
+    def labelled(*a, **k):
+        seen.append(healthclaw.agent_header())
+        return real(*a, **k)
+    monkeypatch.setattr(fake, "get_agent_run", labelled)
+    assert _flag(c).status_code == 200
+    assert seen == [f"careagents:{_account_id(c)}"]
+    assert RUN in sent[0]["text"]
+
+
+@pytest.mark.parametrize("bad", [
+    "Support<atk@example.test>", "Support <atk@example.test>",
+    '"Support"@example.test', "<atk@example.test>", "atk@example.test>"])
+def test_a_reply_address_must_be_bare(made, sent, bad):  # noqa: F811
+    app, _ = made(RESEND_API_KEY="re_test")
+    r = app.test_client().post("/feedback", json={
+        "stuck": "hi", "reply_email": bad},
+        headers={"X-Real-IP": "203.0.113.52"})
+    assert r.status_code == 400 and r.get_json() == {"error": "bad_email"}
+    assert sent == []
+
+
+def test_the_digest_and_the_page_name_the_ruled_reasons():
+    assert funnel.FLAG_LABELS == (
+        ("wrong", "Wrong"), ("confusing", "Confusing"),
+        ("not_what_asked", "Didn't do what I asked"),
+        ("unsafe", "Felt unsafe or worrying"),
+        ("other", "Something else"))
+    src = CHAT_JS.read_text()
+    block = src[src.index("const FLAG_REASONS"):src.index("const NOTE_MAX")]
+    pairs = re.findall(r'\["(\w+)", "([^"]+)"\]', block)
+    assert tuple(pairs) == funnel.FLAG_LABELS
+
+
+def test_the_flag_sheet_keeps_send_in_view():
+    src = CHAT_JS.read_text()
+    body = src[src.index("function addFlag"):]
+    assert "row.scrollIntoView" in body
+    assert 'note.addEventListener("focus"' in body
+    css = (_ROOT / "careagents" / "static" / "careagents.css").read_text()
+    rule = css[css.index(".flag-actions {"):]
+    rule = rule[:rule.index("}")]
+    assert "position: sticky" in rule and "bottom: 0" in rule

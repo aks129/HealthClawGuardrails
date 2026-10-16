@@ -325,6 +325,10 @@ class RunWorker:
         account_id, day = info.get("account_id"), info.get("day")
         if info.get("refunded") or not account_id or not day:
             return None
+        if info.get("answered"):
+            # A model round already answered, so the model call was paid
+            # for: the turn counts, as any answered turn does.
+            return None
         try:
             self.hc.append_agent_run_event(
                 str(run["id"]), self.worker_id, REFUNDED_EVENT, {"day": day})
@@ -479,14 +483,15 @@ class RunWorker:
         charged = any(event.get("type") == CHARGED_EVENT for event in events)
         # What a failure needs to give the turn back, kept on the run, so
         # the failure branch reads nothing more from the engine
-        # (`_mark_refund`): the account, the day it was charged, and whether
-        # it was already given back.
+        # (`_mark_refund`): the account, the day it was charged, whether it
+        # was already given back, and whether a model round has answered.
         charge = next((e for e in events if e.get("type") == CHARGED_EVENT),
                       None)
         run["_refund"] = {
             "account_id": context["account_id"],
             "day": str(((charge or {}).get("payload") or {}).get("day") or ""),
-            "refunded": any(e.get("type") == REFUNDED_EVENT for e in events)}
+            "refunded": any(e.get("type") == REFUNDED_EVENT for e in events),
+            "answered": bool(checkpoints)}
         if not checkpoints and not charged:
             # The day's allowance is charged here, where the model is called
             # and after turn_block passed (#856 sign-off F4): a turn admitted
@@ -555,6 +560,9 @@ class RunWorker:
                     pending_checkpoint)
                 checkpoints.append({"type": "agent.checkpoint",
                                     "payload": pending_checkpoint})
+                # A model round answered: the turn's cost is spent, and a
+                # later failure no longer gives the turn back.
+                run["_refund"]["answered"] = True
                 history.append({
                     "role": "assistant", "content": turn.text,
                     "tool_calls": pending_checkpoint["tool_calls"],

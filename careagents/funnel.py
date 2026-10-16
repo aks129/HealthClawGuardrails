@@ -60,8 +60,14 @@ ISSUE_KINDS = ("chat_error", "run_replay_error", "fasten_failed",
                "sign_in_failed", "mail_failed", "rate_limited",
                "server_error", "answer_flagged")
 
-#: Why a person flagged an answer ("This wasn't right", static/chat.js).
-FLAG_REASONS = ("wrong", "unclear", "unsafe", "other")
+#: Why a person flagged an answer ("This wasn't right", static/chat.js),
+#: as the code the page sends and the words it shows (a product ruling on
+#: #980). "unsafe" stays: it is the safety signal most worth counting.
+FLAG_LABELS = (("wrong", "Wrong"), ("confusing", "Confusing"),
+               ("not_what_asked", "Didn't do what I asked"),
+               ("unsafe", "Felt unsafe or worrying"),
+               ("other", "Something else"))
+FLAG_REASONS = tuple(code for code, _ in FLAG_LABELS)
 
 #: The kinds counted one step further, in `ca_issue_detail_days`.
 DETAIL_KINDS = ("server_error", "answer_flagged")
@@ -403,7 +409,8 @@ def digest_text(report: dict, day: str) -> str:
         errors.items(), key=lambda kv: (-kv[1], kv[0]))] or ["none"])
     flags = split.get("answer_flagged", {})
     lines += ["", "Flagged answers by reason"]
-    lines += [f"{r}: {flags.get(r, 0)}" for r in FLAG_REASONS]
+    lines += [f"{label}: {flags.get(code, 0)}"
+              for code, label in FLAG_LABELS]
     lines += ["", "Details: /admin/funnel, or flask funnel daily"]
     return "\n".join(lines)
 

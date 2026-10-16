@@ -173,8 +173,11 @@
   // answer's run id (a pointer), a reason code and the person's own short
   // note. Never the answer or the question: flagBody is never handed the
   // bubble, and the server refuses any other field.
-  const FLAG_REASONS = [["wrong", "Wrong"], ["unclear", "Unclear"],
-                        ["unsafe", "Unsafe"], ["other", "Something else"]];
+  // The same codes and words as careagents/funnel.py FLAG_LABELS.
+  const FLAG_REASONS = [["wrong", "Wrong"], ["confusing", "Confusing"],
+                        ["not_what_asked", "Didn't do what I asked"],
+                        ["unsafe", "Felt unsafe or worrying"],
+                        ["other", "Something else"]];
   const NOTE_MAX = 280;
   function flagBody(runId, reason, note) {
     return JSON.stringify({ run_id: runId, reason: reason,
@@ -232,7 +235,12 @@
       status.setAttribute("role", "status");
       sheet.appendChild(status);
       wrap.appendChild(sheet);
-      scroll();
+      // Send in view at 375px (QA on #980): the row is sticky to the
+      // bottom of the log (careagents.css), and is brought into view on
+      // open and again when the keyboard comes up for the note.
+      const showSend = () => row.scrollIntoView({ block: "nearest" });
+      showSend();
+      note.addEventListener("focus", () => setTimeout(showSend, 300));
       cancel.addEventListener("click", function () {
         sheet.remove(); open.hidden = false;
       });

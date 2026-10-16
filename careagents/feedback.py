@@ -18,8 +18,12 @@ A report can carry context, so "it broke" arrives with where and when. It
 is a fixed list, every value checked against a fixed set: the screen (an
 endpoint name of this app, never a URL), the last error code, and a chat
 answer's run id (a UUID, which cannot spell words). The server adds its
-own build and the time; it takes neither from the page. The email puts
-the context in its own block, apart from the tester's words.
+own build and the time; it takes neither from the page, and the
+signed-in account's opaque id (never its address, which is only the
+reply-to). A run id goes in only when it is the signed-in account's own
+run, looked up the way the chat's own replay does; otherwise it is left
+out and the rest still goes. The email puts the context in its own
+block, apart from the tester's words.
 
 After Send the thank-you page leads back where the tester came from: the
 Referer of the form, rebuilt from a fixed list of our own pages
@@ -50,6 +54,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from careagents import funnel, mail
 from careagents.beta_signup import valid_email
 from careagents.errors import NOT_FOUND_SCREEN, known_endpoint
+from careagents.healthclaw import HealthClawError, acting_for
 
 logger = logging.getLogger("careagents.feedback")
 
@@ -176,9 +181,16 @@ def context_from_args(app, args) -> dict:
     return out
 
 
-_CONTEXT_LABELS = (("screen", "Screen"), ("error", "Error code"),
+_CONTEXT_LABELS = (("account", "Account"), ("screen", "Screen"),
+                   ("error", "Error code"),
                    ("run_id", "Chat answer (run id)"), ("reason", "Reason"),
                    ("build", "Build"), ("time", "Sent (UTC)"))
+
+#: The most of an account's assistants a run id is looked for under.
+RUN_LOOKUP_AGENTS = 12
+
+#: Characters a bare address never needs, and a display name does.
+_NOT_BARE = frozenset('<>"')
 
 
 def _stamp(context: dict, build: str) -> dict:
@@ -248,13 +260,14 @@ def _wrap(title: str, who: str, context: dict,
 
 
 def compose(answers: dict, signed_in: bool, context: dict | None = None,
-            build: str = "unknown",
-            reply_to: str | None = None) -> tuple[str, str]:
+            build: str = "unknown", reply_to: str | None = None,
+            account: str | None = None) -> tuple[str, str]:
     """(html, text) for the email. Only the body carries answer text."""
     words = [(question, answers[name] or "(no answer)")
              for name, question in QUESTIONS]
     return _wrap("Tester feedback", _who(signed_in, reply_to),
-                 _stamp(context or {}, build), words)
+                 _stamp({"account": account, **(context or {})}, build),
+                 words)
 
 
 def read_reply_email(body) -> tuple[str | None, str | None]:
@@ -268,7 +281,9 @@ def read_reply_email(body) -> tuple[str | None, str | None]:
     value = raw.strip()
     if not value:
         return None, None
-    if not valid_email(value):
+    # A bare address only: no display name ("Name <a@b.c>") rides along
+    # into the reply-to.
+    if _NOT_BARE & set(value) or not valid_email(value):
         return None, "bad_email"
     return value, None
 
@@ -295,12 +310,14 @@ def read_flag(body) -> tuple[dict | None, str | None]:
     return {"run_id": run_id, "reason": reason, "note": note}, None
 
 
-def compose_flag(flag: dict, signed_in: bool,
-                 build: str = "unknown") -> tuple[str, str]:
-    """(html, text) for a flagged answer: the pointer and the reason as
-    context, the note as the tester's words."""
-    context = _stamp({"run_id": flag["run_id"], "reason": flag["reason"]},
-                     build)
+def compose_flag(flag: dict, signed_in: bool, build: str = "unknown",
+                 account: str | None = None) -> tuple[str, str]:
+    """(html, text) for a flagged answer: the account, the pointer (when
+    it checked out) and the reason as context, the note as the tester's
+    words."""
+    label = dict(funnel.FLAG_LABELS)[flag["reason"]]
+    context = _stamp({"account": account, "run_id": flag.get("run_id"),
+                      "reason": f"{label} ({flag['reason']})"}, build)
     return _wrap("Answer flagged", _who(signed_in), context,
                  [("Their note", flag["note"] or "(no note)")])
 
@@ -346,6 +363,35 @@ def register(app, svc, cfg) -> None:
     def _account():
         aid = session.get("account_id")
         return svc.get_account(aid) if aid else None
+
+    def _run_is_theirs(acct, run_id: str) -> bool:
+        """Is `run_id` a run of one of this account's own assistants? The
+        same rule as the chat's replay (app.py api_chat_events): the
+        account's agent, its tenant, then the engine's tenant-scoped
+        lookup. Any doubt, an engine error included, is a no."""
+        hc = app.extensions["careagents_runtime"]["client"]
+        agents = svc.list_home(acct.id)["agents"][:RUN_LOOKUP_AGENTS]
+        for agent in agents:
+            ctx = svc.get_agent_context(acct.id, agent["id"])
+            if not ctx:
+                continue
+            try:
+                with acting_for(acct.id):
+                    run = hc.get_agent_run(ctx["tenant"], run_id)
+            except HealthClawError:
+                continue
+            if (run.get("tenant_id") == ctx["tenant"]
+                    and run.get("agent_id") == agent["id"]):
+                return True
+        return False
+
+    def _own_run_only(acct, context: dict) -> dict:
+        """The context with its run id kept only if it is the account's.
+        Signed out, never: nothing says whose it is."""
+        run_id = context.get("run_id")
+        if run_id and (acct is None or not _run_is_theirs(acct, run_id)):
+            return {k: v for k, v in context.items() if k != "run_id"}
+        return context
 
     def _send(subject, html, text, reply_to) -> bool:
         """Mail one report to the team. False when it surely did not go."""
@@ -423,9 +469,12 @@ def register(app, svc, cfg) -> None:
             return jsonify({"error": "rate_limited"}), 429
         if acct and valid_email(acct.email or ""):
             reply_to = acct.email
+        # After the rate limit, so the lookups behind it are bounded too.
+        context = _own_run_only(acct, context)
         html, text = compose(answers, signed_in=acct is not None,
                              context=context, build=cfg.build_sha,
-                             reply_to=reply_to)
+                             reply_to=reply_to,
+                             account=acct.id if acct else None)
         if not _send(SUBJECT, html, text, reply_to):
             # Nothing left, so the page keeps the answers and says so.
             _refund(key)
@@ -463,7 +512,10 @@ def register(app, svc, cfg) -> None:
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
             return jsonify({"error": "rate_limited"}), 429
         reply_to = acct.email if valid_email(acct.email or "") else None
-        html, text = compose_flag(flag, signed_in=True, build=cfg.build_sha)
+        # Not this account's run: the note and the reason still go.
+        flag = _own_run_only(acct, flag)
+        html, text = compose_flag(flag, signed_in=True, build=cfg.build_sha,
+                                  account=acct.id)
         if not _send(FLAG_SUBJECT, html, text, reply_to):
             _refund(key)
             return jsonify({"error": "not_sent"}), 503
