@@ -60,9 +60,9 @@
         "spam." + OTHER_WAY;
       againAfter(60);
     } else if (d.sent === false && d.retry_after > 60) {
-      line = "We already sent several emails to " + email + " today, so " +
-        "we can't send another until " + wait(d.retry_after).slice(3) +
-        " from now. Use the newest one we sent." + OTHER_WAY;
+      line = "We already sent several emails to " + email + " today. " +
+        "Use the newest one we sent, or ask for another " +
+        wait(d.retry_after) + "." + OTHER_WAY;
       againAfter(d.retry_after);
     } else if (d.sent === false) {
       line = "We sent an email to " + email + " a moment ago, so we didn't " +
