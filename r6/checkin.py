@@ -16,8 +16,10 @@ pinned to shrink (tests/test_ratchets.py): `mint` is the check-in branch of
 """
 
 import json
+import os
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from flask import Response, jsonify, request
 
@@ -25,6 +27,7 @@ from models import db
 from r6 import access, stepup
 from r6.audit import add_audit_event
 from r6.models import R6Resource
+from r6.runtime_config import resolve_app_env
 
 #: The six items a check-in may ask for. Organization is deliberately absent:
 #: payor Organizations are fetched by the ids the exported Coverage
@@ -108,17 +111,44 @@ _PATIENT_ID = re.compile(r'[A-Za-z0-9\-.]{1,255}')
 _ENTRY_TYPES = CHECKIN_TYPES | {'Organization'}
 
 
+def public_base():
+    """The origin our fullUrls name, with one trailing slash (FHI-61).
+
+    PUBLIC_BASE_URL, the setting the action rails and SDC delivery links
+    already read. Not `request.host_url`: the CareAgents relay calls the
+    engine server to server, so the request's host is the internal one, and
+    a clinic would receive (and the wallet rewrite references to) a URL
+    nobody outside can follow.
+
+    Usable means http(s), a host, no credentials, no query or fragment; in
+    production, https only. Unset or unusable: None in production, which
+    the export refuses rather than publish the request host; elsewhere the
+    request host, for local development."""
+    raw = os.environ.get('PUBLIC_BASE_URL', '').strip().rstrip('/')
+    production = resolve_app_env() == 'production'
+    parts = urlsplit(raw)
+    usable = (parts.scheme in (('https',) if production else ('http', 'https'))
+              and parts.hostname and not parts.username
+              and not parts.password and not parts.query
+              and not parts.fragment and '#' not in raw and '?' not in raw)
+    if usable:
+        return raw + '/'
+    return None if production else request.host_url
+
+
 def full_url(resource):
-    """`{our host}r6/fhir/{type}/{id}`, or None when the type or id is not a
-    shape we would serve. The wallet matches records by fullUrl and resolves
-    references against it (QA #963), so every entry needs one; an id that
+    """`{public_base}r6/fhir/{type}/{id}`, or None when the type or id is
+    not a shape we would serve, or there is no public base. The wallet
+    matches records by fullUrl and resolves references against it (QA
+    #963), so every entry needs one; an id that
     could walk the path (`.`, `..`) or carry anything but the store's id
     characters gets no URL, and its entry is not sent."""
     rtype, rid = resource.get('resourceType'), resource.get('id')
     if (rtype not in _ENTRY_TYPES or not isinstance(rid, str)
             or not _PATIENT_ID.fullmatch(rid) or rid in ('.', '..')):
         return None
-    return f'{request.host_url}r6/fhir/{rtype}/{rid}'
+    base = public_base()
+    return f'{base}r6/fhir/{rtype}/{rid}' if base else None
 
 
 def _entry(resource):
@@ -162,7 +192,9 @@ def export(tenant, body):
     - Each row goes through r6/access.py _checkin_profile. Payor Organizations
       are fetched by the ids the exported Coverage references, in this
       tenant, never by type.
-    - Every entry carries an absolute fullUrl on our own host (full_url).
+    - Every entry carries an absolute fullUrl on our public base (full_url,
+      public_base). In production without one: 503, audited, token not
+      spent.
     - Over MAX_BUNDLE_BYTES: 413, no bundle, audited as a failure, and the
       token is not spent. Never truncated.
     - One AuditEvent, from fixed words.
@@ -184,6 +216,18 @@ def export(tenant, body):
             'severity': 'error', 'code': 'required',
             'diagnostics': 'profile "checkin" requires resource_types from '
                            'the check-in set and a patient_id'}]}), 400
+
+    # Fail closed before the grant (FHI-61): a production engine with no
+    # public base would publish its internal host. Any caller gets the same
+    # answer, and the token is not spent.
+    if public_base() is None:
+        add_audit_event(
+            'read', resource_type='Bundle', resource_id='share-bundle',
+            agent_id=AUDIT_AGENT, tenant_id=tenant.id, outcome='failure',
+            detail='share-bundle export (profile=checkin) refused: '
+                   'PUBLIC_BASE_URL is not configured')
+        db.session.commit()
+        return jsonify({'error': 'checkin_unavailable'}), 503
 
     # Checked here without spending; spent only once the bundle is known to
     # fit, so a 413 does not burn it. A narrower retry still needs a newly
