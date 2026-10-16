@@ -123,8 +123,9 @@
      relationship (FHI-44). Just above the message box, outside the
      scrolling log, so all of them show on a short phone screen (patient
      tester recheck on #944). A returning visit has it hidden: chat.js
-     shows it after an error, so the next try is one tap. #}
-  <div class="starters" id="starters"{% if past %} hidden{% endif %}>
+     shows it after an error, so the next try is one tap. A visit whose
+     last turn failed keeps it shown, the same way. #}
+  <div class="starters" id="starters"{% if past and not past[-1].failed %} hidden{% endif %}>
     {% for s in starters %}
     <button type="button" class="starter">{{ s }}</button>
     {% endfor %}

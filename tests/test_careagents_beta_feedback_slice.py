@@ -651,8 +651,12 @@ def test_the_chat_replays_one_failure_with_a_report_link(
     assert "first try" not in page and "second try" in page
     assert ('class="report-link" href="/feedback?screen=chat&amp;'
             'error=chat_error"') in page
-    # The suggestion chips are still offered.
-    assert 'id="starters"' in page
+    # The suggestion chips are still offered, shown as after a live error.
+    assert re.search(r'id="starters"\s*>', page)
+    # A history that ends well keeps them hidden, as before.
+    past.append({"role": "assistant", "content": "Here it is."})
+    page = c.get(f"/chat?agent={conn['agent_id']}").get_data(as_text=True)
+    assert 'id="starters" hidden' in page
 
 
 def test_the_live_error_bubble_gets_a_report_link_not_a_flag():
