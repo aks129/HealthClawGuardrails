@@ -88,6 +88,11 @@
     <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
       {#- -#}<p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
       {#- -#}</div>
+    {# A failed turn, once (errors.collapse_failed_turns): a way to tell us,
+       with the screen and the code. History keeps no run id. #}
+    {% if m.failed %}
+    <a class="report-link" href="{{ url_for('feedback_page', screen='chat', error='chat_error') }}">Report a problem</a>
+    {% endif %}
     {% endfor %}
     {% elif summary_counts %}
     {# First visit with connected records: show real counts so the user sees
@@ -118,8 +123,9 @@
      relationship (FHI-44). Just above the message box, outside the
      scrolling log, so all of them show on a short phone screen (patient
      tester recheck on #944). A returning visit has it hidden: chat.js
-     shows it after an error, so the next try is one tap. #}
-  <div class="starters" id="starters"{% if past %} hidden{% endif %}>
+     shows it after an error, so the next try is one tap. A visit whose
+     last turn failed keeps it shown, the same way. #}
+  <div class="starters" id="starters"{% if past and not past[-1].failed %} hidden{% endif %}>
     {% for s in starters %}
     <button type="button" class="starter">{{ s }}</button>
     {% endfor %}

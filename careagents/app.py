@@ -40,7 +40,7 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, feedback, funnel, invites
+from careagents import beta_signup, errors, feedback, funnel, invites
 from careagents import checkin_wallet
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -2012,6 +2012,8 @@ def create_app(config: Config | None = None,
             past = [dict(m, content=beta.under_banner(str(m.get("content")
                                                           or ""), frame))
                     if m.get("role") != "user" else m for m in past]
+        # Retries of a broken chat replay as one failure, not a wall.
+        past = errors.collapse_failed_turns(past)
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is
@@ -3661,6 +3663,7 @@ def create_app(config: Config | None = None,
     operator_cli.register(app, svc)
     beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
+    errors.register(app, svc, cfg)
     invites.register(app, svc, cfg, beta_signup.page_context)
     funnel.register(app, svc, cfg, full_session=lambda: not session.get(
         _VIA_LINK))

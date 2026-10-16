@@ -103,8 +103,11 @@ def test_the_page_asks_the_four_questions_in_order(made):
     for b in boxes:
         assert f'maxlength="{feedback.ANSWER_MAX}"' in b
         assert "required" not in b
-    # Nothing asks for a name, an email or a phone number.
-    assert "<input" not in form.replace('type="hidden"', "")
+    # Nothing asks for a name or a phone number. Signed out, the one input
+    # is an optional address to be answered at (never kept).
+    inputs = re.findall(r"<input[^>]*>", form.replace('type="hidden"', ""))
+    assert len(inputs) == 1 and 'name="reply_email"' in inputs[0]
+    assert "required" not in inputs[0]
 
 
 def test_the_page_opens_signed_in_too(made, monkeypatch):
