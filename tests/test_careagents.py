@@ -2572,8 +2572,22 @@ def _make_account(svc, monkeypatch, email):
         mailmod, "send_code",
         lambda cfg, e, code, purpose: (captured.setdefault("c", code)
                                        and mailmod.SENT))
+    _past_the_resend_wait(svc, email)
     svc.start_email_code(email)
     return svc.verify_email_code(email, captured["c"])
+
+
+def _past_the_resend_wait(svc, email):
+    """Move the address's earlier codes back past the resend wait.
+
+    Every code issued in the wait holds the next one back, the used one a
+    sign-in just spent included, so a test that signs the same address in
+    twice is a person signing in again a little later."""
+    from careagents.accounts import RESEND_COOLDOWN
+    from careagents.models import EmailToken
+    with svc.session() as s:
+        s.query(EmailToken).filter_by(email=email.strip().lower()).update(
+            {"exp": EmailToken.exp - (RESEND_COOLDOWN + 1)})
 
 
 def _sink_code(sink):
@@ -2599,6 +2613,7 @@ def _login(client, svc, monkeypatch, email="gene@example.com"):
         mailmod, "send_code",
         lambda cfg, e, code, purpose: (captured.setdefault("c", code)
                                        and mailmod.SENT))
+    _past_the_resend_wait(svc, email)
     r = client.post("/api/auth/email", json={"email": email})
     assert r.status_code == 200
     r = client.post("/api/auth/verify", json={"email": email, "code": captured["c"]})
@@ -2734,12 +2749,15 @@ def test_email_code_response_never_reveals_whether_an_account_exists(
     import careagents.mail as mailmod
     monkeypatch.setattr(mailmod, "send_code", _sink_code([]))
     _make_account(svc, monkeypatch, "member@example.com")
+    # The member signed up a while ago, not moments ago: every code counts
+    # toward the resend wait, the one verify consumed included.
+    _past_the_resend_wait(svc, "member@example.com")
     monkeypatch.setattr(mailmod, "send_code", _sink_code([]))
     c = app.test_client()
 
     def _probe(email):
-        # The member's own code was consumed by verify, so both addresses
-        # start from the same place: no live token.
+        # The member's own code was consumed by verify and is past the wait,
+        # so both addresses start from the same place: nothing holding them.
         first = c.post("/api/auth/email", json={"email": email})
         second = c.post("/api/auth/email", json={"email": email})
         return ((first.status_code, first.get_json()),
