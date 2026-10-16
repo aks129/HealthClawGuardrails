@@ -226,10 +226,11 @@ def test_the_browser_refuses_while_the_box_is_unticked():
     assert "consent.checked" in _JS
     assert 'headers: { "Content-Type": "application/json" }' in _JS
     assert "scrollIntoView" in _JS
-    assert '"Thanks, "' in _JS and "Check your email to confirm." in _JS
-    assert "If it isn't there in a few minutes, check spam." in _JS
-    assert "If you already asked today, use the email we sent earlier." \
-        in _JS
+    assert '"Thanks, "' in _JS and "Tap Confirm in it." in _JS
+    assert "If it isn't there in a few minutes, check \" +\n" in _JS
+    # Only a send that happened is called one (patient tester, 2026-10-16).
+    assert "d.sent === true" in _JS and "d.sent === false" in _JS
+    assert "If you already asked today" not in _JS
     assert "innerHTML" not in _JS
 
 
@@ -239,7 +240,7 @@ def test_a_submit_only_asks_the_address_to_confirm(made, sent):
     app, svc = made(RESEND_API_KEY="re_test",
                     CARE_BETA_NOTIFY_EMAIL="owner@example.org")
     r = _post(app.test_client(), ref="advisor", mobile="(555) 010-0101")
-    assert r.status_code == 200 and r.get_json() == {"ok": True}
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "sent": True}
     row = _row(svc)
     assert row["status"] == "pending" and row["ref"] == "advisor"
     assert row["mobile"] == "+15550100101" and row["confirmed_at"] is None
@@ -385,8 +386,8 @@ def test_the_consent_box_is_checked_on_the_server(made):
     (["advisor"], None),
     (None, None),
 ])
-def test_ref_is_kept_only_when_it_is_plain(made, raw, kept):
-    app, svc = made()
+def test_ref_is_kept_only_when_it_is_plain(made, sent, raw, kept):
+    app, svc = made(RESEND_API_KEY="re_test")
     r = _post(app.test_client(), ref=raw)
     assert r.status_code == 200
     assert _rows(svc)[0]["ref"] == kept
@@ -426,17 +427,47 @@ def test_the_cap_holds_across_processes(made, sent):
     assert len(sent) == 1
 
 
-def test_claim_mail_is_once_a_day():
+def test_claim_mail_waits_then_counts_to_the_daily_cap():
+    """0 when taken, else the seconds to wait: the resend wait first, then
+    what is left of the day once CONFIRM_DAILY went."""
+    from careagents.accounts import AccountService
+    svc = AccountService(_cfg())
+    wait, day = beta_signup.CONFIRM_RESEND, beta_signup.CONFIRM_CAP
+    try:
+        t0 = 1_000_000.0
+        assert beta_signup.claim_mail(svc.session, "a@example.com", t0) == 0
+        assert beta_signup.claim_mail(svc.session, "a@example.com",
+                                      t0 + 10) == wait - 10
+        assert beta_signup.claim_mail(svc.session, "b@example.com",
+                                      t0 + 10) == 0
+        for n in range(1, beta_signup.CONFIRM_DAILY):
+            assert beta_signup.claim_mail(svc.session, "a@example.com",
+                                          t0 + n * wait) == 0
+        late = t0 + beta_signup.CONFIRM_DAILY * wait
+        assert beta_signup.claim_mail(svc.session, "a@example.com",
+                                      late) == day - (late - t0)
+        assert beta_signup.claim_mail(svc.session, "a@example.com",
+                                      t0 + day) == 0
+    finally:
+        svc.engine.dispose()
+
+
+def test_release_mail_gives_back_only_its_own_claim():
     from careagents.accounts import AccountService
     svc = AccountService(_cfg())
     try:
         t0 = 1_000_000.0
-        assert beta_signup.claim_mail(svc.session, "a@example.com", t0)
-        assert not beta_signup.claim_mail(svc.session, "a@example.com",
-                                          t0 + 60)
-        assert beta_signup.claim_mail(svc.session, "b@example.com", t0 + 60)
+        assert beta_signup.claim_mail(svc.session, "a@example.com", t0) == 0
+        beta_signup.release_mail(svc.session, "a@example.com", t0)
         assert beta_signup.claim_mail(svc.session, "a@example.com",
-                                      t0 + beta_signup.CONFIRM_CAP)
+                                      t0 + 1) == 0
+        # Releasing a claim that is no longer the newest changes nothing.
+        beta_signup.release_mail(svc.session, "a@example.com", t0)
+        assert beta_signup.claim_mail(svc.session, "a@example.com",
+                                      t0 + 2) > 0
+        with svc.session() as s:
+            (cap,) = s.query(beta_signup.BetaMailCap).all()
+            assert cap.day_count == 1
     finally:
         svc.engine.dispose()
 
@@ -463,13 +494,26 @@ def test_a_confirmed_request_changes_only_when_the_address_confirms(
     assert row["status"] == "new"
 
 
-def test_asking_again_with_nothing_new_sends_nothing(made, sent):
+def test_asking_again_with_nothing_new_emails_how_to_sign_in(made, sent):
+    """A confirmed request asked for again with nothing new used to send
+    nothing while the form said it had. Now it is emailed how to sign in,
+    under the same cap, with the answer a new address gets, so the form
+    still tells nobody whether an address is in the beta."""
     app, svc = made(RESEND_API_KEY="re_test")
     _join(app, sent)
+    before = _row(svc)
     _age_caps(svc)
     sent.clear()
-    _post(app.test_client(), ip="198.51.100.5")
-    assert sent == []
+    r = _post(app.test_client(), ip="198.51.100.5")
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "sent": True}
+    (to, subject, html, text), = sent
+    assert to == "avery@example.com"
+    assert subject.startswith("How to sign in to CareAgents")
+    assert "/beta/confirm" not in text and "Get started" in text
+    after = _row(svc)
+    assert {k: v for k, v in after.items() if k != "removal_hash"} == {
+        k: v for k, v in before.items() if k != "removal_hash"}
+    assert after["removal_hash"] == beta_signup.hash_token(_token(html))
 
 
 def test_a_confirmed_change_never_puts_a_mobile_on_an_added_row(made, sent):
@@ -513,7 +557,7 @@ def test_after_the_owner_removed_it_a_submit_starts_pending(made, sent):
 def test_a_filled_honeypot_answers_the_same_and_keeps_nothing(made, sent):
     app, svc = made(RESEND_API_KEY="re_test")
     r = _post(app.test_client(), website="http://spam.example")
-    assert r.status_code == 200 and r.get_json() == {"ok": True}
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "sent": True}
     assert _rows(svc) == []
     assert sent == []
 
@@ -554,15 +598,15 @@ def test_bad_fields_are_refused_with_a_reason(made, over, error):
     assert _rows(svc) == []
 
 
-def test_an_email_of_254_characters_is_accepted(made):
-    app, svc = made()
+def test_an_email_of_254_characters_is_accepted(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
     email = "x" * 242 + "@example.com"
     assert len(email) == 254
     assert _post(app.test_client(), email=email).status_code == 200
 
 
-def test_names_in_other_scripts_are_fine(made):
-    app, svc = made()
+def test_names_in_other_scripts_are_fine(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
     assert _post(app.test_client(), first_name="José").status_code == 200
 
 
@@ -580,8 +624,8 @@ def test_a_mobile_is_read_the_way_imessage_reads_it(made, typed, stored):
 
 # --- the rate limit -----------------------------------------------------------
 
-def test_submits_are_limited_per_ip(made):
-    app, svc = made()
+def test_submits_are_limited_per_ip(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
     c = app.test_client()
     for i in range(beta_signup.SUBMITS_PER_WINDOW):
         assert _post(c, email=f"t{i}@example.com").status_code == 200
@@ -1184,8 +1228,8 @@ def test_numbers_are_shown_the_way_people_write_them(raw, shown):
     ("victim@ｇｍａｉｌ.com", "victim@gmail.com"),
     ("victim@bücher.example", "victim@xn--bcher-kva.example"),
 ])
-def test_a_domain_is_stored_in_its_ascii_form(made, typed, stored):
-    app, svc = made()
+def test_a_domain_is_stored_in_its_ascii_form(made, sent, typed, stored):
+    app, svc = made(RESEND_API_KEY="re_test")
     assert _post(app.test_client(), email=typed).status_code == 200
     assert [r["email"] for r in _rows(svc)] == [stored]
 
@@ -1264,9 +1308,9 @@ _IDN_EMAILS = ["ida@bücher.example", "ida@ｂｕｃｈｅｒ.example"]
 
 
 @pytest.mark.parametrize("email", _IDN_EMAILS)
-def test_deleting_an_idn_account_deletes_its_request(made, monkeypatch,
-                                                     email):
-    app, svc = made()
+def test_deleting_an_idn_account_deletes_its_request(made, sent,
+                                                     monkeypatch, email):
+    app, svc = made(RESEND_API_KEY="re_test")
     c = app.test_client()
     assert _post(c, email=email).status_code == 200
     _post(c, ip="198.51.100.9", email="other@example.com")

@@ -30,6 +30,7 @@
       <p class="auth-fine" id="code-is-coming">This signs you in on this
         browser only. On another phone or browser, and before you connect
         your own records, we'll email you a code to sign in.</p>
+      {% include "_in_app_hint.html" %}
       <p class="auth-fine">By confirming you agree to the
         <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and
         <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
@@ -76,6 +77,18 @@
     {% elif outcome == "removed" %}
     <h1>Done</h1>
     <p>Your beta request is removed.</p>
+    {% elif outcome == "confirm_gone" %}
+    {# A confirm link, not signed in on this browser (signed in goes on to
+       the hub). The token says nothing about who, so one text fits
+       someone who never confirmed and someone who did elsewhere. #}
+    <h1>This link no longer works</h1>
+    <p>It was used already, it ran out, or a newer email replaced it.</p>
+    <p>Signing in still works: tap Sign in and we'll email you a code.
+      If you hadn't confirmed yet, that gets you in too.</p>
+    <a class="btn-primary btn-block" href="/auth">Sign in</a>
+    <p>Want a new confirm email instead?
+      <a href="/beta">Ask again on the beta page</a>.</p>
+    <p>Something not right? <a href="{{ feedback }}">Tell us</a>.</p>
     {% else %}
     <h1>This link no longer works</h1>
     <p>It was used already, it ran out, or a newer email replaced it. If you
