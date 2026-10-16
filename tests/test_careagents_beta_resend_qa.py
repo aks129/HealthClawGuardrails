@@ -43,12 +43,20 @@ def test_the_daily_cap_lifts_once_the_day_is_over(svc):
         assert beta_signup.claim_mail(svc.session, EMAIL, t0 + i * step) == 0
     last = t0 + beta_signup.CONFIRM_DAILY * step
     assert beta_signup.claim_mail(svc.session, EMAIL, last) > 0
-    # A day after the first email, the mailbox may be emailed again, and the
-    # new day starts its count from one.
+    # A day after the first email, the mailbox may be emailed again. The
+    # day rolls (#979 security Low 1): the other four of the last 24 hours
+    # still count, so the next waits until the second is a day old.
     later = t0 + beta_signup.CONFIRM_CAP + 1
     assert beta_signup.claim_mail(svc.session, EMAIL, later) == 0
-    cap = _cap(svc)
-    assert (cap.day_from, cap.day_count) == (later, 1)
+    assert beta_signup.send_times(_cap(svc))[-1] == later
+    assert beta_signup.claim_mail(
+        svc.session, EMAIL, later + step) == pytest.approx(
+            t0 + step + beta_signup.CONFIRM_CAP - (later + step), abs=1)
+    # Once every one of them is a day old, all five are free again.
+    fresh = later + beta_signup.CONFIRM_CAP
+    for i in range(beta_signup.CONFIRM_DAILY):
+        assert beta_signup.claim_mail(
+            svc.session, EMAIL, fresh + i * step) == 0
 
 
 def test_retry_after_never_says_a_moment_too_early(svc):
@@ -72,7 +80,7 @@ def test_a_worker_that_read_a_stale_row_does_not_also_send(svc):
     assert beta_signup.claim_mail(svc.session, EMAIL, peer) == 0
 
     # What this worker read before the peer's claim landed.
-    stale = SimpleNamespace(sent_at=t0, day_from=t0, day_count=1)
+    stale = SimpleNamespace(sent_at=t0, sends=repr(t0))
 
     @contextmanager
     def stale_scope():

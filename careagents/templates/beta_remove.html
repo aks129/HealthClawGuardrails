@@ -30,7 +30,14 @@
       <p class="auth-fine" id="code-is-coming">This signs you in on this
         browser only. On another phone or browser, and before you connect
         your own records, we'll email you a code to sign in.</p>
-      {% include "_in_app_hint.html" %}
+      {% if in_app %}{% include "_in_app_hint.html" %}
+      {% elif mobile %}
+      {# Gmail on iPhone opens links in its own browser and says nothing
+         about it, so every phone gets this quiet line. #}
+      <p class="auth-fine" id="email-app-line">Opened this from your email
+        app? To keep using CareAgents in Safari or Chrome, open
+        {{ web_host }} there and sign in with your email.</p>
+      {% endif %}
       <p class="auth-fine">By confirming you agree to the
         <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and
         <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy

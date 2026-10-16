@@ -131,6 +131,11 @@ def _age_caps(svc, seconds=beta_signup.CONFIRM_CAP + 1):
     with svc.session() as s:
         for cap in s.query(beta_signup.BetaMailCap):
             cap.sent_at -= seconds
+            if cap.sends is not None:
+                cap.sends = " ".join(repr(float(x) - seconds)
+                                     for x in cap.sends.split())
+            if cap.already_at is not None:
+                cap.already_at -= seconds
 
 
 # --- the page ---------------------------------------------------------------
@@ -510,10 +515,53 @@ def test_asking_again_with_nothing_new_emails_how_to_sign_in(made, sent):
     assert to == "avery@example.com"
     assert subject.startswith("How to sign in to CareAgents")
     assert "/beta/confirm" not in text and "Get started" in text
-    after = _row(svc)
-    assert {k: v for k, v in after.items() if k != "removal_hash"} == {
-        k: v for k, v in before.items() if k != "removal_hash"}
-    assert after["removal_hash"] == beta_signup.hash_token(_token(html))
+    # No removal link, and the one the tester holds is not replaced: the
+    # row is untouched (#979 review).
+    assert "/beta/remove" not in html + text
+    assert _row(svc) == before
+
+
+def test_a_tester_gets_one_how_to_sign_in_email_a_day(made, sent):
+    """The form is anonymous: past the first a day, nothing more is sent
+    to a confirmed tester, and the answer stays the one anyone gets: a
+    send, then the same wait (#979 review)."""
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent)
+    _age_caps(svc)
+    sent.clear()
+    c = app.test_client()
+    # Each ask still takes a claim, as a stranger's would, so the daily
+    # cap's own wait comes after CONFIRM_DAILY asks.
+    for i in range(beta_signup.CONFIRM_DAILY):
+        r = _post(c, ip=f"198.51.100.{i}")
+        assert r.get_json() == {"ok": True, "sent": True}, i
+        assert _post(c, ip=f"198.51.101.{i}").get_json()["sent"] is False
+        _age_caps(svc, beta_signup.CONFIRM_RESEND)
+    assert [m[1].split(" —")[0] for m in sent] == [
+        "How to sign in to CareAgents"]
+    # A day on, one more.
+    _age_caps(svc, beta_signup.CONFIRM_CAP)
+    _post(c, ip="198.51.102.1")
+    assert len(sent) == 2
+
+
+def test_a_refused_how_to_sign_in_email_can_be_asked_again(
+        made, sent, monkeypatch):
+    from careagents import mail
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent)
+    _age_caps(svc)
+    sent.clear()
+    real = mail.requests.post
+
+    def refuse(*a, **k):
+        raise mail.requests.ConnectionError("down")
+    monkeypatch.setattr(mail.requests, "post", refuse)
+    assert _post(app.test_client(), ip="198.51.100.1").status_code == 502
+    monkeypatch.setattr(mail.requests, "post", real)
+    assert _post(app.test_client(), ip="198.51.100.2").get_json() == {
+        "ok": True, "sent": True}
+    assert len(sent) == 1
 
 
 def test_a_confirmed_change_never_puts_a_mobile_on_an_added_row(made, sent):

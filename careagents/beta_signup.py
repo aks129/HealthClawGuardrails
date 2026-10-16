@@ -38,6 +38,7 @@ import secrets
 import time
 import unicodedata
 from collections import OrderedDict, deque
+from urllib.parse import urlsplit
 
 import click
 # A dependency of `requests`, so always installed; the stdlib codec is
@@ -46,7 +47,7 @@ import idna
 from flask import (jsonify, make_response, redirect, render_template,
                    request, session)
 from markupsafe import Markup, escape
-from sqlalchemy import Column, Float, Integer, String, update
+from sqlalchemy import Column, Float, String, update
 from sqlalchemy.exc import IntegrityError
 
 from careagents import funnel, invites, mail
@@ -130,16 +131,24 @@ class BetaRequest(Base):
 
 
 class BetaMailCap(Base):
-    """When a confirmation was last emailed to a mailbox, and how many went
-    in the day that started at `day_from`, keyed by the sha256 of the
-    normalized mailbox. Outlives a removed request, so removing yourself
-    does not reopen your inbox to a stranger's submits. A row from before
-    the count has both empty: one email, its day starting at `sent_at`."""
+    """When a confirmation was last emailed to a mailbox, and when each
+    email of the last CONFIRM_CAP seconds went (`sends`), keyed by the
+    sha256 of the normalized mailbox. Outlives a removed request, so
+    removing yourself does not reopen your inbox to a stranger's submits.
+    A row from before `sends` reads as one email, at `sent_at`."""
     __tablename__ = "ca_beta_mail_caps"
     email_hash = Column(String(64), primary_key=True)
     sent_at = Column(Float, nullable=False)
-    day_from = Column(Float, nullable=True)
-    day_count = Column(Integer, nullable=True)
+    # Space-separated send times, oldest first, at most CONFIRM_DAILY.
+    sends = Column(String(128), nullable=True)
+    # When the last "how to sign in" email went to a confirmed tester's
+    # mailbox: at most one a day (`claim_already`).
+    already_at = Column(Float, nullable=True)
+
+    @property
+    def day_count(self) -> int:
+        """How many sends are recorded (the rolling day's count)."""
+        return len(send_times(self))
 
 
 # --- pure rules ---------------------------------------------------------------
@@ -277,6 +286,14 @@ def in_app_browser(user_agent: str | None) -> bool:
     return any(mark in ua for mark in _IN_APP_MARKS)
 
 
+def mobile_browser(user_agent: str | None) -> bool:
+    """A phone or tablet. Gmail on iPhone sends no mark of its own, so the
+    confirm page says one quiet line to every mobile visitor instead."""
+    ua = user_agent or ""
+    return any(mark in ua for mark in ("Mobile", "Android", "iPhone",
+                                       "iPad"))
+
+
 def text_number(cfg) -> str:
     """The number testers text: the Sendblue line when it is on."""
     return cfg.sendblue_from_number if cfg.sendblue_enabled else ""
@@ -300,13 +317,29 @@ def _expire_lapsed(s, moment: float) -> None:
                       confirm_hash=None, confirm_expires_at=None))
 
 
+def send_times(row) -> list[float]:
+    """When the emails a cap row records went, oldest first. A row from
+    before `sends` has one, at `sent_at`."""
+    raw = getattr(row, "sends", None)
+    if raw is None:
+        return [row.sent_at]
+    return [float(x) for x in raw.split()]
+
+
+def _sends(times: list[float]) -> str:
+    # repr keeps every float exactly, so release_mail can match one.
+    return " ".join(repr(x) for x in times[-CONFIRM_DAILY:])
+
+
 def claim_mail(session_scope, email: str, at: float | None = None) -> int:
     """Take one of the mailbox's confirmation emails: 0 when taken, else
-    the whole seconds until one may be (the resend wait, or what is left
-    of the day once CONFIRM_DAILY went). A keyed insert, and an update
-    conditional on the `sent_at` it read, so two workers racing on one
-    mailbox cannot both win. Taken before the send so a race cannot send
-    twice; `release_mail` gives it back when the send failed."""
+    the whole seconds until one may be (the resend wait, or until the
+    oldest of CONFIRM_DAILY emails sent in the last CONFIRM_CAP seconds
+    is a day old: a rolling day, so no window edge lets more through). A
+    keyed insert, and an update conditional on the `sent_at` it read, so
+    two workers racing on one mailbox cannot both win. Taken before the
+    send so a race cannot send twice; `release_mail` gives it back when
+    the send failed."""
     moment = at if at is not None else time.time()
     key = hash_token(mailbox(email))
     try:
@@ -314,24 +347,22 @@ def claim_mail(session_scope, email: str, at: float | None = None) -> int:
             row = s.get(BetaMailCap, key)
             if row is None:
                 s.add(BetaMailCap(email_hash=key, sent_at=moment,
-                                  day_from=moment, day_count=1))
+                                  sends=_sends([moment])))
                 return 0
             last = row.sent_at
-            day_from = row.day_from if row.day_from is not None else last
-            count = row.day_count if row.day_count is not None else 1
             if moment - last < CONFIRM_RESEND:
                 # Round up: never tell someone to retry a moment early.
                 return max(1, math.ceil(last + CONFIRM_RESEND - moment))
-            if moment - day_from >= CONFIRM_CAP:
-                day_from, count = moment, 0
-            elif count >= CONFIRM_DAILY:
-                return max(1, math.ceil(day_from + CONFIRM_CAP - moment))
+            day = [x for x in send_times(row) if moment - x < CONFIRM_CAP]
+            if len(day) >= CONFIRM_DAILY:
+                oldest = day[-CONFIRM_DAILY]
+                return max(1, math.ceil(oldest + CONFIRM_CAP - moment))
             won = s.execute(
                 update(BetaMailCap)
                 .where(BetaMailCap.email_hash == key,
                        BetaMailCap.sent_at == last)
-                .values(sent_at=moment, day_from=day_from,
-                        day_count=count + 1)).rowcount
+                .values(sent_at=moment,
+                        sends=_sends(day + [moment]))).rowcount
             return 0 if won else CONFIRM_RESEND
     except IntegrityError:
         return CONFIRM_RESEND
@@ -343,11 +374,38 @@ def release_mail(session_scope, email: str, at: float) -> None:
     that claim's row, so a later claim is never undone."""
     key = hash_token(mailbox(email))
     with session_scope() as s:
+        row = s.get(BetaMailCap, key)
+        if row is None or row.sent_at != at:
+            return
+        rest = [x for x in send_times(row) if x != at]
         s.execute(update(BetaMailCap)
                   .where(BetaMailCap.email_hash == key,
                          BetaMailCap.sent_at == at)
-                  .values(sent_at=at - CONFIRM_RESEND,
-                          day_count=BetaMailCap.day_count - 1))
+                  .values(sent_at=at - CONFIRM_RESEND, sends=_sends(rest)))
+
+
+def claim_already(session_scope, email: str, at: float) -> bool:
+    """Take the mailbox's one "how to sign in" email of the day. The form
+    is anonymous, so a confirmed tester's inbox gets at most this one a
+    day from it, not CONFIRM_DAILY."""
+    key = hash_token(mailbox(email))
+    with session_scope() as s:
+        return bool(s.execute(
+            update(BetaMailCap)
+            .where(BetaMailCap.email_hash == key,
+                   BetaMailCap.already_at.is_(None)
+                   | (BetaMailCap.already_at <= at - CONFIRM_CAP))
+            .values(already_at=at)).rowcount)
+
+
+def release_already(session_scope, email: str, at: float) -> None:
+    """Give back `claim_already`'s email when the send failed."""
+    key = hash_token(mailbox(email))
+    with session_scope() as s:
+        s.execute(update(BetaMailCap)
+                  .where(BetaMailCap.email_hash == key,
+                         BetaMailCap.already_at == at)
+                  .values(already_at=None))
 
 
 def _spot_holders(s, but: str):
@@ -406,11 +464,11 @@ def submit(session_scope, first_name: str, email: str, mobile: str | None,
     with session_scope() as s:
         row = s.get(BetaRequest, email)
         if not wanted and row is not None and row.status in _CONFIRMED:
-            # Nothing to confirm. Emailed anyway, so the answer is the one
-            # a new address gets: whether an address is in the beta is not
-            # learned from the form.
-            row.removal_hash = hash_token(removal)
-            return {"kind": "already", "removal": removal, "at": moment}
+            # Nothing to confirm. Emailed how to sign in, so the answer is
+            # the one a new address gets: whether an address is in the
+            # beta is not learned from the form. No removal link, so the
+            # one the tester holds keeps working.
+            return {"kind": "already", "removal": None, "at": moment}
         if row is None:
             row = BetaRequest(email=email, created_at=now())
             s.add(row)
@@ -687,19 +745,22 @@ def _line(x, feedback_url: str = FEEDBACK_URL) -> tuple[str, str]:
 
 
 def _tester_email(cfg, email: str, subject: str, lines: list,
-                  token: str, link: tuple[str, str] | None = None) -> str:
+                  token: str | None,
+                  link: tuple[str, str] | None = None) -> str:
     """One email to a tester: plain sentences, an optional action link,
-    the feedback link and the single-use removal link. A name in a line is
-    the visitor's own, read back to them, escaped."""
-    remove_url = f"{cfg.origin}/beta/remove?t={token}"
+    the feedback link and the single-use removal link (none when `token`
+    is None, so the link the tester already holds stays the live one). A
+    name in a line is the visitor's own, read back to them, escaped."""
+    remove_url = f"{cfg.origin}/beta/remove?t={token}" if token else None
     feedback_url = f"{cfg.origin}{FEEDBACK_URL}"
     pairs = [_line(x, feedback_url) for x in lines]
     parts = [t for t, _ in pairs]
     if link:
         parts.append(f"{link[0]}: {link[1]}")
-    text = "\n\n".join(
-        parts + [f"Something broke, or a question? Tell us: {feedback_url}",
-                 f"Remove my request: {remove_url}"])
+    parts.append(f"Something broke, or a question? Tell us: {feedback_url}")
+    if remove_url:
+        parts.append(f"Remove my request: {remove_url}")
+    text = "\n\n".join(parts)
     body = "".join(h if h.startswith("<ol") else f"<p>{h}</p>"
                    for _, h in pairs)
     if link:
@@ -708,9 +769,11 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
     html = (f"<div style='font-family:system-ui,sans-serif;max-width:420px'>"
             f"<h2 style='color:#22190E'>CareAgents</h2>{body}"
             f"<p>Something broke, or a question? "
-            f"<a href='{escape(feedback_url)}'>Tell us</a>.</p>"
-            f"<p style='color:#5E5240;font-size:13px'>"
-            f"<a href='{escape(remove_url)}'>Remove my request</a></p></div>")
+            f"<a href='{escape(feedback_url)}'>Tell us</a>.</p>")
+    if remove_url:
+        html += (f"<p style='color:#5E5240;font-size:13px'>"
+                 f"<a href='{escape(remove_url)}'>Remove my request</a></p>")
+    html += "</div>"
     return mail.send_message(cfg, email, subject, html, text)
 
 
@@ -823,6 +886,21 @@ def page_context() -> dict:
             "mobile_days": MOBILE_DAYS, "request_days": REQUEST_DAYS}
 
 
+#: What may stand in a subject line as the inviter's name besides letters.
+_NAME_MARKS = frozenset(" -'’")
+
+
+def subject_name(name: str | None) -> bool:
+    """May this first name stand in a subject line? The inviter typed it,
+    so only a name's characters: letters, spaces, hyphens and apostrophes,
+    up to 40. That refuses a link (`://`, `www.`, a dotted domain: no
+    `:`, `/` or `.` pass) and any line or paragraph separator. Otherwise
+    the email keeps its generic subject."""
+    if not name or len(name) > 40 or not name.strip():
+        return False
+    return all(c.isalpha() or c in _NAME_MARKS for c in name)
+
+
 def _submit_email(cfg, result: dict, inviter: str | None):
     """(subject, lines, link) for the email a submit sends. `inviter` is
     the first name the inviter confirmed on their own request, never their
@@ -840,7 +918,7 @@ def _submit_email(cfg, result: dict, inviter: str | None):
                  "24 hours.",
                  "If you didn't ask, ignore this email and nothing more "
                  "happens."]
-        if inviter:
+        if subject_name(inviter):
             subject = f"{inviter} invited you to try CareAgents"
             lines.insert(0, subject + ".")
         return subject, lines, ("Confirm", url)
@@ -916,8 +994,10 @@ def register(app, svc, cfg, first_run=None) -> None:
     @app.context_processor
     def _in_app():
         # For _in_app_hint.html: the address to open in Safari or Chrome.
-        return {"in_app": in_app_browser(request.headers.get("User-Agent")),
-                "web_address": cfg.origin}
+        ua = request.headers.get("User-Agent")
+        return {"in_app": in_app_browser(ua), "mobile": mobile_browser(ua),
+                "web_address": cfg.origin,
+                "web_host": urlsplit(cfg.origin).netloc or cfg.origin}
 
     @app.after_request
     def _tell_the_promoted(response):
@@ -985,6 +1065,15 @@ def register(app, svc, cfg, first_run=None) -> None:
             # does, #262). This turns on what was asked for this mailbox
             # lately, never on whether it has a request or an account.
             return jsonify({"sent": False, "retry_after": result["wait"]})
+        already = result["kind"] == "already"
+        if already and not claim_already(svc.session, email, result["at"]):
+            # Today's "how to sign in" email to this tester went already,
+            # and an anonymous form must not fill a tester's inbox: not
+            # sent again. Answered as a send, as a new address would be,
+            # so the form does not tell who is in the beta. The claim
+            # above stands, so the next ask waits as anyone's does, and
+            # the email that did go today says the same thing.
+            return jsonify({"ok": True, "sent": True})
         subject, lines, link = _submit_email(cfg, result, inviter)
         try:
             outcome = _tester_email(cfg, email, subject, lines,
@@ -996,6 +1085,8 @@ def register(app, svc, cfg, first_run=None) -> None:
         if outcome == mail.NOT_SENT:
             # Nothing left, so nothing is spent: asking again works now.
             release_mail(svc.session, email, result["at"])
+            if already:
+                release_already(svc.session, email, result["at"])
             return jsonify({"error": "not_sent", "sent": False}), 502
         if outcome != mail.SENT:
             # Unconfirmed, and anything unrecognised: it may be in the

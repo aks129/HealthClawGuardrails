@@ -498,13 +498,14 @@ def _ensure_columns(engine) -> None:
         if "person_id" not in cols:
             _add_column(engine, "ca_agents", "person_id", "VARCHAR(32)")
     if "ca_beta_mail_caps" in tables:
-        # The daily count of confirmation emails (beta_signup.claim_mail).
-        # A row from before it reads as one email, its day from sent_at.
+        # The rolling day's send times (beta_signup.claim_mail) and the
+        # last "how to sign in" email (claim_already). A row from before
+        # them reads as one email, at sent_at.
         cols = {c["name"] for c in insp.get_columns("ca_beta_mail_caps")}
-        if "day_from" not in cols:
-            _add_column(engine, "ca_beta_mail_caps", "day_from", "FLOAT")
-        if "day_count" not in cols:
-            _add_column(engine, "ca_beta_mail_caps", "day_count", "INTEGER")
+        if "sends" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "sends", "VARCHAR(128)")
+        if "already_at" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "already_at", "FLOAT")
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:

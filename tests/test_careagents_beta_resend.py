@@ -27,6 +27,11 @@ def _age(svc, seconds):
     with svc.session() as s:
         for cap in s.query(beta_signup.BetaMailCap):
             cap.sent_at -= seconds
+            if cap.sends is not None:
+                cap.sends = " ".join(repr(float(x) - seconds)
+                                     for x in cap.sends.split())
+            if cap.already_at is not None:
+                cap.already_at -= seconds
 
 
 @pytest.fixture
@@ -200,7 +205,7 @@ def test_a_legacy_cap_row_gains_the_count_and_reads_as_one_email(url):
     engine = models.make_engine(url)
     cols = {c["name"] for c in inspect(engine).get_columns(
         "ca_beta_mail_caps")}
-    assert {"day_from", "day_count"} <= cols
+    assert {"sends", "already_at"} <= cols
     session_factory = models.make_session_factory(engine)
 
     from contextlib import contextmanager
@@ -220,6 +225,7 @@ def test_a_legacy_cap_row_gains_the_count_and_reads_as_one_email(url):
     with scope() as s:
         cap = s.get(beta_signup.BetaMailCap,
                     beta_signup.hash_token("a@example.com"))
-        assert (cap.day_from, cap.day_count) == (t0, 2)
+        assert beta_signup.send_times(cap) == [
+            t0, t0 + beta_signup.CONFIRM_RESEND]
     engine.dispose()
     legacy.dispose()

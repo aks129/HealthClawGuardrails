@@ -290,3 +290,59 @@ def test_a_lowercase_delete_works(app, svc, monkeypatch):  # noqa: F811
     r = c.post("/api/account/delete", json={"confirm": "nope"})
     assert r.status_code == 400
     assert r.get_json()["message"] == "Type the word delete to confirm."
+
+
+# --- #979 review: the mobile line, and the inviter's name ---------------------
+
+DESKTOP = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 "
+           "(KHTML, like Gecko) Version/18.0 Safari/605.1.15")
+
+
+def test_every_phone_gets_the_quiet_line_on_the_confirm_page(made, sent):
+    """Gmail on iPhone sends no mark of its own: every phone is told."""
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    _post(c)
+    token = _confirm_token(sent[-1][3])
+
+    def page(ua):
+        return c.get(f"/beta/confirm?t={token}",
+                     headers={"User-Agent": ua}).get_data(as_text=True)
+    phone = page(SAFARI)
+    assert ("Opened this from your email app? To keep using CareAgents in "
+            "Safari or Chrome, open localhost there and sign in with your "
+            "email.") in _visible(phone)
+    assert 'id="in-app-hint"' not in phone
+    # A detected in-app browser gets the stronger hint instead.
+    linked = page(LINKEDIN)
+    assert 'id="in-app-hint"' in linked
+    assert 'id="email-app-line"' not in linked
+    assert 'id="email-app-line"' not in page(DESKTOP)
+
+
+@pytest.mark.parametrize("name", ["Robin", "Mary Jane", "Anne-Marie",
+                                  "O'Brien", "D\u2019Arcy", "Zo\u00eb",
+                                  "Jos\u00e9", "x" * 40])
+def test_a_plain_first_name_may_stand_in_the_subject(name):
+    assert beta_signup.subject_name(name)
+
+
+@pytest.mark.parametrize("name", [
+    None, "", "   ", "x" * 41, "evil.example", "www.evil", "https://evil",
+    "a://b", "Rob\u2028in", "Rob\u2029in", "Rob\u0085in", "Rob\nin",
+    "Robin2", "Robin!", "Robin <b>", "Robin.", "Rob\u202ein",
+])
+def test_a_link_or_separator_never_stands_in_the_subject(name):
+    assert not beta_signup.subject_name(name)
+
+
+def test_an_inviter_name_that_is_not_plain_gets_the_generic_subject():
+    from careagents.config import Config
+    cfg = Config(env={"CARE_ORIGIN": "http://localhost"})
+    result = {"kind": "join", "confirm": "t"}
+    subject, lines, _ = beta_signup._submit_email(cfg, result,
+                                                  "evil.example")
+    assert subject == "Confirm you asked to test CareAgents"
+    assert "evil" not in " ".join(str(x) for x in lines)
+    subject, _, _ = beta_signup._submit_email(cfg, result, "Robin")
+    assert subject == "Robin invited you to try CareAgents"

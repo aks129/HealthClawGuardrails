@@ -14,6 +14,8 @@
     mobile: "Please check the mobile number, or leave it empty.",
     rate_limited: "Too many tries. Please wait a few minutes.",
   };
+  const FAILED = "Something went wrong. Please try again.";
+  const OFFLINE = "Couldn't reach us. Please try again.";
   // The other way in, said wherever an email is late or not coming.
   const OTHER_WAY = " Or tap Get started below to sign in with a code " +
     "we email you instead.";
@@ -23,16 +25,19 @@
     err.hidden = false;
     err.scrollIntoView({ block: "center", behavior: "smooth" });
   }
+  // "in 45 seconds", "in 12 minutes", "in about an hour", "in about 5
+  // hours": never a raw count like 3540 seconds.
   function wait(seconds) {
-    if (seconds > 3600) {
-      const hours = Math.ceil(seconds / 3600);
-      return "in about " + hours + (hours === 1 ? " hour" : " hours");
-    }
-    return "in " + seconds + " seconds";
+    if (seconds <= 90) return "in " + seconds + " seconds";
+    if (seconds < 50 * 60) return "in " + Math.ceil(seconds / 60) + " minutes";
+    if (seconds <= 90 * 60) return "in about an hour";
+    return "in about " + Math.ceil(seconds / 3600) + " hours";
   }
 
-  // What was sent last, so "Send it again" asks for the same thing.
+  // What was sent last, so "Send it again" asks for the same thing, and
+  // the line now shown, so a failed re-send adds to it, never replaces it.
   let last = null;
+  let shown = "";
   let timer = null;
   // Offer "Send it again" once the wait is over, never before.
   function againAfter(seconds) {
@@ -40,6 +45,13 @@
     again.hidden = true;
     if (seconds > 3600) return;
     timer = setTimeout(() => { again.hidden = false; }, seconds * 1000);
+  }
+  // Green only for a send that happened; anything else is a warning.
+  function say(line, good, extra) {
+    if (!extra) shown = line;
+    doneText.textContent = extra ? shown + " " + extra : line;
+    done.classList.toggle("form-ok", good);
+    done.classList.toggle("form-warn", !good);
   }
 
   // Four answers, and only `sent === true` earns "We sent". Compared by
@@ -49,39 +61,42 @@
     // textContent: the name and address are shown back, never parsed.
     const name = last.first_name.trim();
     const email = last.email.trim();
-    let line;
     if (status === 502) {
-      line = "Sorry, " + name + ". We couldn't send the email to " + email +
-        " just now. Please try again in a minute." + OTHER_WAY;
+      say("Sorry, " + name + ". We couldn't send the email to " + email +
+        " just now. Please try again in a minute." + OTHER_WAY, false);
       againAfter(0);
     } else if (d.sent === true) {
-      line = "Thanks, " + name + ". We sent an email to " + email +
+      say("Thanks, " + name + ". We sent an email to " + email +
         ". Tap Confirm in it. If it isn't there in a few minutes, check " +
-        "spam." + OTHER_WAY;
+        "spam." + OTHER_WAY, true);
       againAfter(60);
     } else if (d.sent === false && d.retry_after > 60) {
-      line = "We already sent several emails to " + email + " today. " +
+      say("We already sent several emails to " + email + " today. " +
         "Use the newest one we sent, or ask for another " +
-        wait(d.retry_after) + "." + OTHER_WAY;
+        wait(d.retry_after) + "." + OTHER_WAY, false);
       againAfter(d.retry_after);
     } else if (d.sent === false) {
-      line = "We sent an email to " + email + " a moment ago, so we didn't " +
+      say("We sent an email to " + email + " a moment ago, so we didn't " +
         "send another yet. Check your inbox and spam folder. You can ask " +
-        "for a new one " + wait(d.retry_after) + "." + OTHER_WAY;
+        "for a new one " + wait(d.retry_after) + "." + OTHER_WAY, false);
       againAfter(d.retry_after);
     } else {
-      line = "We couldn't confirm the email reached " + email + ". Check " +
+      say("We couldn't confirm the email reached " + email + ". Check " +
         "your inbox in a few minutes. If nothing arrives, you can ask " +
-        "again " + wait(d.retry_after) + "." + OTHER_WAY;
+        "again " + wait(d.retry_after) + "." + OTHER_WAY, false);
       againAfter(d.retry_after);
     }
-    doneText.textContent = line;
-    // Green only for a send that happened; a failure is not good news.
-    done.classList.toggle("form-ok", d.sent === true);
-    done.classList.toggle("form-warn", d.sent !== true);
     form.hidden = true;
     done.hidden = false;
     done.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  // A refusal on the form goes next to Send. On a re-send it is added to
+  // what the panel said, in the warning style, and the button comes back.
+  function refused(msg) {
+    if (!form.hidden) return fail(msg);
+    say(shown, false, msg);
+    again.hidden = false;
   }
 
   async function send(body, button) {
@@ -93,14 +108,9 @@
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok || r.status === 502) return show(d, r.status);
-      if (!form.hidden) {
-        return fail(MESSAGES[d.error] || "Something went wrong. Please try again.");
-      }
-      doneText.textContent = MESSAGES[d.error] ||
-        "Something went wrong. Please try again.";
+      refused(MESSAGES[d.error] || FAILED);
     } catch (e) {
-      if (!form.hidden) return fail("Couldn't reach us. Please try again.");
-      doneText.textContent = "Couldn't reach us. Please try again.";
+      refused(OFFLINE);
     } finally {
       button.disabled = false;
     }
