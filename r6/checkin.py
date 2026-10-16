@@ -121,6 +121,17 @@ def full_url(resource):
     return f'{request.host_url}r6/fhir/{rtype}/{rid}'
 
 
+def stored_meta(row):
+    """The row's `meta` as stored. `to_fhir_json` replaces `meta`
+    wholesale, which takes the HTEST test-data marker with it; the profile
+    reads that one coding back from here (r6/access.py _test_markers)."""
+    try:
+        meta = json.loads(row.resource_json).get('meta')
+    except (ValueError, AttributeError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
 def _entry(resource):
     url = full_url(resource)
     return {'fullUrl': url, 'resource': resource} if url else None
@@ -163,6 +174,7 @@ def export(tenant, body):
       are fetched by the ids the exported Coverage references, in this
       tenant, never by type.
     - Every entry carries an absolute fullUrl on our own host (full_url).
+    - A record's own HTEST test-data marker stays on it (stored_meta).
     - Over MAX_BUNDLE_BYTES: 413, no bundle, audited as a failure, and the
       token is not spent. Never truncated.
     - One AuditEvent, from fixed words.
@@ -216,7 +228,8 @@ def export(tenant, body):
                 continue
         if not has_claim(stored):
             continue
-        resource = access._checkin_profile(stored, patient_id=patient_id)
+        resource = access._checkin_profile(
+            stored, patient_id=patient_id, stored_meta=stored_meta(row))
         entry = _entry(resource)
         if entry is None:
             continue
@@ -234,7 +247,8 @@ def export(tenant, body):
         ).order_by(R6Resource.id).all()
         for org in orgs:
             entry = _entry(access._checkin_profile(
-                org.to_fhir_json(), patient_id=patient_id))
+                org.to_fhir_json(), patient_id=patient_id,
+                stored_meta=stored_meta(org)))
             if entry is not None:
                 entries.append(entry)
                 type_set.add('Organization')
