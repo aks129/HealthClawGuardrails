@@ -25,6 +25,7 @@ from careagents.accounts import (CODES_PER_DAY, CODES_PER_HOUR, DAY, HOUR,
                                  MAX_CODE_ATTEMPTS, RESEND_COOLDOWN,
                                  WRONG_GUESSES_PER_DAY, AccountService,
                                  AuthError)
+from careagents.beta_signup import mailbox
 from careagents.config import Config
 from careagents.models import Base, EmailToken, make_engine
 from tests.test_careagents import _make_account, _sink_code
@@ -41,9 +42,9 @@ WRONG = "00000000"
 
 
 def _age(svc, email, seconds):
-    """Move every code of the address `seconds` into the past."""
+    """Move every code of the address's inbox `seconds` into the past."""
     with svc.session() as s:
-        s.query(EmailToken).filter_by(email=email).update(
+        s.query(EmailToken).filter_by(mailbox=mailbox(email)).update(
             {"exp": EmailToken.exp - seconds})
 
 
@@ -233,6 +234,111 @@ def test_wrong_guesses_under_the_cap_leave_the_right_code_working(
     assert svc.verify_email_code(email, codes[-1]).email == email
 
 
+# --- one inbox, several spellings ---------------------------------------------
+
+#: Three spellings that deliver to one Gmail inbox (beta_signup.mailbox).
+GMAIL_VARIANTS = ("ab+1@gmail.com", "a.b@gmail.com", "ab@googlemail.com")
+
+
+def _addressed(sink):
+    """A send_code stand-in that records (address, code)."""
+    def _send(cfg, email, code, purpose):
+        sink.append((email, code))
+        return mailmod.SENT
+    return _send
+
+
+def test_spellings_of_one_gmail_inbox_share_the_resend_wait(
+        svc, monkeypatch):
+    """MUTATION: key _issued_within on the typed address -> red."""
+    assert len({mailbox(v) for v in GMAIL_VARIANTS}) == 1
+    sent = []
+    monkeypatch.setattr(mailmod, "send_code", _addressed(sent))
+    assert svc.start_email_code(GMAIL_VARIANTS[0]) == 0
+    for v in GMAIL_VARIANTS[1:]:
+        assert 0 < svc.start_email_code(v) <= RESEND_COOLDOWN
+    assert len(sent) == 1
+
+
+def test_spellings_of_one_gmail_inbox_share_the_hourly_cap(svc, monkeypatch):
+    sent = []
+    monkeypatch.setattr(mailmod, "send_code", _addressed(sent))
+    for i in range(CODES_PER_HOUR):
+        assert _issue(svc, GMAIL_VARIANTS[i % 3]) == 0
+    for v in GMAIL_VARIANTS:
+        _age(svc, v, RESEND_COOLDOWN + 1)
+        assert svc.start_email_code(v) > RESEND_COOLDOWN, v
+    assert len(sent) == CODES_PER_HOUR
+
+
+def test_spellings_of_one_gmail_inbox_share_the_wrong_guess_cap(
+        svc, monkeypatch):
+    sent = []
+    monkeypatch.setattr(mailmod, "send_code", _addressed(sent))
+    spent, i = 0, 0
+    while spent < WRONG_GUESSES_PER_DAY:
+        v = GMAIL_VARIANTS[i % 3]
+        assert _issue(svc, v) == 0
+        n = min(3, WRONG_GUESSES_PER_DAY - spent)
+        _wrong(svc, v, n)
+        spent, i = spent + n, i + 1
+    for v in GMAIL_VARIANTS:
+        _age(svc, v, RESEND_COOLDOWN + 1)
+        assert svc.start_email_code(v) > HOUR, v
+
+
+def test_the_code_goes_to_the_address_as_typed(svc, monkeypatch):
+    sent = []
+    monkeypatch.setattr(mailmod, "send_code", _addressed(sent))
+    svc.start_email_code("A.B+Tag@Gmail.com")
+    assert sent[0][0] == "a.b+tag@gmail.com"
+    assert svc.verify_email_code("a.b+tag@gmail.com",
+                                 sent[0][1]).email == "a.b+tag@gmail.com"
+
+
+def test_a_new_code_for_one_spelling_retires_another_spellings_code(
+        svc, monkeypatch):
+    """One live code per inbox, whichever spelling asked."""
+    sent = []
+    monkeypatch.setattr(mailmod, "send_code", _addressed(sent))
+    svc.start_email_code("ab+1@gmail.com")
+    _age(svc, "ab+1@gmail.com", RESEND_COOLDOWN + 1)
+    svc.start_email_code("a.b@gmail.com")
+    with pytest.raises(AuthError):
+        svc.verify_email_code("ab+1@gmail.com", sent[0][1])
+
+
+def test_dots_are_not_folded_outside_gmail(svc, monkeypatch):
+    sent = []
+    monkeypatch.setattr(mailmod, "send_code", _addressed(sent))
+    assert svc.start_email_code("a.b@example.com") == 0
+    assert svc.start_email_code("ab@example.com") == 0
+    assert len(sent) == 2
+
+
+def test_an_existing_code_table_gains_the_inbox_column_and_index(tmp_path):
+    """MUTATION: delete the `mailbox` block from _ensure_columns -> red."""
+    from sqlalchemy import create_engine, inspect, text
+
+    from careagents.models import _ensure_columns
+    # A bare engine: make_engine runs the very step under test.
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy_codes.db")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE ca_email_tokens (id VARCHAR(32) PRIMARY KEY, "
+            "email VARCHAR(255) NOT NULL, code_hash VARCHAR(64) NOT NULL, "
+            "purpose VARCHAR(16), exp FLOAT NOT NULL, used BOOLEAN, "
+            "attempts INTEGER DEFAULT 0)"))
+    _ensure_columns(engine)
+    insp = inspect(engine)
+    assert "mailbox" in {c["name"] for c in insp.get_columns(
+        "ca_email_tokens")}
+    assert "ix_ca_email_tokens_mailbox" in {
+        i["name"] for i in insp.get_indexes("ca_email_tokens")}
+    _ensure_columns(engine)                      # and again: idempotent
+    engine.dispose()
+
+
 # --- 3. code requests per client address -------------------------------------
 
 def _ask(c, n, ip, prefix="fam", **headers):
@@ -363,6 +469,35 @@ def test_racing_code_requests_cannot_pass_the_resend_wait(
         _race(8, lambda: shared_svc.start_email_code("race@example.com"))
         assert len(codes) - before == 1, (
             f"{len(codes) - before} codes sent inside one resend wait")
+
+
+def test_racing_spellings_of_one_inbox_cannot_pass_the_resend_wait(
+        shared_svc, monkeypatch):
+    """MUTATION: take the lock on the typed address -> red on Postgres. On
+    SQLite one write lock covers every address, so there it pins the wait."""
+    sent = []
+    lock = threading.Lock()
+
+    def _send(cfg, email, code, purpose):
+        with lock:
+            sent.append(email)
+        return mailmod.SENT
+    monkeypatch.setattr(mailmod, "send_code", _send)
+    spellings = [f"a.b+{i}@gmail.com" if i % 2 else f"ab+{i}@googlemail.com"
+                 for i in range(8)]
+    for _ in range(5):
+        before = len(sent)
+        _age(shared_svc, spellings[0], RESEND_COOLDOWN + 1)
+        queue = list(spellings)
+        qlock = threading.Lock()
+
+        def one():
+            with qlock:
+                email = queue.pop()
+            shared_svc.start_email_code(email)
+        _race(len(spellings), one)
+        assert len(sent) - before == 1, (
+            f"{len(sent) - before} codes sent to one inbox inside one wait")
 
 
 def test_racing_wrong_guesses_cannot_pass_the_attempt_limit(

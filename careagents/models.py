@@ -411,6 +411,10 @@ class EmailToken(Base):
     # Failed-guess counter so a login code can be burned after a few misses
     # (anti-brute-force). See AccountService.verify_email_code.
     attempts = Column(Integer, default=0)
+    # The inbox `email` delivers to (beta_signup.mailbox): the key the
+    # per-address caps count on, so variants of one inbox share them.
+    # NULL on codes issued before it existed.
+    mailbox = Column(String(255), index=True)
 
 
 #: What a peer adding the same column first looks like: Postgres says the
@@ -487,6 +491,20 @@ def _ensure_columns(engine) -> None:
                 conn.execute(text(
                     "ALTER TABLE ca_email_tokens ADD COLUMN attempts INTEGER "
                     "DEFAULT 0"))
+        if "mailbox" not in cols:
+            _add_column(engine, "ca_email_tokens", "mailbox", "VARCHAR(255)")
+            # The index create_all gives a new table, under its name. A
+            # peer racing the same statement on Postgres loses with a
+            # duplicate key on the catalogue: the index is there.
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "ix_ca_email_tokens_mailbox "
+                        "ON ca_email_tokens (mailbox)"))
+            except IntegrityError as exc:
+                if "duplicate key" not in str(exc.orig).lower():
+                    raise
     if "ca_agents" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_agents")}
         if "advisor" not in cols:

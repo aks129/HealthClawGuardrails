@@ -113,12 +113,14 @@ class AccountService:
         """Make reading an address's codes and writing after them one step.
 
         Racing requests otherwise all read the same count and all pass a cap.
-        Postgres takes a per-address advisory lock for the transaction. SQLite
+        Postgres takes an advisory lock on the address's inbox (mailbox) for
+        the transaction, so variants of one inbox wait for each other. SQLite
         takes its write lock when a write statement starts, so a write that
         changes nothing goes first and a racing request waits for the commit
         before it reads."""
         if self.engine.dialect.name == "postgresql":
-            k = int.from_bytes(hashlib.sha256(email.encode()).digest()[:4],
+            key = beta_signup.mailbox(email)
+            k = int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],
                                "big", signed=True)
             # The two-key form takes two 32-bit integers.
             s.execute(text("SELECT pg_advisory_xact_lock("
@@ -129,11 +131,21 @@ class AccountService:
                            "WHERE 1 = 0"))
 
     @staticmethod
-    def _issued_within(s, email: str, window: int) -> list:
-        """Every code issued for the address in the last `window` seconds,
-        oldest first. exp is issue time + CODE_TTL; there is no issue column."""
+    def _same_inbox(email: str):
+        """Every code for the inbox the address delivers to: one Gmail inbox
+        is reached by plus-tags, dots and googlemail, and they share its
+        caps. The typed address also matches codes issued before `mailbox`
+        was recorded."""
+        return or_(EmailToken.mailbox == beta_signup.mailbox(email),
+                   EmailToken.email == email)
+
+    @classmethod
+    def _issued_within(cls, s, email: str, window: int) -> list:
+        """Every code issued for the address's inbox in the last `window`
+        seconds, oldest first. exp is issue time + CODE_TTL; there is no
+        issue column."""
         return (s.query(EmailToken)
-                .filter_by(email=email)
+                .filter(cls._same_inbox(email))
                 .filter(EmailToken.exp >= now() - window + CODE_TTL)
                 .order_by(EmailToken.exp.asc()).all())
 
@@ -186,13 +198,17 @@ class AccountService:
             if wait > 0:
                 # Round up: never tell someone to retry a moment early.
                 return max(1, math.ceil(wait))
-            # One live code at a time: retire any prior unused codes so an
-            # attacker can't accumulate many simultaneously-valid guesses.
-            s.query(EmailToken).filter_by(
-                email=email, used=False).update({"used": True})
+            # One live code per inbox: retire any prior unused codes, the
+            # inbox's other variants' included, so an attacker can't
+            # accumulate many simultaneously-valid guesses.
+            (s.query(EmailToken)
+             .filter(self._same_inbox(email), EmailToken.used.is_(False))
+             .update({"used": True}, synchronize_session=False))
             code = f"{secrets.randbelow(CODE_MAX):08d}"
+            # Sent to the address as typed; counted against its inbox.
             tok = EmailToken(email=email, code_hash=self._hash(code),
-                             purpose=purpose, exp=now() + CODE_TTL)
+                             purpose=purpose, exp=now() + CODE_TTL,
+                             mailbox=beta_signup.mailbox(email))
             s.add(tok)
             s.flush()
             token_id = tok.id
