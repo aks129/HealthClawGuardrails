@@ -53,7 +53,7 @@ def collapse_failed_turns(past: list[dict]) -> list[dict]:
     """The replayed history with each run of failed turns shown once.
 
     A tester who retried a broken chat came back to a wall of the same
-    "Something went wrong" bubble. A failed turn is a question answered by
+    failure bubble. A failed turn is a question answered by
     one of FAILURE_TEXTS; of consecutive failed turns only the last is
     kept, and a failure bubble right after another is dropped. The kept
     failure is marked `failed`, so the page can offer "Report a problem".
