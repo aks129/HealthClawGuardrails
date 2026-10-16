@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from urllib.parse import urlparse
 
 from careagents import _build
@@ -297,6 +298,41 @@ class Config:
         # worker count; this one is DB-backed and is what actually bounds
         # what a single account can cost the operator in a day.
         self.chat_turns_per_day = int(e.get("CARE_CHAT_TURNS_PER_DAY", "200"))
+
+        # Voice (careagents/voice.py): ElevenLabs as speech-to-text and
+        # text-to-speech only; the turn itself still goes through /api/chat.
+        # CARE_VOICE=on needs the key and a stock (never cloned) voice id,
+        # in every environment: voice never falls back to a fake.
+        self.voice = e.get("CARE_VOICE", "off") == "on"
+        # Real records over voice: off unless switched on, and it must stay
+        # off until ElevenLabs' BAA and zero retention exist. Off, only the
+        # sample connection may use voice (voice.voice_blocked).
+        self.voice_real_records = (e.get("CARE_VOICE_REAL_RECORDS") or ""
+                                   ).strip().lower() in (
+                                       "1", "true", "yes", "on")
+        self.elevenlabs_api_key = e.get("ELEVENLABS_API_KEY", "")
+        self.elevenlabs_voice_id = (e.get("ELEVENLABS_VOICE_ID") or "").strip()
+        # Daily ceilings per account, durable (models.VoiceUsageDay).
+        self.voice_stt_seconds_per_day = int(e.get(
+            "CARE_VOICE_STT_SECONDS_PER_DAY", "600"))
+        self.voice_tts_chars_per_day = int(e.get(
+            "CARE_VOICE_TTS_CHARS_PER_DAY", "20000"))
+        if self.voice_stt_seconds_per_day < 0:
+            raise ConfigError("CARE_VOICE_STT_SECONDS_PER_DAY must be >= 0")
+        if self.voice_tts_chars_per_day < 0:
+            raise ConfigError("CARE_VOICE_TTS_CHARS_PER_DAY must be >= 0")
+        if self.voice:
+            # Names only: an error never carries the credential.
+            if not self.elevenlabs_api_key:
+                raise ConfigError(
+                    "CARE_VOICE=on needs ELEVENLABS_API_KEY")
+            if not re.fullmatch(r"[A-Za-z0-9]{1,64}",
+                                self.elevenlabs_voice_id):
+                # It is a URL path segment; no default, because stock
+                # voices differ by account and expire.
+                raise ConfigError(
+                    "CARE_VOICE=on needs ELEVENLABS_VOICE_ID, a stock "
+                    "voice id (letters and digits)")
 
         # Durable run execution. Web requests enqueue and replay; this fixed
         # worker pool performs inference outside Gunicorn request threads.
