@@ -22,6 +22,7 @@ SNOMED = 'http://snomed.info/sct'
 @pytest.fixture(autouse=True)
 def _mint_secret(monkeypatch):
     monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', f.MINT_SECRET)
+    monkeypatch.setenv('KTC_EXPORT_ENABLED', 'true')
 
 
 def _mint(client, types, tenant=f.TENANT):

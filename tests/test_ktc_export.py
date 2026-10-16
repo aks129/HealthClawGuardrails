@@ -30,6 +30,9 @@ HTEST = {'system': V3_ACT_REASON, 'code': 'HTEST',
 @pytest.fixture(autouse=True)
 def _mint_secret(monkeypatch):
     monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', f.MINT_SECRET)
+    # The export is off unless the engine says otherwise (the flag tests
+    # at the end of this file); everything else here runs with it on.
+    monkeypatch.setenv('KTC_EXPORT_ENABLED', 'true')
 
 
 def mint(client, types, tenant=f.TENANT, **extra):
@@ -435,3 +438,58 @@ def test_refusals_are_audited_as_failures_from_fixed_words(
         'share-bundle export (profile=ktc) refused: no exportable Patient']
     assert 'CANARY' not in ''.join(details)
     assert 'ci-pt' not in ''.join(details)
+
+
+# --- the flag: plaintext never leaves until the link store lands -------------
+
+def test_the_export_flag_is_off_by_default(monkeypatch):
+    """MUTATION: default KTC_EXPORT_ENABLED to on -> red."""
+    monkeypatch.delenv('KTC_EXPORT_ENABLED')
+    assert ktc.export_enabled() is False
+    for value in ('', '0', 'false', 'no', 'off', 'enabled'):
+        monkeypatch.setenv('KTC_EXPORT_ENABLED', value)
+        assert ktc.export_enabled() is False, value
+    for value in ('1', 'true', 'yes', ' TRUE '):
+        monkeypatch.setenv('KTC_EXPORT_ENABLED', value)
+        assert ktc.export_enabled() is True, value
+
+
+@pytest.mark.parametrize('value', [None, '', '0', 'false'])
+def test_off_the_plaintext_bundle_is_refused_and_the_token_kept(
+        app, client, records, monkeypatch, value):
+    """Design section 1: plaintext never leaves the engine. Until PR 3's
+    link store, the export answers only where the engine turned it on.
+
+    MUTATION: drop the export_enabled check -> red."""
+    tok = token(client, ALL)
+    if value is None:
+        monkeypatch.delenv('KTC_EXPORT_ENABLED')
+    else:
+        monkeypatch.setenv('KTC_EXPORT_ENABLED', value)
+    resp = export(client, tok, ALL)
+    assert resp.status_code == 404
+    assert resp.get_json() == {'error': 'ktc_export_disabled'}
+    text = resp.get_data(as_text=True)
+    assert 'Testperson' not in text and 'entry' not in text
+    assert f.export_audits(app) == [(
+        'careagents-ktc',
+        'share-bundle export (profile=ktc) refused: export disabled')]
+    monkeypatch.setenv('KTC_EXPORT_ENABLED', 'true')
+    assert export(client, tok, ALL).status_code == 200
+
+
+def test_off_it_answers_the_same_to_any_caller(app, client, monkeypatch):
+    """Checked first: no token and a malformed request read the same as a
+    good one, so the flag is no oracle for anything behind it."""
+    monkeypatch.delenv('KTC_EXPORT_ENABLED')
+    for resp in (export(client, None, ALL),
+                 export(client, None, ['Organization'], patient_id=None)):
+        assert resp.status_code == 404
+        assert resp.get_json() == {'error': 'ktc_export_disabled'}
+
+
+def test_off_the_check_in_export_is_unaffected(app, client, records,
+                                               monkeypatch):
+    monkeypatch.delenv('KTC_EXPORT_ENABLED')
+    resp = f.export(client, f.token(client, ['Patient']), ['Patient'])
+    assert resp.status_code == 200

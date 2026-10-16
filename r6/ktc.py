@@ -18,9 +18,11 @@ The row walk, the claim gate, the redaction, our labels and the HTEST
 marker are the check-in's own (r6/checkin.collect, r6/access.py
 _checkin_profile), not copies of them.
 
-Until the link store lands (design PR 3) the export answers with the bundle
-itself. PR 3 replaces that body with `{link_id, shlink, exp}`, so the
-plaintext stays in the engine.
+Until the link store lands (design PR 3) the export would answer with the
+bundle itself, and the design says plaintext never leaves the engine. So it
+is OFF unless KTC_EXPORT_ENABLED is set (`export_enabled`): the tests turn
+it on, no deployment does. PR 3 replaces the body with
+`{link_id, shlink, exp}` and can then remove the flag.
 
 Both handlers live here rather than in r6/routes.py, which is pinned to
 shrink: `mint` is the ktc branch of /internal/step-up-token and `export`
@@ -28,12 +30,14 @@ the ktc branch of $share-bundle.
 """
 
 import json
+import os
 
 from flask import Response, jsonify
 
 from models import db
 from r6 import access, checkin, stepup
 from r6.audit import add_audit_event
+from r6.runtime_config import TRUE_VALUES
 
 #: The six items a link may carry; payor Organizations follow the exported
 #: Coverage by reference, never by type. The check-in set, by owner ruling
@@ -53,6 +57,14 @@ MAX_BUNDLE_BYTES = 2_000_000
 
 #: The agent id the export audits under. Fixed words.
 AUDIT_AGENT = 'careagents-ktc'
+
+
+def export_enabled():
+    """Whether this engine answers the ktc export. Off unless
+    KTC_EXPORT_ENABLED says so: until PR 3 the answer is the plaintext
+    bundle, which the design keeps inside the engine."""
+    return os.environ.get('KTC_EXPORT_ENABLED', '').strip().lower() \
+        in TRUE_VALUES
 
 
 def parse_types(value):
@@ -103,6 +115,9 @@ def _refuse(tenant, status, reason, body):
 def export(tenant, body):
     """$share-bundle profile=ktc.
 
+    - Off (export_enabled false, the default): 404, audited, before
+      anything else is read, so no token is spent and the answer is the
+      same for any caller.
     - Gate: a token minted for exactly this type set (`aud` ktc-export,
       `op` from r6/ktc.operation), single use. A check-in token, the cached
       general token (no `aud`), a subset or a superset is refused.
@@ -114,6 +129,10 @@ def export(tenant, body):
     - Over MAX_BUNDLE_BYTES: 413, no bundle, audited, token not spent.
     - One AuditEvent, from fixed words.
     """
+    if not export_enabled():
+        return _refuse(tenant, 404, 'export disabled',
+                       {'error': 'ktc_export_disabled'})
+
     # Request checks first, so a malformed one does not spend the token
     # (#963 security review F4).
     types = parse_types(body.get('resource_types'))
