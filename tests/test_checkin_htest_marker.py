@@ -230,3 +230,29 @@ def test_the_profile_reads_the_marker_only_from_the_stored_meta():
     for bad in (None, 'HTEST', [HTEST], {'tag': 'HTEST'}, {'tag': [None]}):
         assert _markers(_checkin_profile(
             cond, patient_id=f.PT, stored_meta=bad)) == []
+
+
+def test_the_shipped_test_patient_keeps_its_marker_end_to_end(app, client):
+    """The #959 fixture, stored the way scripts/seed_demo_tenant.py stores
+    it (r6.seed.seed_demo_data), then exported: every entry carries the
+    marker. Proves the write path keeps meta.tag in the stored JSON, not
+    only that the export reads it back."""
+    import json
+    from pathlib import Path
+
+    from r6.seed import seed_demo_data
+    fixture = (Path(__file__).resolve().parents[1] / 'careagents'
+               / 'checkin' / 'us_core_test_patient.json')
+    bundle = json.loads(fixture.read_text(encoding='utf-8'))
+    with app.app_context():
+        seed_demo_data(f.TENANT, resources=[
+            e['resource'] for e in bundle['entry']])
+    types = ['AllergyIntolerance', 'Condition', 'Coverage', 'Immunization',
+             'MedicationRequest', 'Patient']
+    resp = f.export(client, f.token(client, types), types,
+                    patient_id='checkin-test-patient')
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    out = f.resources(resp)
+    assert {r['resourceType'] for r in out} == set(types) | {'Organization'}
+    for res in out:
+        assert _markers(res) == [dict(HTEST, display=OUR_LABEL)], res['id']
