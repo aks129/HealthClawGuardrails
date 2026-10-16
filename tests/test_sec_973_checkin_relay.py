@@ -292,3 +292,75 @@ def test_a_padded_nka_code_is_not_shared_as_an_allergy():
     allergy; codes are trimmed before the absence check."""
     assert _shareable(["716186003 ", " 409137002"]) == {
         "716186003 ": False, " 409137002": False}
+
+
+# --- recheck at 1b828dc: the wallet now names records by `code.text` ----------
+
+def _upstream_named(rtype, field, concept, rid):
+    res = {"resourceType": rtype, "id": rid,
+           "meta": f.claim({
+               "Condition": "us-core-condition-problems-health-concerns",
+               "Immunization": "us-core-immunization",
+               "MedicationRequest": "us-core-medicationrequest",
+               "AllergyIntolerance": "us-core-allergyintolerance"}[rtype]),
+           field: concept}
+    res["patient" if rtype in ("Immunization", "AllergyIntolerance")
+        else "subject"] = {"reference": f"Patient/{f.PT}"}
+    return res
+
+
+#: Concepts the engine has no label for, carrying upstream words in `text`
+#: and `display`: the relabel cannot overwrite them, so only the strip
+#: stands between the feed and what the wallet shows.
+_UNLABELLED = {
+    "unknown code": lambda: {"coding": [{"system": "http://snomed.info/sct",
+                                         "code": "999999999",
+                                         "display": CANARY}], "text": CANARY},
+    "text only": lambda: {"text": CANARY},
+    "coding not a list": lambda: {"coding": {"system": "x", "code": "1"},
+                                  "text": CANARY},
+    "empty coding": lambda: {"coding": [], "text": CANARY},
+}
+_FIELDS = [("Condition", "code"), ("Immunization", "vaccineCode"),
+           ("MedicationRequest", "medicationCodeableConcept"),
+           # A substance code so the allow-list lets it through to be named.
+           ("AllergyIntolerance", "code")]
+
+
+@pytest.mark.parametrize("shape", sorted(_UNLABELLED))
+def test_upstream_text_on_an_unlabelled_concept_never_names_a_record(
+        app, client, monkeypatch, shape):
+    from tests.test_checkin_relay import _wallet_view
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", f.MINT_SECRET)
+    rows = [f.patient()]
+    for i, (rtype, field) in enumerate(_FIELDS):
+        concept = _UNLABELLED[shape]()
+        if rtype == "AllergyIntolerance" and isinstance(
+                concept.get("coding"), list):
+            concept["coding"].append({
+                "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+                "code": "999999"})
+        rows.append(_upstream_named(rtype, field, concept, f"sec973-{i}"))
+    f.seed(app, *rows)
+    hc = HealthClawClient(base="http://engine", mint_secret=f.MINT_SECRET)
+    hc.http = _Engine(client)
+    ca, svc = _careagents(hc)
+    try:
+        acct = _account(svc, monkeypatch)
+        svc.add_connection(acct.id, "direct", f.TENANT, "Upload")
+        browser = ca.test_client()
+        _sign_in(browser, acct)
+        types = sorted({t for t, _ in _FIELDS})
+        r = browser.post(RELAY, json={"resource_types": types})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        assert CANARY not in r.get_data(as_text=True)
+        got = {e["resource"]["id"] for e in r.get_json()["entry"]}
+        # Every planted record is exported (else this proves nothing), the
+        # allergy only when its coding is a list a substance code can join.
+        assert {"sec973-0", "sec973-1", "sec973-2"} <= got, got
+        view = _wallet_view(r.get_json(), types)
+        assert CANARY not in json.dumps(view)
+        assert {"A health problem", "A vaccine", "A medicine"} <= set(
+            view["shown"]), view["shown"]
+    finally:
+        svc.engine.dispose()
