@@ -448,7 +448,7 @@ class Node {
   remove() { if (this.parent) this.parent.children.splice(
     this.parent.children.indexOf(this), 1); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
-  scrollIntoView() {}
+  scrollIntoView() { scrolled.push(this.cls || this.tagName); }
   addEventListener(k, fn) { this.listeners[k] = fn; }
   set className(v) { this.cls = v; }
   get textContent() { return this._text + this.children.map(
@@ -460,6 +460,7 @@ class Node {
 }
 const document = { createElement: t => new Node(t) };
 let sentBody = null;
+const scrolled = [];
 async function fetch(url, opts) { sentBody = opts.body;
   return { ok: true, json: async () => ({ ok: true }) }; }
 const code = cutFn('el') + cutConst('FLAG_REASONS') + cutConst('NOTE_MAX')
@@ -482,6 +483,7 @@ const args = JSON.parse(process.argv[2]);
   find('flag-note').value = args.note;
   await find('flag-send').listeners.click();
   console.log(JSON.stringify({ body: sentBody, bubble: bubble.textContent,
+    scrolled: scrolled,
     after: log.children.indexOf(bubble) + 1 === log.children.indexOf(
       find('flag')) }));
 })();
@@ -511,6 +513,8 @@ def test_the_flag_sends_the_run_id_reason_and_note_only():
     # The control sits beside the bubble; the answer's text is untouched.
     assert out["after"] is True
     assert out["bubble"] == answer
+    # Opening the sheet brings its Send row into view (QA G7 on #980).
+    assert "flag-actions" in out["scrolled"]
 
 
 def test_the_flag_note_is_cut_to_the_cap_in_the_page_too():
