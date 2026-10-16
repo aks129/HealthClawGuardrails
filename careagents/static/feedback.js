@@ -5,6 +5,7 @@
   const form = $("feedback-form");
   const err = $("feedback-err");
   const NAMES = ["stuck", "change", "trust", "real"];
+  const CONTEXT = ["screen", "error", "run_id"];
   const MESSAGES = {
     empty: "Please answer at least one question.",
     too_long: "One answer is too long. Please make it shorter.",
@@ -24,6 +25,15 @@
     err.hidden = true;
     const body = {};
     NAMES.forEach((n) => { body[n] = form.elements[n].value; });
+    // The context a "Report a problem" link carried, as the server wrote
+    // it onto the form after checking it. Never read from the URL here.
+    const context = {};
+    CONTEXT.forEach((n) => {
+      const v = form.dataset["ctx" + n.replace(/(^|_)(\w)/g,
+        (_, _s, c) => c.toUpperCase())];
+      if (v) context[n] = v;
+    });
+    if (Object.keys(context).length) body.context = context;
     if (!NAMES.some((n) => body[n].trim())) return fail(MESSAGES.empty);
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;

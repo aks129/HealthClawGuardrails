@@ -1210,3 +1210,30 @@ textarea:focus-visible {
 .add-person-form .field { width: 100%; box-sizing: border-box; }
 .add-person-form .btn-block { margin-top: 12px; }
 .field-optional { font-weight: 400; color: var(--ink-soft); }
+
+/* --- beta feedback: error pages, report context, flag an answer --------- */
+.error-page h1 { font-size: 28px; }
+.feedback-context { font-size: 15px; color: var(--ink-soft); }
+/* "This wasn't right": quiet under the answer, a 44px tap target. */
+.flag { align-self: flex-start; max-width: min(65ch, 88%); margin-top: -6px; }
+.flag-open { background: none; border: 0; padding: 10px 4px; min-height: 44px;
+  font: inherit; font-size: 15px; color: var(--ink-soft); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px; }
+.flag-open:hover { color: var(--accent-ink); }
+.flag-sheet { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 12px 14px; }
+.flag-ask { font-weight: 600; margin-bottom: 8px; }
+.flag-reasons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.flag-reason { min-height: 44px; padding: 8px 14px; font: inherit; font-size: 16px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--field-line); border-radius: 999px; cursor: pointer; }
+.flag-reason[aria-pressed="true"] { background: var(--accent-tint);
+  border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.flag-note { width: 100%; box-sizing: border-box; resize: vertical; }
+.flag-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.flag-actions .btn-primary, .flag-actions .btn-secondary { margin-top: 0;
+  min-height: 44px; padding: 10px 18px; font-size: 16px; }
+.flag-send:disabled { opacity: .5; cursor: not-allowed; }
+.flag-status { font-size: 15px; color: var(--critical-ink); margin-top: 6px; }
+.flag-status:empty { display: none; }
+.flag-done { font-size: 15px; color: var(--ink-soft); padding: 10px 4px; }

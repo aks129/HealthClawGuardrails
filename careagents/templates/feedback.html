@@ -16,7 +16,16 @@
     {% if signed_in %}
     <p id="feedback-reply">We'll reply to the email you signed in with.</p>
     {% endif %}
-    <form id="feedback-form" novalidate>
+    {# Context a "Report a problem" link carried, already checked against
+       fixed lists by feedback.context_from_args. Shown, so nothing rides
+       along that the tester cannot see. #}
+    {% if context %}
+    <p class="feedback-context" id="feedback-context">We'll also send which
+      screen you were on{% if context.error %} and the error code ({{ context.error }}){% endif %},
+      so we can find the problem. Nothing from your records.</p>
+    {% endif %}
+    <form id="feedback-form" novalidate
+          {%- for name, value in context.items() %} data-ctx-{{ name | replace('_', '-') }}="{{ value }}"{% endfor %}>
       {% for name, question in questions %}
       <label class="field-label" for="fb-{{ name }}">{{ question }}</label>
       <textarea class="field" id="fb-{{ name }}" name="{{ name }}" rows="4" maxlength="{{ answer_max }}"></textarea>

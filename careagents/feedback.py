@@ -12,12 +12,26 @@ own address, and is left out when nobody is signed in.
 JSON only, as every form here: a cross-site page cannot send it without a
 preflight, which is the CSRF guard. Sends are rate-limited per account, or
 per client address when signed out.
+
+A report can carry context, so "it broke" arrives with where and when. It
+is a fixed list, every value checked against a fixed set: the screen (an
+endpoint name of this app, never a URL), the last error code, and a chat
+answer's run id (a UUID, which cannot spell words). The server adds its
+own build and the time; it takes neither from the page. The email puts
+the context in its own block, apart from the tester's words.
+
+"This wasn't right" on a chat answer (POST /feedback/flag) goes the same
+way: the answer's run id, a reason code and an optional short note. Never
+the answer or the question; a body with any other field is refused. Each
+flag is counted by its reason, for the digest.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import ipaddress
 import logging
+import re
 import threading
 import time
 import unicodedata
@@ -29,11 +43,13 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from careagents import funnel, mail
 from careagents.beta_signup import valid_email
+from careagents.errors import NOT_FOUND_SCREEN, known_endpoint
 
 logger = logging.getLogger("careagents.feedback")
 
 FEEDBACK_TO = "contactus@healthclaw.io"
 SUBJECT = "Tester feedback"
+FLAG_SUBJECT = "Answer flagged"
 
 #: (field name, question), in the order the page asks them.
 QUESTIONS = (
@@ -48,12 +64,30 @@ ANSWER_MAX = 2000
 #: CRLF. Measured raw, so characters `clean` drops still count.
 RAW_ANSWER_MAX = 2 * ANSWER_MAX
 #: The largest request body read: four answers at RAW_ANSWER_MAX, every
-#: character escaped in JSON as \uXXXX (six bytes), and room for the keys.
-BODY_MAX = 4 * RAW_ANSWER_MAX * 6 + 1024
+#: character escaped in JSON as \uXXXX (six bytes), and room for the keys
+#: and the context.
+BODY_MAX = 4 * RAW_ANSWER_MAX * 6 + 2048
+
+#: The context a report may carry, each checked by `read_context`.
+CONTEXT_FIELDS = ("screen", "error", "run_id")
+#: The error codes a page may report: the statuses our pages show.
+ERROR_CODES = ("400", "403", "404", "500", "503")
+#: An engine run id is str(uuid.uuid4()) (r6/agent_runs/models.py).
+_RUN_ID = re.compile(
+    r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+
+#: A flag's note is short: what was wrong, in a line or two.
+NOTE_MAX = 280
+RAW_NOTE_MAX = 2 * NOTE_MAX
+FLAG_FIELDS = ("run_id", "reason", "note")
+FLAG_BODY_MAX = RAW_NOTE_MAX * 6 + 512
 
 #: Emails sent per account (or client address) per window, and how many
 #: keys the limiter remembers before it forgets the oldest.
 SENDS_PER_WINDOW = 5
+#: Flags have their own window, so flagging a few answers on a test call
+#: does not use up the feedback form.
+FLAGS_PER_WINDOW = 10
 WINDOW_SECONDS = 3600
 LIMITER_KEYS = 512
 
@@ -91,23 +125,129 @@ def read_answers(body) -> tuple[dict | None, str | None]:
     return answers, None
 
 
-def compose(answers: dict, signed_in: bool) -> tuple[str, str]:
-    """(html, text) for the email. Only the body carries answer text."""
-    who = ("From a signed-in tester. Reply to this email to answer them."
-           if signed_in else
-           "From someone not signed in, so there is no address to reply to.")
-    text_parts = ["Tester feedback from CareAgents.", who]
-    html_parts = []
-    for name, question in QUESTIONS:
-        answer = answers[name] or "(no answer)"
-        text_parts.append(f"{question}\n{answer}")
-        html_parts.append(
-            f"<p><b>{escape(question)}</b><br>"
-            f"{str(escape(answer)).replace(chr(10), '<br>')}</p>")
+def read_context(app, raw) -> tuple[dict | None, str | None]:
+    """(context, None), or (None, "invalid"). Only CONTEXT_FIELDS, each a
+    string from its fixed set; a missing or empty field is left out."""
+    if raw is None:
+        return {}, None
+    if not isinstance(raw, dict) or set(raw) - set(CONTEXT_FIELDS):
+        return None, "invalid"
+    out = {}
+    for name in CONTEXT_FIELDS:
+        value = raw.get(name)
+        if value in (None, ""):
+            continue
+        if not isinstance(value, str):
+            return None, "invalid"
+        if name == "screen":
+            ok = (value == NOT_FOUND_SCREEN
+                  or known_endpoint(app, value) is not None)
+        elif name == "error":
+            ok = value in ERROR_CODES
+        else:
+            ok = bool(_RUN_ID.match(value))
+        if not ok:
+            return None, "invalid"
+        out[name] = value
+    return out, None
+
+
+def context_from_args(app, args) -> dict:
+    """The context a link to /feedback carries, each field kept only if it
+    passes `read_context` on its own. Nothing else reaches the page."""
+    out = {}
+    for name in CONTEXT_FIELDS:
+        one, error = read_context(app, {name: args.get(name, "")})
+        if not error:
+            out.update(one)
+    return out
+
+
+_CONTEXT_LABELS = (("screen", "Screen"), ("error", "Error code"),
+                   ("run_id", "Chat answer (run id)"), ("reason", "Reason"),
+                   ("build", "Build"), ("time", "Sent (UTC)"))
+
+
+def _stamp(context: dict, build: str) -> dict:
+    """The context with the server's own build and the time added."""
+    return {**context, "build": build or "unknown",
+            "time": _dt.datetime.now(_dt.timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S")}
+
+
+def _who(signed_in: bool) -> str:
+    return ("From a signed-in tester. Reply to this email to answer them."
+            if signed_in else
+            "From someone not signed in, so there is no address to reply to.")
+
+
+def _wrap(title: str, who: str, context: dict,
+          words: list[tuple[str, str]]) -> tuple[str, str]:
+    """(html, text): who sent it, the app's context block, then the
+    tester's own words under a rule. Every value is escaped in the HTML."""
+    ctx = [(label, context[k]) for k, label in _CONTEXT_LABELS
+           if context.get(k)]
+    text_parts = [f"{title} from CareAgents.", who,
+                  "== Added by the app (no health details) ==\n" + "\n".join(
+                      f"{label}: {value}" for label, value in ctx),
+                  "== In the tester's own words =="]
+    html_words = []
+    for heading, said in words:
+        text_parts.append(f"{heading}\n{said}")
+        html_words.append(
+            f"<p><b>{escape(heading)}</b><br>"
+            f"{str(escape(said)).replace(chr(10), '<br>')}</p>")
+    html_ctx = "".join(f"<li>{escape(label)}: {escape(value)}</li>"
+                       for label, value in ctx)
     html = (f"<div style='font-family:system-ui,sans-serif;max-width:560px'>"
-            f"<h2 style='color:#22190E'>Tester feedback</h2>"
-            f"<p>{escape(who)}</p>{''.join(html_parts)}</div>")
+            f"<h2 style='color:#22190E'>{escape(title)}</h2>"
+            f"<p>{escape(who)}</p>"
+            f"<h3>Added by the app (no health details)</h3>"
+            f"<ul style='font-family:monospace'>{html_ctx}</ul>"
+            f"<hr><h3>In the tester's own words</h3>"
+            f"{''.join(html_words)}</div>")
     return html, "\n\n".join(text_parts)
+
+
+def compose(answers: dict, signed_in: bool, context: dict | None = None,
+            build: str = "unknown") -> tuple[str, str]:
+    """(html, text) for the email. Only the body carries answer text."""
+    words = [(question, answers[name] or "(no answer)")
+             for name, question in QUESTIONS]
+    return _wrap("Tester feedback", _who(signed_in),
+                 _stamp(context or {}, build), words)
+
+
+def read_flag(body) -> tuple[dict | None, str | None]:
+    """(flag, None), or (None, the error code). Exactly FLAG_FIELDS: a run
+    id, a reason code and an optional note. Any other field is refused, so
+    an answer's text can never ride along."""
+    if not isinstance(body, dict) or set(body) - set(FLAG_FIELDS):
+        return None, "invalid"
+    run_id, reason = body.get("run_id"), body.get("reason")
+    note = body.get("note") or ""
+    if not isinstance(run_id, str) or not _RUN_ID.match(run_id):
+        return None, "invalid"
+    if reason not in funnel.FLAG_REASONS:
+        return None, "invalid"
+    if not isinstance(note, str):
+        return None, "invalid"
+    if len(note) > RAW_NOTE_MAX:
+        return None, "too_long"
+    note = clean(note)
+    if len(note) > NOTE_MAX:
+        return None, "too_long"
+    return {"run_id": run_id, "reason": reason, "note": note}, None
+
+
+def compose_flag(flag: dict, signed_in: bool,
+                 build: str = "unknown") -> tuple[str, str]:
+    """(html, text) for a flagged answer: the pointer and the reason as
+    context, the note as the tester's words."""
+    context = _stamp({"run_id": flag["run_id"], "reason": flag["reason"]},
+                     build)
+    return _wrap("Answer flagged", _who(signed_in), context,
+                 [("Their note", flag["note"] or "(no note)")])
 
 
 def register(app, svc, cfg) -> None:
@@ -125,13 +265,13 @@ def register(app, svc, cfg) -> None:
         except ValueError:
             return request.remote_addr or ""
 
-    def _allow(key: str) -> bool:
+    def _allow(key: str, limit: int = SENDS_PER_WINDOW) -> bool:
         moment = time.time()
         with lock:
             window = sends.pop(key, None) or deque()
             while window and moment - window[0] > WINDOW_SECONDS:
                 window.popleft()
-            allowed = len(window) < SENDS_PER_WINDOW
+            allowed = len(window) < limit
             if allowed:
                 window.append(moment)
             sends[key] = window             # newest last
@@ -152,11 +292,28 @@ def register(app, svc, cfg) -> None:
         aid = session.get("account_id")
         return svc.get_account(aid) if aid else None
 
+    def _send(subject, html, text, reply_to) -> bool:
+        """Mail one report to the team. False when it surely did not go."""
+        try:
+            outcome = mail.send_message(cfg, FEEDBACK_TO, subject, html, text,
+                                        reply_to=reply_to)
+        except Exception:                   # pragma: no cover - defensive
+            # No exc_info: a traceback can carry the answers.
+            logger.warning("feedback email failed to send")
+            outcome = mail.NOT_SENT
+        if outcome == mail.NOT_SENT:
+            funnel.note_mail(svc.session, cfg, outcome)
+            return False
+        # SENT, or UNCONFIRMED: the request went out and the answer was
+        # lost, so the mail may have arrived.
+        return True
+
     @app.get("/feedback")
     def feedback_page():
         return render_template("feedback.html", done=False,
                                questions=QUESTIONS, answer_max=ANSWER_MAX,
-                               signed_in=_account() is not None)
+                               signed_in=_account() is not None,
+                               context=context_from_args(app, request.args))
 
     @app.get("/feedback/thanks")
     def feedback_thanks():
@@ -182,6 +339,9 @@ def register(app, svc, cfg) -> None:
         answers, error = read_answers(body)
         if error:
             return jsonify({"error": error}), 400
+        context, error = read_context(app, body.get("context"))
+        if error:
+            return jsonify({"error": error}), 400
         acct = _account()
         key = f"acct:{acct.id}" if acct else f"ip:{_client_key()}"
         if not _allow(key):
@@ -190,16 +350,9 @@ def register(app, svc, cfg) -> None:
         reply_to = None
         if acct and valid_email(acct.email or ""):
             reply_to = acct.email
-        html, text = compose(answers, signed_in=acct is not None)
-        try:
-            outcome = mail.send_message(cfg, FEEDBACK_TO, SUBJECT, html, text,
-                                        reply_to=reply_to)
-        except Exception:                   # pragma: no cover - defensive
-            # No exc_info: a traceback can carry the answers.
-            logger.warning("feedback email failed to send")
-            outcome = mail.NOT_SENT
-        if outcome == mail.NOT_SENT:
-            funnel.note_mail(svc.session, cfg, outcome)
+        html, text = compose(answers, signed_in=acct is not None,
+                             context=context, build=cfg.build_sha)
+        if not _send(SUBJECT, html, text, reply_to):
             # Nothing left, so the page keeps the answers and says so.
             _refund(key)
             return jsonify({"error": "not_sent"}), 503
@@ -209,3 +362,37 @@ def register(app, svc, cfg) -> None:
         if acct is not None:
             funnel.safely(funnel.mark, svc.session, acct.id, "feedback_sent")
         return jsonify({"ok": True, "redirect": "/feedback/thanks"})
+
+    @app.post("/feedback/flag")
+    def feedback_flag():
+        """'This wasn't right' on one chat answer. Signed in only: the
+        answers are on the chat page, which is. The same gates as the form:
+        JSON only, and the size checked before the body is parsed."""
+        if not request.is_json:
+            return jsonify({"error": "json_required"}), 415
+        clen = request.content_length
+        if clen is not None and clen > FLAG_BODY_MAX:
+            return jsonify({"error": "too_long"}), 413
+        request.max_content_length = FLAG_BODY_MAX
+        try:
+            body = request.get_json(silent=True)
+        except RequestEntityTooLarge:
+            return jsonify({"error": "too_long"}), 413
+        acct = _account()
+        if acct is None:
+            return jsonify({"error": "sign_in_required"}), 401
+        flag, error = read_flag(body)
+        if error:
+            return jsonify({"error": error}), 400
+        key = f"flag:acct:{acct.id}"
+        if not _allow(key, FLAGS_PER_WINDOW):
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
+            return jsonify({"error": "rate_limited"}), 429
+        reply_to = acct.email if valid_email(acct.email or "") else None
+        html, text = compose_flag(flag, signed_in=True, build=cfg.build_sha)
+        if not _send(FLAG_SUBJECT, html, text, reply_to):
+            _refund(key)
+            return jsonify({"error": "not_sent"}), 503
+        funnel.safely(funnel.count_detail, svc.session, "answer_flagged",
+                      flag["reason"])
+        return jsonify({"ok": True})
