@@ -170,7 +170,7 @@ def test_the_sign_in_page_has_a_plain_title(made, sent):
     assert c.post("/beta/confirm", data={"t": token, "n": n}
                   ).status_code == 303
     page = c.get("/auth?invite=1").get_data(as_text=True)
-    assert "<h1>Confirm it&#39;s you</h1>" in page
+    assert "<h1>Confirm it's you</h1>" in page
 
 
 def test_a_wrong_code_offers_a_new_one():
