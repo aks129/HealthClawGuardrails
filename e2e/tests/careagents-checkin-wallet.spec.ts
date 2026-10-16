@@ -495,7 +495,8 @@ test.describe('check-in wallet', () => {
 
   // The records are the account's own now, not the synthetic test patient,
   // so the wallet adds no test marker of its own (#960's note: the
-  // real-record export drops it). A record that carries one keeps it.
+  // real-record export drops it). The wallet passes a record's own tag
+  // through, but the engine's export does not keep one today.
   test('the wallet tags no Bundle as test data', async ({ page }) => {
     await page.goto('/');
     const tags = await page.evaluate(async ({ request, bundle }) => {

@@ -237,13 +237,15 @@ test.describe('sec #960: hostile opener', () => {
       expect(JSON.stringify(RELAY_ASKED)).not.toContain(EVIL);
     });
 
-  // Finding (#959/#960) was: HTEST lived only on the fixture's outer Bundle.
-  // The wallet answered from the fixture alone then, and tagged each Bundle
-  // it sent. It answers from the account's own records now (#960's note: the
-  // real-record export drops the wallet's tag), so the marker that remains
-  // is the one each record carries itself. The fixture's records do
-  // (tests/test_sec_960_checkin_fixture.py), and it survives the answer.
-  test('a record\'s own HTEST tag still reaches the website', async ({ page }) => {
+  // Finding (#959/#960) was: HTEST lived only on the fixture's outer Bundle,
+  // so the wallet tagged each Bundle it sent while it answered from the
+  // fixture alone. It answers from the account's own records now (#960's
+  // note: the real-record export drops the wallet's tag), so it adds none.
+  // Open, engine lane: the engine's export rebuilds `meta` and drops a
+  // record's own HTEST tag too, so uploaded synthetic records reach a
+  // website unmarked. This stub serves the raw fixture, whose records keep
+  // theirs, so it cannot speak to that and does not assert it.
+  test('the wallet adds no test tag of its own', async ({ page }) => {
     const wallet = await openAndSignIn(page);
     await expect(wallet.locator('#wallet-review')).toBeVisible();
     for (const r of await wallet.locator('#wallet-items input[value=share]').all()) {
@@ -257,8 +259,6 @@ test.describe('sec #960: hostile opener', () => {
       (t: any) => t.code === 'HTEST');
     for (const a of r.json.artifacts) {
       expect(isTest(a.value.meta), `artifact ${a.id} adds no tag`).toBe(false);
-      expect(a.value.entry.every((e: any) => isTest(e.resource.meta)),
-        `artifact ${a.id} records keep HTEST`).toBe(true);
     }
   });
 });
