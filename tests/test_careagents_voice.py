@@ -43,10 +43,30 @@ def test_voice_is_off_by_default():
     assert c.voice_tts_chars_per_day == 20000
 
 
-@pytest.mark.parametrize("value", ["", "off", "true", "1", "ON", "yes"])
-def test_only_on_turns_voice_on(value):
+@pytest.mark.parametrize("value,expected", [
+    ("", False), ("off", False), ("OFF", False), ("0", False),
+    ("false", False), ("no", False),
+    ("on", True), ("ON", True), ("true", True), ("1", True), ("yes", True)])
+def test_voice_reads_like_the_other_flags(value, expected):
     assert _cfg(CARE_VOICE=value, ELEVENLABS_API_KEY=FAKE_KEY,
-                ELEVENLABS_VOICE_ID=VOICE_ID).voice is False
+                ELEVENLABS_VOICE_ID=VOICE_ID).voice is expected
+
+
+@pytest.mark.parametrize("name", ["CARE_VOICE", "CARE_VOICE_REAL_RECORDS"])
+@pytest.mark.parametrize("value", ["enabled", "onn", "2", "y"])
+def test_an_unrecognised_flag_refuses_to_boot(name, value):
+    """Not silently off: an operator who typed `enabled` meant something."""
+    with pytest.raises(ConfigError, match=name):
+        _cfg(**{name: value})
+
+
+@pytest.mark.parametrize("name", ["CARE_VOICE_STT_SECONDS_PER_DAY",
+                                  "CARE_VOICE_TTS_CHARS_PER_DAY",
+                                  "CARE_CHAT_TURNS_PER_DAY"])
+@pytest.mark.parametrize("value", ["ten", "1.5", "600s"])
+def test_a_non_integer_cap_refuses_to_boot_naming_it(name, value):
+    with pytest.raises(ConfigError, match=name):
+        _cfg(**{name: value})
 
 
 def test_voice_on_without_a_key_refuses_to_boot():
@@ -198,6 +218,7 @@ def test_transcribe_sends_one_multipart_scribe_request():
     assert url == "https://api.elevenlabs.io/v1/speech-to-text"
     assert kw["headers"] == {"xi-api-key": FAKE_KEY}
     assert kw["data"] == {"model_id": "scribe_v2"}
+    assert kw["allow_redirects"] is False
     assert kw["files"]["file"][1:] == (b"\x1a\x45audio", "audio/webm")
     assert kw["timeout"] == voice.TIMEOUT
     # Not Enterprise: zero retention is not asked for (it would be refused).
@@ -253,6 +274,7 @@ def test_speak_returns_the_whole_reply_from_the_stock_voice():
     assert kw["params"] == {"output_format": "mp3_44100_128"}
     assert kw["headers"] == {"xi-api-key": FAKE_KEY}
     assert kw["stream"] is True
+    assert kw["allow_redirects"] is False
     assert kw["timeout"] == voice.TIMEOUT
 
 

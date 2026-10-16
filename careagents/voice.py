@@ -99,6 +99,8 @@ class Client:
         self.http = http or requests.Session()
 
     def _headers(self) -> dict:
+        # requests strips only Authorization on a cross-host redirect, so
+        # both calls refuse to follow one: a 3xx is a failure (#974 F5).
         return {"xi-api-key": self.cfg.elevenlabs_api_key}
 
     def _params(self) -> dict:
@@ -126,7 +128,7 @@ class Client:
                 headers=self._headers(), params=self._params(),
                 data={"model_id": STT_MODEL},
                 files={"file": ("clip", audio, content_type)},
-                timeout=TIMEOUT)
+                timeout=TIMEOUT, allow_redirects=False)
         except Exception as exc:
             # Any exception, not only RequestException: http.client raises
             # a bare ValueError quoting a bad header value, the key (#974 F4).
@@ -167,7 +169,7 @@ class Client:
                 headers=self._headers(),
                 params={**self._params(), "output_format": TTS_OUTPUT_FORMAT},
                 json={"text": text, "model_id": TTS_MODEL},
-                stream=True, timeout=TIMEOUT)
+                stream=True, timeout=TIMEOUT, allow_redirects=False)
         except Exception as exc:            # see transcribe: #974 F4
             logger.warning("elevenlabs text-to-speech failed: %s",
                            type(exc).__name__)
