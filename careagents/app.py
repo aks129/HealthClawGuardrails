@@ -14,13 +14,15 @@ guardrail layer; careagents holds identity + pointers only.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import quote
@@ -70,6 +72,15 @@ _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
 
 #: The one address patient-facing copy sends people to.
 CONTACT_EMAIL = "contactus@healthclaw.io"
+
+#: Sign-in code requests one client address may make per window. Sized for
+#: a family on one home Wi-Fi, each asking for codes and asking again; the
+#: per-address caps in accounts.py protect each inbox.
+CODE_REQUESTS_PER_IP = 30
+CODE_REQUEST_WINDOW = 600
+#: Client addresses the code-request limiter remembers before it forgets
+#: the oldest.
+CODE_REQUEST_KEYS = 4096
 
 
 def contact_links(text) -> Markup:
@@ -754,10 +765,59 @@ def create_app(config: Config | None = None,
 
     # --- email code auth -----------------------------------------------------
 
+    code_requests: OrderedDict[str, deque] = OrderedDict()
+    # gunicorn runs several threads per worker: reading, counting and
+    # re-inserting a window is one step, or a racing burst beats the limit.
+    code_requests_lock = threading.Lock()
+
+    def _code_request_client() -> str:
+        # As /feedback and /beta do: X-Real-IP, never X-Forwarded-For, whose
+        # entries can be the client's own words. The edge must overwrite
+        # X-Real-IP with the connecting address (Railway's does); passed
+        # through from the client, it would pick its own bucket.
+        raw = (request.headers.get("X-Real-IP") or "").strip()
+        try:
+            return str(ipaddress.ip_address(raw))
+        except ValueError:
+            return request.remote_addr or ""
+
+    def _code_request_wait(key: str) -> int:
+        """0 and counted, or the whole seconds until this client may ask."""
+        moment = time.time()
+        with code_requests_lock:
+            window = code_requests.pop(key, None) or deque()
+            while window and moment - window[0] > CODE_REQUEST_WINDOW:
+                window.popleft()
+            wait = 0
+            if len(window) >= CODE_REQUESTS_PER_IP:
+                oldest = window[len(window) - CODE_REQUESTS_PER_IP]
+                wait = max(1, math.ceil(oldest + CODE_REQUEST_WINDOW
+                                        - moment))
+            else:
+                window.append(moment)
+            code_requests[key] = window             # newest last
+            while len(code_requests) > CODE_REQUEST_KEYS:
+                code_requests.popitem(last=False)   # forget the oldest key
+            return wait
+
     @app.post("/api/auth/email")
     def auth_email():
         email = (request.get_json(silent=True) or {}).get("email", "")
         purpose = "verify"
+        # Per client address, before any address is looked at: one network
+        # asking for codes to many inboxes. Keyed on the network alone, so
+        # the answer says nothing about the address asked for. A 429 with a
+        # sentence, not the resend wait: that answer tells the person a code
+        # went out moments ago, and from here none did.
+        wait = _code_request_wait(_code_request_client())
+        if wait:
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
+            minutes = math.ceil(wait / 60)
+            return jsonify({
+                "error": ("Too many code requests from this network. Try "
+                          f"again in {minutes} minute"
+                          f"{'' if minutes == 1 else 's'}."),
+                "retry_after": wait}), 429
         try:
             retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
@@ -776,19 +836,19 @@ def create_app(config: Config | None = None,
             # inbox with no idea whether to wait or retry.
             return jsonify({"error": str(exc), "sent": False}), 502
         if retry_after:
-            # The cooldown suppressed the send (#262). 200, not 4xx: the
-            # request was handled correctly and the person still holds a live
-            # code, so the UI still advances to code entry. But claiming
-            # "sent" here is the lie — it strands whoever's first email never
-            # arrived, telling them to wait for something nobody sent.
+            # The resend wait, or a per-address cap, suppressed the send
+            # (#262). 200, not 4xx: the request was handled correctly and the
+            # address was sent a code recently, so the UI still advances to
+            # code entry and shows the wait. But claiming "sent" here is the
+            # lie — it strands whoever's first email never arrived, telling
+            # them to wait for something nobody sent.
             #
-            # Not an enumeration oracle: this branch turns only on whether a
-            # code was requested for this address moments ago — a state the
-            # requester just created themselves — never on whether an account
-            # exists. start_email_code touches ca_email_tokens alone; accounts
-            # are created at verify. The genuine-send and cooldown responses
-            # are byte-identical for an address with an account and one
-            # without.
+            # Not an enumeration oracle: this branch turns only on the codes
+            # already requested for this address, and their wrong guesses —
+            # states requesters created — never on whether an account exists.
+            # start_email_code touches ca_email_tokens alone; accounts are
+            # created at verify. The genuine-send and wait responses are
+            # byte-identical for an address with an account and one without.
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
