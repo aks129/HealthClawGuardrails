@@ -1589,7 +1589,7 @@ def test_there_is_no_profile_member_meaning_no_redaction():
     MUTATION: add Profile.NONE -> red.
     """
     assert {p.name for p in Profile} == {'STANDARD', 'PATIENT_CONTROLLED',
-                                         'INTAKE', 'CHECKIN'}
+                                         'INTAKE', 'CHECKIN', 'KTC'}
 
 
 def test_fhir_response_refuses_the_checkin_profile_until_it_is_routed():
@@ -1600,6 +1600,8 @@ def test_fhir_response_refuses_the_checkin_profile_until_it_is_routed():
     """
     with pytest.raises(ValueError):
         fhir_response({'resourceType': 'Patient'}, profile=Profile.CHECKIN)
+    with pytest.raises(ValueError):
+        fhir_response({'resourceType': 'Patient'}, profile=Profile.KTC)
 
 
 def test_the_standard_profile_strips_upstream_display_and_adds_a_disclaimer(
@@ -1862,7 +1864,10 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # audience- and operation-bound token, and
                      # _checkin_profile beside _intake_profile. It lives
                      # here rather than in r6/routes.py, which only shrinks.
-                     'r6/checkin.py'}
+                     'r6/checkin.py',
+                     # SHL PR 1: the ktc branch, the check-in's sibling,
+                     # born on the kernel the same way.
+                     'r6/ktc.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
