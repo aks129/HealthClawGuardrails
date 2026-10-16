@@ -3664,7 +3664,7 @@ def create_app(config: Config | None = None,
     invites.register(app, svc, cfg, beta_signup.page_context)
     funnel.register(app, svc, cfg, full_session=lambda: not session.get(
         _VIA_LINK))
-    checkin_wallet.register(app, svc, cfg, full_session=lambda: not session.get(
-        _VIA_LINK))
+    checkin_wallet.register(app, svc, cfg, hc,
+                            full_session=lambda: not session.get(_VIA_LINK))
 
     return app

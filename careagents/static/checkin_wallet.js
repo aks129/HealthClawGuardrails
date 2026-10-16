@@ -7,8 +7,11 @@
 
    Nothing about the request or the answer goes to the CareAgents server.
    The request arrives by postMessage, the answer is built and sealed here
-   and leaves by postMessage. The one fetch is a GET of the synthetic test
-   patient (FHI-51); the others are the existing sign-in endpoints. */
+   and leaves by postMessage. The server is asked only for the kinds of
+   record the request names (POST /checkin/wallet/records, a list of type
+   names and nothing else: not the request, not the website's origin), and
+   answers with the account's own records from the engine's checkin export.
+   The other calls are the existing sign-in endpoints. */
 import {
   checkWalletResponse, declineAll, serveWebWallet,
 } from "./vendor/smart-health-checkin-client/0.4.4/wallet.js";
@@ -17,6 +20,7 @@ import {
 // cannot carry it.
 const {
   buildResponse, itemHeading, matchItems, prepareRecords, recordNames,
+  requestedTypes,
 } = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
 const $ = (id) => document.getElementById(id);
@@ -142,8 +146,9 @@ function review(request, origin, matches) {
   // The origin is what the browser reported, shown as a website. Request
   // text is the website's own words: textContent only, never markup.
   $("wallet-origin").textContent = origin;
-  if (typeof request.purpose === "string" && request.purpose) {
-    $("wallet-purpose").textContent = `The website says why: ${request.purpose}`;
+  const purpose = Object.hasOwn(request, "purpose") ? request.purpose : undefined;
+  if (typeof purpose === "string" && purpose) {
+    $("wallet-purpose").textContent = `The website says why: ${purpose}`;
     $("wallet-purpose").hidden = false;
   }
   const list = $("wallet-items");
@@ -202,11 +207,25 @@ function done(title, text) {
   show("wallet-done");
 }
 
-async function loadRecords() {
-  const r = await fetch(card.dataset.records, { credentials: "same-origin" });
-  if (!r.ok) throw new Error("records");
-  return prepareRecords(await r.json());
+/* The account's records of the kinds the request names, or none when it
+   names none this wallet can answer. Throws the server's fixed code. */
+async function loadRecords(request, unsupportedItems) {
+  const types = requestedTypes(request, unsupportedItems);
+  if (!types.length) return prepareRecords({ entry: [] });
+  const res = await post(card.dataset.records, { resource_types: types });
+  if (!res.ok) throw new Error(typeof res.d.error === "string" ? res.d.error : "records");
+  return prepareRecords(res.d);
 }
+
+// Why the records could not be read, in plain words. The website is told
+// only that something went wrong.
+const NO_RECORDS = {
+  no_records: "There are no records on your account to answer from. Connect or upload your records first.",
+  several_records: "Your account holds more than one set of records, and this test version can answer from only one.",
+  no_patient: "We couldn't tell whose records these are, so we didn't send any.",
+  too_large: "Your records are too large to send this way.",
+  paused: "Sharing records is paused on your account.",
+};
 
 // --- the hand-off -----------------------------------------------------------
 
@@ -226,8 +245,10 @@ function start() {
     async onRequest({ request, origin, unsupportedItems }) {
       clearTimeout(late);
       let records;
-      try { records = await loadRecords(); } catch (e) {
-        done("Couldn't answer", "We couldn't read the test records. The website was told something went wrong.");
+      try { records = await loadRecords(request, unsupportedItems); } catch (e) {
+        const why = Object.hasOwn(NO_RECORDS, e.message) ? NO_RECORDS[e.message]
+          : "We couldn't read your records.";
+        done("Couldn't answer", `${why} The website was told something went wrong.`);
         return { error: "The wallet couldn't read its records" };
       }
       const matches = matchItems(request, unsupportedItems, records);

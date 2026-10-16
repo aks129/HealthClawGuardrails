@@ -9,9 +9,15 @@
  *     here counts the messages it receives, before and after sign-in.
  *  2. The answer rules in careagents/static/checkin_answer.js, run as shipped
  *     against the synthetic test patient (FHI-51): unprofiled records left
- *     out, nothing on file -> unavailable, a coded "no known allergy" never
- *     sent, unchosen -> declined, a form -> unsupported, and a response the
- *     vendored library's own pre-flight check finds clean.
+ *     out, nothing on file -> unavailable, an allergy sent only when it codes
+ *     a substance, unchosen -> declined, a form -> unsupported, and a
+ *     response the vendored library's own pre-flight check finds clean.
+ *
+ * The records come from POST /checkin/wallet/records, which relays the
+ * engine's checkin export (careagents/checkin_wallet.py). This suite's
+ * CareAgents has no engine behind it, so the relay is answered here, by
+ * route, with the test patient; what the wallet asks it is recorded and
+ * checked. The relay itself, on the real engine: tests/test_checkin_relay.py.
  *
  * The sealed round trip with a real check-in page is the organizers' Testing
  * EHR (https://smart-health-checkin.org/connectathon/testing-ehr/), run by
@@ -97,6 +103,19 @@ async function signInInTab(wallet: Page) {
   await wallet.locator('#signin-email-btn').click();
   await wallet.locator('#signin-code-input').fill(await codeFromLog(email, CARE_LOG));
   await wallet.locator('#signin-verify').click();
+}
+
+/** Answer the records relay for every page in the context with `bundle`,
+ *  and keep each body the wallet sent it. */
+async function serveRelay(page: Page, bundle: unknown = FIXTURE) {
+  const asked: unknown[] = [];
+  await page.context().route(`${CARE_BASE_URL}/checkin/wallet/records`,
+    (route) => {
+      asked.push(route.request().postDataJSON());
+      return route.fulfill({ status: 200, contentType: 'application/fhir+json',
+        headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(bundle) });
+    });
+  return asked;
 }
 
 const ALL = { patient: true, problems: true, allergies: true,
@@ -222,19 +241,130 @@ test.describe('check-in wallet', () => {
       });
   }
 
-  test('an allergen named in words is still an allergy', async ({ page }) => {
+  // An allow-list, not a list of absence phrases (#960 security review):
+  // only a coded substance is sent, and words never decide either way.
+  test('an allergy said only in words is unavailable', async ({ page }) => {
     await page.goto('/');
-    for (const text of ['Penicillin', 'Nickel', 'Nuts', 'Known latex sensitivity']) {
+    for (const text of ['Penicillin', 'Nickel', 'Allergies: none',
+      'Patient denies allergies', 'Zero allergies', 'N/A',
+      'Sin alergias conocidas']) {
       const one = structuredClone(FIXTURE);
       one.entry.find((e: any) => e.resource.resourceType ===
         'AllergyIntolerance').resource.code = { text };
       const r = await answer(page, one, ALL);
-      expect(r.status.allergies, text).toBe('fulfilled');
+      expect(r.status.allergies, text).toBe('unavailable');
     }
+  });
+
+  test('a coded substance is sent whatever its words say', async ({ page }) => {
+    await page.goto('/');
+    const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm';
+    for (const code of [
+      { coding: [{ system: RXNORM, code: '7980' }], text: 'Penicillin (no known reaction)' },
+      { coding: [{ system: RXNORM, code: '7980' }], text: 'NKA-12 (allergen extract)' },
+      { coding: [{ system: 'http://snomed.info/sct', code: '762952008' }], text: 'Peanut' },
+      { coding: [{ system: 'http://fdasis.nlm.nih.gov', code: 'QE1QX6B99R' }] },
+    ]) {
+      const one = structuredClone(FIXTURE);
+      one.entry.find((e: any) => e.resource.resourceType ===
+        'AllergyIntolerance').resource.code = code;
+      const r = await answer(page, one, ALL);
+      expect(r.status.allergies, JSON.stringify(code)).toBe('fulfilled');
+    }
+  });
+
+  test('a refuted or entered-in-error allergy is unavailable', async ({ page }) => {
+    await page.goto('/');
+    for (const status of ['refuted', 'entered-in-error']) {
+      const one = structuredClone(FIXTURE);
+      one.entry.find((e: any) => e.resource.resourceType ===
+        'AllergyIntolerance').resource.verificationStatus = { coding: [{
+          system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification',
+          code: status }] };
+      const r = await answer(page, one, ALL);
+      expect(r.status.allergies, status).toBe('unavailable');
+    }
+  });
+
+  test('a substance coding beside an absence coding is unavailable',
+    async ({ page }) => {
+      await page.goto('/');
+      const one = structuredClone(FIXTURE);
+      one.entry.find((e: any) => e.resource.resourceType ===
+        'AllergyIntolerance').resource.code = { coding: [
+        { system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '7980' },
+        { system: 'http://snomed.info/sct', code: '716186003' }] };
+      const r = await answer(page, one, ALL);
+      expect(r.status.allergies).toBe('unavailable');
+    });
+
+  test('the relay is asked only for the kinds of record requested',
+    async ({ page }) => {
+      await page.goto('/');
+      const got = await page.evaluate(async ({ request }) => {
+        const m = await import('/static/checkin_answer.js');
+        const sel = (content: unknown) => ({ id: 'x', title: 'x',
+          accept: ['application/fhir+json'], content });
+        const ask = (items: unknown[]) => m.requestedTypes(
+          { ...request, items }, []);
+        return {
+          shareRecords: m.requestedTypes(request, []),
+          coverageOnly: ask([sel({ kind: 'selection.fhir', profiles: [
+            'http://hl7.org/fhir/us/core/StructureDefinition/us-core-coverage|7.0.0'] })]),
+          c4dic: ask([sel({ kind: 'selection.fhir', profiles: [
+            'http://hl7.org/fhir/us/insurance-card/StructureDefinition/C4DIC-Coverage'] })]),
+          unknownProfile: ask([sel({ kind: 'selection.fhir', profiles: [
+            'http://example.org/StructureDefinition/patient'] })]),
+          anyUsCore: ask([sel({ kind: 'selection.fhir', profilesFrom: [
+            'http://hl7.org/fhir/us/core'] })]),
+          byType: ask([sel({ kind: 'selection.fhir',
+            resourceTypes: ['Immunization', 'Observation'] })]),
+          noSelector: ask([sel({ kind: 'selection.fhir' })]),
+          formOnly: ask([request.items[6]]),
+          protoKey: ask([sel({ kind: 'selection.fhir',
+            resourceTypes: ['__proto__', 'constructor', 'toString'] })]),
+        };
+      }, { request: REQUEST });
+      expect(got.shareRecords).toEqual(['AllergyIntolerance', 'Condition',
+        'Coverage', 'Immunization', 'MedicationRequest', 'Patient']);
+      expect(got.coverageOnly).toEqual(['Coverage']);
+      expect(got.c4dic).toEqual(['Coverage']);
+      expect(got.unknownProfile).toEqual([]);
+      expect(got.anyUsCore).toEqual(got.shareRecords);
+      expect(got.byType).toEqual(['Immunization']);
+      expect(got.noSelector).toEqual(got.shareRecords);
+      expect(got.formOnly).toEqual([]);
+      expect(got.protoKey).toEqual([]);
+    });
+
+  test('a member ID shows at most half of itself', async ({ page }) => {
+    await page.goto('/');
+    const got = await page.evaluate(async () => {
+      const m = await import('/static/checkin_answer.js');
+      return ['12345', '1234567', 'ABCD1234', 'FAKE-MEMBER-0000001', 42, null]
+        .map((v) => m.masked(v));
+    });
+    expect(got).toEqual(['on file', 'on file', 'ending 1234', 'ending 0001',
+      'on file', 'on file']);
+  });
+
+  test('a choice keyed by a built-in name shares nothing', async ({ page }) => {
+    await page.goto('/');
+    const got = await page.evaluate(async ({ request, bundle }) => {
+      const m = await import('/static/checkin_answer.js');
+      const req = { ...request, items: [{ ...request.items[0], id: 'constructor' }] };
+      const matches = m.matchItems(req, [], m.prepareRecords(bundle));
+      // Nothing chosen: `share` holds a `constructor: true` only by
+      // inheritance, never as its own choice.
+      const share = Object.create({ constructor: true });
+      return m.buildResponse(req, matches, share).requestStatus[0].status;
+    }, { request: REQUEST, bundle: FIXTURE });
+    expect(got).toBe('declined');
   });
 
   test('the review speaks plain words, never FHIR type names',
     async ({ page }) => {
+      const asked = await serveRelay(page);
       await page.setViewportSize({ width: 375, height: 812 });
       await page.route(`${VERIFIER}/**`, (route) => {
         const url = new URL(route.request().url());
@@ -266,6 +396,11 @@ test.describe('check-in wallet', () => {
       }
       // The member ID is masked, and the problem with no profile is not there.
       expect(text).not.toContain('FAKE-MEMBER-0000001');
+      // The relay was asked for the six kinds of record, and nothing else:
+      // not the request, its purpose, or the website's origin.
+      expect(asked).toEqual([{ resource_types: ['AllergyIntolerance',
+        'Condition', 'Coverage', 'Immunization', 'MedicationRequest',
+        'Patient'] }]);
       if (process.env.CHECKIN_SHOTS) {
         await wallet.screenshot({ fullPage: true,
           path: path.join(process.env.CHECKIN_SHOTS, 'review-375.png') });
@@ -274,6 +409,7 @@ test.describe('check-in wallet', () => {
 
   test('every item starts at "Don\'t share", and a bare Send releases nothing',
     async ({ page }) => {
+      await serveRelay(page);
       await page.route(`${VERIFIER}/**`, (route) => {
         const url = new URL(route.request().url());
         return url.pathname === '/checkin.js'
@@ -357,7 +493,10 @@ test.describe('check-in wallet', () => {
       }
     });
 
-  test('every Bundle it sends is tagged as test data', async ({ page }) => {
+  // The records are the account's own now, not the synthetic test patient,
+  // so the wallet adds no test marker of its own (#960's note: the
+  // real-record export drops it). A record that carries one keeps it.
+  test('the wallet tags no Bundle as test data', async ({ page }) => {
     await page.goto('/');
     const tags = await page.evaluate(async ({ request, bundle }) => {
       const m = await import('/static/checkin_answer.js');
@@ -368,6 +507,6 @@ test.describe('check-in wallet', () => {
         ((a.value.meta && a.value.meta.tag) || []).map((t: any) => t.code));
     }, { request: REQUEST, bundle: FIXTURE });
     expect(tags.length).toBe(6);
-    for (const t of tags) expect(t).toEqual(['HTEST']);
+    for (const t of tags) expect(t).toEqual([]);
   });
 });

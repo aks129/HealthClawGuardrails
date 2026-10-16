@@ -28,9 +28,9 @@
 <main class="setup-wrap">
   <div class="setup-card checkin-wallet" id="wallet"
        data-signed-in="{{ '1' if signed_in else '0' }}"
-       data-records="{{ url_for('checkin_wallet_test_patient') }}">
-    <p class="checkin-test-note"><b>Test version.</b> This answers from a
-      made-up test patient, never from your records.</p>
+       data-records="{{ url_for('checkin_wallet_records') }}">
+    <p class="checkin-test-note"><b>Test version.</b> This answers from the
+      records on your CareAgents account. You choose what the website gets.</p>
 
     <div id="wallet-err" class="form-error" role="alert" hidden></div>
 

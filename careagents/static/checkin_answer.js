@@ -7,15 +7,25 @@
                   wallet can send (a form, say: PHQ-2 is later work)
      unavailable  nothing on file claims the requested profile. Nothing is
                   stamped with a claim to make it fit, and "no known
-                  allergies" is never sent: a record coded that way is not
-                  an allergy to share, so the item reads unavailable
+                  allergies" is never sent: an allergy goes only when it
+                  codes a substance (shareableAllergy), so an absence, a
+                  refuted record or one said only in words reads unavailable
      declined     there is something, and the person did not choose to share
      fulfilled    the person chose to share it: one Bundle, fhirVersion 4.0.1
+
+   Request keys are read with Object.hasOwn (own()), never `in` or a bare
+   lookup: the request is the website's, and a key named like a built-in
+   property must not reach a prototype.
 */
 import { selectEntries, selects } from "./vendor/smart-health-checkin-client/0.4.4/wallet.js";
 
 const FHIR_JSON = "application/fhir+json";
 const SNOMED = ["http://snomed.info/sct", "urn:oid:2.16.840.1.113883.6.96"];
+const RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm";
+
+/* obj[key] when obj has it as its own property, else undefined. */
+const own = (obj, key) => (obj !== null && typeof obj === "object" &&
+  Object.hasOwn(obj, key) ? obj[key] : undefined);
 
 // SNOMED 716186003 "no known allergy" and its descendants, its inactive
 // predecessor 160244002, and 260413007 "None". With NKA_LOINC, the same set
@@ -29,37 +39,118 @@ const LOINC = "http://loinc.org";
 // LOINC answers that state an absence (r6.terminology.LOINC_ABSENCE_ANSWERS).
 export const NKA_LOINC = ["LA10030-7", "LA9134-3", "LA4715-4"];
 
-// Words that state an absence rather than name an allergen: "No known
-// allergies", "NKDA", "None", "Nil known". Feeds write these in code.text or
-// as a local code's display. Read only to hold a record back, never to show
-// it, so a false match costs an "unavailable", never a disclosure.
-const ABSENCE_WORDING = new RegExp(
-  "^(?:none|nil)(?: known)?$" +
-  "|^no (?:known )?(?:\\w+ )?allerg" +
-  "|\\bno known\\b" +
-  "|\\bnk[a-z]?a\\b");
+// Code systems that name a substance (US Core's AllergyIntolerance.code
+// binding): RxNorm, SNOMED by either spelling, UNII, NDF-RT.
+const SUBSTANCE_SYSTEMS = [RXNORM, ...SNOMED, "http://fdasis.nlm.nih.gov",
+  "http://hl7.org/fhir/ndfrt"];
+// A verificationStatus that takes the allergy back: itself a statement of
+// absence, or a record that should never have been.
+const WITHDRAWN = ["refuted", "entered-in-error"];
 
-function readsAsAbsence(text) {
-  if (typeof text !== "string") return false;
-  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return words !== "" && ABSENCE_WORDING.test(words);
+function codings(concept) {
+  const c = own(concept, "coding");
+  return Array.isArray(c) ? c.filter((x) => x !== null && typeof x === "object") : [];
 }
 
-function isNoKnownAllergy(resource) {
-  if (!resource || resource.resourceType !== "AllergyIntolerance") return false;
-  const code = resource.code || {};
-  const codings = Array.isArray(code.coding) ? code.coding : [];
-  return readsAsAbsence(code.text) || codings.some((c) => c && (
-    (SNOMED.includes(c.system) && NKA_CODES.includes(String(c.code))) ||
-    (c.system === LOINC && NKA_LOINC.includes(String(c.code))) ||
-    readsAsAbsence(c.display)));
+function statesAbsence(c) {
+  const system = own(c, "system");
+  const code = String(own(c, "code"));
+  return (SNOMED.includes(system) && NKA_CODES.includes(code)) ||
+    (system === LOINC && NKA_LOINC.includes(code));
 }
 
-// HL7 v3 ActReason HTEST: every Bundle this wallet sends says it is test
-// data, whatever its records carry. True while it answers only from the
-// synthetic test patient; the real-record export must drop it.
-const HTEST = { system: "http://terminology.hl7.org/CodeSystem/v3-ActReason",
-  code: "HTEST", display: "test health data" };
+/* An allow-list, not a list of absence phrases (#960 security review):
+   an AllergyIntolerance is shared only when a coding names a substance in
+   a substance code system, no coding states an absence, and its
+   verificationStatus is not refuted or entered-in-error. Free text is
+   never read, either to send a record or to hold one back; a record said
+   only in words reads unavailable. Errs one way: toward unavailable,
+   never toward an inferred "none". */
+export function shareableAllergy(resource) {
+  const code = codings(own(resource, "code"));
+  if (code.some(statesAbsence)) return false;
+  if (codings(own(resource, "verificationStatus")).some(
+    (c) => WITHDRAWN.includes(own(c, "code")))) return false;
+  return code.some((c) => {
+    const value = own(c, "code");
+    return SUBSTANCE_SYSTEMS.includes(own(c, "system")) &&
+      typeof value === "string" && value.trim() !== "";
+  });
+}
+
+const shareable = (resource) => resource.resourceType !== "AllergyIntolerance" ||
+  shareableAllergy(resource);
+
+/* What the engine's checkin export can send (r6/checkin.py CHECKIN_TYPES),
+   and the profile claims that make a row of each type exportable
+   (CLAIMS_BY_TYPE). tests/test_checkin_relay.py holds both equal. */
+export const CHECKIN_TYPES = [
+  "AllergyIntolerance", "Condition", "Coverage", "Immunization",
+  "MedicationRequest", "Patient",
+];
+export const PROFILE_TYPES = {
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient": "Patient",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-condition": "Condition",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-condition-problems-health-concerns": "Condition",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-condition-encounter-diagnosis": "Condition",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-allergyintolerance": "AllergyIntolerance",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-medicationrequest": "MedicationRequest",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-immunization": "Immunization",
+  "http://hl7.org/fhir/us/core/StructureDefinition/us-core-coverage": "Coverage",
+  "http://hl7.org/fhir/us/insurance-card/StructureDefinition/C4DIC-Coverage": "Coverage",
+};
+
+/* Whether this wallet can answer the item at all. */
+function answerable(item, unsupported) {
+  const content = own(item, "content");
+  const accept = own(item, "accept");
+  return !unsupported.has(own(item, "id")) &&
+    own(content, "kind") === "selection.fhir" &&
+    Array.isArray(accept) && accept.includes(FHIR_JSON);
+}
+
+const strings = (obj, key) => {
+  const v = own(obj, key);
+  return Array.isArray(v) ? v.filter((s) => typeof s === "string") : [];
+};
+
+/* The kinds of record the request's answerable items ask for, sorted: what
+   the wallet asks the CareAgents relay for, and so the exact type set the
+   engine's single-use token is minted for. A profile is read as the
+   library reads it (base before any `|version`; profilesFrom as a stem);
+   one this table does not know asks for nothing. An item with no selector
+   asks for every type. Nothing outside CHECKIN_TYPES is ever asked for. */
+export function requestedTypes(request, unsupportedItems) {
+  const unsupported = new Set((unsupportedItems || []).map((u) => own(u, "id")));
+  const items = own(request, "items");
+  const wanted = new Set();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!answerable(item, unsupported)) continue;
+    const content = own(item, "content");
+    const types = strings(content, "resourceTypes");
+    const profiles = strings(content, "profiles");
+    const stems = strings(content, "profilesFrom");
+    let found;
+    if (profiles.length || stems.length) {
+      found = [];
+      for (const p of profiles) {
+        const base = p.split("|")[0];
+        if (Object.hasOwn(PROFILE_TYPES, base)) found.push(PROFILE_TYPES[base]);
+      }
+      for (const s of stems) {
+        const stem = s.split("|")[0].replace(/\/+$/, "") + "/";
+        for (const [url, t] of Object.entries(PROFILE_TYPES)) {
+          if (url.startsWith(stem)) found.push(t);
+        }
+      }
+      if (types.length) found = found.filter((t) => types.includes(t));
+    } else {
+      found = types.length ? types : CHECKIN_TYPES;
+    }
+    found.filter((t) => CHECKIN_TYPES.includes(t)).forEach((t) => wanted.add(t));
+  }
+  return [...wanted].sort();
+}
 
 /* The record set as Bundle entries whose references can be followed.
    selectEntries pulls along what a match references (a payer, a
@@ -89,36 +180,38 @@ export function prepareRecords(bundle) {
    would be sent; `primary` is the part of it the item asked for, which is
    what the person is shown (a payer or prescriber rides along unnamed). */
 export function matchItems(request, unsupportedItems, records) {
-  const unsupported = new Set((unsupportedItems || []).map((u) => u.id));
-  return request.items.map((item) => {
-    const content = item.content || {};
-    if (unsupported.has(item.id) || content.kind !== "selection.fhir" ||
-        !(item.accept || []).includes(FHIR_JSON)) {
+  const unsupported = new Set((unsupportedItems || []).map((u) => own(u, "id")));
+  return own(request, "items").map((item) => {
+    if (!answerable(item, unsupported)) {
       return { item, unsupported: true, entries: [], primary: [] };
     }
-    const shareable = records.entries.filter((e) => !isNoKnownAllergy(e.resource));
+    const content = own(item, "content");
+    const sendable = records.entries.filter((e) => shareable(e.resource));
     // Only what the item asks for makes it answerable: a payer that would
     // ride along by reference is not, on its own, something to share.
-    const primary = shareable.filter((e) => selects(content, e.resource));
+    const primary = sendable.filter((e) => selects(content, e.resource));
     if (!primary.length) return { item, unsupported: false, entries: [], primary: [] };
     // The Patient has an item of its own; elsewhere it is not pulled along.
     const asksForPatient = primary.some((e) => e.fullUrl === records.patientFullUrl);
     const exclude = asksForPatient || !records.patientFullUrl ? [] : [records.patientFullUrl];
     return { item, unsupported: false, primary,
-      entries: selectEntries(content, shareable, { exclude }) };
+      entries: selectEntries(content, sendable, { exclude }) };
   });
 }
 
 /* The SMART response. `share` maps item id -> true for what the person
-   chose to share; anything else is not shared. */
+   chose to share; anything else is not shared. No HTEST tag: the records
+   are the account's own now, not the synthetic test patient, and a test
+   marker on them would mislabel them (the #960 note said the real-record
+   export drops it). */
 export function buildResponse(request, matches, share) {
   const artifacts = [];
   const requestStatus = [];
   for (const m of matches) {
-    const id = m.item.id;
+    const id = own(m.item, "id");
     if (m.unsupported) { requestStatus.push({ item: id, status: "unsupported" }); continue; }
     if (!m.entries.length) { requestStatus.push({ item: id, status: "unavailable" }); continue; }
-    if (!share || share[id] !== true) { requestStatus.push({ item: id, status: "declined" }); continue; }
+    if (own(share, id) !== true) { requestStatus.push({ item: id, status: "declined" }); continue; }
     artifacts.push({
       id: `fhir-${id}`,
       mediaType: FHIR_JSON,
@@ -126,7 +219,6 @@ export function buildResponse(request, matches, share) {
       fulfills: [id],
       value: {
         resourceType: "Bundle",
-        meta: { tag: [{ ...HTEST }] },
         type: "collection",
         entry: m.entries.map((e) => ({ fullUrl: e.fullUrl, resource: e.resource })),
       },
@@ -136,7 +228,7 @@ export function buildResponse(request, matches, share) {
   return {
     type: "smart-health-checkin-response",
     version: "1",
-    requestId: request.id,
+    requestId: own(request, "id"),
     artifacts,
     requestStatus,
   };
@@ -148,11 +240,10 @@ export function buildResponse(request, matches, share) {
    the fields a real feed puts other people's names in. A record is named by
    its code, from LABELS, or by structured fields of the person's own
    (their name, the payer Organization's name, a masked member id). The
-   real-record path will name records from the engine's output, whose
-   labels come from r6/terminology.py; LABELS mirrors that table for the
-   test patient's codes (tests/test_checkin_wallet.py holds them equal). */
+   engine's output is labelled from r6/terminology.py; LABELS mirrors that
+   table for the codes it names (tests/test_checkin_wallet.py holds them
+   equal), and a code it does not name gets a plain fallback. */
 
-const RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm";
 const CVX = "http://hl7.org/fhir/sid/cvx";
 
 export const LABELS = {
@@ -177,28 +268,29 @@ const HEADINGS = {
 export function itemHeading(match) {
   const types = new Set((match.primary || []).map((e) => e.resource.resourceType));
   if (types.size === 1) {
-    const h = HEADINGS[[...types][0]];
-    if (h) return h;
+    const h = own(HEADINGS, [...types][0]);
+    if (typeof h === "string") return h;
   }
-  return match.item.title || match.item.id;
+  return own(match.item, "title") || own(match.item, "id");
 }
 
 function labelOf(concept) {
-  const codings = (concept && Array.isArray(concept.coding)) ? concept.coding : [];
-  for (const c of codings) {
-    if (!c) continue;
-    const system = SNOMED.includes(c.system) ? SNOMED[0] : c.system;
-    const label = LABELS[`${system}|${String(c.code)}`];
-    if (label) return label;
+  for (const c of codings(concept)) {
+    const system = SNOMED.includes(own(c, "system")) ? SNOMED[0] : own(c, "system");
+    const label = own(LABELS, `${system}|${String(own(c, "code"))}`);
+    if (typeof label === "string") return label;
   }
   return null;
 }
 
 const day = (s) => (typeof s === "string" ? s.slice(0, 10) : "");
 
-function masked(value) {
-  const s = String(value || "");
-  return s.length > 4 ? `ending ${s.slice(-4)}` : "on file";
+/* The last 4 characters, and only of an id at least twice that long, so at
+   most half of it shows; a shorter one is "on file" (#960 security note: a
+   5-character id showed 4 of its 5). */
+export function masked(value) {
+  const s = typeof value === "string" ? value : "";
+  return s.length >= 8 ? `ending ${s.slice(-4)}` : "on file";
 }
 
 /* One short line per record the item asked for. `entries` is everything
