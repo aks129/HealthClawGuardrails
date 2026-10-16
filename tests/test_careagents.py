@@ -2578,15 +2578,18 @@ def _make_account(svc, monkeypatch, email):
 
 
 def _past_the_resend_wait(svc, email):
-    """Move the address's earlier codes back past the resend wait.
+    """Move the earlier codes of the address's inbox back past the resend
+    wait.
 
     Every code issued in the wait holds the next one back, the used one a
-    sign-in just spent included, so a test that signs the same address in
-    twice is a person signing in again a little later."""
+    sign-in just spent included, and spellings of one inbox (plus-tags)
+    share it, so a test that signs one inbox in twice is a person signing
+    in again a little later."""
     from careagents.accounts import RESEND_COOLDOWN
+    from careagents.beta_signup import mailbox
     from careagents.models import EmailToken
     with svc.session() as s:
-        s.query(EmailToken).filter_by(email=email.strip().lower()).update(
+        s.query(EmailToken).filter_by(mailbox=mailbox(email)).update(
             {"exp": EmailToken.exp - (RESEND_COOLDOWN + 1)})
 
 
