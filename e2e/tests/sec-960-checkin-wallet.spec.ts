@@ -13,8 +13,9 @@
  * Tests assert the secure behaviour. A red test is a finding.
  *
  * The wallet's records relay (POST /checkin/wallet/records) is answered by
- * route with the synthetic fixture: the CareAgents under test has no engine
- * behind it. Each body the wallet sends it is kept in RELAY_ASKED.
+ * route with the engine's checkin export of the synthetic fixture
+ * (e2e/fixtures/checkin-export-test-patient.json): the CareAgents under
+ * test has no engine behind it. Each body the wallet sends it is kept in RELAY_ASKED.
  *
  * Run against a flag-on CareAgents server:
  *   CARE_E2E_PORT=<port> SEC_CARE_LOG=<that server's stderr log> \
@@ -41,6 +42,11 @@ const CHECKIN_JS_SHA256 =
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..',
   'careagents', 'checkin', 'us_core_test_patient.json'), 'utf8'));
+// What the relay answers with: the engine's own checkin export of the test
+// patient, upstream words dropped and our labels written (pinned to the
+// engine by tests/test_checkin_relay.py).
+const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+  'fixtures', 'checkin-export-test-patient.json'), 'utf8'));
 
 const CANARY = 'SEC960CANARY';
 const US_CORE = 'http://hl7.org/fhir/us/core/StructureDefinition/';
@@ -119,7 +125,7 @@ async function serveAttacker(context: BrowserContext) {
     if (url.hostname === 'localhost' && url.pathname === '/checkin/wallet/records') {
       RELAY_ASKED.push(route.request().postDataJSON());
       return route.fulfill({ status: 200, contentType: 'application/fhir+json',
-        headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(FIXTURE) });
+        headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(EXPORT) });
     }
     if (url.hostname === 'localhost') return route.continue();
     return route.abort();

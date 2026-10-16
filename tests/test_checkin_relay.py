@@ -20,8 +20,12 @@ Synthetic data only (tests/checkin_fixtures.py).
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -166,6 +170,8 @@ def test_the_one_connection_answers_with_the_sorted_type_set(relay):
 
 
 def test_no_records_but_the_sample_is_a_fixed_refusal(monkeypatch):
+    """No records at all, and only the made-up sample, are told apart: the
+    wallet says which (#973 patient test, finding 4)."""
     hc = _FakeClient()
     app, svc = _careagents(hc)
     try:
@@ -173,12 +179,13 @@ def test_no_records_but_the_sample_is_a_fixed_refusal(monkeypatch):
         browser = app.test_client()
         _sign_in(browser, acct)
         assert _post(browser).get_json() == {"error": "no_records"}
-        svc.add_connection(acct.id, "sample", "ca-relay-sample", "Sample")
         svc.add_connection(acct.id, "direct", "ca-relay-wait", "Upload",
                            status="pending")
+        assert _post(browser).get_json() == {"error": "no_records"}
+        svc.add_connection(acct.id, "sample", "ca-relay-sample", "Sample")
         r = _post(browser)
         assert r.status_code == 409
-        assert r.get_json() == {"error": "no_records"}
+        assert r.get_json() == {"error": "sample_only"}
         assert hc.calls == []
     finally:
         svc.engine.dispose()
@@ -423,3 +430,92 @@ def test_the_wallet_types_and_profiles_are_the_engines():
     rows = re.findall(r'"(http[^"]+)": "(\w+)"', block)
     assert {(url, t) for url, t in rows} == {
         (url, t) for t, urls in CLAIMS_BY_TYPE.items() for url in urls}
+
+
+# --- what the wallet names a record by, on the real engine ---------------------
+
+E2E_EXPORT = (Path(__file__).resolve().parent.parent / "e2e" / "fixtures"
+              / "checkin-export-test-patient.json")
+TEST_PATIENT = (Path(__file__).resolve().parent.parent / "careagents"
+                / "checkin" / "us_core_test_patient.json")
+
+
+def _normalised(bundle):
+    """The export without what changes run to run."""
+    bundle = dict(bundle)
+    bundle.pop("timestamp", None)
+    for e in bundle["entry"]:
+        meta = e["resource"].get("meta")
+        if isinstance(meta, dict):
+            meta.pop("lastUpdated", None)
+            meta.pop("versionId", None)
+    return bundle
+
+
+def test_the_e2e_relay_answer_is_what_the_engine_exports(app, client,
+                                                         monkeypatch):
+    """The browser specs answer the relay with e2e/fixtures/
+    checkin-export-test-patient.json, so it must be the engine's own checkin
+    export of the test patient: upstream words dropped, our labels written.
+    CHECKIN_EXPORT_WRITE=1 regenerates it."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", f.MINT_SECRET)
+    bundle = json.loads(TEST_PATIENT.read_text())
+    f.seed(app, *[e["resource"] for e in bundle["entry"]])
+    types = sorted({"Patient", "Condition", "AllergyIntolerance",
+                    "MedicationRequest", "Immunization", "Coverage"})
+    r = f.export(client, f.token(client, types), types,
+                 patient_id="checkin-test-patient")
+    assert r.status_code == 200
+    got = _normalised(r.get_json())
+    text = json.dumps(got, indent=1, sort_keys=True) + "\n"
+    if os.environ.get("CHECKIN_EXPORT_WRITE") == "1":
+        E2E_EXPORT.write_text(text)
+    assert E2E_EXPORT.read_text() == text
+
+
+_NAMES = """
+const m = await import(process.argv[1]);
+const bundle = JSON.parse(process.argv[2]);
+const request = { type: "smart-health-checkin-request", version: "1", id: "x",
+  items: JSON.parse(process.argv[3]).map((t, i) => ({ id: `i${i}`, title: t,
+    accept: ["application/fhir+json"],
+    content: { kind: "selection.fhir", resourceTypes: [t] } })) };
+const matches = m.matchItems(request, [], m.prepareRecords(bundle));
+const share = Object.fromEntries(request.items.map((i) => [i.id, true]));
+console.log(JSON.stringify({
+  shown: matches.flatMap((x) => [m.itemHeading(x), ...m.recordNames(x)]),
+  sent: m.buildResponse(request, matches, share),
+}));
+"""
+
+
+def _wallet_view(bundle, types):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    out = subprocess.run(
+        [node, "--input-type=module", "-e", _NAMES,
+         str(STATIC / "checkin_answer.js"), json.dumps(bundle),
+         json.dumps(types)],
+        capture_output=True, text=True, check=True, timeout=30)
+    return json.loads(out.stdout)
+
+
+def test_the_wallet_names_records_by_the_engines_label_never_upstream(
+        app, client, chain):
+    """#973 patient test, finding 1: real records read "A health problem".
+    The wallet names a record by the engine-written `code.text`, which is
+    r6/terminology.py's label for the code, the same words the website
+    gets. An upstream name in `code.text` or `coding.display` (the canary)
+    reaches neither what the person is shown nor what is sent."""
+    browser, _, _ = chain
+    r = browser.post(RELAY, json={"resource_types": ["Condition"]})
+    assert r.status_code == 200
+    bundle = r.get_json()
+    assert f.CANARY_DISPLAY not in r.get_data(as_text=True)
+    view = _wallet_view(bundle, ["Condition"])
+    shown = json.dumps(view["shown"])
+    assert "Type 2 diabetes mellitus" in view["shown"], view["shown"]
+    assert "Your health problems" in view["shown"]
+    assert f.CANARY_DISPLAY not in shown
+    assert f.CANARY_DISPLAY not in json.dumps(view["sent"])

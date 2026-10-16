@@ -135,7 +135,7 @@ $("signin-code-input").addEventListener("keydown", (e) => {
 // What an item would send, in plain words: one line per record it asked
 // for (checkin_answer.js recordNames), or why there is nothing to send.
 function describe(m) {
-  if (m.unsupported) return ["This wallet can't answer this yet."];
+  if (m.unsupported) return ["This wallet can't answer this yet. You can answer it in person instead."];
   if (!m.entries.length) return ["Nothing on file. The website will be told that."];
   return recordNames(m);
 }
@@ -204,8 +204,31 @@ function review(request, origin, matches) {
 function done(title, text) {
   $("wallet-done-title").textContent = title;
   $("wallet-done-text").textContent = text;
+  $("wallet-ok").hidden = true;
   show("wallet-done");
 }
+
+// The website's check-in library closes this tab the moment any reply
+// arrives. So a reason the person must read is held until they tap OK,
+// and the reply goes only then.
+function untilOk(title, text) {
+  done(title, text);
+  const ok = $("wallet-ok");
+  ok.hidden = false;
+  ok.focus();
+  return new Promise((resolve) => { ok.onclick = () => resolve(); });
+}
+
+// A short pause, so a confirmation can be seen before the tab closes.
+const SHOW_MS = 1500;
+function briefly(title, text) {
+  done(title, text);
+  return new Promise((resolve) => setTimeout(resolve, SHOW_MS));
+}
+
+// What the website is told when the wallet can't answer: plain, and the
+// same whatever the reason, which stays with the person.
+const CANT_SHARE = "The person's wallet couldn't share records this time. They were told why.";
 
 /* The account's records of the kinds the request names, or none when it
    names none this wallet can answer. Throws the server's fixed code. */
@@ -218,9 +241,10 @@ async function loadRecords(request, unsupportedItems) {
 }
 
 // Why the records could not be read, in plain words. The website is told
-// only that something went wrong.
+// only CANT_SHARE, whatever the reason.
 const NO_RECORDS = {
-  no_records: "There are no records on your account to answer from. Connect or upload your records first.",
+  no_records: "There are no records on your account yet. Upload or connect your own records first, then start check-in again.",
+  sample_only: "Your account has only the sample records, which are made up and can't be shared. Upload or connect your own records first, then start check-in again.",
   several_records: "Your account holds more than one set of records, and this test version can answer from only one.",
   no_patient: "We couldn't tell whose records these are, so we didn't send any.",
   too_large: "Your records are too large to send this way.",
@@ -247,26 +271,26 @@ function start() {
       let records;
       try { records = await loadRecords(request, unsupportedItems); } catch (e) {
         const why = Object.hasOwn(NO_RECORDS, e.message) ? NO_RECORDS[e.message]
-          : "We couldn't read your records.";
-        done("Couldn't answer", `${why} The website was told something went wrong.`);
-        return { error: "The wallet couldn't read its records" };
+          : "We couldn't read your records just now. Try check-in again in a few minutes.";
+        await untilOk("Couldn't answer", `${why} Tap OK to tell the website.`);
+        return { error: CANT_SHARE };
       }
       const matches = matchItems(request, unsupportedItems, records);
       const choice = await review(request, origin, matches);
       if (choice.kind === "closed") {
-        done("Closed", "Nothing was sent. You can close this tab.");
+        await briefly("Closed", "Nothing was sent. This tab may close on its own.");
         return { declined: true };
       }
       if (choice.kind === "declined-all") {
-        done("Nothing shared", "The website was told you chose not to share anything. You can close this tab.");
+        await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
         return { response: declineAll(request) };
       }
       const response = buildResponse(request, matches, choice.share);
       if (checkWalletResponse(request, response).length) {
-        done("Couldn't answer", "Something went wrong building the answer. Nothing was shared.");
-        return { error: "The wallet couldn't build a valid answer" };
+        await untilOk("Couldn't answer", "Something went wrong building the answer. Nothing was shared. Tap OK to tell the website.");
+        return { error: CANT_SHARE };
       }
-      done("Sent", "Your choices went to the website. You can close this tab.");
+      await briefly("Sending", "Your choices are going to the website now. This tab may close on its own.");
       return { response };
     },
     onInvalidRequest(message, origin) {

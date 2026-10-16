@@ -35,6 +35,11 @@ test.use({ baseURL: CARE_BASE_URL });
 const FIXTURE = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', '..', 'careagents', 'checkin',
     'us_core_test_patient.json'), 'utf8'));
+// What the relay answers with: the engine's own checkin export of the test
+// patient, upstream words dropped and our labels written (pinned to the
+// engine by tests/test_checkin_relay.py).
+const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+  'fixtures', 'checkin-export-test-patient.json'), 'utf8'));
 
 const US_CORE = 'http://hl7.org/fhir/us/core/StructureDefinition/';
 const item = (id: string, profile: string) => ({
@@ -92,7 +97,8 @@ document.getElementById('go').onclick = () => {
   const wallet = webWallet({ id: 'e2e', name: 'e2e',
     walletUrl: ${JSON.stringify(`${CARE_BASE_URL}/checkin/wallet`)} });
   runCheckin(window.__req, { wallet }).then((r) => {
-    window.__result = { status: r.status, json: r.response ? r.response.json : null };
+    window.__result = { status: r.status, json: r.response ? r.response.json : null,
+      error: r.error ? r.error.message : null };
   }, (e) => { window.__result = { status: "threw", error: String(e) }; });
 };
 </script>`;
@@ -105,17 +111,36 @@ async function signInInTab(wallet: Page) {
   await wallet.locator('#signin-verify').click();
 }
 
-/** Answer the records relay for every page in the context with `bundle`,
- *  and keep each body the wallet sent it. */
-async function serveRelay(page: Page, bundle: unknown = FIXTURE) {
+/** Answer the records relay for every page in the context with `bundle`
+ *  (or, with a status, the relay's refusal), and keep each body the wallet
+ *  sent it. */
+async function serveRelay(page: Page, bundle: unknown = EXPORT, status = 200) {
   const asked: unknown[] = [];
   await page.context().route(`${CARE_BASE_URL}/checkin/wallet/records`,
     (route) => {
       asked.push(route.request().postDataJSON());
-      return route.fulfill({ status: 200, contentType: 'application/fhir+json',
-        headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(bundle) });
+      return route.fulfill({ status, headers: { 'Cache-Control': 'no-store' },
+        contentType: status === 200 ? 'application/fhir+json' : 'application/json',
+        body: JSON.stringify(bundle) });
     });
   return asked;
+}
+
+/** The Verifier page, opening the wallet with `req`; resolves to the
+ *  signed-in wallet tab. */
+async function checkIn(page: Page, req: unknown) {
+  await page.route(`${VERIFIER}/**`, (route) => {
+    const url = new URL(route.request().url());
+    return url.pathname === '/checkin.js'
+      ? route.fulfill({ status: 200, contentType: 'text/javascript', body: CHECKIN_JS })
+      : route.fulfill({ status: 200, contentType: 'text/html', body: VERIFIER_HTML });
+  });
+  await page.goto(`${VERIFIER}/`);
+  await page.evaluate((r) => { (window as any).__req = r; }, req);
+  const [wallet] = await Promise.all([
+    page.waitForEvent('popup'), page.locator('#go').click()]);
+  await signInInTab(wallet);
+  return wallet;
 }
 
 const ALL = { patient: true, problems: true, allergies: true,
@@ -390,8 +415,9 @@ test.describe('check-in wallet', () => {
       for (const plain of ['Your allergies', 'Penicillin', 'Your medicines',
         'Lisinopril 10 mg', 'Your insurance card',
         'Synthetic Test Health Plan, member ID ending 0001',
-        'Your vaccines', 'Influenza vaccine, 2025-10-01',
-        'Casey Testpatient, born 1985-07-04', 'Your address, phone, email']) {
+        'Your vaccines', 'Influenza vaccine, 1 October 2025',
+        'Casey Testpatient, born 4 July 1985', 'Your address, phone, email',
+        'Hypertensive disorder']) {
         expect(text, plain).toContain(plain);
       }
       // The member ID is masked, and the problem with no profile is not there.
@@ -436,6 +462,56 @@ test.describe('check-in wallet', () => {
       expect(r.json.requestStatus.map((s: any) => s.status))
         .toEqual(Array(6).fill('declined'));
     });
+
+  // #973 patient test, finding 3: the heading does not depend on whether
+  // there is anything on file. And a form says what to do instead.
+  test('an item with nothing on file still has our heading', async ({ page }) => {
+    await serveRelay(page, { ...EXPORT, entry: EXPORT.entry.filter((e: any) =>
+      !['Immunization', 'Coverage', 'Organization'].includes(e.resource.resourceType)) });
+    const wallet = await checkIn(page, { items: REQUEST.items });
+    await expect(wallet.locator('#wallet-review')).toBeVisible();
+    const vaccines = wallet.locator('#wallet-items li[data-item=immunizations]');
+    await expect(vaccines.locator('.checkin-item-title')).toHaveText('Your vaccines');
+    const card = wallet.locator('#wallet-items li[data-item=coverage]');
+    await expect(card.locator('.checkin-item-title')).toHaveText('Your insurance card');
+    await expect(wallet.locator('#wallet-items li[data-item=phq2]'))
+      .toContainText('You can answer it in person instead.');
+  });
+
+  // #973 patient test, findings 2 and 4: the website's library closes this
+  // tab the moment a reply arrives, so the reason is held until OK.
+  for (const [code, words] of [
+    ['sample_only', 'only the sample records'],
+    ['no_records', 'no records on your account yet'],
+    ['several_records', 'more than one set of records'],
+    ['unavailable', "couldn't read your records just now"],
+  ]) {
+    test(`a can't-answer reason waits for OK: ${code}`, async ({ page }) => {
+      await serveRelay(page, { error: code }, code === 'unavailable' ? 502 : 409);
+      const wallet = await checkIn(page, { items: REQUEST.items.slice(0, 6) });
+      await expect(wallet.locator('#wallet-done-text')).toContainText(words);
+      await expect(wallet.locator('#wallet-ok')).toBeVisible();
+      await wallet.waitForTimeout(1000);
+      expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
+      await wallet.locator('#wallet-ok').click();
+      await expect.poll(() => page.evaluate(() => (window as any).__result),
+        { timeout: 15_000 }).toBeDefined();
+      const r = JSON.stringify(await page.evaluate(() => (window as any).__result));
+      expect(r).toContain("couldn't share records this time");
+      expect(r).not.toContain(code);
+    });
+  }
+
+  test('a date reads as words', async ({ page }) => {
+    await page.goto('/');
+    const got = await page.evaluate(async () => {
+      const m = await import('/static/checkin_answer.js');
+      return ['1985-07-04', '2025-10-01T09:30:00-05:00', '1985-07', '1985',
+        'soon', null].map((v) => m.day(v));
+    });
+    expect(got).toEqual(['4 July 1985', '1 October 2025', 'July 1985', '1985',
+      '', '']);
+  });
 
   test('the code screen can send a new code or go back to the email',
     async ({ page }) => {

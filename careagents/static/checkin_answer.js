@@ -246,13 +246,17 @@ export function buildResponse(request, matches, share) {
 
 /* --- What the person is shown, in plain words ---------------------------
 
-   Never a FHIR type name, never `text` or a coding's `display`: those are
-   the fields a real feed puts other people's names in. A record is named by
-   its code, from LABELS, or by structured fields of the person's own
-   (their name, the payer Organization's name, a masked member id). The
-   engine's output is labelled from r6/terminology.py; LABELS mirrors that
-   table for the codes it names (tests/test_checkin_wallet.py holds them
-   equal), and a code it does not name gets a plain fallback. */
+   Never a FHIR type name, never a coding's `display`, never an upstream
+   feed's words: those are where a real feed puts other people's names. The
+   records come only from the engine's checkin export, which drops every
+   upstream `display` and `text` and writes each CodeableConcept's `text`
+   as OUR label for its code, from r6/terminology.py (r6/access.py
+   _codes_with_our_text), or leaves none. So a record is named by that
+   engine-written `text`, the same words the website receives; then by
+   LABELS, for a code the engine does not label yet; then by a plain
+   fallback ("A medicine"). Otherwise by structured fields of the person's
+   own (their name, the payer Organization's name, a masked member id).
+   tests/test_checkin_relay.py runs a canary through the real engine. */
 
 const CVX = "http://hl7.org/fhir/sid/cvx";
 
@@ -273,10 +277,13 @@ const HEADINGS = {
   Coverage: "Your insurance card",
 };
 
-/* Our heading for an item, from what it matched; the website's own title
-   only when there is nothing to name it by. */
+/* Our heading for an item, from what it matched, or, with nothing on
+   file, from the one kind of record it asks for: the same heading either
+   way. The website's own title only when there is no one kind to name it
+   by (a form, say). */
 export function itemHeading(match) {
-  const types = new Set((match.primary || []).map((e) => e.resource.resourceType));
+  let types = new Set((match.primary || []).map((e) => e.resource.resourceType));
+  if (!types.size) types = new Set(requestedTypes({ items: [match.item] }, []));
   if (types.size === 1) {
     const h = own(HEADINGS, [...types][0]);
     if (typeof h === "string") return h;
@@ -285,6 +292,9 @@ export function itemHeading(match) {
 }
 
 function labelOf(concept) {
+  // The engine's label for this code (see above), never upstream words.
+  const ours = own(concept, "text");
+  if (typeof ours === "string" && ours.trim()) return ours.trim();
   for (const c of codings(concept)) {
     const system = SNOMED.includes(own(c, "system")) ? SNOMED[0] : own(c, "system");
     const label = own(LABELS, `${system}|${String(own(c, "code"))}`);
@@ -293,7 +303,19 @@ function labelOf(concept) {
   return null;
 }
 
-const day = (s) => (typeof s === "string" ? s.slice(0, 10) : "");
+const MONTHS = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+/* A FHIR date or dateTime as "4 July 1985" ("July 1985", "1985" when that
+   is all it says). Read from its digits, never through a time zone, so
+   the day cannot shift. */
+export function day(s) {
+  const m = typeof s === "string" ? /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/.exec(s) : null;
+  if (!m) return "";
+  const month = m[2] ? MONTHS[Number(m[2]) - 1] : undefined;
+  if (!month) return m[1];
+  return m[3] ? `${Number(m[3])} ${month} ${m[1]}` : `${month} ${m[1]}`;
+}
 
 /* The last 4 characters, and only of an id at least twice that long, so at
    most half of it shows; a shorter one is "on file" (#960 security note: a

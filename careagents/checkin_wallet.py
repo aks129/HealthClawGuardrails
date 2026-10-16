@@ -91,15 +91,17 @@ def records_tenant(svc, account_id: str) -> tuple[str | None, str]:
     """(tenant, "") for the account holder's one active connection that is
     not the sample, else (None, why). Someone the account cares for is not
     the person checking in, and the sample's made-up records claim no US
-    Core profile, so they would answer nothing. With two or more there is
-    no telling which the person means, so none is guessed."""
+    Core profile, so they would answer nothing; an account with only the
+    sample is told so (`sample_only`), not that it has no records. With two
+    or more there is no telling which the person means, so none is
+    guessed."""
     home = svc.list_home(account_id)
     me = {p["id"] for p in home["people"] if p["kind"] == "self"}
-    tenants = {c["tenant_id"] for c in home["connections"]
-               if c["person_id"] in me and c["kind"] != "sample"
-               and c["status"] == "active"}
+    mine = [c for c in home["connections"]
+            if c["person_id"] in me and c["status"] == "active"]
+    tenants = {c["tenant_id"] for c in mine if c["kind"] != "sample"}
     if not tenants:
-        return None, "no_records"
+        return None, ("sample_only" if mine else "no_records")
     if len(tenants) > 1:
         return None, "several_records"
     return next(iter(tenants)), ""

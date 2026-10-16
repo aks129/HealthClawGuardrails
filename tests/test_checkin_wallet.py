@@ -300,8 +300,10 @@ def test_every_engine_absence_concept_is_held_back_by_the_wallet():
 
 
 def test_review_names_follow_the_engine_terminology_table():
-    """The review names a record by its code, never by the record's own
-    text. Where r6/terminology.py labels a code, the wallet says the same."""
+    """The review names a record by the engine-written `code.text` (our
+    r6/terminology.py label; the engine drops upstream words), then by the
+    LABELS fallback for a code the engine does not label yet. Where
+    r6/terminology.py labels a code, LABELS says the same."""
     from r6 import terminology
     src = (STATIC / "checkin_answer.js").read_text()
     block = re.search(r"export const LABELS = \{(.*?)\};", src, re.S).group(1)
@@ -313,6 +315,9 @@ def test_review_names_follow_the_engine_terminology_table():
         engine = terminology.lookup(systems[system], code)
         if engine is not None:
             assert label == engine, (code, label, engine)
-    # And the code never reads a record's own words.
+    # A coding's display is never read; `text` is read in one place only,
+    # labelOf, which the engine's checkin export is the only source for.
     names = src.split("What the person is shown", 1)[1]
-    assert ".display" not in names and ".text" not in names
+    assert "display" not in names.split("*/", 1)[1]
+    assert ".text" not in names
+    assert names.count('own(concept, "text")') == 1
