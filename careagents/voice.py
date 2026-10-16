@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterator
 
 import requests
 from sqlalchemy import func, update
@@ -52,6 +51,9 @@ MAX_CLIP_SECONDS = 30
 #: (connect, read) seconds. For the stream, read is the gap between chunks.
 TIMEOUT = (5, 30)
 STREAM_CHUNK_BYTES = 8192
+#: speak() holds the whole reply before handing it over. 10,000 characters
+#: is minutes of mp3, a few MB; anything far past that is not our reply.
+MAX_AUDIO_BYTES = 16 * 1024 * 1024
 
 METRICS = ("stt_seconds", "tts_chars")
 
@@ -88,8 +90,10 @@ class Client:
     """ElevenLabs speech-to-text and text-to-speech. Tests swap `http`."""
 
     def __init__(self, cfg, http=None):
-        if not (cfg.elevenlabs_api_key and cfg.elevenlabs_voice_id):
-            # Fail loud: there is no fake transcript to fall back to.
+        # Fail loud: there is no fake transcript to fall back to. The flag
+        # binds the client too, not only the boot check (#974 F3).
+        if not (cfg.voice and cfg.elevenlabs_api_key
+                and cfg.elevenlabs_voice_id):
             raise VoiceError("voice is not configured")
         self.cfg = cfg
         self.http = http or requests.Session()
@@ -123,7 +127,9 @@ class Client:
                 data={"model_id": STT_MODEL},
                 files={"file": ("clip", audio, content_type)},
                 timeout=TIMEOUT)
-        except requests.RequestException as exc:
+        except Exception as exc:
+            # Any exception, not only RequestException: http.client raises
+            # a bare ValueError quoting a bad header value, the key (#974 F4).
             logger.warning("elevenlabs speech-to-text failed: %s",
                            type(exc).__name__)
             raise VoiceError("elevenlabs speech-to-text failed") from None
@@ -142,13 +148,13 @@ class Client:
             seconds = None
         return Transcript(text.strip(), seconds)
 
-    def speak(self, text: str) -> Iterator[bytes]:
+    def speak(self, text: str) -> bytes:
         """The whole of `text` as mp3, or an error: never a part of it, so a
         reply's last line ("call 988") cannot be cut from the audio.
 
-        The request is made before this returns, so a refusal is an
-        exception here and not a broken stream. The iterator closes the
-        response when it ends, fails, or is dropped.
+        The stream is read to its end before anything is returned (#974
+        F1): a connection that drops mid-reply is an error, not the head of
+        the reply.
         """
         if not text or not text.strip():
             raise ValueError("nothing to speak")
@@ -162,27 +168,29 @@ class Client:
                 params={**self._params(), "output_format": TTS_OUTPUT_FORMAT},
                 json={"text": text, "model_id": TTS_MODEL},
                 stream=True, timeout=TIMEOUT)
-        except requests.RequestException as exc:
+        except Exception as exc:            # see transcribe: #974 F4
             logger.warning("elevenlabs text-to-speech failed: %s",
                            type(exc).__name__)
             raise VoiceError("elevenlabs text-to-speech failed") from None
-        if r.status_code != 200:
-            r.close()
-            raise self._failed("text-to-speech", r.status_code)
-        return self._chunks(r)
-
-    @staticmethod
-    def _chunks(r) -> Iterator[bytes]:
         try:
+            if r.status_code != 200:
+                raise self._failed("text-to-speech", r.status_code)
+            audio = bytearray()
             for chunk in r.iter_content(chunk_size=STREAM_CHUNK_BYTES):
-                if chunk:
-                    yield chunk
-        except requests.RequestException as exc:
+                audio += chunk
+                if len(audio) > MAX_AUDIO_BYTES:
+                    raise self._failed("text-to-speech", r.status_code)
+        except VoiceError:
+            raise
+        except Exception as exc:
             logger.warning("elevenlabs text-to-speech stream broke: %s",
                            type(exc).__name__)
             raise VoiceError("elevenlabs text-to-speech failed") from None
         finally:
             r.close()
+        if not audio:
+            raise self._failed("text-to-speech", r.status_code)
+        return bytes(audio)
 
 
 # --- daily ceilings ------------------------------------------------------------

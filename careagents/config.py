@@ -310,7 +310,10 @@ class Config:
         self.voice_real_records = (e.get("CARE_VOICE_REAL_RECORDS") or ""
                                    ).strip().lower() in (
                                        "1", "true", "yes", "on")
-        self.elevenlabs_api_key = e.get("ELEVENLABS_API_KEY", "")
+        # Stripped: a secret pasted into an env UI often ends in a newline,
+        # which requests lets through and http.client then quotes, whole, in
+        # its error (#974 F4).
+        self.elevenlabs_api_key = (e.get("ELEVENLABS_API_KEY") or "").strip()
         self.elevenlabs_voice_id = (e.get("ELEVENLABS_VOICE_ID") or "").strip()
         # Daily ceilings per account, durable (models.VoiceUsageDay).
         self.voice_stt_seconds_per_day = int(e.get(
@@ -326,6 +329,9 @@ class Config:
             if not self.elevenlabs_api_key:
                 raise ConfigError(
                     "CARE_VOICE=on needs ELEVENLABS_API_KEY")
+            if re.search(r"\s", self.elevenlabs_api_key):
+                raise ConfigError(
+                    "ELEVENLABS_API_KEY must not contain whitespace")
             if not re.fullmatch(r"[A-Za-z0-9]{1,64}",
                                 self.elevenlabs_voice_id):
                 # It is a URL path segment; no default, because stock

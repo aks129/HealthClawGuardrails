@@ -62,6 +62,32 @@ def test_voice_on_needs_a_plain_voice_id(voice_id):
     assert FAKE_KEY not in str(e.value)
 
 
+@pytest.mark.parametrize("key", ["   ", "\t", "\n"])
+def test_a_blank_key_refuses_to_boot(key):
+    """#974 F2."""
+    with pytest.raises(ConfigError, match="ELEVENLABS_API_KEY"):
+        _cfg(CARE_VOICE="on", ELEVENLABS_API_KEY=key,
+             ELEVENLABS_VOICE_ID=VOICE_ID)
+
+
+def test_a_pasted_key_is_stripped():
+    """#974 F4: the trailing newline an env UI adds is not part of it."""
+    c = _cfg(CARE_VOICE="on", ELEVENLABS_API_KEY=f" {FAKE_KEY}\n",
+             ELEVENLABS_VOICE_ID=f"{VOICE_ID}\n")
+    assert (c.elevenlabs_api_key, c.elevenlabs_voice_id) == (FAKE_KEY,
+                                                             VOICE_ID)
+
+
+@pytest.mark.parametrize("key", [FAKE_KEY + "\r\nX-Injected: 1",
+                                 "fake eleven key", "fake\tkey"])
+def test_a_key_with_whitespace_inside_refuses_to_boot_without_naming_it(key):
+    """#974 F4: the error names the variable, never the value."""
+    with pytest.raises(ConfigError, match="ELEVENLABS_API_KEY") as e:
+        _cfg(CARE_VOICE="on", ELEVENLABS_API_KEY=key,
+             ELEVENLABS_VOICE_ID=VOICE_ID)
+    assert "fake" not in str(e.value)
+
+
 def test_voice_on_with_key_and_voice_boots():
     c = _on()
     assert c.voice is True
@@ -183,7 +209,7 @@ def test_real_records_mode_asks_for_zero_retention_on_both_calls():
     c = _client(http, CARE_VOICE_REAL_RECORDS="on")
     c.transcribe(b"a", "audio/webm")
     http.response = FakeResponse(chunks=[b"mp3"])
-    list(c.speak("Hello."))
+    c.speak("Hello.")
     assert [kw["params"]["enable_logging"] for _, kw in http.calls] == [
         "false", "false"]
 
@@ -213,11 +239,11 @@ def test_an_unreadable_transcript_is_an_error_not_a_fake(response):
         _client(FakeHTTP(response)).transcribe(b"a", "audio/webm")
 
 
-def test_speak_streams_the_whole_reply_from_the_stock_voice():
+def test_speak_returns_the_whole_reply_from_the_stock_voice():
     resp = FakeResponse(chunks=[b"ID3", b"", b"frames"])
     http = FakeHTTP(resp)
-    out = list(_client(http).speak("Your A1c was 5.6 in March."))
-    assert out == [b"ID3", b"frames"]
+    out = _client(http).speak("Your A1c was 5.6 in March.")
+    assert out == b"ID3frames"
     assert resp.closed
     (url, kw), = http.calls
     assert url == (
@@ -230,8 +256,7 @@ def test_speak_streams_the_whole_reply_from_the_stock_voice():
     assert kw["timeout"] == voice.TIMEOUT
 
 
-def test_speak_makes_the_request_before_it_returns():
-    """A refusal is an exception at the call, not a broken stream later."""
+def test_a_refused_speak_is_an_exception_at_the_call():
     http = FakeHTTP(FakeResponse(status=401))
     with pytest.raises(voice.VoiceError) as e:
         _client(http).speak("Hello.")
@@ -251,17 +276,39 @@ def test_a_reply_at_the_limit_is_sent_whole():
     http = FakeHTTP(FakeResponse(chunks=[b"a"]))
     text = "x" * (voice.TTS_MAX_CHARS - 9) + " call 988"
     assert len(text) == voice.TTS_MAX_CHARS
-    list(_client(http).speak(text))
+    assert _client(http).speak(text) == b"a"
     assert http.calls[0][1]["json"]["text"].endswith("call 988")
 
 
-def test_a_stream_that_breaks_is_an_error_and_is_closed():
+def test_a_stream_that_breaks_gives_no_audio_at_all():
+    """#974 F1: the head of a reply is never handed over; its tail is
+    where "call 988" sits."""
     resp = FakeResponse(chunks=[b"a", b"b"], broken_after=1)
-    chunks = _client(FakeHTTP(resp)).speak("Hello.")
-    assert next(chunks) == b"a"
     with pytest.raises(voice.VoiceError):
-        next(chunks)
+        _client(FakeHTTP(resp)).speak("Hello. Call 988.")
     assert resp.closed
+
+
+@pytest.mark.parametrize("chunks", [[], [b""]])
+def test_an_empty_audio_answer_is_an_error(chunks):
+    with pytest.raises(voice.VoiceError):
+        _client(FakeHTTP(FakeResponse(chunks=chunks))).speak("Hello.")
+
+
+def test_audio_far_past_any_reply_is_refused(monkeypatch):
+    monkeypatch.setattr(voice, "MAX_AUDIO_BYTES", 4)
+    resp = FakeResponse(chunks=[b"abc", b"def"])
+    with pytest.raises(voice.VoiceError):
+        _client(FakeHTTP(resp)).speak("Hello.")
+    assert resp.closed
+
+
+def test_a_client_refuses_while_voice_is_off():
+    """#974 F3: the flag binds the client, not only the boot check."""
+    c = _cfg(ELEVENLABS_API_KEY=FAKE_KEY, ELEVENLABS_VOICE_ID=VOICE_ID)
+    assert c.voice is False
+    with pytest.raises(voice.VoiceError):
+        voice.Client(c, http=FakeHTTP())
 
 
 # --- nothing spoken or heard is logged ----------------------------------------
@@ -275,6 +322,9 @@ SPOKEN = "Synthetic: my metformin dose is 500 mg"
     lambda: FakeHTTP(FakeResponse(status=422, raw=SENTINEL)),
     lambda: FakeHTTP(error=requests.ConnectionError(SENTINEL)),
     lambda: FakeHTTP(error=requests.Timeout(SENTINEL)),
+    # #974 F4: http.client's own ValueError quotes a bad header, the key.
+    lambda: FakeHTTP(error=ValueError(f"Invalid header value {FAKE_KEY}")),
+    lambda: FakeHTTP(error=TypeError(SENTINEL)),
 ])
 def test_a_failure_carries_no_content_body_or_key(caplog, call, http):
     caplog.set_level(logging.DEBUG)
@@ -299,7 +349,7 @@ def test_a_success_logs_nothing_heard_or_spoken(caplog):
     c = _client(http)
     assert c.transcribe(b"a", "audio/webm").text == SPOKEN
     http.response = FakeResponse(chunks=[b"mp3"])
-    list(c.speak(SPOKEN))
+    c.speak(SPOKEN)
     assert "metformin" not in caplog.text
     assert FAKE_KEY not in caplog.text
 
@@ -308,7 +358,7 @@ def test_a_broken_stream_logs_no_content(caplog):
     caplog.set_level(logging.DEBUG)
     resp = FakeResponse(chunks=[b"a", b"b"], broken_after=1)
     with pytest.raises(voice.VoiceError):
-        list(_client(FakeHTTP(resp)).speak(SPOKEN))
+        _client(FakeHTTP(resp)).speak(SPOKEN)
     assert SENTINEL not in caplog.text
     assert "metformin" not in caplog.text
 
