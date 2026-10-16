@@ -500,6 +500,27 @@ def test_racing_spellings_of_one_inbox_cannot_pass_the_resend_wait(
             f"{len(sent) - before} codes sent to one inbox inside one wait")
 
 
+def test_the_postgres_lock_is_taken_on_the_inbox(svc, monkeypatch):
+    """Off the Postgres lane the race test above cannot tell the lock's key
+    from the typed address's: SQLite has one write lock for everything.
+
+    MUTATION: take the lock on the typed address -> red."""
+    from types import SimpleNamespace
+    taken = []
+
+    class _Session:
+        def execute(self, stmt, params):
+            taken.append(params["k"])
+    monkeypatch.setattr(svc, "engine",
+                        SimpleNamespace(dialect=SimpleNamespace(
+                            name="postgresql")))
+    for v in GMAIL_VARIANTS:
+        svc._lock_codes(_Session(), v)
+    svc._lock_codes(_Session(), "someone@example.com")
+    assert len(set(taken[:3])) == 1
+    assert taken[3] != taken[0]
+
+
 def test_racing_wrong_guesses_cannot_pass_the_attempt_limit(
         shared_svc, monkeypatch):
     """Every guess that is compared is counted, however many arrive at once.
