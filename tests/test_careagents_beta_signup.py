@@ -596,6 +596,7 @@ def test_a_family_on_one_home_wifi_can_all_join(made):
         r = _post(c, email=f"relative{i}@example.com")
         assert r.status_code != 429, i
 
+
 def test_submits_are_limited_per_ip(made):
     app, svc = made()
     c = app.test_client()
