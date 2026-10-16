@@ -279,20 +279,16 @@ def test_no_snomed_nka_concept_is_shared_as_an_allergy():
     assert _shareable(codes) == {c: False for c in codes}
 
 
-@pytest.mark.xfail(strict=True, reason="#973 flag 4: the wallet mirrors "
-                   "NKA_CONCEPTS but not ALLERGY_STATUS_CONCEPTS, so an "
-                   "AllergyIntolerance coded SNOMED 1631000175102 'Patient "
-                   "not asked' is sent as a fulfilled allergy.")
 def test_no_engine_absence_concept_is_shared_as_an_allergy():
+    """#973 flag 4, fixed: SNOMED 1631000175102 'Patient not asked' was
+    sent as a fulfilled allergy."""
     from r6.terminology import ABSENCE_CONCEPTS, SNOMED
     codes = sorted(c for s, c in ABSENCE_CONCEPTS if s == SNOMED)
     assert _shareable(codes) == {c: False for c in codes}
 
 
-@pytest.mark.xfail(strict=True, reason="#973 flag 4: the absence check "
-                   "compares the code exactly, the substance check only asks "
-                   "for a non-blank string, so ' 716186003' (padded) is an "
-                   "NKA sent as an allergy.")
 def test_a_padded_nka_code_is_not_shared_as_an_allergy():
+    """#973 flag 4, fixed: a padded ' 716186003' was an NKA sent as an
+    allergy; codes are trimmed before the absence check."""
     assert _shareable(["716186003 ", " 409137002"]) == {
         "716186003 ": False, " 409137002": False}

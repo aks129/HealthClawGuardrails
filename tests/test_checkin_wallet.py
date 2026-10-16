@@ -284,6 +284,21 @@ def test_no_known_allergy_codes_match_the_chat():
     assert js == set(_NKA_CODES)
 
 
+def test_every_engine_absence_concept_is_held_back_by_the_wallet():
+    """The wallet holds back every absence concept the engine knows, not
+    only the chat's NKA codes: "Patient not asked" is no allergy either."""
+    from r6.terminology import ABSENCE_CONCEPTS, LOINC, SNOMED
+    src = (STATIC / "checkin_answer.js").read_text()
+
+    def listed(name):
+        block = re.search(name + r" = \[(.*?)\]", src, re.S).group(1)
+        return set(re.findall(r'"([^"]+)"', block))
+    js = ({(SNOMED, c) for c in listed("NKA_CODES")
+           | listed("ALLERGY_STATUS_CODES")}
+          | {(LOINC, c) for c in listed("NKA_LOINC")})
+    assert js == set(ABSENCE_CONCEPTS)
+
+
 def test_review_names_follow_the_engine_terminology_table():
     """The review names a record by its code, never by the record's own
     text. Where r6/terminology.py labels a code, the wallet says the same."""

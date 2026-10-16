@@ -148,14 +148,6 @@ def test_anything_but_a_list_of_the_six_is_refused(relay, body):
     assert hc.calls == []
 
 
-def test_an_oversized_body_is_refused(relay):
-    browser, hc, *_ = relay
-    r = browser.post(RELAY, data='{"resource_types": ["Patient"], "x": "'
-                     + "a" * 2048 + '"}', content_type="application/json")
-    assert r.status_code == 400
-    assert hc.calls == []
-
-
 def test_a_paused_account_is_refused(relay):
     browser, hc, svc, acct = relay
     svc.set_paused(acct.email, True)

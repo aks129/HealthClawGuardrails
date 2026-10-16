@@ -38,6 +38,11 @@ export const NKA_CODES = [
 const LOINC = "http://loinc.org";
 // LOINC answers that state an absence (r6.terminology.LOINC_ABSENCE_ANSWERS).
 export const NKA_LOINC = ["LA10030-7", "LA9134-3", "LA4715-4"];
+// SNOMED 1631000175102 "Patient not asked": allergies not checked, which is
+// no allergy either (r6.terminology.ALLERGY_STATUS_CONCEPTS). With the two
+// lists above, every engine absence concept (r6.terminology
+// ABSENCE_CONCEPTS); tests/test_checkin_wallet.py holds them equal.
+export const ALLERGY_STATUS_CODES = ["1631000175102"];
 
 // Code systems that name a substance (US Core's AllergyIntolerance.code
 // binding): RxNorm, SNOMED by either spelling, UNII, NDF-RT.
@@ -52,10 +57,18 @@ function codings(concept) {
   return Array.isArray(c) ? c.filter((x) => x !== null && typeof x === "object") : [];
 }
 
+/* A code as the engine compares it: a string or a number, trimmed. A
+   padded " 716186003" is still that concept, not a substance. */
+const codeOf = (c) => {
+  const v = own(c, "code");
+  return typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+};
+
 function statesAbsence(c) {
   const system = own(c, "system");
-  const code = String(own(c, "code"));
-  return (SNOMED.includes(system) && NKA_CODES.includes(code)) ||
+  const code = codeOf(c);
+  return (SNOMED.includes(system) &&
+      (NKA_CODES.includes(code) || ALLERGY_STATUS_CODES.includes(code))) ||
     (system === LOINC && NKA_LOINC.includes(code));
 }
 
@@ -71,11 +84,8 @@ export function shareableAllergy(resource) {
   if (code.some(statesAbsence)) return false;
   if (codings(own(resource, "verificationStatus")).some(
     (c) => WITHDRAWN.includes(own(c, "code")))) return false;
-  return code.some((c) => {
-    const value = own(c, "code");
-    return SUBSTANCE_SYSTEMS.includes(own(c, "system")) &&
-      typeof value === "string" && value.trim() !== "";
-  });
+  return code.some((c) => SUBSTANCE_SYSTEMS.includes(own(c, "system")) &&
+    typeof own(c, "code") === "string" && codeOf(c) !== "");
 }
 
 const shareable = (resource) => resource.resourceType !== "AllergyIntolerance" ||

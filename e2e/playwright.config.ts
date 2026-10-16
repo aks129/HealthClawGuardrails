@@ -13,7 +13,8 @@ const PORT = process.env.E2E_PORT || '5000';
 // HealthClaw.
 export const CARE_PORT = process.env.CARE_E2E_PORT || '5101';
 export const CARE_BASE_URL = `http://localhost:${CARE_PORT}`;
-export const CARE_LOG = '/tmp/e2e-careagents.log';
+// CARE_E2E_LOG moves it, so two runs on one machine do not share a log.
+export const CARE_LOG = process.env.CARE_E2E_LOG || '/tmp/e2e-careagents.log';
 const CARE_DB = '/tmp/e2e-careagents.db';
 
 // A THIRD app: the same CareAgents code with CARE_REAL_RECORDS=allowlist
