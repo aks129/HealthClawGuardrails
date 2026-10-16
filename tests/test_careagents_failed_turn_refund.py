@@ -130,19 +130,44 @@ def test_a_run_already_marked_is_not_given_back_twice(
 
 def test_a_charge_from_before_the_day_was_recorded_is_kept(
         cfg, svc, monkeypatch):  # noqa: F811
+    # A recovered run charged by older code: its marker has no day, so
+    # which day's turn to give back is unknown, and none is.
     app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
     _model_fails(monkeypatch)
-    real = fake.append_agent_run_event
+    real = fake.agent_run_events
 
-    def no_day(run_id, worker_id, event_type, payload=None):
-        if event_type == CHARGED_EVENT:
-            payload = {}
-        return real(run_id, worker_id, event_type, payload)
-    monkeypatch.setattr(fake, "append_agent_run_event", no_day)
+    def old_charge(tenant_id, run_id, after=0, limit=100):
+        out = real(tenant_id, run_id, after=after, limit=limit)
+        return {**out, "events": list(out.get("events") or []) + [
+            {"type": CHARGED_EVENT, "payload": {}}]}
     assert _post(c, agent_id, "o-1") == 200
+    from careagents.models import Account
+    with svc.session() as s:
+        aid = s.query(Account).filter_by(email="gene@example.com").one().id
+    svc.claim_daily_turn(aid, 5)         # what the older code charged
+    monkeypatch.setattr(fake, "agent_run_events", old_charge)
     _work(c)
     assert _used(svc) == 1
     assert _events(fake, REFUNDED_EVENT) == []
+
+
+def test_the_failure_branch_reads_nothing_more_from_the_engine(
+        cfg, svc, monkeypatch):  # noqa: F811
+    # The failure branch runs outside the turn's acting_for block, so a
+    # read there would not carry the account's label. It reads none.
+    app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    _model_fails(monkeypatch)
+    real = fake.agent_run_events
+    reads = []
+
+    def counted(*a, **k):
+        reads.append(1)
+        return real(*a, **k)
+    monkeypatch.setattr(fake, "agent_run_events", counted)
+    assert _post(c, agent_id, "r-1") == 200
+    _work(c)
+    assert _used(svc) == 0
+    assert len(reads) == 1
 
 
 def test_a_refund_that_fails_never_breaks_the_failure_answer(

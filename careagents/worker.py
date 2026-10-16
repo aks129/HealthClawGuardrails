@@ -316,25 +316,20 @@ class RunWorker:
         back only once this worker's failure is accepted (`_refund`): a
         worker that lost its lease lands in the same branch, and the run
         may yet finish elsewhere. Every miss errs toward the cap, never
-        past it. A charge from before the day was recorded is kept."""
+        past it. A charge from before the day was recorded is kept.
+
+        It reads what `_execute_turn` left on the run (`_refund`), never the
+        engine again: this branch runs outside the turn's `acting_for`
+        block, so a read here would not be labelled with the account."""
+        info = run.get("_refund") or {}
+        account_id, day = info.get("account_id"), info.get("day")
+        if info.get("refunded") or not account_id or not day:
+            return None
         try:
-            replay = self.hc.agent_run_events(
-                str(run["tenant_id"]), str(run["id"]), after=0, limit=500)
-            events = list(replay.get("events") or [])
-            if any(e.get("type") == REFUNDED_EVENT for e in events):
-                return None
-            charge = next((e for e in events
-                           if e.get("type") == CHARGED_EVENT), None)
-            day = str(((charge or {}).get("payload") or {}).get("day") or "")
-            if not day:
-                return None
-            context = self.accounts.get_worker_agent_context(
-                str(run.get("agent_id") or ""))
-            if context is None:
-                return None
             self.hc.append_agent_run_event(
                 str(run["id"]), self.worker_id, REFUNDED_EVENT, {"day": day})
-            return context["account_id"], day
+            info["refunded"] = True
+            return account_id, day
         except Exception:  # noqa: BLE001 - a refund never fails a failure
             logger.warning("could not mark run %s for a refund", run.get("id"))
             return None
@@ -482,6 +477,16 @@ class RunWorker:
                 final_checkpoint = payload
 
         charged = any(event.get("type") == CHARGED_EVENT for event in events)
+        # What a failure needs to give the turn back, kept on the run, so
+        # the failure branch reads nothing more from the engine
+        # (`_mark_refund`): the account, the day it was charged, and whether
+        # it was already given back.
+        charge = next((e for e in events if e.get("type") == CHARGED_EVENT),
+                      None)
+        run["_refund"] = {
+            "account_id": context["account_id"],
+            "day": str(((charge or {}).get("payload") or {}).get("day") or ""),
+            "refunded": any(e.get("type") == REFUNDED_EVENT for e in events)}
         if not checkpoints and not charged:
             # The day's allowance is charged here, where the model is called
             # and after turn_block passed (#856 sign-off F4): a turn admitted
@@ -504,6 +509,7 @@ class RunWorker:
                 return
             self.hc.append_agent_run_event(
                 run_id, self.worker_id, CHARGED_EVENT, {"day": day})
+            run["_refund"]["day"] = day
 
         lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
