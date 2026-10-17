@@ -21,7 +21,9 @@ import click
 from flask import Flask, g, request as flask_request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
+from r6.access import _TENANT_ID_PATTERN
 from r6.database_migrations import register_model_metadata, upgrade_database
+from r6.log_safety import loggable_id, scrub as scrub_credentials
 from r6.runtime_config import (validate_runtime_environment,
                                warn_on_padded_secrets)
 from r6.safe_read import StrictJSONProvider
@@ -346,13 +348,19 @@ def _register_request_hooks(flask_app: Flask) -> None:
             level,
             json.dumps(
                 {
-                    "request_id": getattr(g, "request_id", "-"),
+                    # Never the raw headers: they are caller-chosen, and a
+                    # token sent in one was logged verbatim (FHI-60).
+                    "request_id": loggable_id(
+                        getattr(g, "request_id", None)),
                     "method": flask_request.method,
-                    "path": flask_request.path,
+                    "path": scrub_credentials(flask_request.path),
                     "status": response.status_code,
                     "duration_ms": duration_ms,
-                    "tenant_id": flask_request.headers.get("X-Tenant-Id", "-"),
-                    "agent_id": flask_request.headers.get("X-Agent-Id", "-"),
+                    "tenant_id": loggable_id(
+                        flask_request.headers.get("X-Tenant-Id"),
+                        _TENANT_ID_PATTERN),
+                    "agent_id": loggable_id(
+                        flask_request.headers.get("X-Agent-Id")),
                 }
             )
         )
