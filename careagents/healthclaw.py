@@ -8,10 +8,14 @@ browser never sees (the mint secret and tenant-bound step-up tokens).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import secrets
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from urllib.parse import quote
 
 import logging
@@ -28,6 +32,44 @@ _FHIR_ID = re.compile(r"[A-Za-z0-9\-.]{1,128}")
 
 #: How long a tenant's resolved `Patient/<id>` is reused (#867).
 PATIENT_SUBJECT_TTL_SECONDS = 300.0
+
+#: Which account a tenant-scoped call is made for (one assistant per person
+#: spec, section 6.2). Set around a signed-in request and around a worker's
+#: turn, and read only to label the engine's audit trail. Per thread and
+#: always reset, so one request's account never labels the next one's call.
+_ACTOR: ContextVar[str | None] = ContextVar("careagents_actor", default=None)
+
+#: An account id as CareAgents mints it (`acct_<hex>`), the only thing that
+#: becomes part of the header. Inside the engine's own id charset.
+_ACCOUNT_ID = re.compile(r"acct_[A-Za-z0-9]{1,64}")
+
+
+@contextmanager
+def acting_for(account_id: str | None):
+    """Label the tenant-scoped engine calls made inside this block with
+    the account that asked for them."""
+    token = _ACTOR.set(account_id)
+    try:
+        yield
+    finally:
+        _ACTOR.reset(token)
+
+
+def act_as(account_id: str | None) -> None:
+    """Name the acting account part-way through an `acting_for` block, once
+    it is known (the worker learns it from the run). The block's exit
+    still restores what was there before it."""
+    _ACTOR.set(account_id)
+
+
+def agent_header() -> str:
+    """The `X-Agent-Id` for a tenant-scoped call: `careagents:<account id>`
+    when an account is acting, else `careagents`. An opaque pointer, no
+    PHI; the engine stores it as the audit row's agent id."""
+    actor = _ACTOR.get()
+    if isinstance(actor, str) and _ACCOUNT_ID.fullmatch(actor):
+        return f"careagents:{actor}"
+    return "careagents"
 
 
 class HealthClawError(RuntimeError):
@@ -267,7 +309,7 @@ class HealthClawClient:
     def _headers(self, tenant: str) -> dict:
         return {"X-Tenant-Id": tenant,
                 "X-Step-Up-Token": self.mint_token(tenant),
-                "X-Agent-Id": "careagents"}
+                "X-Agent-Id": agent_header()}
 
     def _internal_headers(self) -> dict:
         return {"X-Internal-Secret": self.mint_secret,
@@ -531,7 +573,7 @@ class HealthClawClient:
         r = self._send("POST", f"{self.actions}/{action_id}/confirm",
                        headers={"X-Tenant-Id": tenant,
                                 "X-Step-Up-Token": token,
-                                "X-Agent-Id": "careagents"},
+                                "X-Agent-Id": agent_header()},
                        json={"approved_via": "review-page"},
                        what="confirm", error=HealthClawUnconfirmed)
         if not r.ok:
@@ -576,7 +618,7 @@ class HealthClawClient:
         r = self._send("POST", f"{self.actions}/{action_id}/decline",
                        headers={"X-Tenant-Id": tenant,
                                 "X-Step-Up-Token": token,
-                                "X-Agent-Id": "careagents"},
+                                "X-Agent-Id": agent_header()},
                        json={"declined_via": "review-page"},
                        what="decline")
         try:
@@ -648,8 +690,20 @@ class HealthClawClient:
         HMAC-verified `patient.connection_success` webhook then registers the
         org_connection_id back to this tenant and ingests the records. We do
         NOT build a Fasten-hosted URL ourselves — the provider domain differs
-        by TEFCA/mode and only the HealthClaw page has the verified key."""
-        return f"{self.public_base}/connect/{tenant}"
+        by TEFCA/mode and only the HealthClaw page has the verified key.
+
+        The link carries a tag over the tenant, keyed from the secret both
+        sides hold (app.py, connect_view_tag), so the engine shows its
+        patient view: no HealthClaw nav, no tenant id, no assistant token,
+        and a way back to the hub (#937). Without a secret, no tag, and the
+        engine shows its developer page."""
+        url = f"{self.public_base}/connect/{tenant}"
+        if not self.mint_secret:
+            return url
+        key = hashlib.sha256(b"healthclaw-connect-view:"
+                             + self.mint_secret.encode("utf-8")).digest()
+        tag = hmac.new(key, tenant.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{url}?src=careagents&sig={tag}"
 
     def wearables_connect_url(self, tenant: str, provider: str) -> str:
         """Route to HealthClaw's wearables OAuth kickoff for this tenant +
@@ -671,6 +725,54 @@ class HealthClawClient:
         """
         bundle = self.search(tenant, "Patient", {"_summary": "count"})
         return int(bundle.get("total") or 0) > 0
+
+    # A Fasten job in none of these is still writing records (the engine's
+    # r6/fasten/reaper.py TERMINAL_STATUSES; this app does not import r6).
+    FASTEN_JOB_DONE = ("complete", "completed", "failed")
+
+    def fasten_import_running(self, tenant: str) -> bool:
+        """Whether a Fasten export is still being written into `tenant`.
+
+        The engine ingests in a background thread and commits every ten
+        resources, and a Patient lands first, so records exist long before
+        the import is done. A count taken in between is a fraction of the
+        record, shown as the whole (QA940-F1). Only `status` is read: the
+        job rows carry no patient data, and failure detail is not needed.
+
+        A job with no recognisable status counts as running, so the doubt
+        withholds a number rather than showing one. Raises HealthClawError
+        when the engine could not be asked, which is not the same answer as
+        "nothing is importing".
+        """
+        return self.fasten_import_state(tenant) == "running"
+
+    def fasten_import_state(self, tenant: str) -> str:
+        """"running", "failed", "done" or "none" for `tenant`'s Fasten jobs.
+
+        "failed" only when nothing runs and the newest job (the engine lists
+        newest first) failed, so a retry that later succeeded is not shown
+        as a failure. Raises HealthClawError on a failed or malformed
+        answer, never "none".
+        """
+        r = self._send("GET", f"{self.base}/fasten/jobs",
+                       headers=self._headers(tenant), what="import status")
+        if r.status_code != 200:
+            raise HealthClawError(f"import status failed ({r.status_code})",
+                                  r.status_code)
+        jobs = self._json_object(r, "import status").get("jobs")
+        if not isinstance(jobs, list):
+            raise HealthClawError("import status returned invalid data",
+                                  r.status_code)
+        return self._import_state(jobs)
+
+    def _import_state(self, jobs: list) -> str:
+        if any(not isinstance(j, dict)
+               or j.get("status") not in self.FASTEN_JOB_DONE
+               for j in jobs):
+            return "running"
+        if not jobs:
+            return "none"
+        return "failed" if jobs[0].get("status") == "failed" else "done"
 
     # Counted on refresh to report growth. Deliberately a fixed, clinically
     # meaningful set rather than every supported type — this is a progress

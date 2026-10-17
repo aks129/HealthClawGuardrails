@@ -16,6 +16,9 @@ Routes:
     GET  /command-center/api/tasks?tenant=<id>            — pending tasks
     GET  /command-center/api/insights?tenant=<id>         — derived insights
     GET  /command-center/api/system                       — Flask/MCP/gateway/redis probes
+                                                            (operator-only: X-Internal-Secret)
+    GET  /command-center/api/openclaw/sessions            — gateway-wide chat sessions
+                                                            (operator-only: X-Internal-Secret)
     POST /command-center/api/conversations                — log a chat turn
     POST /command-center/api/tasks                        — create a task
     PATCH /command-center/api/tasks/<id>                  — update status
@@ -37,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from models import db
 from r6.command_center import projector, access, gateway
 from r6.audit import add_audit_event
+from r6.internal_auth import internal_secret_authorized
 from r6.command_center.models import (
     KNOWN_CHANNELS,
     AgentTask,
@@ -46,7 +50,7 @@ from r6.command_center.models import (
 )
 from r6.command_center.agents import load_agents, load_agent_templates, get_agent
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
-                       decide_grant, has_grant, public_step_up_reason,
+                       decide_grant, public_step_up_reason,
                        tenant_from_request)
 from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
 
@@ -258,34 +262,25 @@ def api_insights():
     return jsonify(projector.insights(_tenant(), limit=limit))
 
 
-def _require_session_or_stepup():
-    """System status / sessions-list leak infra URLs — require session or step-up."""
-    if session.get(SESSION_KEY):
+def _require_operator():
+    """Gateway-wide infrastructure reads are operator-only (SEC941-PRE1).
+
+    /api/system and /api/openclaw/sessions describe the whole OpenClaw
+    gateway, not one tenant: its URL and every chat session on it, with the
+    Telegram/iMessage/WhatsApp peer handles. Gateway sessions carry no
+    reliable tenant binding, so no tenant credential can scope them, and a
+    public-tenant step-up token is minted for free. Only the internal
+    secret opens them, the same tenant-blind gate as /r6/ops (#304).
+    """
+    if internal_secret_authorized():
         return None
-    if request.headers.get("X-Step-Up-Token"):
-        # Kernel slice 18: a predicate, not a gate, so it asks has_grant,
-        # which answers None in exactly the cases require_grant would refuse
-        # and never raises; the kernel logs each refusal with its public
-        # reason (the line #307 asked for), so this site no longer logs one
-        # of its own. The tenant is read in the order this predicate always
-        # used (?tenant=, then X-Tenant-Id, then the blueprint default). A
-        # malformed id is not a 400 here: it never was, it was a token that
-        # failed its tenant binding, and it stays the same 401.
-        try:
-            tenant = tenant_from_request(
-                sources=(TenantSource.QUERY, TenantSource.HEADER),
-                default=DEFAULT_TENANT, query_keys=("tenant",))
-        except TenantRejected:
-            tenant = None
-        if tenant is not None and has_grant(
-                scope=Scope.TENANT_BOUND, tenant=tenant) is not None:
-            return None
-    return jsonify({"error": "authentication required"}), 401
+    return jsonify(
+        {"error": "operator endpoint: X-Internal-Secret required"}), 403
 
 
 @command_center_blueprint.route("/api/system", methods=["GET"])
 def api_system():
-    if (err := _require_session_or_stepup()):
+    if (err := _require_operator()):
         return err
     return jsonify(projector.system_status())
 
@@ -300,9 +295,9 @@ def api_agent_templates():
 @command_center_blueprint.route("/api/openclaw/sessions", methods=["GET"])
 def api_openclaw_sessions():
     """Live list of OpenClaw chat sessions pulled from the gateway RPC."""
-    # Gateway URL + session list reveal the Mac mini's address and ongoing
-    # chats — require a session or step-up token.
-    if (err := _require_session_or_stepup()):
+    # Gateway URL + session list reveal the Mac mini's address and every
+    # ongoing chat's peer handle — operator-only.
+    if (err := _require_operator()):
         return err
     return jsonify({
         "gateway": gateway.probe().to_dict(),

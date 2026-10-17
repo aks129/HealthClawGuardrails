@@ -393,7 +393,8 @@ def test_deleting_a_connection_revokes_its_grants_at_healthclaw_and_keeps_the_re
     tenant = svc.get_connection(acct.id, conn)["tenant_id"]
     gid = svc.add_grant(acct.id, conn, tenant, "cid-claude", "Claude", "fhir.read", "consent_del")
     fake.purge_tenant = lambda t: {"rows_deleted": 3}
-    resp = client.delete(f"/api/connections/{conn}")
+    resp = client.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert resp.status_code == 200, resp.get_data(as_text=True)
     assert resp.get_json()["deleted"] is True
     assert fake.revoked == ["consent_del"]
@@ -410,7 +411,8 @@ def test_a_revoke_that_cannot_be_confirmed_keeps_the_connection_listed(
     gid = svc.add_grant(acct.id, conn, tenant, "cid-claude", "Claude", "fhir.read", "consent_x")
     fake.purge_tenant = lambda t: {"rows_deleted": 3}
     fake.revoke_fails = True
-    resp = client.delete(f"/api/connections/{conn}")
+    resp = client.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert resp.status_code == 502
     body = resp.get_json()
     assert body["deleted"] is True and body["unlinked"] is False and body["grants_active"] == 1

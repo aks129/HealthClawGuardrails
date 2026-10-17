@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from urllib.parse import urlparse
 
 from careagents import _build
@@ -34,6 +35,29 @@ def _require(name: str, value: str | None, why: str) -> str:
     if not value:
         raise ConfigError(f"{name} is required in production — {why}")
     return value
+
+
+_ON = ("1", "true", "yes", "on")
+_OFF = ("", "0", "false", "no", "off")
+
+
+def _flag(e, name: str) -> bool:
+    """An on/off flag, read like CARE_CHECKIN_WALLET (case-insensitive), but
+    a value that is neither refuses to boot rather than reading as off."""
+    value = (e.get(name) or "").strip().lower()
+    if value in _ON:
+        return True
+    if value in _OFF:
+        return False
+    raise ConfigError(f"{name} must be on or off")
+
+
+def _int(e, name: str, default: int) -> int:
+    """An integer setting; anything else refuses to boot, naming it."""
+    try:
+        return int(e.get(name) or default)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number") from None
 
 
 class Config:
@@ -132,11 +156,41 @@ class Config:
         # Where a new /beta request is announced (careagents/beta_signup.py).
         # Unset = no announcement; the request is still saved.
         self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")
+        # Sign-ups one personal invite link admits (careagents/invites.py).
+        # The operator can set a different cap on one link.
+        try:
+            invite_cap = int(e.get("CARE_INVITE_LINK_CAP", "5"))
+        except ValueError:
+            logger.warning("CARE_INVITE_LINK_CAP is not a whole number; "
+                           "using 5")
+            invite_cap = 5
+        self.invite_link_cap = max(0, invite_cap)
+        # Who may open /admin/funnel (careagents/funnel.py): the owner's own
+        # account emails, comma-separated, case-insensitive. Unset = nobody.
+        # Deliberately not CARE_REAL_RECORDS_ALLOWLIST, which holds testers.
+        self.owner_emails = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_OWNER_EMAILS") or "").split(",")
+            if x.strip())
+        # Where the worker sends the once-a-day funnel digest. Unset = off.
+        self.digest_to = (e.get("CARE_DIGEST_TO") or "").strip()
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
         self.wearables_enabled = e.get(
             "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
+        # "Add someone you care for" (one assistant per person spec,
+        # section 6), made-up records only. Off until the hub renders whose
+        # assistant is whose; before that, a second person reads as a
+        # second identical assistant (#947 QA).
+        self.people_enabled = e.get(
+            "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
+        # SMART Health Check-in web wallet (careagents/checkin_wallet.py).
+        # Off unless asked for: off, its routes are never registered and
+        # answer 404. While on, it answers only from the synthetic test
+        # patient, never from an account's records (FHI-54).
+        self.checkin_wallet_enabled = e.get(
+            "CARE_CHECKIN_WALLET", "").lower() in ("1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on
@@ -188,7 +242,20 @@ class Config:
                 f"{self.canonical_host!r})")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
-        self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        # Trimmed, as the engine trims INTERNAL_TOKEN_MINT_SECRET: stray
+        # whitespace on one side only meant no signature ever matched, and
+        # testers silently got the developer connect page.
+        raw_mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
+        self.mint_secret = raw_mint_secret.strip()
+        if raw_mint_secret and not self.mint_secret:
+            # Never quietly unset (SEC941-F2): refuse to start.
+            raise ConfigError(
+                "HEALTHCLAW_MINT_SECRET is set but contains only whitespace; "
+                "set a real secret or unset it")
+        if raw_mint_secret != self.mint_secret:
+            logger.warning(
+                "HEALTHCLAW_MINT_SECRET has leading or trailing whitespace; "
+                "it is trimmed before use. Remove it from the environment.")
 
         # LLM provider: Anthropic preferred; OpenAI-compatible fallback so the
         # product works before an Anthropic key is provisioned.
@@ -203,7 +270,20 @@ class Config:
         self.openai_api_key = e.get("OPENAI_API_KEY", "")
         self.openai_base = (e.get("OPENAI_BASE_URL")
                             or "https://api.openai.com/v1").rstrip("/")
-        self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5")
+        self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5-5")
+        # Current Claude models always think before answering, and thinking
+        # spends the same max_tokens as the answer: at 1200 a thorough lab
+        # answer was cut off mid-sentence at every effort level. Effort is
+        # the depth control; medium keeps chat brisk without losing care.
+        effort = e.get("CARE_EFFORT", "medium")
+        self.anthropic_effort = (effort if effort in ("low", "medium", "high")
+                                 else "medium")
+        self.anthropic_max_tokens = 8000
+        # CARE_ROUTING=on answers small talk and app questions on Haiku and
+        # everything else on Sonnet with an Opus advisor (careagents/
+        # routing.py). Off, CARE_MODEL answers every turn as before.
+        self.routing = e.get("CARE_ROUTING", "off") == "on"
+        self.advisor = self.routing and e.get("CARE_ADVISOR", "on") != "off"
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
         # With real records open, chat turns carry redacted-but-real health
         # data to the model host, so that host must be vetted: one of the
@@ -240,7 +320,46 @@ class Config:
         # in-process, so it resets on restart and multiplies by gunicorn
         # worker count; this one is DB-backed and is what actually bounds
         # what a single account can cost the operator in a day.
-        self.chat_turns_per_day = int(e.get("CARE_CHAT_TURNS_PER_DAY", "200"))
+        self.chat_turns_per_day = _int(e, "CARE_CHAT_TURNS_PER_DAY", 200)
+
+        # Voice (careagents/voice.py): ElevenLabs as speech-to-text and
+        # text-to-speech only; the turn itself still goes through /api/chat.
+        # CARE_VOICE=on needs the key and a stock (never cloned) voice id,
+        # in every environment: voice never falls back to a fake.
+        self.voice = _flag(e, "CARE_VOICE")
+        # Real records over voice: off unless switched on, and it must stay
+        # off until ElevenLabs' BAA and zero retention exist. Off, only the
+        # sample connection may use voice (voice.voice_blocked).
+        self.voice_real_records = _flag(e, "CARE_VOICE_REAL_RECORDS")
+        # Stripped: a secret pasted into an env UI often ends in a newline,
+        # which requests lets through and http.client then quotes, whole, in
+        # its error (#974 F4).
+        self.elevenlabs_api_key = (e.get("ELEVENLABS_API_KEY") or "").strip()
+        self.elevenlabs_voice_id = (e.get("ELEVENLABS_VOICE_ID") or "").strip()
+        # Daily ceilings per account, durable (models.VoiceUsageDay).
+        self.voice_stt_seconds_per_day = _int(
+            e, "CARE_VOICE_STT_SECONDS_PER_DAY", 600)
+        self.voice_tts_chars_per_day = _int(
+            e, "CARE_VOICE_TTS_CHARS_PER_DAY", 20000)
+        if self.voice_stt_seconds_per_day < 0:
+            raise ConfigError("CARE_VOICE_STT_SECONDS_PER_DAY must be >= 0")
+        if self.voice_tts_chars_per_day < 0:
+            raise ConfigError("CARE_VOICE_TTS_CHARS_PER_DAY must be >= 0")
+        if self.voice:
+            # Names only: an error never carries the credential.
+            if not self.elevenlabs_api_key:
+                raise ConfigError(
+                    "CARE_VOICE=on needs ELEVENLABS_API_KEY")
+            if re.search(r"\s", self.elevenlabs_api_key):
+                raise ConfigError(
+                    "ELEVENLABS_API_KEY must not contain whitespace")
+            if not re.fullmatch(r"[A-Za-z0-9]{1,64}",
+                                self.elevenlabs_voice_id):
+                # It is a URL path segment; no default, because stock
+                # voices differ by account and expire.
+                raise ConfigError(
+                    "CARE_VOICE=on needs ELEVENLABS_VOICE_ID, a stock "
+                    "voice id (letters and digits)")
 
         # Durable run execution. Web requests enqueue and replay; this fixed
         # worker pool performs inference outside Gunicorn request threads.

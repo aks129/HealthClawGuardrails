@@ -45,6 +45,36 @@ SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
                 "you.")
 
 
+def sample_frame(who: str = "") -> str:
+    """The sample line for these records. `who` is hub.relation_of the
+    person they stand in for ("your parent"), empty for the holder's own:
+    Mom's chat said "not yours" to someone asking about Mom (FHI-44). The
+    line opens every answer, so the model reads it back as history: the
+    relationship only, never the nickname."""
+    if not who:
+        return SAMPLE_FRAME
+    return (f"These are made-up records. Nothing here is about {who}, or "
+            "about you.")
+
+
+def under_banner(text: str, frame: str = SAMPLE_FRAME) -> str:
+    """A sample answer as the web chat shows it under its sticky banner:
+    without the worker's leading copy of `frame` (sample_frame), so the
+    line shows once per view. Only that exact copy on its own line, and
+    never down to nothing. Called only where the banner is rendered on the
+    page.
+
+    The holder's SAMPLE_FRAME goes by the same rule in every chat: answers
+    stored before sample_frame named the person open with it, and it would
+    show under Mom's banner (QA and security review of #952, L1)."""
+    for line in dict.fromkeys((frame, SAMPLE_FRAME)):
+        lead = line + "\n\n"
+        rest = text[len(lead):] if text.startswith(lead) else ""
+        if rest.strip():
+            return rest
+    return text
+
+
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
 #: True before and after #565 is approved: a connection made before the

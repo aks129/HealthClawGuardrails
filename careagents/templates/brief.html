@@ -19,7 +19,7 @@
          sends both; this page does not show them. #}
       <div class="hub-sub">{% if sample_line %}A snapshot of these made-up records, to show what a visit brief looks like.{% else %}A snapshot of your records to bring to your visit.{% endif %}</div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;margin-top:4px">
+    <div class="hub-head-actions">
       <a class="pill" href="/chat?agent={{ agent_id|urlencode }}">← chat</a>
       <a class="pill" href="/home">hub</a>
     </div>
@@ -89,7 +89,7 @@
     <div class="section-head"><h2>Recent labs</h2></div>
     {% set fields = sections.get('labs', []) %}
     {% if fields %}
-    <div class="brief-section">
+    <div class="brief-section brief-labs">
       {% for f in fields %}
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>

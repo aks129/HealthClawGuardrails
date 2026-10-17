@@ -9,7 +9,12 @@
 <main class="setup-wrap">
   <div class="setup-card beta-page">
     <h1>Help us test CareAgents</h1>
-    {% if ref %}
+    {% if invite %}
+    {# A personal invite link (careagents/invites.py). The inviter's own
+       first name if they gave one, and nothing else about them. #}
+    <p class="beta-open">{% if invite.first_name %}{{ invite.first_name }} invited you{% else %}Someone you know invited you{% endif %}
+      to try CareAgents. It is free during the beta.</p>
+    {% elif ref %}
     <p class="beta-open">Someone you know sent you this link. CareAgents is
       free during the beta.</p>
     {% else %}
@@ -18,13 +23,18 @@
     <p>CareAgents is an assistant that reads health records and drafts
       paperwork, and you approve anything it sends. It is not a doctor, and
       it does not give medical advice.</p>
+    {% if invite and invite.real %}
+    <p id="beta-records-line">You start on made-up sample records. After
+      that, you can connect your own. Trying it takes about 15 minutes.</p>
+    {% else %}
     <p>During the beta you use made-up sample records, not your own. It takes
       about 15 minutes.</p>
+    {% endif %}
 
     <ol class="beta-steps">
       <li id="beta-step-1"><b>Sign up with your email.</b></li>
-      <li id="beta-step-2"><b>Pick the made-up sample records</b> and ask a
-        question.</li>
+      <li id="beta-step-2"><b>Tap Confirm in our email.</b> A chat on
+        made-up sample records opens first. Ask it a question.</li>
       <li id="beta-step-3"><b>Try an approval.</b> Ask it to fill in an
         intake form, then check it and approve it.</li>
     </ol>
@@ -54,6 +64,7 @@
         <input id="beta-website" name="website" tabindex="-1" autocomplete="off">
       </div>
       <input type="hidden" name="ref" value="{{ ref }}">
+      <input type="hidden" name="invite" value="{{ invite.code if invite else '' }}">
       <label class="beta-consent">
         <input type="checkbox" id="beta-consent" name="consent" required>
         <span>You can contact me about the beta.

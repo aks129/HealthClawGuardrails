@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Invite link — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# One page for a code that is unknown, revoked or full, and for too many
+   opens: which one it was is not said, so the page tells nobody whether a
+   code exists. #}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card beta-page">
+    <h1>This invite link isn't open</h1>
+    <p>It may have been used up or turned off. You can still ask to test
+      CareAgents.</p>
+    <a class="btn-primary btn-block" href="/beta">Ask to join the beta</a>
+  </div>
+</main>
+{% endblock %}

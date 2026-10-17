@@ -24,7 +24,47 @@
     <a class="pill" href="/auth?enroll=1">Add a passkey</a>
   </section>
 
-  <section class="hub-section">
+  {# One personal invite link per account (careagents/invites.py). The
+     link is the whole of what is shared; invite.js copies or shares it. #}
+  {% if invite %}
+  <section class="hub-section" id="invite-section">
+    <div class="section-head"><h2>Invite friends and family</h2></div>
+    <div class="invite-row">
+      <div class="invite-row-head">
+        <b>Your link</b>
+        <span class="invite-used">{% if invite.revoked %}turned off{% else %}{{ invite.used }} of {{ invite.cap }} used{% endif %}</span>
+      </div>
+      {% if not invite.revoked %}
+      <code class="invite-url" id="invite-url">{{ invite.url }}</code>
+      {% endif %}
+    </div>
+    {% if invite.revoked %}
+    <p class="card-note">This link no longer lets anyone join.</p>
+    {% elif invite.used >= invite.cap %}
+    <p class="card-note">All {{ invite.cap }} places on your link are used.</p>
+    {% else %}
+    <p class="card-note">Up to {{ invite.cap }} people can join with it.
+      They start on made-up records.</p>
+    <div class="invite-actions">
+      <button type="button" class="pill" id="invite-share" hidden>Share</button>
+      <button type="button" class="pill" id="invite-copy">Copy link</button>
+    </div>
+    {% endif %}
+    <p class="inline-msg" id="invite-msg" role="status" aria-live="polite" hidden></p>
+  </section>
+  {% elif link_session %}
+  {# Opened by the confirm link: the link is made only after a full sign-in
+     (#928 F6), so say how to get it rather than leave the section out. #}
+  <section class="hub-section" id="invite-section">
+    <div class="section-head"><h2>Invite friends and family</h2></div>
+    <p class="card-note">Your invite link is one step away. We'll email you a
+      code to confirm it's you, then bring you back here.</p>
+    <a class="btn-primary btn-block" id="invite-signin"
+       href="/auth?invite=1">Sign in to get your invite link</a>
+  </section>
+  {% endif %}
+
+  <section class="hub-section" id="reach">
     <div class="section-head"><h2>Where you can reach your assistant</h2></div>
     <div class="surface-row">
       <div class="surface on"><b>Web</b><span>always on</span></div>
@@ -78,6 +118,62 @@
     {% endif %}
   </section>
 
+  {# Tone and routines, one form per assistant (one assistant per person
+     spec, section 7). "Focuses on", not "Watching": nothing runs unprompted
+     (owner decision D3). assistant_settings.js posts each form. #}
+  {% if assistants %}
+  <section class="hub-section" id="assistant-settings">
+    {% set several = assistants | length > 1 %}
+    {# Plural over several, as for someone you care for (FHI-45). #}
+    <div class="section-head"><h2>{{ "Your assistants" if several else "Your assistant" }}</h2></div>
+    {% for a in assistants %}
+    <form class="assistant-settings hub-card" data-agent="{{ a.id }}">
+      <div class="hub-card-name">{{ a.name }}{% if a.for_line %}
+        {# hub.for_line, the hub's rule: never "your other", and "For
+           you" once someone you care for is here. #}
+        <span class="hub-card-sub">{{ a.for_line }}</span>{% endif %}</div>
+      {# An account from before keeps several assistants (owner decision
+         D5): each says which records it reads, so they are told apart. #}
+      {% if several and a.reads %}
+      <div class="hub-card-sub">Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}</div>
+      {% endif %}
+      <fieldset class="choice-group assistant-tone">
+        <legend>Tone</legend>
+        {% for key, p in tones %}
+        <label class="choice-row"><input type="radio" name="tone-{{ a.id }}"
+          value="{{ key }}" {% if a.persona == key %}checked{% endif %}><span>{{ p.name }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="choice-group assistant-routines">
+        <legend>Focuses on</legend>
+        {% for r in routine_catalog %}
+        <label class="choice-row"><input type="checkbox" value="{{ r.id }}"
+          {% if r.name in a.routines %}checked{% endif %}><span>{{ r.name }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <p class="card-note">These change what {{ a.name }} pays attention
+        to, not what it can read.</p>
+      <div class="card-actions">
+        <button type="submit" class="pill">Save</button>
+        {% if a.legacy_extra %}
+        <button type="button" class="pill danger assistant-remove" data-agent="{{ a.id }}">Remove</button>
+        {% endif %}
+      </div>
+      {% if a.legacy_extra %}
+      <div class="assistant-remove-confirm" hidden>
+        <p>Remove {{ a.name }}? Its chat history stays with the records.</p>
+        <div class="card-actions">
+          <button type="button" class="pill danger assistant-remove-yes">Remove</button>
+          <button type="button" class="pill assistant-remove-no">Keep</button>
+        </div>
+      </div>
+      {% endif %}
+      <p class="inline-msg" role="status" aria-live="polite" hidden></p>
+    </form>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   <section class="leaving">
     <h2>Sign out or leave</h2>
     <form method="post" action="/logout"><button class="pill">Sign out</button></form>
@@ -109,4 +205,6 @@
 {# The hub's script: its dialog, announce and delete primitives are shared,
    and every handler is guarded by the element it binds. #}
 <script src="{{ url_for('static', filename='home.js') }}"></script>
+<script src="{{ url_for('static', filename='invite.js') }}"></script>
+<script src="{{ url_for('static', filename='assistant_settings.js') }}"></script>
 {% endblock %}

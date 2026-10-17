@@ -19,6 +19,7 @@ import pytest
 from careagents.config import Config, ConfigError
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
+from tests.careagents_legacy_helpers import legacy_agent
 from tests.careagents_consent_helpers import consented
 
 
@@ -818,11 +819,9 @@ def test_two_agents_on_one_connection_have_isolated_transcripts(
         cfg, svc, monkeypatch):
     _app, c, fake, first_agent, tenant, conn_id = _chat_app(
         cfg, svc, monkeypatch)
-    second_agent = c.post("/api/agents", json={
-        "name": "Cedar",
-        "persona": "calm",
-        "connection_id": conn_id,
-    }).get_json()["id"]
+    # Two assistants on one connection: an account from before one
+    # assistant per person (spec PR #943, section 4).
+    second_agent = legacy_agent(svc, conn_id, "Cedar")
 
     _turn(c, first_agent, "only Juniper should see this")
     _turn(c, second_agent, "only Cedar should see this")
@@ -1899,8 +1898,8 @@ def test_a_truncated_list_says_so_rather_than_looking_complete():
 
     marker = [i for i in items if i.get("truncated")]
     assert marker, "a truncated list must carry a truncation marker"
-    assert marker[0]["total"] == 30
-    assert marker[0]["shown"] == 12
+    # No counts to quote back at the patient (#939).
+    assert "total" not in marker[0] and "shown" not in marker[0]
     # Must not be mistakable for a record.
     assert "name" not in marker[0] and "type" not in marker[0]
     assert "complete" in marker[0]["note"].lower()
@@ -1927,8 +1926,10 @@ def test_truncation_total_ignores_operation_outcomes():
                              "code": {"text": f"C{i}"}}} for i in range(13)]
     entries.append({"resource": {"resourceType": "OperationOutcome"}})
     items = _summarize_bundle({"entry": entries})
-    marker = [i for i in items if i.get("truncated")][0]
-    assert marker["total"] == 13
+    assert [i for i in items if i.get("truncated")]
+    # Twelve records and an outcome fit: no records are promised.
+    items = _summarize_bundle({"entry": entries[1:]})
+    assert not [i for i in items if i.get("truncated")]
 
 
 def test_safety_core_forbids_presenting_a_truncated_list_as_complete():
@@ -2295,6 +2296,20 @@ class FakeClient:
 
     def tenant_has_records(self, tenant):
         return True
+
+    # Settable: whether a Fasten export is still being written (QA940-F1).
+    importing = False
+
+    def fasten_import_running(self, tenant):
+        return self.importing
+
+    # Settable: the newest Fasten job failed (QA940 round 3).
+    import_failed = False
+
+    def fasten_import_state(self, tenant):
+        if self.importing:
+            return "running"
+        return "failed" if self.import_failed else "none"
 
     # Settable so a test can simulate a refresh pulling additional records.
     counted = 100
@@ -2908,11 +2923,12 @@ def test_sample_connection_agent_and_chat_gate(app, svc, monkeypatch):
     r = c.post("/api/connections/sample")
     assert r.status_code == 200 and r.get_json()["status"] == "active"
     conn_id = r.get_json()["id"]
+    # The sample made the assistant; asking again answers with it.
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.get_json()["existing"] is True
     agent_id = r.get_json()["id"]
-    assert b"Ada" in c.get(f"/chat?agent={agent_id}").data
+    assert b"Juniper" in c.get(f"/chat?agent={agent_id}").data
     # unknown agent → redirect to hub
     assert c.get("/chat?agent=nope").status_code == 302
     # chat api rejects an agent that isn't the account's
@@ -3757,7 +3773,8 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     created = c.post("/api/connections/sample").get_json()
     conn = created["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 200
     d = r.get_json()
     assert d["deleted"] is True and d["rows_deleted"] == 42
@@ -3857,7 +3874,8 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
 
-    r = c.delete(f"/api/connections/{conn}")
+    r = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"})
     assert r.status_code == 502
     body = r.get_json()
     # #586: the purge raises on any non-200 and on a lost answer, so the
@@ -5214,16 +5232,16 @@ def test_connect_and_reauth_links_never_use_the_internal_base():
     from careagents.healthclaw import HealthClawClient
     client = HealthClawClient("https://internal.up.railway.app/", "m",
                               public_base="https://app.healthclaw.io/")
-    assert client.fasten_connect_url("t-1") == (
-        "https://app.healthclaw.io/connect/t-1")
+    assert client.fasten_connect_url("t-1").startswith(
+        "https://app.healthclaw.io/connect/t-1?src=careagents&sig=")
     assert client.wearables_connect_url("t-1", "oura").startswith(
         "https://app.healthclaw.io/wearables/oauth/start?")
     # Server-to-server stays internal.
     assert client.fhir == "https://internal.up.railway.app/r6/fhir"
     # Without a public base the client behaves as before (tests, dev).
     plain = HealthClawClient("https://internal.up.railway.app", "m")
-    assert plain.fasten_connect_url("t-1") == (
-        "https://internal.up.railway.app/connect/t-1")
+    assert plain.fasten_connect_url("t-1").startswith(
+        "https://internal.up.railway.app/connect/t-1?src=careagents&sig=")
 
 
 def test_the_app_builds_its_client_with_the_public_base(svc):
@@ -5286,11 +5304,8 @@ def test_agent_with_advisor_gets_specialized_prompt(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/sample").get_json()["id"]
-    r = c.post("/api/agents", json={"name": "Meds", "persona": "direct",
-                                    "advisor": "medication-refills",
-                                    "connection_id": conn})
-    assert r.status_code == 200
-    aid = r.get_json()["id"]
+    # A legacy assistant still carrying its advisor (spec PR #943, 2.2).
+    aid = legacy_agent(svc, conn, "Meds", "direct", "medication-refills")
     with svc.session() as s:
         from careagents.models import Account
         acct_id = s.query(Account).filter_by(
@@ -5720,7 +5735,9 @@ def test_the_timeline_endpoint_returns_series_for_the_signed_in_agent(
     body = c.get(f"/api/labs/timeline?agent={agent_id}").get_json()
     names = [s["name"] for s in body["series"]]
     assert "Total cholesterol" in names and "Hemoglobin A1c" in names
-    assert body["disclaimer"] == "Decision support."
+    # The plain footnote, not the engine's clinician wording (#942).
+    from careagents.app import CHART_FOOTNOTE
+    assert body["disclaimer"] == CHART_FOOTNOTE
 
 
 def test_the_timeline_endpoint_narrows_to_the_topic_asked_about(
@@ -5756,12 +5773,14 @@ def test_the_timeline_endpoint_degrades_rather_than_500ing(
     assert c.get(f"/api/labs/timeline?agent={agent_id}").status_code == 502
 
 
-def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
+def test_show_lab_timeline_emits_a_card_and_gives_first_latest_direction(
         cfg, svc, monkeypatch):
-    """The chart carries the values. Handing them to the model too invites it
-    to restate every number and to narrate a direction from a single point.
+    """The chart carries every value. The model gets the first and latest
+    reading and the direction, worked out here: given only the chart's
+    shape, it would not say how a result changed (#937). Not every value,
+    and never a direction from a single point.
 
-    MUTATION: return the readings in the tool result -> red.
+    MUTATION: return every reading in the tool result -> red.
     """
     import json as _json
 
@@ -5777,9 +5796,13 @@ def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
     assert events == [{"type": "card", "kind": "lab-timeline",
                        "topic": "cholesterol"}]
     assert out["chart_shown"] is True
-    assert out["series"] == [{"name": "Total cholesterol", "readings": 2,
-                              "trend_plottable": True}]
-    assert "244" not in _json.dumps(out), "the tool handed the model raw values"
+    assert out["series"] == [{
+        "name": "Total cholesterol", "readings": 2, "trend_plottable": True,
+        "first": {"date": "January 1, 2025", "value": 210, "unit": "mg/dL"},
+        "latest": {"date": "March 1, 2026", "value": 244, "unit": "mg/dL"},
+        "direction": "higher"}]
+    assert "readings\": [" not in _json.dumps(out), \
+        "the tool handed the model every reading"
 
 
 def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
@@ -6086,7 +6109,8 @@ def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
         {"resourceType": "Bundle", "type": "collection", "entry": []}),
         content_type="application/fhir+json")
     assert r.status_code == 200
-    assert c.delete(f"/api/connections/{fasten['id']}").status_code == 200
+    assert c.delete(f"/api/connections/{fasten['id']}",
+                 json={"confirm": "DELETE"}).status_code == 200
 
 
 def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,

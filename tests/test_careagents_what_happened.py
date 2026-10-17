@@ -308,7 +308,8 @@ def test_records_delete_uses_the_count_the_card_showed(
     fake = PurgeClient({"resources": 15, "action_events": 7})
     c, _, conn = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     svc.mark_synced(conn, 9)
-    body = c.delete(f"/api/connections/{conn}").get_json()
+    body = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()
     assert body["deleted"] is True
     assert body["records_deleted"] == 9
     assert body["message"].startswith("All 9 records in Sample records "
@@ -324,7 +325,8 @@ def test_records_delete_without_a_count_does_not_invent_one(
     with svc.session() as s:
         from careagents.models import Connection
         s.query(Connection).filter_by(id=conn).update({"last_count": None})
-    body = c.delete(f"/api/connections/{conn}").get_json()
+    body = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()
     assert body["deleted"] is True
     assert body["records_deleted"] is None
     assert body["message"].startswith("Your records in Sample records were "
@@ -335,7 +337,8 @@ def test_records_delete_without_a_count_does_not_invent_one(
 def test_one_record_is_singular(cfg, svc, monkeypatch):
     c, _, conn = _signed_in(_app(cfg, svc, PurgeClient({})), svc, monkeypatch)
     svc.mark_synced(conn, 1)
-    msg = c.delete(f"/api/connections/{conn}").get_json()["message"]
+    msg = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()["message"]
     assert msg.startswith("The 1 record in Sample records was deleted.")
 
 
@@ -344,7 +347,8 @@ def test_records_delete_says_the_assistant_went_with_them(
     """Deleting a connection deletes the assistants that read it. The
     patient tester found the assistant gone with nothing saying so."""
     c, _, conn = _signed_in(_app(cfg, svc, PurgeClient({})), svc, monkeypatch)
-    body = c.delete(f"/api/connections/{conn}").get_json()
+    body = c.delete(f"/api/connections/{conn}",
+                 json={"confirm": "DELETE"}).get_json()
     assert body["assistants_deleted"] == ["Juniper"]
     assert "Juniper was deleted too" in body["message"]
 

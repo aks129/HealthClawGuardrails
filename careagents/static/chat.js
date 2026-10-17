@@ -4,6 +4,9 @@
   const AGENT = window.CARE_AGENT || "";
   const CONVERSATION = window.CARE_CONVERSATION || "";
   const AGENT_NAME = window.CARE_AGENT_NAME || "Your assistant";
+  // "Mom's records" in the chat of someone the holder cares for, empty in
+  // the holder's own (FHI-44). Page text only, never sent anywhere.
+  const WHOSE = window.CARE_WHOSE || "";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -61,7 +64,9 @@
       if (m.index > last)
         parent.appendChild(document.createTextNode(text.slice(last, m.index)));
       const a = el("a", null, m[0]);
-      a.href = m[0] === "your hub" ? "/home" : "mailto:" + m[0];
+      // Both hrefs are fixed strings, never built from the matched text:
+      // a replayed bubble's text comes from the page (CodeQL 124).
+      a.href = m[0] === "your hub" ? "/home" : "mailto:contactus@healthclaw.io";
       parent.appendChild(a);
       last = LINKS.lastIndex;
     }
@@ -124,13 +129,40 @@
     return (d && typeof d.message === "string" && d.message) || PACE_TEXT;
   }
 
+  // The sample's made-up-records line is the sticky banner above the log,
+  // so a bubble does not say it again. The worker still opens every stored
+  // and texted answer with it; only that exact leading copy is dropped,
+  // only while the banner is on this page, and never down to nothing
+  // (careagents/beta.py under_banner does the same for the history).
+  function withoutFrame(text) {
+    const banner = document.querySelector(".sample-banner");
+    const frame = banner ? banner.textContent.trim() : "";
+    if (!frame || text.indexOf(frame + "\n\n") !== 0) return text;
+    const rest = text.slice(frame.length + 2);
+    return rest.trim() ? rest : text;
+  }
+
   function addAgentText(text) {
+    text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
       renderMarkdown(m, text);
       scroll();
     });
+  }
+
+  // A chat reopened from history arrives as the server's plain text
+  // (chat.html), so its markdown showed as literal asterisks (#942). The
+  // same renderer lays it out and adds back the same two links. A bubble
+  // with nothing to lay out is left as written: the greetings carry their
+  // own <strong>, which re-rendering from text would drop.
+  function renderReplayed(bubble) {
+    const text = bubble.textContent;
+    BOLD_OR_ITALIC.lastIndex = 0;
+    if (!BOLD_OR_ITALIC.test(text) &&
+        !text.split("\n").some((line) => LIST_ITEM.test(line))) return;
+    renderMarkdown(bubble, text);
   }
 
   function addChip(label) {
@@ -159,10 +191,12 @@
       c.appendChild(el("p", null,
         "This waits for your answer. Nothing happens until you approve it."));
     } else {
-      c.appendChild(el("h4", null, "Review & approve your intake form"));
+      c.appendChild(el("h4", null, WHOSE ? "Review & approve the intake form"
+                                         : "Review & approve your intake form"));
       c.appendChild(el("p", null,
-        AGENT_NAME + " filled it in from your records. Check each " +
-        "medication and allergy. Nothing is made until you approve."));
+        AGENT_NAME + " filled it in from " + (WHOSE || "your records") +
+        ". Check each medication and allergy. Nothing is made until you " +
+        "approve."));
     }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
@@ -180,7 +214,8 @@
 
   function addPdfCard(url) {
     const c = el("div", "card pdf");
-    c.appendChild(el("h4", null, "Your intake form is ready"));
+    c.appendChild(el("h4", null, WHOSE ? "The intake form is ready"
+                                       : "Your intake form is ready"));
     c.appendChild(el("p", null,
       "You checked it, and the PDF says so. The link works for one day."));
     const a = el("a", "btn-primary", "Open the PDF");
@@ -204,6 +239,29 @@
     return node;
   }
 
+  // The three y-axis labels, top to bottom, with the fewest decimals (up to
+  // two) that keep them apart. Whole numbers read an A1c chart as
+  // "9 / 9 / 8" (#942).
+  function axisLabels(lo, hi) {
+    const values = [hi, (hi + lo) / 2, lo];
+    let labels = [];
+    for (let digits = 0; digits <= 2; digits++) {
+      labels = values.map((v) => v.toFixed(digits));
+      if (new Set(labels).size === labels.length) break;
+    }
+    return labels;
+  }
+
+  // "Apr 21, 2025" for a real YYYY-MM-DD, anything else as it came. A fixed
+  // month list, so the words do not change with the browser's locale.
+  const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
+                        "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function shortDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    if (!m || +m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31) return iso;
+    return SHORT_MONTHS[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
+  }
+
   function drawSeries(series) {
     const W = 520, H = 150, padL = 40, padR = 10, padT = 12, padB = 22;
     const pts = series.readings.filter((r) => r.date);
@@ -224,12 +282,13 @@
     const x = (t) => padL + ((t - t0) / (t1 - t0)) * (W - padL - padR);
     const y = (v) => padT + ((hi - v) / (hi - lo)) * (H - padT - padB);
 
-    [0, 0.5, 1].forEach((frac) => {
+    const yLabels = axisLabels(lo, hi);
+    [0, 0.5, 1].forEach((frac, i) => {
       const gy = padT + frac * (H - padT - padB);
       svg.appendChild(svgEl("line", {
         class: "spark-grid", x1: padL, x2: W - padR, y1: gy, y2: gy }));
       const label = svgEl("text", { class: "spark-axis", x: 2, y: gy + 3 });
-      label.textContent = (hi - frac * (hi - lo)).toFixed(0);
+      label.textContent = yLabels[i];
       svg.appendChild(label);
     });
 
@@ -246,7 +305,7 @@
         class: "spark-pt " + (p.flag || "IND"),
         cx: x(times[i]).toFixed(1), cy: y(p.value).toFixed(1), r: 4 });
       const title = document.createElementNS(SVG_NS, "title");
-      title.textContent = p.date + ": " + p.value + " " + (p.unit || "") +
+      title.textContent = shortDate(p.date) + ": " + p.value + " " + (p.unit || "") +
         " (" + (p.flag || "IND") + ")";
       dot.appendChild(title);
       svg.appendChild(dot);
@@ -256,7 +315,7 @@
       const label = svgEl("text", {
         class: "spark-axis", x: x(pair[0]), y: H - 5,
         "text-anchor": pair[1] === "end" ? "end" : "start" });
-      label.textContent = new Date(pair[0]).toISOString().slice(0, 10);
+      label.textContent = shortDate(new Date(pair[0]).toISOString().slice(0, 10));
       svg.appendChild(label);
     });
     return svg;
@@ -374,17 +433,41 @@
           // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
           typing.remove(); addAgentText(ev.text); state.done = true;
+          state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
+          // An answer came: the next step, if the page offers one.
+          if (ev.status === "completed") {
+            const next = document.getElementById("connect-next");
+            if (next) next.hidden = false;
+          }
         }
       }
     }
   }
 
+  // The greeting's "Yes" and the ideas under it. Hidden while a turn runs,
+  // and back under an error, so trying again is one tap.
+  const suggestions = [document.getElementById("quick"), starters]
+    .filter(Boolean);
+  function hideSuggestions() {
+    suggestions.forEach((n) => { n.hidden = true; });
+  }
+  function showSuggestions() {
+    // The greeting's answer goes back to the end of the log; the starters
+    // live above the message box and stay there.
+    suggestions.forEach((n) => {
+      n.hidden = false;
+      if (n !== starters) log.appendChild(n);
+    });
+    scroll();
+  }
+
   async function send(text) {
     if (busy || !text.trim()) return;
     busy = true; sendBtn.disabled = true;
-    if (starters) starters.remove();
+    hideSuggestions();
+    let failed = false;
     addUser(text);
     box.value = "";
     const typing = addTyping();
@@ -437,13 +520,19 @@
         if (!state.done) await pause(400);
       }
       if (typing.parentNode) typing.remove();
+      failed = state.failed === true;
+      if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
       addAgentText("Connection hiccup — try that again.");
+      showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();
     }
   }
+
+  // The answers replayed from history, laid out as they were live (#942).
+  log.querySelectorAll(".msg.agent").forEach(renderReplayed);
 
   // Requests still waiting when the page loaded, read from the engine by
   // the server: history keeps only text, so without this a reload lost the
@@ -480,12 +569,14 @@
   composer.addEventListener("submit", (e) => { e.preventDefault(); send(box.value); });
   document.querySelectorAll(".starter").forEach((b) =>
     b.addEventListener("click", () => send(b.textContent)));
+  document.querySelectorAll(".quick-reply").forEach((b) =>
+    b.addEventListener("click", () => send(b.dataset.ask || b.textContent)));
 
-  fetch("/api/trust").then((r) => r.json()).then((d) => {
-    const pill = document.getElementById("trust-pill");
-    const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "Safety grade: " + grade;
-  }).catch(() => {});
+  // The ⋯ menu closes on a tap anywhere else, as a phone menu does.
+  const menu = document.querySelector(".chat-menu");
+  if (menu) document.addEventListener("click", (e) => {
+    if (menu.open && !menu.contains(e.target)) menu.open = false;
+  });
 
   box.focus();
 })();

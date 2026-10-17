@@ -14,8 +14,9 @@ from typing import Any
 from flask import g, request, jsonify, session
 from r6 import constant_time
 from r6.access import Scope, Tenant, TenantSource, has_grant
+from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
 from r6.read_auth import TENANT_SESSION_KEY
-from r6.runtime_config import resolve_app_env
+from r6.runtime_config import internal_mint_secret, resolve_app_env
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def _tenant_claim_is_authenticated(tenant_id):
     guard untestable, since the suite runs with no secret set. A limiter that
     is only armed in production is a limiter nobody can prove works.
     """
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    mint_secret = internal_mint_secret()
     if mint_secret and constant_time.equal(
             request.headers.get('X-Internal-Secret', ''), mint_secret):
         return True
@@ -158,12 +159,29 @@ def _tenant_claim_is_authenticated(tenant_id):
     # authorization result), so the try/except stays here, at the one site
     # that has a reason to survive it. The tenant is the raw X-Tenant-Id the
     # caller claimed, exactly what the validator bound the token to before.
+    #
+    # Confirm and decline are the two endpoints whose credential is the
+    # action-approval token, which every audience-free question now refuses
+    # (#962). Asked first here, and only here, with that audience, so a
+    # legitimate approval keys by its tenant (not the shared CareAgents
+    # egress IP) and logs no refusal. Nowhere else does an approval token
+    # prove a tenant.
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
     try:
-        return has_grant(scope=Scope.TENANT_BOUND,
-                         tenant=Tenant(id=tenant_id, source=TenantSource.HEADER),
+        if (request.endpoint in _APPROVAL_ENDPOINTS
+                and has_grant(scope=Scope.TENANT_BOUND, tenant=tenant,
+                              audience=ACTION_APPROVAL_AUDIENCE,
+                              also_bearer=True) is not None):
+            return True
+        return has_grant(scope=Scope.TENANT_BOUND, tenant=tenant,
                          also_bearer=True) is not None
     except Exception:  # noqa: BLE001 — never fail a request from the limiter
         return False
+
+
+#: The endpoints that take the action-approval credential (r6/actions/routes.py).
+_APPROVAL_ENDPOINTS = frozenset({'actions.confirm_action',
+                                 'actions.decline_action'})
 
 
 def rate_limit_key():

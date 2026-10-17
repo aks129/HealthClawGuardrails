@@ -409,8 +409,11 @@ def test_the_safety_pill_is_a_link_to_the_safety_page(cfg, svc, monkeypatch):  #
     assert pill, "the pill is not a link"
     assert 'href="/safety"' in pill.group(0)
     assert "_blank" not in pill.group(0)          # the same tab
+    # Named for what it tells a patient, and left as written: the grade
+    # itself is on /safety (patient walk on #920, F5).
+    assert "How we keep you safe</a>" in page
     js = (ROOT / "careagents" / "static" / "chat.js").read_text()
-    assert 'pill.textContent = "Safety grade: " + grade;' in js
+    assert "trust-pill" not in js
 
 
 def test_the_safety_page_says_what_is_tested_and_the_grade(app, svc):  # noqa: F811
@@ -547,9 +550,11 @@ def test_the_review_card_names_the_assistant(cfg, svc, monkeypatch):  # noqa: F8
     page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
     assert 'window.CARE_AGENT_NAME = "Juniper";' in page
     js = (ROOT / "careagents" / "static" / "chat.js").read_text()
-    assert ('AGENT_NAME + " filled it in from your records. Check each " +\n'
-            '        "medication and allergy. Nothing is made until you '
-            'approve."') in js
+    # The holder's words are unchanged; someone they care for is named
+    # instead of "your records" (FHI-44).
+    assert ('AGENT_NAME + " filled it in from " + (WHOSE || "your records") +'
+            '\n        ". Check each medication and allergy. Nothing is made '
+            'until you " +\n        "approve."') in js
 
 
 def test_chat_bubbles_carry_no_stray_whitespace(cfg, svc, monkeypatch):  # noqa: F811

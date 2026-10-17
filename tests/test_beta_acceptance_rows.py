@@ -66,8 +66,8 @@ class _Browser:
     def post(self, url, json=None, timeout=None, stream=False, **_):
         return _to_requests(self.client.post(self._path(url), json=json))
 
-    def delete(self, url, timeout=None, **_):
-        return _to_requests(self.client.delete(self._path(url)))
+    def delete(self, url, json=None, timeout=None, **_):
+        return _to_requests(self.client.delete(self._path(url), json=json))
 
 
 class Chain:

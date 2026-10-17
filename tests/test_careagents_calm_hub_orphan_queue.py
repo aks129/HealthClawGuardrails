@@ -45,7 +45,10 @@ def test_a_request_waiting_after_its_assistant_is_deleted_is_not_zero(
     before = c.get("/api/approvals/count").get_json()
     assert before["count"] >= 1, "precondition: the tenant has a request"
 
-    assert c.delete(f"/api/agents/{agent}").status_code == 200
+    # The hub no longer removes a primary (SEC951-L1); an account from
+    # before could still be left without one, so the service does it here.
+    with c.session_transaction() as s:
+        assert svc.delete_agent(s["account_id"], agent)
 
     r = c.get("/api/approvals/count")
     body = r.get_json()
@@ -59,7 +62,9 @@ def test_an_orphaned_queue_is_counted_and_says_how_to_reach_it(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     agent = c.post("/api/connections/sample").get_json()["agent_id"]
-    assert c.delete(f"/api/agents/{agent}").status_code == 200
+    # As above: a primary goes only through the service (SEC951-L1).
+    with c.session_transaction() as s:
+        assert svc.delete_agent(s["account_id"], agent)
 
     body = c.get("/api/approvals/count").get_json()
     assert body["count"] >= 1

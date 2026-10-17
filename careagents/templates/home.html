@@ -18,14 +18,6 @@
      a delete's count, a disconnect's result (#847). #}
   <p class="hub-notice" id="hub-notice" role="status" aria-live="polite" hidden></p>
 
-  {# 1. Waiting for you. Always shown. It starts as "Checking" and home.js
-     fills it from /api/approvals/count. A failed count says so and is
-     never rendered as zero (calm hub spec section 3). #}
-  <section class="waiting" id="waiting" data-state="checking" aria-live="polite">
-    <h2>Waiting for you</h2>
-    <p class="waiting-line">Checking for requests…</p>
-  </section>
-
   {# An operator paused this account (beta spec 4.6). One calm line; the
      record cards below say Paused and offer no Refresh or Upload. #}
   {% if paused %}
@@ -47,26 +39,34 @@
   </section>
   {% endif %}
 
-  {% if switch_prompt %}
-  <section class="switch-prompt" id="switch-prompt"
-           data-agent="{{ switch_prompt.agent_id }}"
-           data-conn="{{ switch_prompt.connection_id }}">
-    <p>Switch {{ switch_prompt.agent_name }} to your records?</p>
-    <button type="button" class="btn-primary" id="switch-yes">Switch</button>
-    <button type="button" class="linkish" id="switch-later">Not now</button>
-    <span class="inline-msg" id="switch-msg" role="status" aria-live="polite" hidden></span>
-  </section>
-  {% endif %}
-
-  <!-- 2. YOUR ASSISTANT -->
-  <section class="hub-section">
-    <div class="section-head"><h2>Your assistant</h2></div>
+  {# 1. Ask your assistant: the reason to be here, so it comes first
+     (hub critique 2026-10). How many assistants there are, and what adding
+     one means, belong to a separate design pass. #}
+  <section class="hub-section ask" id="ask-section">
+    <div class="section-head"><h2>Ask your assistant</h2></div>
     <div class="card-grid" id="agents" data-records='{{ hub.move_choices | tojson }}'>
-      {% for a in hub.agents %}
-      <div class="hub-card agent-card" data-agent="{{ a.id }}">
+      {# One card per assistant, from hub.assistants (one assistant per
+         person spec, 4 and 8): whose it is, its tone, and what it focuses
+         on, so no two cards look the same. The holder's come first. An
+         older account's extra assistants follow its primary, each with
+         Remove; the primary has none (owner decision D5). Every label is
+         escaped text: the nickname is the holder's own words. #}
+      {% for a in people_view.assistants %}
+      {% set choices = hub.move_choices_by_person.get(a.person.id, []) %}
+      <div class="hub-card agent-card{% if a.legacy_extra %} is-extra{% endif %}" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
-        <div class="hub-card-sub">{% if a.reads %}Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}{% endif %}</div>
-        <p class="card-note">Visit brief: a one-page summary of {{ "these made-up records, to show how it works" if a.reads == "Sample records" else "your records to bring to an appointment" }}.</p>
+        {% if a.for_line %}<div class="agent-for">{{ a.for_line }}</div>{% endif %}
+        {# A label that starts with a plain noun reads mid-sentence in lower
+           case: "Reads records from your doctor", not "Reads Records". #}
+        <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads[:1]|lower ~ a.reads[1:] if a.reads.split()[0] in ("Sample", "Records", "Uploaded") else a.reads }}{% endif %}</div>
+        {# "Focuses on", never "Watching": nothing runs unprompted (D3). #}
+        <p class="agent-traits"><span>Tone: {{ a.tone_word }}</span>{% if a.focuses_on %}<span>{{ a.focuses_on }}</span>{% endif %}
+          <a href="/settings#assistant-settings">Change in Settings</a></p>
+        {% if a.legacy_extra %}
+        <p class="card-note">An extra assistant from before. You can keep it or remove it.</p>
+        {% else %}
+        <p class="card-note">Visit brief: a one-page summary of {% if a.reads == "Sample records" %}these made-up records, to show how it works{% elif a.person.kind == "other" %}their records to bring to an appointment{% else %}your records to bring to an appointment{% endif %}.</p>
+        {% endif %}
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
           <a class="pill" href="/brief?agent={{ a.id }}">Visit brief</a>
@@ -74,12 +74,16 @@
             <summary>More</summary>
             <button type="button" class="agent-rename" data-agent="{{ a.id }}"
                     data-name="{{ a.name }}">Rename</button>
-            {% if hub.active_records | length > 1 %}
+            {# Only the same person's records (spec section 9). #}
+            {% if choices | length > 1 %}
             <button type="button" class="agent-move" data-agent="{{ a.id }}"
-                    data-conn="{{ a.connection_id }}">Change records</button>
+                    data-conn="{{ a.connection_id }}"
+                    data-records='{{ choices | tojson }}'>Change records</button>
             {% endif %}
-            <button type="button" class="agent-delete" data-agent="{{ a.id }}"
-                    data-name="{{ a.name }}">Delete</button>
+            {% if a.legacy_extra %}
+            <button type="button" class="agent-remove" data-agent="{{ a.id }}"
+                    data-name="{{ a.name }}">Remove</button>
+            {% endif %}
           </details>
         </div>
         <span class="agent-msg inline-msg" role="status" aria-live="polite" hidden></span>
@@ -93,80 +97,229 @@
           <button type="button" class="linkish" id="start-chat" data-conn="{{ hub.active_records[0].id }}">Start a chat</button>
           <span class="inline-msg" id="start-chat-msg" role="status" aria-live="polite" hidden></span></div>
         {% else %}
-        <div class="empty">Your assistant appears here once records are connected.</div>
+        {# A template, not a row (spec section 3): the assistant is made
+           when the first records arrive. #}
+        <div class="hub-card agent-card is-waiting">
+          <div class="hub-card-name">Your assistant, waiting for records</div>
+          {# Paused: "Add a source" is left out, so point at nothing. #}
+          {% if not paused %}<p class="card-note">Add a source below. Made-up
+            records work too, to see how it works.</p>{% endif %}
+        </div>
         {% endif %}
       {% endif %}
     </div>
+    {# Someone you care for (spec section 6), on made-up records only until
+       counsel answers (owner decision D1), behind CARE_PEOPLE. Paused:
+       nothing can be added, so it is left out. The server checks the
+       relationship and the nickname; this form only offers them. #}
+    {# Only once the holder has an assistant of their own (#951). #}
+    {% if people_enabled and not paused and people_view.has_own %}
+    <details class="add-person" id="add-person">
+      <summary>Add someone you care for</summary>
+      <form class="add-person-form" id="add-person-form" novalidate>
+        <fieldset class="choice-group">
+          <legend>Who are they to you?</legend>
+          {% for value, word in [("parent", "A parent"), ("child", "A child"), ("partner", "A partner"), ("other", "Someone else")] %}
+          <label class="choice-row"><input type="radio" name="relationship" value="{{ value }}"><span>{{ word }}</span></label>
+          {% endfor %}
+        </fieldset>
+        <label class="field-label" for="add-person-nickname">A nickname, like Mom <span class="field-optional">(optional)</span></label>
+        <input class="field" id="add-person-nickname" maxlength="24" autocomplete="off">
+        <p class="card-note">They get their own assistant on made-up
+          records, so you can see how it works. Real records for someone
+          you care for aren't open yet.</p>
+        <button type="submit" class="btn-primary btn-block">Add them</button>
+        <span class="inline-msg" id="add-person-msg" role="status" aria-live="polite" hidden></span>
+      </form>
+    </details>
+    {% endif %}
   </section>
 
-  {# Sample accounts the owner added to the Sendblue sandbox, while Sendblue
-     is on (beta_signup.text_tile): nobody else's text is answered. The
-     same texting instruction as the "Text hi" email. #}
-  {% if text_tile %}
-  <section class="hub-section" id="text-tile">
+  {# 2. Waiting for your OK. Always shown. It starts as "Checking" and home.js
+     fills it from /api/approvals/count. A failed count says so and is
+     never rendered as zero (calm hub spec section 3). #}
+  <section class="waiting" id="waiting" data-state="checking" aria-live="polite">
+    <h2>Waiting for your OK</h2>
+    <p class="waiting-line">Checking for requests…</p>
+  </section>
+
+  {# 3. What's new: only what really changed. A real source's records
+     arriving, and the one question that follows it. Left out otherwise:
+     an "Updated today" stamp is not news (hub critique 2026-10). #}
+  {% set news = hub.news | rejectattr('id', 'equalto', switch_prompt.connection_id if switch_prompt else '') | list %}
+  {% if switch_prompt or news %}
+  <section class="hub-section whats-new" id="whats-new">
+    <div class="section-head"><h2>What's new in your records</h2></div>
+    {% for n in news %}
+    <p class="news-line">{{ n.line }}</p>
+    {% endfor %}
+    {% if switch_prompt %}
+  <div class="switch-prompt" id="switch-prompt"
+           data-agent="{{ switch_prompt.agent_id }}"
+           data-conn="{{ switch_prompt.connection_id }}">
+    {# The next step once records land (#937): say they arrived, with the
+       count when there is one, and make switching the one primary button. #}
+    <p><b>Your records are here.</b>{% if switch_prompt.count_line %} {{ switch_prompt.count_line }} arrived.{% endif %}
+      {{ switch_prompt.agent_name }} still reads the made-up records. Switch to yours?</p>
+    <button type="button" class="btn-primary" id="switch-yes">Switch {{ switch_prompt.agent_name }} to your records</button>
+    <button type="button" class="linkish" id="switch-later">Not now</button>
+    <span class="inline-msg" id="switch-msg" role="status" aria-live="polite" hidden></span>
+  </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# The next step once made-up records have answered a question, for an
+     account the real-records gate already opens (app.py _connect_next).
+     The same tile as the menu's: the consent card, then Fasten. #}
+  {% if connect_next %}
+  <section class="hub-section connect-next" id="connect-records">
     <div class="hub-card">
-      <div class="hub-card-name">Text your assistant</div>
-      <p class="card-note">Text hi to <a href="{{ text_tile.sms }}">{{ text_tile.number }}</a>. You'll get a link back to sign in, then your assistant answers there.</p>
-      <p class="card-note">Your texts pass through a texting company we use, so only use the made-up records here.</p>
+      <div class="hub-card-name">Connect your records</div>
+      <p class="card-note">You've seen how it works on made-up records. Now
+        bring in your own from your doctor or hospital. You'll read the
+        terms first, and you sign in on their site, not ours.</p>
+      {% if link_session %}
+      {# Opened by the confirm link: a code first, then back here. #}
+      <a class="btn-primary btn-block" id="connect-signin"
+         href="/auth?connect=1">Sign in again to connect your records</a>
+      {# Said before the tap, not after it (#937): the code is the step. #}
+      <p class="card-note" id="connect-code-note">We'll email you a code to
+        sign in. Then you'll come back here.</p>
+      {% else %}
+      <button type="button" class="btn-primary btn-block connector-tile"
+              data-connector="fasten" data-consent="1">Connect your records</button>
+      {% endif %}
     </div>
   </section>
   {% endif %}
 
-  <!-- 3. YOUR RECORDS -->
-  <section class="hub-section" id="records-section">
-    <div class="section-head"><h2>Your records</h2></div>
-    <div class="card-grid" id="connections">
-      {% for c in hub.records %}
+  {# 4. Where you can reach your assistant (the same words as Settings). The web always; iMessage as this account
+     can use it. No email channel exists, so none is listed. Setting up a
+     phone stays on Settings: no second control to bind here. #}
+  <section class="hub-section reach" id="reach-section">
+    <div class="section-head"><h2>Where you can reach your assistant</h2></div>
+    <ul class="reach-list">
+      <li><b>Web</b> <span>Here on the web, any time.</span></li>
+      {% if reach_phones %}
+      <li><b>iMessage</b> <span>Connected: {{ reach_phones | join(", ") }}.
+        <a href="/settings#reach">Manage</a></span></li>
+      {% elif text_tile %}
+      {# Sample accounts the owner added to the Sendblue sandbox, while
+         Sendblue is on (beta_signup.text_tile): nobody else's text is
+         answered. The same texting instruction as the "Text hi" email. #}
+      <li id="text-tile"><b>iMessage</b> <span>Text your assistant.
+        Text hi to <a href="{{ text_tile.sms }}">{{ text_tile.number }}</a>. You'll get a link back to sign in, then your assistant answers there.
+        <small>Your texts pass through a texting company we use, so only use the made-up records here.</small></span></li>
+      {% elif imessage_handle and hub.agents %}
+      <li><b>iMessage</b> <span>Text your assistant from your phone.
+        <a href="/settings#reach">Set it up in Settings</a></span></li>
+      {% endif %}
+    </ul>
+  </section>
+
+  {# One compact row per source with ONE status (hub critique 2026-10):
+     the chip is the only status a row shows, chosen by hub.status_chip.
+     Refresh, Disconnect and Delete wait in the row's menu; Delete is
+     never a bare red button, and each still asks before it acts. #}
+  {% macro source_row(c) %}
       <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}"
            data-conn="{{ c.id }}" data-kind="{{ c.kind }}" data-status="{{ c.status }}">
-        <div class="hub-card-name">{{ c.label }}</div>
-        <div class="hub-card-sub">{{ c.provider or '' }}</div>
+        {% set page = connect_pages.get(c.id) %}
+        {% set st = chip(c, page, paused) %}
+        <div class="source-head">
+          <div class="hub-card-name">{{ c.label }}</div>
+          <span class="status status-{{ st.cls }}">{{ st.word }}</span>
+        </div>
+        {# hub.subtitle: the provider, never a status word. #}
+        {# Whose records, once someone the holder cares for is here (#951). #}
+        {% if c.whose %}<div class="agent-for source-whose">{{ c.whose }}</div>{% endif %}
+        <div class="hub-card-sub">{{ c.sub }}</div>
         {% if c.is_sample %}<span class="badge-sample">Made-up records</span>{% endif %}
-        {% if paused %}
-        <span class="status status-paused">Paused</span>
-        {% else %}
-        <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
-        {% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
-        {% if paused %}
-        {# Paused: nothing new can be added, so no button that would fail. #}
-        {% elif c.kind == 'direct' %}
+        {% if page and page.state == 'running' %}
+        {# Static: no number and no progress claim (QA940 round 3). #}
+        <p class="card-note">Your records are on their way. This can take up to 45 minutes.</p>
+        {% elif page and page.state == 'failed' %}
+        <p class="card-note">Bringing in your records didn't work. <a class="open-connect-page" href="{{ page.url }}"
+             target="_blank" rel="noopener">Try connecting again</a></p>
+        {% elif page %}
+        <p class="card-note">Not finished? <a class="open-connect-page" href="{{ page.url }}"
+             target="_blank" rel="noopener">Open the connect page</a></p>
+        {% endif %}
+        {% if c.kind == 'direct' and not paused %}
+        {# An upload row's one job, so it stays in view. Paused: nothing new
+           can be added, so no button that would fail. #}
         <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
-        {% elif not c.is_sample %}
-        <button type="button" class="conn-refresh" data-conn="{{ c.id }}">Refresh</button>
         {% endif %}
-        {% if not c.is_sample %}
-        <button type="button" class="conn-disconnect" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}" data-readers="{{ c.readers }}"
-                title="Stop new records arriving; keep what's already here">Disconnect</button>
-        {% endif %}
-        <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
+        <details class="card-menu source-menu">
+          <summary aria-label="More for {{ c.label }}{% if c.whose %} ({{ c.whose }}){% endif %}">More</summary>
+          {% if not paused and c.kind != 'direct' and not c.is_sample and not (c.kind == 'fasten' and c.status == 'pending') %}
+          {# Not on a Fasten card still connecting: a Refresh there stored a
+             mid-import count (QA940-F1b), and the connect link above is that
+             card's way forward. #}
+          <button type="button" class="conn-refresh" data-conn="{{ c.id }}">Refresh</button>
+          {% endif %}
+          {% if not c.is_sample %}
+          <button type="button" class="conn-disconnect" data-conn="{{ c.id }}"
+                  data-label="{{ c.label }}" data-readers="{{ c.readers }}"
+                  title="Stop new records arriving; keep what's already here">Disconnect</button>
+          {% endif %}
+          <button type="button" class="conn-delete" data-conn="{{ c.id }}"
+                  data-label="{{ c.label }}" data-whose="{{ c.whose }}"
+                  data-readers="{{ c.readers }}"
+                  data-leaves="{{ c.leaves }}">Delete</button>
+        </details>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
+  {% endmacro %}
+
+  <!-- 5. YOUR SOURCES -->
+  <section class="hub-section" id="records-section">
+    <div class="section-head"><h2>Your sources</h2></div>
+    <div class="card-grid source-list" id="connections">
+      {% for c in hub.sources %}
+      {{ source_row(c) }}
       {% endfor %}
-      {% if not hub.records %}
-      {# Paused: "Add records" is left out below, so point at nothing. #}
+      {% if not hub.sources %}
+      {# Paused: "Add a source" is left out below, so point at nothing. #}
       <div class="empty">No records yet.{% if not paused %} Add some below.{% endif %}</div>
       {% endif %}
     </div>
+    {% if hub.made_up_sources %}
+    {# Your own records are here, so the made-up ones step aside. Kept in
+       reach, closed, so they can still be deleted. #}
+    <details class="made-up-sources">
+      <summary>Made-up records ({{ hub.made_up_sources | length }})</summary>
+      <div class="card-grid source-list">
+        {% for c in hub.made_up_sources %}
+        {{ source_row(c) }}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
     {% if has_grants %}
     <p class="hub-link"><a href="/settings#grants-section">Apps you've shared records with</a></p>
     {% endif %}
   </section>
 
-  <!-- 4. ADD RECORDS -->
+  <!-- 6. ADD A SOURCE -->
   {# `menu` is hub.menu_items: with real records closed it holds no
      coming-soon source, so the groups below render nothing in that state.
      Paused: nothing can be added, the sample included, and the pause line at
      the top says why, so the section is left out (#856 sign-off F2). #}
   {% if not paused %}
-  <section class="hub-section" id="connect-section">
-    <div class="section-head"><h2>Add records</h2></div>
+  {# A confirm-link session connects real records only after a code
+     (#920 F1): home.js offers that sign-in on the tap (patient tester on
+     #944), as the Connect your records card does. #}
+  <section class="hub-section" id="connect-section"{% if link_session %} data-link-session="1"{% endif %}>
+    <div class="section-head"><h2>Add a source</h2></div>
     {% if not menu_open %}
     <button type="button" class="btn-primary btn-block connector-tile"
             id="explore-sample" data-connector="sample">Explore with made-up records</button>
-    {% if invited %}
+    {% if invite_line %}
+    <p class="menu-closed-line" id="invite-line">{{ invite_line }}</p>
+    {% elif invited %}
     <p class="menu-closed-line">You're invited. This opens soon.</p>
     {% elif hub.has_real %}
     <p class="menu-closed-line">Adding more records isn't open right now.</p>
@@ -216,7 +369,7 @@
   </section>
   {% endif %}
 
-  <!-- 5. PAST CONNECTIONS -->
+  <!-- 7. PAST CONNECTIONS -->
   {% if hub.past %}
   <details class="hub-section past" id="past-connections">
     <summary>Past connections ({{ hub.past | length }})</summary>
@@ -227,7 +380,8 @@
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">No new records arrive from this one.</div>
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}"
+                data-leaves="{{ c.leaves }}">Delete</button>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}
@@ -369,10 +523,10 @@
 <div class="modal" id="agent-delete-modal" role="dialog" aria-modal="true"
      aria-labelledby="agent-delete-title" hidden>
   <div class="modal-card">
-    <h3 id="agent-delete-title">Delete <span id="agent-delete-name"></span>?</h3>
+    <h3 id="agent-delete-title">Remove <span id="agent-delete-name"></span>?</h3>
     <p>Your records stay. This assistant goes, and you won't be able to open
       its chat again.</p>
-    <button type="button" class="btn-primary btn-block" id="agent-delete-confirm">Delete</button>
+    <button type="button" class="btn-primary btn-block" id="agent-delete-confirm">Remove</button>
     <button type="button" class="linkish" id="agent-delete-cancel">Cancel</button>
   </div>
 </div>

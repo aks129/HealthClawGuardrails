@@ -26,11 +26,13 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-# Also puts the beta tables in Base.metadata before any engine is built.
-from careagents import beta_signup
-from careagents.models import (Account, ActivityDay, Agent, Connection,
-                               EmailToken, Grant, ImessageHandleState,
-                               ImessageLink, Passkey, RealRecordInvite,
+# Also puts the beta, invite and funnel tables in Base.metadata before any
+# engine is built.
+from careagents import beta_signup, funnel, invites
+from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
+                               ActivityDay, Agent, Connection, EmailToken,
+                               Grant, ImessageHandleState, ImessageLink,
+                               Passkey, Person, RealRecordInvite,
                                SendblueMessage, Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
@@ -42,6 +44,9 @@ RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts
                         # while a recent one is still in flight
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
 SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
+#: People someone can add to care for. Each mints and seeds a sample tenant,
+#: so the number is bounded.
+MAX_OTHER_PEOPLE = 4
 
 
 class AuthError(RuntimeError):
@@ -162,6 +167,7 @@ class AccountService:
         # outcome, let the session commit, then raise afterwards.
         error: str | None = None
         result: _Row | None = None
+        made = False
         with self.session() as s:
             # Fetch the single live code by email (not by hash) so a wrong
             # guess is counted against it and the code can be burned.
@@ -185,6 +191,10 @@ class AccountService:
                 if acct is None:
                     acct = Account(email=email, email_verified_at=now())
                     s.add(acct)
+                    s.flush()
+                    # Every account has its self person from the start.
+                    s.add(Person(account_id=acct.id, kind="self"))
+                    made = True
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
@@ -192,6 +202,50 @@ class AccountService:
                 result = _detach(acct)
         if error:
             raise AuthError(error)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
+        return result
+
+    def has_connections(self, account_id: str) -> bool:
+        """Has this account ever connected anything, sample included?"""
+        with self.session() as s:
+            return s.query(Connection).filter_by(
+                account_id=account_id).first() is not None
+
+    def has_real_connection(self, account_id: str) -> bool:
+        """Any connection that is not the sample, in any state."""
+        with self.session() as s:
+            return s.query(Connection).filter(
+                Connection.account_id == account_id,
+                Connection.kind != "sample").first() is not None
+
+    def first_run_account(self, email: str) -> Account | None:
+        """The account a confirmed beta request signs in to, or None.
+
+        The confirm link proves the mailbox, as an email code does, so the
+        address gets the account a code would give it: made now if there
+        is none, verified, its sign-in stamped. None when the account
+        already has a connection: a forwarded link must never open records
+        that are already there, so that account signs in the usual way."""
+        email = email.strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is not None and s.query(Connection).filter_by(
+                    account_id=acct.id).first() is not None:
+                return None
+            made = acct is None
+            if acct is None:
+                acct = Account(email=email, email_verified_at=now())
+                s.add(acct)
+                s.flush()
+                s.add(Person(account_id=acct.id, kind="self"))
+            elif acct.email_verified_at is None:
+                acct.email_verified_at = now()
+            acct.last_login_at = now()
+            s.flush()
+            result = _detach(acct)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
         return result
 
     def ping(self) -> bool:
@@ -295,37 +349,83 @@ class AccountService:
             raise AuthError("Enter a valid email address.")
         return email
 
+    #: Postgres advisory-lock key that serialises stage 1 invite writes, so
+    #: the count of live invites and the write that depends on it are one
+    #: step. Distinct from the migration keys in models.py.
+    _INVITE_LOCK_KEY = 9_280_001
+
+    def _write_invite(self, email: str, invited_by: str,
+                      reopen: bool) -> str:
+        """Create (or, with `reopen`, reopen) an invite only while fewer than
+        STAGE1_INVITE_CAP are live, as one atomic step (#928 F1). Returns
+        "created", "reopened", "live" (already live, unchanged), "revoked"
+        (revoked and left so) or "full".
+
+        The cap sits inside the writing statement. SQLite takes its write
+        lock when that statement starts, so the count it reads cannot move
+        under it; Postgres first takes an advisory lock for the
+        transaction, and each statement after it reads committed rows.
+        This is the path for the operator's command and for a link join."""
+        from careagents.beta import STAGE1_INVITE_CAP
+        live = ("(SELECT COUNT(*) FROM ca_real_record_invites "
+                "WHERE revoked_at IS NULL)")
+        args = {"e": email, "t": now(), "b": invited_by,
+                "cap": STAGE1_INVITE_CAP}
+        with self.engine.begin() as conn:
+            if self.engine.dialect.name == "postgresql":
+                conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                             {"k": self._INVITE_LOCK_KEY})
+            if conn.execute(text(
+                    "INSERT INTO ca_real_record_invites "
+                    "(email, invited_at, invited_by) "
+                    "SELECT :e, :t, :b WHERE NOT EXISTS ("
+                    "SELECT 1 FROM ca_real_record_invites WHERE email = :e) "
+                    f"AND {live} < :cap"), args).rowcount:
+                return "created"
+            if reopen and conn.execute(text(
+                    "UPDATE ca_real_record_invites SET revoked_at = NULL, "
+                    "invited_at = :t, invited_by = :b "
+                    "WHERE email = :e AND revoked_at IS NOT NULL "
+                    f"AND {live} < :cap"), args).rowcount:
+                return "reopened"
+            row = conn.execute(text(
+                "SELECT revoked_at FROM ca_real_record_invites "
+                "WHERE email = :e"), {"e": email}).first()
+        if row is not None and row[0] is None:
+            return "live"
+        if row is not None and not reopen:
+            return "revoked"
+        return "full"
+
     def invite_real_records(self, email: str, invited_by: str) -> bool:
-        """Invite an email to connect real records. Inviting a revoked email
-        again reopens it. Returns False when it was already invited.
+        """Invite an email to connect real records (the operator's command).
+        Inviting a revoked email again reopens it. Returns False when it was
+        already invited.
 
         Stage 1 holds at most STAGE1_INVITE_CAP active invites; a new or
-        reopened one past that raises ValueError. Two operators racing on
-        the last place can both get in: a hand-run command, not worth a lock.
+        reopened one past that raises ValueError. Atomic: racing callers
+        cannot pass the cap (#928 F1).
         """
         from careagents.beta import STAGE1_INVITE_CAP
         email = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
-        with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            if row is not None and row.revoked_at is None:
-                return False
-            active = (s.query(RealRecordInvite)
-                      .filter(RealRecordInvite.revoked_at.is_(None)).count())
-            if active >= STAGE1_INVITE_CAP:
-                raise ValueError(
-                    f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
-                    "Revoke one first.")
-            if row is None:
-                s.add(RealRecordInvite(email=email, invited_at=now(),
-                                       invited_by=invited_by))
-                return True
-            row.revoked_at = None
-            row.invited_at = now()
-            row.invited_by = invited_by
-            return True
+        outcome = self._write_invite(email, invited_by, reopen=True)
+        if outcome == "full":
+            raise ValueError(
+                f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
+                "Revoke one first.")
+        return outcome != "live"
+
+    def grant_join_invite(self, email: str, invited_by: str) -> str:
+        """A fresh invite for someone who joined through a link, or nothing
+        (#928 F2): an invite that exists in any state, live or revoked by
+        the operator, is left exactly as it is, `invited_by` included.
+        Returns "created", "live", "revoked" or "full"."""
+        email = self._invite_email(email)
+        return self._write_invite(email, (invited_by or "")[:255],
+                                  reopen=False)
 
     def revoke_real_records_invite(self, email: str) -> bool:
         """Revoke an invite. New real connections are refused from now on;
@@ -383,43 +483,172 @@ class AccountService:
             conns = s.query(Connection).filter_by(account_id=account_id).all()
             agents = s.query(Agent).filter_by(account_id=account_id).all()
             surfaces = s.query(Surface).filter_by(account_id=account_id).all()
+            people = (s.query(Person).filter_by(account_id=account_id)
+                      .order_by(Person.created_at.asc()).all())
             return {
                 "connections": [_conn_dict(c) for c in conns],
                 "agents": [_agent_dict(a) for a in agents],
                 "surfaces": [_surf_dict(x) for x in surfaces],
+                "people": [_person_dict(p) for p in people],
             }
+
+    # --- people (one assistant per person spec, section 2) ------------------
+
+    @staticmethod
+    def _self_person_id(s, account_id: str) -> str:
+        """The account's self person, made if an older path left it out.
+
+        Sign-up and the boot migration both make it; this covers a row
+        written by a process still on the code from before. A racing peer
+        that makes it first trips the one-self index, and its row is used.
+        """
+        found = (s.query(Person.id)
+                 .filter_by(account_id=account_id, kind="self").scalar())
+        if found:
+            return found
+        try:
+            with s.begin_nested():
+                p = Person(account_id=account_id, kind="self")
+                s.add(p)
+                s.flush()
+                return p.id
+        except IntegrityError:
+            return (s.query(Person.id)
+                    .filter_by(account_id=account_id, kind="self").scalar())
+
+    def add_person(self, account_id: str, relation: str,
+                   nickname: str | None = None) -> str:
+        """Someone the account holder cares for: a relationship and an
+        optional short nickname, nothing else (D4). No authority is stamped:
+        their records are made-up until owner decision D1.
+
+        Raises ValueError for anything outside that shape, and AuthError
+        past MAX_OTHER_PEOPLE.
+        """
+        if relation not in RELATIONSHIPS:
+            raise ValueError("relationship")
+        if nickname is not None:
+            if not isinstance(nickname, str):
+                raise ValueError("nickname")
+            nickname = nickname.strip() or None
+        if nickname is not None and (len(nickname) > NICKNAME_MAX
+                                     or not nickname.isprintable()):
+            raise ValueError("nickname")
+        with self.session() as s:
+            others = (s.query(Person)
+                      .filter_by(account_id=account_id, kind="other").count())
+            if others >= MAX_OTHER_PEOPLE:
+                raise AuthError("That's as many people as one account can "
+                                "add for now.")
+            p = Person(account_id=account_id, kind="other", relation=relation,
+                       nickname=nickname)
+            s.add(p)
+            s.flush()
+            return p.id
+
+    def remove_empty_person(self, account_id: str, person_id: str) -> None:
+        """Undo an add whose records never arrived. Never the self person,
+        and never one anything points at."""
+        with self.session() as s:
+            self._drop_empty_other(s, account_id, person_id)
+
+    def agent_for_person_of(self, account_id: str,
+                            connection_id: str) -> str | None:
+        """The assistant the person behind this connection already has, or
+        None (also for a connection that is not the account's)."""
+        with self.session() as s:
+            conn = s.query(Connection).filter_by(
+                id=connection_id, account_id=account_id).first()
+            if conn is None or conn.person_id is None:
+                return None
+            a = (s.query(Agent)
+                 .filter_by(account_id=account_id, person_id=conn.person_id)
+                 .order_by(Agent.created_at.asc()).first())
+            return a.id if a else None
+
+    @staticmethod
+    def _drop_empty_other(s, account_id: str, person_id: str | None) -> None:
+        """Remove someone the holder cares for once nothing points at
+        them. Never the self person."""
+        if not person_id:
+            return
+        p = (s.query(Person)
+             .filter_by(id=person_id, account_id=account_id, kind="other")
+             .first())
+        if p is None:
+            return
+        if (s.query(Connection).filter_by(person_id=person_id).first()
+                or s.query(Agent).filter_by(person_id=person_id).first()):
+            return
+        s.delete(p)
+
+    def other_person_connection_ids(self, account_id: str) -> set[str]:
+        """Connections that hold someone else's records, left out of what
+        a third-party app can be granted in the beta (spec 6.3)."""
+        with self.session() as s:
+            return {cid for (cid,) in
+                    s.query(Connection.id)
+                    .join(Person, Person.id == Connection.person_id)
+                    .filter(Connection.account_id == account_id,
+                            Person.kind != "self")}
+
+    def assistant_counts(self) -> dict:
+        """How many accounts hold no, one, or several assistants. Counts
+        only, for the operator (spec section 4)."""
+        with self.session() as s:
+            per = (s.query(Agent.account_id, func.count(Agent.id))
+                   .group_by(Agent.account_id).all())
+            total = s.query(func.count(Account.id)).scalar() or 0
+        one = sum(1 for _, n in per if n == 1)
+        several = sum(1 for _, n in per if n > 1)
+        return {"accounts": total, "none": total - one - several,
+                "one": one, "several": several}
 
     def add_connection(self, account_id: str, kind: str, tenant_id: str,
                        label: str, status: str = "active",
                        provider: str | None = None,
-                       consent_version: str | None = None) -> str:
+                       consent_version: str | None = None,
+                       person_id: str | None = None) -> str:
+        """Record a connection for one person: the account holder unless
+        `person_id` names someone else on this account."""
         with self.session() as s:
+            if person_id is None:
+                person_id = self._self_person_id(s, account_id)
+            elif not s.query(Person).filter_by(
+                    id=person_id, account_id=account_id).first():
+                raise AuthError("That person isn't on your account.")
             c = Connection(account_id=account_id, kind=kind,
                            tenant_id=tenant_id, label=label[:120],
                            status=status, provider=provider,
                            consented_at=now() if consent_version else None,
-                           consent_version=consent_version)
+                           consent_version=consent_version,
+                           person_id=person_id)
             s.add(c)
             s.flush()
             return c.id
 
     def active_sample(self, account_id: str) -> dict | None:
         """The account's oldest active sample, if any. Older accounts can
-        hold several; none is merged or removed (calm hub spec section 5)."""
+        hold several; none is merged or removed (calm hub spec section 5).
+        The holder's own: someone they care for has a sample of their own."""
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(account_id=account_id, kind="sample",
-                            status="active")
+                            status="active",
+                            person_id=self._self_person_id(s, account_id))
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 
-    def pending_connection(self, account_id: str, kind: str) -> dict | None:
+    def pending_connection(self, account_id: str, kind: str,
+                           status: str = "pending") -> dict | None:
         """The account's oldest connection of this kind still waiting for
-        records, if any."""
+        records, if any. `direct` waits as "empty" rather than "pending".
+        The holder's own."""
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(account_id=account_id, kind=kind,
-                            status="pending")
+                            status=status,
+                            person_id=self._self_person_id(s, account_id))
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 
@@ -568,8 +797,10 @@ class AccountService:
                  .filter_by(id=conn_id, account_id=account_id).first())
             if c is None:
                 return False
+            people = {c.person_id}
             for agent in s.query(Agent).filter_by(connection_id=conn_id).all():
                 s.query(Surface).filter_by(agent_id=agent.id).delete()
+                people.add(agent.person_id)
                 s.delete(agent)
             # A grant outlives its connection as a record of what was shared
             # and whether it was taken back; detach it rather than lose it
@@ -578,6 +809,10 @@ class AccountService:
             for g in s.query(Grant).filter_by(connection_id=conn_id).all():
                 g.connection_id = None
             s.delete(c)
+            s.flush()
+            for person_id in people:
+                self._release_person_agent(s, person_id)
+                self._drop_empty_other(s, account_id, person_id)
             return True
 
     def delete_account(self, account_id: str) -> bool:
@@ -595,9 +830,13 @@ class AccountService:
             acct = s.get(Account, account_id)
             if acct is None:
                 return False
+            # People last: connections and agents point at them.
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, ActivityDay):
+                          UsageDay, ActivityDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
+            # Its invite link (a foreign key here) and funnel row go too.
+            invites.delete_for_account(s, acct)
+            funnel.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.
@@ -724,17 +963,62 @@ class AccountService:
             new = 0 if previous is None else max(0, count - int(previous))
             return {"new": new, "total": count}
 
+    @staticmethod
+    def _claim_person_agent(s, person_id: str) -> bool:
+        """Win the right to give this person their assistant: a
+        compare-and-set on `agent_at`, as ensure_first_agent's is on the
+        account. A second request, or one racing this one, updates zero
+        rows. The one place one-assistant-per-person is decided."""
+        return (s.query(Person)
+                .filter(Person.id == person_id, Person.agent_at.is_(None))
+                .update({"agent_at": now()},
+                        synchronize_session=False)) == 1
+
+    @staticmethod
+    def _release_person_agent(s, person_id: str | None) -> None:
+        """The person's last assistant is gone: they may have one again."""
+        if person_id and not s.query(Agent).filter_by(
+                person_id=person_id).first():
+            (s.query(Person).filter(Person.id == person_id)
+             .update({"agent_at": None}, synchronize_session=False))
+
     def create_agent(self, account_id: str, name: str, persona: str,
                      connection_id: str, advisor: str | None = None) -> str:
+        """The assistant for the person whose records this connection
+        holds: made if they have none, else the one they have (one
+        assistant per person spec, section 3). Never a second one."""
         with self.session() as s:
-            if not s.query(Connection).filter_by(
-                    id=connection_id, account_id=account_id).first():
+            conn = s.query(Connection).filter_by(
+                id=connection_id, account_id=account_id).first()
+            if not conn:
                 raise AuthError("That connection isn't yours.")
+            person_id = conn.person_id or self._self_person_id(s, account_id)
+            if not self._claim_person_agent(s, person_id):
+                have = (s.query(Agent)
+                        .filter_by(account_id=account_id, person_id=person_id)
+                        .order_by(Agent.created_at.asc()).first())
+                if have is None:
+                    raise AuthError("That person already has an assistant.")
+                return have.id
             a = Agent(account_id=account_id, name=name[:48], persona=persona,
-                      connection_id=connection_id, advisor=advisor)
+                      connection_id=connection_id, advisor=advisor,
+                      routines="", person_id=person_id)
             s.add(a)
             s.flush()
             return a.id
+
+    def set_agent_settings(self, account_id: str, agent_id: str,
+                           persona: str, routines: list[str]) -> bool:
+        """Tone and routines, already checked against the fixed sets by
+        the caller. Neither changes what the assistant can read."""
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                return False
+            a.persona = persona
+            a.routines = ",".join(routines)
+            return True
 
     def ensure_first_agent(self, account_id: str,
                            connection_id: str) -> str | None:
@@ -752,6 +1036,11 @@ class AccountService:
                                status="active").first())
             if conn is None:
                 return None
+            # The holder's own records only. Someone they care for is given
+            # an assistant when they are added, never by a callback.
+            me = self._self_person_id(s, account_id)
+            if (conn.person_id or me) != me:
+                return None
             won = (s.query(Account)
                    .filter(Account.id == account_id,
                            Account.first_agent_at.is_(None))
@@ -759,10 +1048,11 @@ class AccountService:
                            synchronize_session=False))
             if won != 1:
                 return None
-            if s.query(Agent).filter_by(account_id=account_id).first():
+            if not self._claim_person_agent(s, me):
                 return None
             a = Agent(account_id=account_id, connection_id=connection_id,
-                      name="Juniper", persona="calm", advisor=None)
+                      name="Juniper", persona="calm", advisor=None,
+                      routines="", person_id=me)
             s.add(a)
             s.flush()
             return a.id
@@ -813,6 +1103,10 @@ class AccountService:
                             status="active").first())
             if c is None:
                 raise AuthError("Those records aren't available.")
+            # An assistant reads its own person's records, never someone
+            # else's: "Your assistant" must not answer about Mom (spec 9).
+            if c.person_id != a.person_id:
+                raise AuthError("Those records aren't available.")
             a.connection_id = c.id
 
     def delete_agent(self, account_id: str, agent_id: str) -> bool:
@@ -825,6 +1119,8 @@ class AccountService:
                 return False
             s.query(Surface).filter_by(agent_id=agent_id).delete()
             s.delete(a)
+            s.flush()
+            self._release_person_agent(s, a.person_id)
             return True
 
     def switch_prompted_at(self, account_id: str) -> float | None:
@@ -875,9 +1171,17 @@ class AccountService:
             # The connection and the pause flag let the worker refuse a turn
             # before it reads anything (beta spec 4.3 and 4.6).
             acct = s.get(Account, a.account_id)
+            # Whose records, for the prompt and the sample line (FHI-44):
+            # the kind and relationship only. The nickname is the holder's
+            # typed text and stays out of the worker altogether.
+            p = (s.query(Person).filter_by(id=a.person_id,
+                                            account_id=a.account_id).first()
+                 if a.person_id else None)
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
                     "account_id": a.account_id,
                     "connection": _conn_dict(conn),
+                    "person": ({"kind": p.kind, "relationship": p.relation}
+                               if p else {"kind": "self"}),
                     "paused": bool(acct and acct.real_paused_at is not None)}
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
@@ -1267,7 +1571,8 @@ def _conn_dict(c: Connection) -> dict:
             "connected_at": c.connected_at,
             "last_synced_at": c.last_synced_at, "last_count": c.last_count,
             "last_uncounted": c.last_uncounted,
-            "consent_version": c.consent_version}
+            "consent_version": c.consent_version,
+            "person_id": c.person_id}
 
 
 def _grant_dict(g: Grant) -> dict:
@@ -1282,7 +1587,14 @@ def _grant_dict(g: Grant) -> dict:
 
 def _agent_dict(a: Agent) -> dict:
     return {"id": a.id, "name": a.name, "persona": a.persona,
-            "advisor": a.advisor, "connection_id": a.connection_id}
+            "advisor": a.advisor, "connection_id": a.connection_id,
+            "routines": a.routines, "person_id": a.person_id,
+            "created_at": a.created_at}
+
+
+def _person_dict(p: Person) -> dict:
+    return {"id": p.id, "kind": p.kind, "relationship": p.relation,
+            "nickname": p.nickname}
 
 
 def _surf_dict(x: Surface) -> dict:
