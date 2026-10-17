@@ -285,7 +285,7 @@ def test_web_and_worker_booting_together_both_come_up(kind, tmp_path,
     would otherwise hide a race."""
     import logging
     caplog.set_level(logging.WARNING, logger="careagents.models")
-    for trial in range(12):
+    for trial in range(25):
         (tmp_path / str(trial)).mkdir()
         url = _old_database(kind, tmp_path / str(trial))
         n = 4
