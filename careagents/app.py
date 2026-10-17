@@ -42,6 +42,7 @@ from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents import beta_signup, feedback, funnel, invites
 from careagents import checkin_wallet
+from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -3666,5 +3667,6 @@ def create_app(config: Config | None = None,
         _VIA_LINK))
     checkin_wallet.register(app, svc, cfg, full_session=lambda: not session.get(
         _VIA_LINK))
+    checkins.register(app, svc, cfg)
 
     return app

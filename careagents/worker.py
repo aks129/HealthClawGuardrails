@@ -17,7 +17,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-from careagents import beta, funnel, llm, routing, tester_terms
+from careagents import beta, checkins, funnel, llm, routing, tester_terms
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
@@ -734,6 +734,12 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
         threads.append(threading.Thread(
             target=funnel.run_digest, args=(accounts.session, cfg, stop),
             daemon=False, name="careagents-digest"))
+    if cfg.checkin_emails:
+        # Day-2 and day-7 tester check-ins (careagents/checkins.py). Each is
+        # claimed once across workers before it is sent.
+        threads.append(threading.Thread(
+            target=checkins.run, args=(accounts.session, cfg, stop),
+            daemon=False, name="careagents-checkins"))
     for thread in threads:
         thread.start()
     for thread in threads:
