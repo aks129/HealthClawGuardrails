@@ -62,8 +62,9 @@ def _link(svc, code):
 
 
 def _invite_row(svc, email):
+    """The invite the inbox of `email` holds (keyed by `invite_key`)."""
     with svc.session() as s:
-        row = s.get(RealRecordInvite, email)
+        row = s.get(RealRecordInvite, invites.invite_key(email))
         return None if row is None else (row.invited_by, row.revoked_at)
 
 

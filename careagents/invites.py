@@ -94,6 +94,17 @@ def mailbox_hash(email: str) -> str:
         beta_signup.account_key(email).encode("utf-8")).hexdigest()
 
 
+def invite_key(email) -> str:
+    """What a real-record invite matches: the inbox an address delivers to
+    (`beta_signup.account_key`: case, +tags, Gmail dots, googlemail), the
+    folding the sign-up and sign-in caps use. `ca_real_record_invites` is
+    keyed by it, so every alias of an invited inbox matches and no other
+    inbox does. "" for no address."""
+    from careagents import beta_signup
+    typed = (email or "").strip().lower()
+    return beta_signup.account_key(typed) if typed else ""
+
+
 class InvitePending(Base):
     """A beta request made through a link, waiting for its confirm."""
     __tablename__ = "ca_invite_pending"
@@ -232,17 +243,12 @@ def inviter_has_access(svc, cfg, account) -> bool:
 
 def _real_records_for(svc, cfg, email: str, inviter_id: str) -> str:
     """The real-record outcome of one join. Only ever a fresh invite."""
-    from careagents import beta_signup
-    from careagents.models import RealRecordInvite
     if not tester_terms.approved():
         return CLOSED
     if not inviter_has_access(svc, cfg, svc.get_account(inviter_id)):
         return NONE
-    key = beta_signup.account_key(email)
-    with svc.session() as s:
-        for (other,) in s.query(RealRecordInvite.email):
-            if other != email and beta_signup.account_key(other) == key:
-                return NONE         # the inbox holds one under another alias
+    # Invites are keyed by inbox (`invite_key`): one the inbox already
+    # holds under another alias comes back "live" or "revoked", untouched.
     outcome = svc.grant_join_invite(email, inviter_id)
     return {"created": GRANTED, "live": HAD, "full": FULL}.get(outcome, NONE)
 
@@ -471,6 +477,20 @@ def register(app, svc, cfg, beta_context) -> None:
         if not set_cap(svc.session, which, value):
             raise click.ClickException("no link by that code or email")
         click.echo(f"cap set to {cap}")
+
+
+def real_record_rows(session_scope) -> list[dict]:
+    """The real-record invites for the owner's list (`flask invites list`):
+    the address as typed, the inbox it matches, and whether an account on
+    that inbox exists yet, so "invited but not joined" shows."""
+    from careagents.models import RealRecordInvite
+    with session_scope() as s:
+        joined = {invite_key(e) for (e,) in s.query(Account.email)}
+        return [{"display": r.display_email or r.email, "key": r.email,
+                 "invited_at": r.invited_at, "invited_by": r.invited_by,
+                 "revoked_at": r.revoked_at, "signed_up": r.email in joined}
+                for r in s.query(RealRecordInvite).order_by(
+                    RealRecordInvite.invited_at)]
 
 
 def settings_row(svc, cfg, account_id: str) -> dict:

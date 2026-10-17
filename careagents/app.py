@@ -3622,8 +3622,11 @@ def create_app(config: Config | None = None,
             created = svc.invite_real_records(email, invited_by)
         except (AuthError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"invited {email.strip().lower()}" if created
-                   else f"{email.strip().lower()} was already invited")
+        typed, key = email.strip().lower(), invites.invite_key(email)
+        click.echo(f"invited {typed}" if created
+                   else f"{typed} was already invited")
+        if key != typed:
+            click.echo(f"matches the inbox {key} (any alias of it)")
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
@@ -3645,7 +3648,9 @@ def create_app(config: Config | None = None,
 
     @_invites.command("list")
     def _invites_list():
-        rows = svc.real_record_invites()
+        """Each invite: as typed, the inbox it matches, when and by whom,
+        live or revoked, and whether that inbox has signed up yet."""
+        rows = invites.real_record_rows(svc.session)
         if not rows:
             click.echo("no invites")
         for r in rows:
@@ -3653,8 +3658,10 @@ def create_app(config: Config | None = None,
             state = ("revoked " + datetime.fromtimestamp(
                 r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
                      if r["revoked_at"] else "live")
-            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
-                       f"by {r['invited_by']:<20} {state}")
+            joined = "signed up" if r["signed_up"] else "not signed up"
+            click.echo(f"{r['display']:<40} matches {r['key']:<32} "
+                       f"{when:%Y-%m-%d} by {r['invited_by']:<20} "
+                       f"{state:<18} {joined}")
 
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
