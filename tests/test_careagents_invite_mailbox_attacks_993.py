@@ -1,8 +1,9 @@
 """Security review of #993: exploit tests for inbox-keyed real-record invites.
 
-Each test asserts the safe behaviour. A test marked xfail(strict=True) pins
-a finding that is still open: it goes red the day the finding is fixed, and
-the marker comes off then. Synthetic addresses only.
+Each test asserts the safe behaviour. F1 (a non-Gmail +tag join undoing a
+revoke or taking a second stage 1 place) and F2 (a trailing-dot invite that
+could not be revoked) were pinned as strict xfails and are fixed. Synthetic
+addresses only.
 """
 
 from __future__ import annotations
@@ -23,8 +24,6 @@ def _live_rows(svc) -> list[str]:  # noqa: F811
                 if r.revoked_at is None]
 
 
-@pytest.mark.xfail(strict=True, reason="#993 F1: _real_records_for lost its "
-                   "account_key alias check; a non-Gmail +tag join is granted")
 def test_a_link_join_through_a_plus_alias_does_not_undo_an_operator_revoke(
         made, sent, monkeypatch):  # noqa: F811
     """The operator revoked carol@. Carol joins a friend's link as
@@ -43,8 +42,6 @@ def test_a_link_join_through_a_plus_alias_does_not_undo_an_operator_revoke(
         "an operator-revoked inbox got real records back through +tag")
 
 
-@pytest.mark.xfail(strict=True, reason="#993 F1: second stage 1 place for "
-                   "one inbox through a non-Gmail +tag join")
 def test_a_link_join_through_a_plus_alias_takes_no_second_stage1_place(
         made, sent, monkeypatch):  # noqa: F811
     """carol@ holds a live operator invite. Joining as carol+x@ must not
@@ -87,8 +84,6 @@ def test_lookalikes_do_not_match(svc, attacker):  # noqa: F811
     assert svc.real_records_invited(attacker) is False, attacker
 
 
-@pytest.mark.xfail(strict=True, reason="#993 F2: invites add accepts a "
-                   "trailing-dot address; revoking the plain form misses it")
 def test_a_malformed_invite_is_refused_or_never_matches_a_real_inbox(svc):  # noqa: F811
     """An invite typed with a trailing dot is keyed as typed; the revoke of
     the plain address must not report success while it stays live."""

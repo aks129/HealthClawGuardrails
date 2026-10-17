@@ -92,6 +92,53 @@ def test_a_non_gmail_plus_tag_is_another_person(svc, monkeypatch):  # noqa: F811
     assert svc.real_records_invited("carol+lab@corp.example") is True
 
 
+def test_the_deny_side_counts_the_inbox_wide(svc):  # noqa: F811
+    """Granting is narrow; refusing is wide (#993 F1). Off Gmail, a +tag
+    of a revoked or invited address cannot get, hold or add an invite."""
+    svc.invite_real_records("carol@corp.example", "owner")
+    # The operator cannot open a second place on the same inbox.
+    with pytest.raises(ValueError, match="same inbox"):
+        svc.invite_real_records("carol+x@corp.example", "owner")
+    assert svc.grant_join_invite("carol+y@corp.example", "acct_x") == "live"
+    # Revoking any +tag revokes the inbox.
+    assert svc.revoke_real_records_invite("Carol+Z@corp.example") is True
+    assert svc.real_records_invited("carol@corp.example") is False
+    assert svc.grant_join_invite("carol+y@corp.example", "acct_x") == "revoked"
+    with pytest.raises(ValueError, match="same inbox"):
+        svc.invite_real_records("carol+x@corp.example", "owner")
+    with svc.session() as s:
+        assert s.query(RealRecordInvite).count() == 1
+
+
+def test_a_live_alias_row_is_refused_while_its_inbox_is_revoked(svc):  # noqa: F811
+    """Two rows on one wide inbox can only come from before this change.
+    A revoke on either side refuses both."""
+    import time
+    with svc.session() as s:
+        s.add(RealRecordInvite(email="erin+x@corp.example", invited_by="o",
+                               invited_at=time.time()))
+        s.add(RealRecordInvite(email="erin@corp.example", invited_by="o",
+                               invited_at=time.time(),
+                               revoked_at=time.time()))
+    assert svc.real_records_invited("erin+x@corp.example") is False
+
+
+def test_a_trailing_dot_is_folded_for_storing_and_never_grants(svc):  # noqa: F811
+    """#993 F2: `dave@corp.example.` is stored as `dave@corp.example`, so
+    the plain address revokes it; an address typed with the dot is never
+    granted."""
+    svc.invite_real_records("Dave@Corp.Example.", "owner")
+    with svc.session() as s:
+        [row] = s.query(RealRecordInvite).all()
+        assert row.email == "dave@corp.example"
+        assert row.display_email == "dave@corp.example."
+    assert svc.real_records_invited("dave@corp.example") is True
+    assert svc.real_records_invited("dave@corp.example.") is False
+    assert svc.invite_real_records("dave@corp.example", "owner") is False
+    assert svc.revoke_real_records_invite("dave@corp.example") is True
+    assert svc.real_records_invited("dave@corp.example") is False
+
+
 def test_a_gmail_plus_tag_still_matches(svc, monkeypatch):  # noqa: F811
     approve_terms(monkeypatch)
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist")
@@ -196,7 +243,8 @@ def test_list_shows_the_match_key_and_who_has_signed_up(monkeypatch):
 
 #: Rows as the code before this wrote them: keyed by the typed address,
 #: lowercased, with no display column. A non-Gmail +tag row keeps its own
-#: key. Two aliases of one Gmail inbox may both
+#: key; a trailing dot on a domain is dropped. Two aliases of one Gmail
+#: inbox may both
 #: exist; the latest owner action between them wins (revoked at 30 beats
 #: invited at 20), and on a tie, revoked.
 OLD = [("jane.doe+beta@gmail.com", 10.0, "owner", None),
@@ -207,14 +255,16 @@ OLD = [("jane.doe+beta@gmail.com", 10.0, "owner", None),
        ("c.d@gmail.com", 40.0, "owner", None),
        ("cd@gmail.com", 1.0, "owner", 40.0),
        ("e.f@gmail.com", 1.0, "owner", 50.0),
-       ("ef@gmail.com", 60.0, "ops", None)]
+       ("ef@gmail.com", 60.0, "ops", None),
+       ("dave@corp.example.", 70.0, "owner", None)]
 
 WANT = {"janedoe@gmail.com": ("jane.doe+beta@gmail.com", "owner", None),
         "bob+x@example.org": (None, "owner", None),
         "plain@example.org": (None, "owner", None),
         "ab@gmail.com": ("ab+old@googlemail.com", "owner", 30.0),
         "cd@gmail.com": (None, "owner", 40.0),
-        "ef@gmail.com": (None, "ops", None)}
+        "ef@gmail.com": (None, "ops", None),
+        "dave@corp.example": ("dave@corp.example.", "owner", None)}
 
 
 def _old_database(kind, tmp_path) -> str:
@@ -269,6 +319,8 @@ def test_an_old_invite_matches_its_variants_after_boot(kind, tmp_path):
         assert service.real_records_invited("Jane.Doe@googlemail.com") is True
         assert service.real_records_invited("BOB+x@example.org") is True
         assert service.real_records_invited("bob@example.org") is False
+        assert service.real_records_invited("dave@corp.example") is True
+        assert service.revoke_real_records_invite("dave@corp.example")
         assert service.real_records_invited("a.b@gmail.com") is False   # revoked
         assert service.real_records_invited("e.f+z@gmail.com") is True
         assert service.real_records_invited("stranger@example.org") is False
