@@ -839,10 +839,9 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 _HAS_GRANT_CALLSITES: frozenset[str] = frozenset({
     'r6/agent_runs/routes.py:_tenant_authorized',
     'r6/actions/routes.py:action_status',
-    # Slice 18: the session-or-token predicate guarding system status and the
-    # sessions list. The tenant is read by the kernel in the order the site
-    # always used.
-    'r6/command_center/routes.py:_require_session_or_stepup',
+    # Slice 18's site, command_center _require_session_or_stepup, is gone:
+    # SEC941-PRE1 put system status and the sessions list behind the
+    # internal secret, so no tenant grant opens them any more.
     # Slice 19: read-auth's step-up branch. The tenant is the one the read
     # gate already resolved; the bearer alias is accepted as before.
     'r6/read_auth.py:authorize_tenant_read',

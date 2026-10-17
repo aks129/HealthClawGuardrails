@@ -971,12 +971,12 @@ def test_step_up_row_refuses_a_token_bound_to_another_audience(
 
 
 #: Read gates that take a step-up token without asking for an audience:
-#: r6/read_auth.py (instance read and search) and the command center's
-#: session-or-step-up predicate.
+#: r6/read_auth.py (instance read and search). The command center's
+#: /api/system left this list in SEC941-PRE1: it is operator-only now, so no
+#: tenant token reads it (tests/test_sec941_operator_gate.py).
 _AUDIENCE_FREE_READS = (
     "/r6/fhir/Patient/guard-matrix-pt",
     "/r6/fhir/Condition",
-    f"/command-center/api/system?tenant={PRIVATE_TENANT}",
 )
 
 
