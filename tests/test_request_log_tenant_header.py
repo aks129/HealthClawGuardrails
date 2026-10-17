@@ -193,6 +193,19 @@ def test_without_a_secret_the_hash_is_unkeyed_and_boot_says_so(
     assert "hashed without a key" in caplog.text
 
 
+def test_create_app_warns_at_boot_without_a_secret(monkeypatch, caplog):
+    import os
+
+    from main import create_app
+    monkeypatch.delenv("STEP_UP_SECRET", raising=False)
+    with caplog.at_level(logging.WARNING):
+        create_app({"TESTING": True,
+                    "SQLALCHEMY_DATABASE_URI":
+                        os.environ["SQLALCHEMY_DATABASE_URI"],
+                    "LEGACY_BOOT_ON_CREATE": False})
+    assert "hashed without a key" in caplog.text
+
+
 def test_a_configured_secret_boots_without_the_warning(caplog):
     with caplog.at_level(logging.WARNING):
         warn_if_unkeyed()
