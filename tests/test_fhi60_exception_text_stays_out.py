@@ -94,6 +94,22 @@ def test_a_telegram_send_error_never_logs_the_bot_token(caplog, monkeypatch):
     assert "ConnectionError" in logged
 
 
+def test_a_failed_telegram_lookup_logs_the_class_not_the_message(
+        app, caplog, monkeypatch):
+    """Not only a DB error: any exception text could carry the tenant."""
+    from r6 import telegram_push
+    token = secrets.token_urlsafe(32)
+    monkeypatch.setattr(telegram_push, "is_enabled", lambda: True)
+    with app.app_context(), caplog.at_level(logging.DEBUG), patch.object(
+            telegram_push.TelegramBinding, "chat_ids_for_tenant",
+            side_effect=RuntimeError(f"no binding for {token}")):
+        assert telegram_push.notify_tenant(token, "synthetic") == 0
+
+    logged = _logged(caplog)
+    assert token not in logged
+    assert "RuntimeError" in logged
+
+
 @pytest.mark.parametrize("path", ["/shc/medent/callback",
                                   "/shc/hbo/callback"])
 def test_an_oauth_callback_error_value_is_not_logged(client, caplog, path):
