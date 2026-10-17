@@ -367,6 +367,24 @@ def _only_absence_codes(res: dict) -> bool:
         k in _ALLERGY_STATUS_CODES or k in _NKA_CODES for k in keys)
 
 
+def _substance_label(res: dict) -> str:
+    """The label on the first coding that keys to neither a status nor a
+    "no known allergy" concept, or "". That `display` is the engine's
+    terminology label, written after redaction (r6.terminology), so it
+    names the substance; `code.text` and an absence coding's display are
+    never read. A coding we cannot key on is no name either (FHI-48)."""
+    code = res.get("code")
+    codings = code.get("coding") if isinstance(code, dict) else None
+    for c in codings if isinstance(codings, list) else []:
+        k = _coding_key(c)
+        if k is None or k in _ALLERGY_STATUS_CODES or k in _NKA_CODES:
+            continue
+        display = c.get("display")
+        if isinstance(display, str) and display.strip():
+            return display
+    return ""
+
+
 #: verificationStatus codes that withdraw an entry (FHIR
 #: allergyintolerance-verification). Read from any coding, system or not:
 #: a wrong match here only stops a "no known allergy" entry being quoted.
@@ -542,11 +560,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         if _carries_absence_code(res):
             # Backstop: whatever the checks above made of it, a record
             # with a status or "no known allergy" coding is never named by
-            # its text, which holds that concept's label (#949 F1). Every
+            # its text, which may hold that concept's label (#949 F1). Every
             # type, not allergies alone: feeds put "No known allergy" on
             # the problem list too, and it read as a fact beside an empty
-            # allergy list (#949 F3). It stays an unlabeled record.
-            text = ""
+            # allergy list (#949 F3). A substance coded beside the absence
+            # concept is a real allergy, named by that coding's label
+            # alone; with none, it stays an unlabeled record (FHI-48).
+            text = _substance_label(res)
         lookup_reason = None
         if not text and resolve_ref is not None:
             # No inline code — the name may live behind medicationReference.
