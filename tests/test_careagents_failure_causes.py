@@ -283,6 +283,21 @@ def test_a_dead_model_key_says_unavailable_and_tells_the_owner(
     assert today["chat_error"] == 1 and today[causes.cause_of(exc)] == 1
 
 
+def test_with_no_owner_address_nobody_claims_to_have_been_told(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """"We've been told" only where an owner address receives the email.
+    MUTATION: always return UNAVAILABLE_TEXT -> red."""
+    monkeypatch.setattr(cfg, "owner_emails", frozenset())
+    monkeypatch.setattr(mail, "send_notice",
+                        lambda *a: pytest.fail("nobody to tell"))
+    frames, _ = _failed_turn(cfg, svc, monkeypatch,
+                             llm.LLMOutOfCredit("billing"), "untold")
+    errors = [f for f in frames if f["type"] == "error"]
+    assert errors[-1]["text"] == (
+        "The assistant is unavailable right now. Please try again later.")
+    assert "told" not in errors[-1]["text"]
+
+
 def test_the_owner_is_emailed_at_most_once_an_hour(svc, cfg, owner_mail):  # noqa: F811
     t = dt.datetime(2026, 10, 16, 14, 5, tzinfo=dt.timezone.utc)
     assert funnel.alert_owner(svc.session, cfg, "model_quota", t) == mail.SENT
