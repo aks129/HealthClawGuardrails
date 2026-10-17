@@ -19,6 +19,7 @@ import os
 import requests
 
 from models import db
+from r6.log_safety import loggable_id
 from r6.models import TelegramBinding
 
 logger = logging.getLogger(__name__)
@@ -76,10 +77,12 @@ def notify_tenant(tenant_id: str, message: str, parse_mode: str = 'Markdown') ->
     try:
         chat_ids = TelegramBinding.chat_ids_for_tenant(tenant_id)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning('telegram tenant lookup failed tenant=%s: %s', tenant_id, exc)
+        logger.warning('telegram tenant lookup failed tenant=%s: %s',
+                       loggable_id(tenant_id), exc)
         return 0
     if not chat_ids:
-        logger.info('telegram notify skipped — no bindings for tenant=%s', tenant_id)
+        logger.info('telegram notify skipped — no bindings for tenant=%s',
+                    loggable_id(tenant_id))
         return 0
     sent = 0
     for chat_id in chat_ids:

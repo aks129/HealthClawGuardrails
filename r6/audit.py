@@ -95,9 +95,10 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
         # The agent id can come straight from a request header, so it is
         # hashed like the access log's; the resource id comes from the path
         # and is scrubbed like it (FHI-60).
+        actor = loggable_id(agent_id) if agent_id else 'system'
         logger.debug(scrub_credentials(
             f'AuditEvent recorded: {event_type} on {resource_type}/{resource_id} '
-            f'by {loggable_id(agent_id) if agent_id else "system"}'
+            f'by {actor}'
         ))
     except Exception as exc:
         logger.error('Failed to record audit event: %s', type(exc).__name__)

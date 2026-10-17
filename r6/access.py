@@ -40,6 +40,7 @@ from r6 import stepup as _stepup_mod
 from r6 import terminology as _terminology_mod
 from r6.safe_read import coding_system as _coding_system
 from r6.models import AuditEventRecord
+from r6.log_safety import loggable_id
 from r6.read_auth import TENANT_SESSION_KEY
 
 logger = logging.getLogger(__name__)
@@ -484,7 +485,8 @@ def _evaluate(
     # only, never for an absent one: an anonymous request is not an event, and
     # a predicate on a hot path (the rate limiter) would otherwise log once per
     # request.
-    logger.info('step-up refused for tenant %s: %s', tenant.id, error)
+    logger.info('step-up refused for tenant %s: %s', loggable_id(tenant.id),
+                error)
     return StepUpDecision(grant=None, reason=public_step_up_reason(error),
                           absent=False)
 

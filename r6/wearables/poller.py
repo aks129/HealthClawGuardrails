@@ -29,6 +29,7 @@ from typing import Optional
 import httpx
 
 from r6.stepup import generate_step_up_token
+from r6.log_safety import loggable_id
 from r6.wearables.client import WearablesClient
 from r6.wearables.mapper import samples_to_bundle
 from r6.wearables.models import WearableConnection
@@ -115,7 +116,7 @@ def run_once(
                 conn.last_sync_detail = str(exc)[:500]
                 logger.warning(
                     'wearable sync failed tenant=%s provider=%s: %s',
-                    conn.tenant_id, conn.provider, exc,
+                    loggable_id(conn.tenant_id), conn.provider, exc,
                 )
             try:
                 db.session.commit()
