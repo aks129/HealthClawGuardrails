@@ -139,9 +139,41 @@ def test_the_consent_passkey_check_is_not_a_sign_in(svc, monkeypatch):
                         lambda **k: AuthV())
     svc.finish_authentication(
         {"rawId": bytes_to_base64url(b"cred-signins")},
-        bytes_to_base64url(b"challenge"), require_uv=True, method=None)
+        bytes_to_base64url(b"challenge"), require_uv=True)
     assert _counts(svc, aid) == {("email_code", funnel.utc_day()): 1}
     assert _method(svc, aid) == "email_code"
+
+
+def test_approving_on_the_consent_screen_is_not_a_sign_in(monkeypatch):
+    """Through the real /authorize/decide route, only the WebAuthn crypto
+    faked: the approval succeeds and no passkey sign-in is counted."""
+    from webauthn.helpers import bytes_to_base64url
+
+    from careagents.accounts import AccountService
+    from careagents.app import create_app
+    from tests.test_careagents_consent import _approve, _cfg, _connect
+
+    class AuthV:
+        new_sign_count = 1
+    cfg_ = _cfg()
+    svc_ = AccountService(cfg_)
+    try:
+        app = create_app(config=cfg_, client=FakeClient(), accounts=svc_)
+        app.config["TESTING"] = True
+        c = _passkey(app, svc_, monkeypatch, "pat@example.com")
+        aid = _acct_id(svc_, "pat@example.com")
+        conn = _connect(svc_, svc_.get_account(aid))
+        monkeypatch.setattr("webauthn.verify_authentication_response",
+                            lambda **k: AuthV())
+        with c.session_transaction() as sess:
+            sess["wa_consent_challenge"] = bytes_to_base64url(b"c")
+        r = _approve(c, conn, passkey={
+            "rawId": bytes_to_base64url(b"cred-signins")})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        assert _counts(svc_, aid) == {("email_code", funnel.utc_day()): 1}
+        assert _method(svc_, aid) == "email_code"
+    finally:
+        svc_.engine.dispose()
 
 
 def test_a_beta_confirm_link_is_counted_as_signup_confirm(svc):

@@ -848,7 +848,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             acct = svc.finish_authentication(request.get_json(force=True),
-                                             challenge)
+                                             challenge, method="passkey")
         except AuthError as exc:
             funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
@@ -970,8 +970,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             verified = svc.finish_authentication(
-                body.get("passkey") or {}, challenge, require_uv=True,
-                method=None)
+                body.get("passkey") or {}, challenge, require_uv=True)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception:  # noqa: BLE001

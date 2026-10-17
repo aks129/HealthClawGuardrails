@@ -313,10 +313,11 @@ class AccountService:
     def finish_authentication(self, credential: dict,
                               expected_challenge: str,
                               require_uv: bool = False,
-                              method: str | None = "passkey") -> Account:
+                              method: str | None = None) -> Account:
         """Verify a passkey assertion. `method` is the sign-in it is
-        counted as (careagents/signins.py); None for a check that makes no
-        session, as the consent screen's."""
+        counted as (careagents/signins.py), passed by the sign-in route.
+        None, the default, counts nothing: the consent screen's check makes
+        no session."""
         raw_id = base64url_to_bytes(credential["rawId"])
         with self.session() as s:
             pk = s.query(Passkey).filter_by(credential_id=raw_id).first()

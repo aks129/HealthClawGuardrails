@@ -107,7 +107,10 @@ def test_admin_funnel_is_404_for_a_case_or_alias_variant_of_the_owner(
     r = c.get("/admin/funnel")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    assert "@" not in html.split("<main", 1)[1]   # no email on the page
+    # Emails only in the Testers table (owner decision 2026-10-16), nowhere
+    # else on the page.
+    assert "@" not in html.split("<main", 1)[1].split(
+        'id="funnel-days"', 1)[1]
     assert _account_id(svc, "OWNER@example.com".lower())
 
 
