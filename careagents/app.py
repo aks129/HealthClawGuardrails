@@ -1207,7 +1207,7 @@ def create_app(config: Config | None = None,
         me = current_account()
         if me is not None and me.email != email.strip().lower():
             return None
-        acct = svc.first_run_account(email)
+        acct = svc.first_run_account(email, sign_in=me is None)
         if acct is None:
             return None
         if me is None:

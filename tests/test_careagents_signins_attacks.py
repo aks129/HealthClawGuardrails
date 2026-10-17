@@ -160,9 +160,6 @@ def test_an_email_appears_on_the_page_only_inside_the_testers_section(
 
 # --- what the table calls the last sign-in -----------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "consent check stamps last_login_at; the Testers table shows it as a "
-    "sign-in under the previous method's label"))
 def test_a_consent_passkey_check_does_not_move_the_last_sign_in(
         svc, monkeypatch):
     """The consent check is not a sign-in and is not counted, but it still

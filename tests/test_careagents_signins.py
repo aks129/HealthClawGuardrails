@@ -202,6 +202,31 @@ def test_the_confirm_route_counts_signup_confirm(made, sent):
                                                         "/beta request")
 
 
+def test_a_confirm_link_opened_while_signed_in_is_not_a_sign_in(
+        made, sent, monkeypatch):
+    """Already signed in here as the same address: the confirm link keeps
+    that session (app.py _first_run, no _login), so nothing is counted and
+    the last sign-in and its method stay as they were."""
+    import re
+
+    from tests.test_careagents_beta_signup import _confirm_token, _post
+    app, svc_ = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    _login(c, svc_, monkeypatch, email="avery@example.com")
+    aid = _acct_id(svc_, "avery@example.com")
+    with svc_.session() as s:
+        s.get(Account, aid).last_login_at = 1_000_000.0
+    _post(c, email="avery@example.com")
+    t = _confirm_token(sent[-1][3])
+    page = c.get(f"/beta/confirm?t={t}").get_data(as_text=True)
+    n = re.search(r'name="n" value="([^"]+)"', page).group(1)
+    c.post("/beta/confirm", data={"t": t, "n": n})
+    assert _counts(svc_, aid) == {("email_code", funnel.utc_day()): 1}
+    assert _method(svc_, aid) == "email_code"
+    with svc_.session() as s:
+        assert s.get(Account, aid).last_login_at == 1_000_000.0
+
+
 def test_an_invite_link_join_is_a_confirm_sign_in_joined_by_invite(
         made, sent, monkeypatch):
     """An invite link is not its own sign-in method: the link opens /beta

@@ -141,9 +141,9 @@ def testers(session_scope, moment: _dt.datetime | None = None,
     """One row per account, newest first, at most `limit`. Owner only: the
     rows carry the email.
 
-    First sign-in is when the account was made: an account is made only at
-    a proven sign-in (a code or a confirm link), and the sign-in table has
-    no history from before it shipped. Last active is the latest UTC day
+    `joined` is also the first sign-in: an account is made only at a
+    proven sign-in (a code or a confirm link), so there is no separate
+    column for it. Last active is the latest UTC day
     with a chat turn (`ca_usage_days`, any assistant, sample included) or
     an approval (`ca_activity_days`)."""
     from careagents import beta_signup, invites
@@ -220,7 +220,6 @@ def testers(session_scope, moment: _dt.datetime | None = None,
                 "account_id": a.id, "email": a.email,
                 "joined": _fmt(a.created_at), "joined_via": via,
                 "inviter": inviter, "joined_label": label,
-                "first_sign_in": _fmt(a.created_at),
                 "last_sign_in": _fmt(a.last_login_at),
                 "last_method": a.last_login_method or "",
                 "last_method_label": METHOD_LABELS.get(
@@ -234,7 +233,7 @@ def testers(session_scope, moment: _dt.datetime | None = None,
 
 #: The CSV's columns, in order.
 CSV_FIELDS = ("email", "joined", "joined_via", "inviter_first_name",
-              "first_sign_in", "last_sign_in", "last_method", "sign_ins_7d",
+              "last_sign_in", "last_method", "sign_ins_7d",
               "last_active", "milestones", "furthest", "idle_days", "stuck")
 
 
@@ -254,7 +253,7 @@ def testers_csv(rows: list[dict]) -> str:
     for r in rows:
         w.writerow([_cell(v) for v in (
             r["email"], r["joined"], r["joined_via"], r["inviter"],
-            r["first_sign_in"], r["last_sign_in"], r["last_method"],
+            r["last_sign_in"], r["last_method"],
             r["sign_ins_7d"], r["last_active"], ";".join(r["milestones"]),
             r["furthest"], r["idle_days"], "yes" if r["stuck"] else "")])
     return buf.getvalue()

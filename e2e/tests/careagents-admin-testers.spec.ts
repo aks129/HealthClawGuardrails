@@ -50,6 +50,10 @@ test.describe('owner Testers table', () => {
       await expect(row).toContainText('Get started');
       let w = await width(page);
       expect(w.scroll).toBe(w.client);
+      // At 1280px the whole table fits: no column behind a hidden scroll.
+      const box = await section.locator('.funnel-scroll').evaluate(
+        (el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(box.scroll).toBeLessThanOrEqual(box.client);
       await page.screenshot({ path: test.info().outputPath('testers-desktop.png'),
                               fullPage: true });
 

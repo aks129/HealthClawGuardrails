@@ -221,14 +221,19 @@ class AccountService:
                 Connection.account_id == account_id,
                 Connection.kind != "sample").first() is not None
 
-    def first_run_account(self, email: str) -> Account | None:
+    def first_run_account(self, email: str,
+                          sign_in: bool = True) -> Account | None:
         """The account a confirmed beta request signs in to, or None.
 
         The confirm link proves the mailbox, as an email code does, so the
         address gets the account a code would give it: made now if there
         is none, verified, its sign-in stamped. None when the account
         already has a connection: a forwarded link must never open records
-        that are already there, so that account signs in the usual way."""
+        that are already there, so that account signs in the usual way.
+
+        `sign_in=False` when this browser is already signed in as the
+        address (app.py `_first_run` keeps that session): no sign-in
+        happened, so none is stamped or counted."""
         email = email.strip().lower()
         with self.session() as s:
             acct = s.query(Account).filter_by(email=email).first()
@@ -243,14 +248,16 @@ class AccountService:
                 s.add(Person(account_id=acct.id, kind="self"))
             elif acct.email_verified_at is None:
                 acct.email_verified_at = now()
-            acct.last_login_at = now()
-            acct.last_login_method = "signup_confirm"
+            if sign_in or made:
+                acct.last_login_at = now()
+                acct.last_login_method = "signup_confirm"
             s.flush()
             result = _detach(acct)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
-        funnel.safely(signins.count, self.session, result.id,
-                      "signup_confirm")
+        if sign_in or made:
+            funnel.safely(signins.count, self.session, result.id,
+                          "signup_confirm")
         return result
 
     def ping(self) -> bool:
@@ -334,8 +341,8 @@ class AccountService:
             )
             pk.sign_count = verification.new_sign_count
             acct = s.get(Account, pk.account_id)
-            acct.last_login_at = now()
             if method:
+                acct.last_login_at = now()
                 acct.last_login_method = method
             s.flush()
             result = _detach(acct)
