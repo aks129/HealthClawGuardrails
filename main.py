@@ -21,9 +21,10 @@ import click
 from flask import Flask, g, request as flask_request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
-from r6.access import _TENANT_ID_PATTERN
 from r6.database_migrations import register_model_metadata, upgrade_database
-from r6.log_safety import loggable_id, scrub as scrub_credentials
+from r6.log_safety import (id_hash, loggable_id, loggable_request_id,
+                           scrub as scrub_credentials, scrub_request_line,
+                           warn_if_unkeyed)
 from r6.runtime_config import (validate_runtime_environment,
                                warn_on_padded_secrets)
 from r6.safe_read import StrictJSONProvider
@@ -39,12 +40,13 @@ class _ScrubCredentials(logging.Filter):
     """Cut credential-shaped runs out of a third-party log line (FHI-60).
 
     For werkzeug's development-server access line, which prints the raw
-    request path and query string. Production runs gunicorn without an
-    access log, so this is the local server only.
+    request path and query string. The query string is dropped and the rest
+    scrubbed. Production runs gunicorn without an access log, so this is the
+    local server only.
     """
 
     def filter(self, record):
-        record.msg = scrub_credentials(record.getMessage())
+        record.msg = scrub_request_line(record.getMessage())
         record.args = None
         return True
 
@@ -183,6 +185,16 @@ def _register_lifecycle_cli(flask_app: Flask) -> None:
         """Upgrade the configured database to the current schema."""
         revision = initialize_database(flask_app)
         click.echo(f"Database upgraded to Alembic revision {revision}.")
+
+    @flask_app.cli.command("log-id-hash")
+    @click.argument("value")
+    def log_id_hash_command(value: str) -> None:
+        """Print the hash the request log writes for a tenant or agent id.
+
+        Run with the deployment's STEP_UP_SECRET set, or the hash will not
+        match what that deployment logged (FHI-60).
+        """
+        click.echo(id_hash(value))
 
     @flask_app.cli.command("seed-demo")
     @click.option("--tenant-id", default=None, help="Tenant to seed.")
@@ -366,16 +378,17 @@ def _register_request_hooks(flask_app: Flask) -> None:
             json.dumps(
                 {
                     # Never the raw headers: they are caller-chosen, and a
-                    # token sent in one was logged verbatim (FHI-60).
-                    "request_id": loggable_id(
+                    # token sent in one was logged verbatim (FHI-60). The
+                    # ids are keyed hashes; `flask log-id-hash` recomputes
+                    # one. `path` never includes the query string.
+                    "request_id": loggable_request_id(
                         getattr(g, "request_id", None)),
                     "method": flask_request.method,
                     "path": scrub_credentials(flask_request.path),
                     "status": response.status_code,
                     "duration_ms": duration_ms,
                     "tenant_id": loggable_id(
-                        flask_request.headers.get("X-Tenant-Id"),
-                        _TENANT_ID_PATTERN),
+                        flask_request.headers.get("X-Tenant-Id")),
                     "agent_id": loggable_id(
                         flask_request.headers.get("X-Agent-Id")),
                 }
@@ -425,6 +438,7 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
     app_env = validate_runtime_environment()
     _configure_logging(app_env)
     warn_on_padded_secrets()
+    warn_if_unkeyed()
 
     flask_app = Flask(
         __name__,

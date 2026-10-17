@@ -10,7 +10,7 @@ import logging
 from models import db
 from r6.models import AuditEventRecord
 from r6.health_context import get as _hc_get
-from r6.log_safety import scrub as scrub_credentials
+from r6.log_safety import loggable_id, scrub as scrub_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +92,12 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
         db.session.add(audit)
         nested.commit()
         db.session.commit()
-        # The agent and resource ids can come straight from a request
-        # header or path, so they are scrubbed like the access log (FHI-60).
+        # The agent id can come straight from a request header, so it is
+        # hashed like the access log's; the resource id comes from the path
+        # and is scrubbed like it (FHI-60).
         logger.debug(scrub_credentials(
             f'AuditEvent recorded: {event_type} on {resource_type}/{resource_id} '
-            f'by {agent_id or "system"}'
+            f'by {loggable_id(agent_id) if agent_id else "system"}'
         ))
     except Exception as exc:
         logger.error('Failed to record audit event: %s', type(exc).__name__)
