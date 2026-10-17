@@ -281,10 +281,11 @@ def alert_owner(session_scope, cfg, cause: str,
             s.add(OwnerAlert(hour=hour, sent_at=now()))
     except IntegrityError:
         return None
-    line = (f"Chat turns are failing on the model key ({cause}): it was "
-            f"refused or is out of credit. Testers are being told the "
-            f"assistant is unavailable. Check the provider account; the "
-            f"counts are on /admin/funnel.")
+    line = (f"Chat turns are failing on the model setup ({cause}): the key "
+            f"was refused or is out of credit, or the model host is not "
+            f"approved for real records. Testers are being told the "
+            f"assistant is unavailable. Check the provider account and the "
+            f"worker's model settings; the counts are on /admin/funnel.")
     outcome = mail.NOT_SENT
     for to in sorted(cfg.owner_emails):
         try:

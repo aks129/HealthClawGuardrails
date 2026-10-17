@@ -291,16 +291,18 @@ class Config:
         # CARE_REAL_RECORDS_MODEL_HOSTS (naming it is the deliberate act).
         # Exact hostname match. The Anthropic SDK honours ANTHROPIC_BASE_URL
         # from the environment, so that is the Anthropic host when set.
+        # Kept on every process, whatever CARE_REAL_RECORDS says here: the
+        # worker makes the model calls and may not carry the web's setting,
+        # so it asks model_host_vetted per turn (careagents/worker.py).
+        self.anthropic_base_url = (e.get("ANTHROPIC_BASE_URL")
+                                   or "https://api.anthropic.com")
+        self.extra_model_hosts = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_REAL_RECORDS_MODEL_HOSTS") or "")
+            .split(",") if x.strip())
         if self.real_records != "off":
-            serving_url = (
-                (e.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com")
-                if self.provider == "anthropic" else self.openai_base)
-            model_host = urlparse(serving_url).hostname
-            vetted = _VETTED_MODEL_HOSTS | {
-                x.strip().lower()
-                for x in (e.get("CARE_REAL_RECORDS_MODEL_HOSTS") or "")
-                .split(",") if x.strip()}
-            if model_host not in vetted:
+            model_host = self.model_host
+            if not self.model_host_vetted:
                 # Host only: a base URL can carry credentials.
                 raise ConfigError(
                     f"CARE_REAL_RECORDS={self.real_records} but chat would "
@@ -445,6 +447,21 @@ class Config:
         if self.anthropic_api_key or self.anthropic_oauth_token:
             return "anthropic"
         return "openai"
+
+    @property
+    def model_host(self) -> str | None:
+        """The hostname chat turns are sent to. The Anthropic SDK honours
+        ANTHROPIC_BASE_URL, so that is the Anthropic host when set."""
+        url = (self.anthropic_base_url if self.provider == "anthropic"
+               else self.openai_base)
+        return urlparse(url).hostname
+
+    @property
+    def model_host_vetted(self) -> bool:
+        """May real records go to model_host? Exact hostname match against
+        the owner-approved hosts and CARE_REAL_RECORDS_MODEL_HOSTS."""
+        return self.model_host in (_VETTED_MODEL_HOSTS
+                                   | self.extra_model_hosts)
 
     def real_records_open_for(self, email, invited=None) -> bool:
         """May this account START a real-record connection? See

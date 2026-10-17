@@ -100,6 +100,12 @@ class LLMOutOfCredit(LLMError):
     """
 
 
+class ModelHostNotApproved(LLMError):
+    """A real-record turn was refused before any model call: the configured
+    model host is not one approved for real records. Raised by the worker,
+    never by a provider. Like a refused key, only an operator can clear it."""
+
+
 def _error_fields(body) -> tuple[str, str, str]:
     """(type, code, message) from a provider error body, '' when absent.
 

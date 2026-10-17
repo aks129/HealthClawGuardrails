@@ -368,6 +368,14 @@ class RunWorker:
             self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
+        if (context["connection"].get("kind") != "sample"
+                and not self.cfg.model_host_vetted):
+            # Fail closed per turn, before any record read or model call:
+            # real records go only to an approved model host. The boot check
+            # in config.py runs only where CARE_REAL_RECORDS is set, and this
+            # process may not have it. Anything not sample counts as real.
+            raise llm.ModelHostNotApproved(
+                "model host not approved for real records")
         if context["connection"].get("kind") != "sample":
             # The weekly number (beta spec 4.5): integers only. A retried run
             # can count twice; the weekly figure counts accounts, so that
@@ -706,10 +714,37 @@ class _IdleBackoff:
             return interval
 
 
+def warn_real_records_unset(cfg: Config, accounts: AccountService) -> bool:
+    """At boot: warn, never fail, when this worker has CARE_REAL_RECORDS off
+    but real-record connections exist, which only the web can have made.
+    The worker still refuses each real-record turn whose model host is not
+    approved; the warning says the setting should be mirrored here."""
+    if cfg.real_records != "off":
+        return False
+    from careagents.models import Connection
+    try:
+        with accounts.session() as s:
+            real = (s.query(Connection.id)
+                    .filter(Connection.kind != "sample").first())
+    except Exception:  # noqa: BLE001 - a boot warning never stops a worker
+        logger.warning("could not check for real-record connections")
+        return False
+    if real is None:
+        return False
+    logger.warning(
+        "CARE_REAL_RECORDS is unset on this worker but real-record "
+        "connections exist: mirror the web's CARE_REAL_RECORDS here. Model "
+        "host %s is %s for real records; unapproved, their turns are "
+        "refused.", cfg.model_host,
+        "approved" if cfg.model_host_vetted else "NOT approved")
+    return True
+
+
 def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
+    warn_real_records_unset(cfg, accounts)
     # The routing counts (careagents/routing.py) write through this pool
     # rather than opening one of their own.
     routing.use_session_scope(getattr(accounts, "session", None))
