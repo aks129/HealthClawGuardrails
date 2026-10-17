@@ -104,6 +104,8 @@ def test_a_second_tick_sends_nothing(svc, monkeypatch, sent):  # noqa: F811
     checkins.send_due(svc.session, cfg_)
     checkins.send_due(svc.session, cfg_)
     assert len(sent) == 1
+    # And what was sent is no longer due, so the preview does not list it.
+    assert checkins.due(svc.session) == []
 
 
 def test_racing_workers_send_each_email_once(tmp_path, monkeypatch):
@@ -225,6 +227,20 @@ def test_an_opt_out_before_day_two_sends_nothing(svc, monkeypatch, sent):  # noq
     assert checkins.opt_out(svc.session, aid)
     checkins.send_due(svc.session, _cfg(svc))
     assert sent == []
+
+
+def test_an_opt_out_after_the_list_is_read_still_wins(svc, monkeypatch,  # noqa: F811
+                                                      sent):
+    aid = _aged(svc, monkeypatch, "t@example.com", 3)
+    real_due = checkins.due
+
+    def due_then_stop(*a, **k):
+        rows = real_due(*a, **k)
+        checkins.opt_out(svc.session, aid)
+        return rows
+    monkeypatch.setattr(checkins, "due", due_then_stop)
+    assert checkins.send_due(svc.session, _cfg(svc))["skipped"] == 1
+    assert sent == [] and _rows(svc) == {(aid, checkins.STOPPED)}
 
 
 @pytest.mark.parametrize("mangle", [
