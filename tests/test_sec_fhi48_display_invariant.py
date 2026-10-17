@@ -217,8 +217,8 @@ def test_a_record_stored_with_old_engine_labels_is_relabelled_on_read(
     [{"system": SNOMED, "code": NKA}, {"system": OID, "code": NKDA}],
     [{"system": "http://loinc.org", "code": "LA10030-7", "display": NAME}],
 ])
-def test_absence_only_is_never_named(cfg, svc, monkeypatch, caplog,
-                                     codings):  # noqa: F811
+def test_absence_only_is_never_named(
+        cfg, svc, monkeypatch, caplog, codings):  # noqa: F811
     caplog.set_level(logging.DEBUG)
     chain = Chain(cfg, svc, monkeypatch)
     _stub_resolver(monkeypatch, None, {NKA: "Penicillin", NKDA: "Penicillin"})
