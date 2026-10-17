@@ -28,6 +28,9 @@ from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import allowlist_cfg, approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _beta_app, _login, cfg, svc)
+from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
+    made, sent)
+from tests.test_careagents_invite_links import _code, _join_via
 
 PG = os.environ.get("CARE_TEST_DATABASE_URL", "")
 URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
@@ -371,3 +374,20 @@ def test_invite_key_folds_like_the_caps_on_gmail_only():
     assert invites.invite_key(" Bob+X@Corp.Example ") == "bob+x@corp.example"
     assert invites.invite_key("a.b@corp.example") == "a.b@corp.example"
     assert invites.invite_key("") == invites.invite_key(None) == ""
+
+
+def test_a_join_on_an_inbox_invited_under_another_address_is_none(
+        made, sent, monkeypatch):  # noqa: F811
+    """carol@ holds a live invite. Carol joining a link as carol+x@ gets
+    no invite and the hub's "none" line, not "had": carol+x@ itself is not
+    invited (the grant is narrow)."""
+    approve_terms(monkeypatch)
+    app, svc = made(RESEND_API_KEY="re_test", CARE_REAL_RECORDS="allowlist",  # noqa: F811
+                    CARE_REAL_RECORDS_ALLOWLIST="friend@example.com")
+    svc.invite_real_records("carol@corp.example", "operator")
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="friend@example.com")
+    _join_via(app, sent, _code(c), "carol+x@corp.example", first_run=False)
+    assert invites.join_outcome(svc.session,
+                                "carol+x@corp.example") == invites.NONE
+    assert svc.real_records_invited("carol+x@corp.example") is False
