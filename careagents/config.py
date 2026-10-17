@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from urllib.parse import urlparse
 
 from careagents import _build
@@ -34,6 +35,29 @@ def _require(name: str, value: str | None, why: str) -> str:
     if not value:
         raise ConfigError(f"{name} is required in production — {why}")
     return value
+
+
+_ON = ("1", "true", "yes", "on")
+_OFF = ("", "0", "false", "no", "off")
+
+
+def _flag(e, name: str) -> bool:
+    """An on/off flag, read like CARE_CHECKIN_WALLET (case-insensitive), but
+    a value that is neither refuses to boot rather than reading as off."""
+    value = (e.get(name) or "").strip().lower()
+    if value in _ON:
+        return True
+    if value in _OFF:
+        return False
+    raise ConfigError(f"{name} must be on or off")
+
+
+def _int(e, name: str, default: int) -> int:
+    """An integer setting; anything else refuses to boot, naming it."""
+    try:
+        return int(e.get(name) or default)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number") from None
 
 
 class Config:
@@ -161,6 +185,12 @@ class Config:
         # second identical assistant (#947 QA).
         self.people_enabled = e.get(
             "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
+        # SMART Health Check-in web wallet (careagents/checkin_wallet.py).
+        # Off unless asked for: off, its routes are never registered and
+        # answer 404. While on, it answers only from the synthetic test
+        # patient, never from an account's records (FHI-54).
+        self.checkin_wallet_enabled = e.get(
+            "CARE_CHECKIN_WALLET", "").lower() in ("1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on
@@ -290,7 +320,46 @@ class Config:
         # in-process, so it resets on restart and multiplies by gunicorn
         # worker count; this one is DB-backed and is what actually bounds
         # what a single account can cost the operator in a day.
-        self.chat_turns_per_day = int(e.get("CARE_CHAT_TURNS_PER_DAY", "200"))
+        self.chat_turns_per_day = _int(e, "CARE_CHAT_TURNS_PER_DAY", 200)
+
+        # Voice (careagents/voice.py): ElevenLabs as speech-to-text and
+        # text-to-speech only; the turn itself still goes through /api/chat.
+        # CARE_VOICE=on needs the key and a stock (never cloned) voice id,
+        # in every environment: voice never falls back to a fake.
+        self.voice = _flag(e, "CARE_VOICE")
+        # Real records over voice: off unless switched on, and it must stay
+        # off until ElevenLabs' BAA and zero retention exist. Off, only the
+        # sample connection may use voice (voice.voice_blocked).
+        self.voice_real_records = _flag(e, "CARE_VOICE_REAL_RECORDS")
+        # Stripped: a secret pasted into an env UI often ends in a newline,
+        # which requests lets through and http.client then quotes, whole, in
+        # its error (#974 F4).
+        self.elevenlabs_api_key = (e.get("ELEVENLABS_API_KEY") or "").strip()
+        self.elevenlabs_voice_id = (e.get("ELEVENLABS_VOICE_ID") or "").strip()
+        # Daily ceilings per account, durable (models.VoiceUsageDay).
+        self.voice_stt_seconds_per_day = _int(
+            e, "CARE_VOICE_STT_SECONDS_PER_DAY", 600)
+        self.voice_tts_chars_per_day = _int(
+            e, "CARE_VOICE_TTS_CHARS_PER_DAY", 20000)
+        if self.voice_stt_seconds_per_day < 0:
+            raise ConfigError("CARE_VOICE_STT_SECONDS_PER_DAY must be >= 0")
+        if self.voice_tts_chars_per_day < 0:
+            raise ConfigError("CARE_VOICE_TTS_CHARS_PER_DAY must be >= 0")
+        if self.voice:
+            # Names only: an error never carries the credential.
+            if not self.elevenlabs_api_key:
+                raise ConfigError(
+                    "CARE_VOICE=on needs ELEVENLABS_API_KEY")
+            if re.search(r"\s", self.elevenlabs_api_key):
+                raise ConfigError(
+                    "ELEVENLABS_API_KEY must not contain whitespace")
+            if not re.fullmatch(r"[A-Za-z0-9]{1,64}",
+                                self.elevenlabs_voice_id):
+                # It is a URL path segment; no default, because stock
+                # voices differ by account and expire.
+                raise ConfigError(
+                    "CARE_VOICE=on needs ELEVENLABS_VOICE_ID, a stock "
+                    "voice id (letters and digits)")
 
         # Durable run execution. Web requests enqueue and replay; this fixed
         # worker pool performs inference outside Gunicorn request threads.
