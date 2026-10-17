@@ -2401,7 +2401,7 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.DAILY_LIMIT_TEXT,
+                    "message": beta.daily_limit_text(),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -3153,7 +3153,7 @@ def create_app(config: Config | None = None,
                            tester_terms.CONSENT_VERSION):
             return None
         if svc.daily_turns_used(account_id) >= cfg.chat_turns_per_day:
-            return beta.DAILY_LIMIT_TEXT
+            return beta.daily_limit_text()
         return None
 
     def _imessage_queue_turn(ctx, text, request_id, conversation_id):

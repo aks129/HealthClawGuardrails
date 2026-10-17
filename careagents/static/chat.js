@@ -124,9 +124,22 @@
   // A 429 is two different limits (#862). The burst limiter sends only an
   // error code, and the pace sentence is true for it. The daily limit sends
   // its own sentence, and "a few minutes" would be false there.
-  const PACE_TEXT = "You’ve hit the pace limit for now — give it a few minutes.";
+  const PACE_TEXT = "You've hit the pace limit for now — give it a few minutes.";
   function limitText(d) {
     return (d && typeof d.message === "string" && d.message) || PACE_TEXT;
+  }
+
+  // Under the daily limit's sentence, a way to say the limit got in the
+  // way (#864, FHI-68 item 7): /feedback with the screen and the error
+  // code. Pointers only, never the message that was refused.
+  function addLimitFeedback() {
+    const q = new URLSearchParams({ screen: "chat", error: "rate_limited" });
+    const p = el("p", "chat-feedback limit-feedback", "Need more? ");
+    const a = el("a", null, "Tell us");
+    a.href = "/feedback?" + q.toString();
+    p.appendChild(a);
+    p.appendChild(document.createTextNode("."));
+    log.appendChild(p);
   }
 
   // The sample's made-up-records line is the sticky banner above the log,
@@ -501,7 +514,10 @@
           initial = false;
           if (resp.status === 429) {
             typing.remove();
-            addAgentText(limitText(await resp.json().catch(() => ({}))));
+            const limit = await resp.json().catch(() => ({}));
+            addAgentText(limitText(limit));
+            if (limit && limit.error === "daily_limit_reached")
+              addLimitFeedback();
             return;
           }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
