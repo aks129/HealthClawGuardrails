@@ -514,6 +514,15 @@ def _ensure_columns(engine) -> None:
             _add_column(engine, "ca_agents", "routines", "VARCHAR(255)")
         if "person_id" not in cols:
             _add_column(engine, "ca_agents", "person_id", "VARCHAR(32)")
+    if "ca_beta_mail_caps" in tables:
+        # The rolling day's send times (beta_signup.claim_mail) and the
+        # last "how to sign in" email (claim_already). A row from before
+        # them reads as one email, at sent_at.
+        cols = {c["name"] for c in insp.get_columns("ca_beta_mail_caps")}
+        if "sends" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "sends", "VARCHAR(128)")
+        if "already_at" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "already_at", "FLOAT")
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:

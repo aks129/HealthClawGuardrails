@@ -3,8 +3,8 @@
 {% block bodyclass %}page-setup{% endblock %}
 {% block content %}
 {# What the "Safety grade" pill and the landing page link to (#884 G7):
-   what is tested, in plain words, and today's grade. The technical report
-   stays one small link away for anyone who wants it. #}
+   what is tested, in plain words, and today's grade. The full results
+   stay one small link away for anyone who wants them. #}
 <main class="setup-wrap">
   <div class="setup-card">
     <h1>How we keep you safe</h1>
@@ -17,7 +17,7 @@
     {% endif %}
     <p class="safety-links">
       <a class="safety-back" href="{{ back_href }}">{{ back_label }}</a>
-      <a class="safety-report" href="{{ report_url }}">Technical report</a>
+      <a class="safety-report" href="{{ report_url }}">See every test we run</a>
     </p>
   </div>
 </main>

@@ -6536,7 +6536,9 @@ def test_the_landing_page_does_not_promise_a_provider_login_the_beta_closes(
     goes rather than being made conditional."""
     body = app.test_client().get("/").get_data(as_text=True)
     assert "verified login" not in body
-    assert "connect your records" in body
+    # While real records are closed it says they come later (patient
+    # tester, 2026-10-16), not "then connect your records".
+    assert "Connecting your own records comes later in the beta." in body
 
 
 def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):
