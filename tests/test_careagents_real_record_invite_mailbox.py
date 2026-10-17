@@ -1,11 +1,11 @@
 """Real-record invites match the inbox, not the typed string.
 
 `flask invites add <email>` opens real records to one person in
-`CARE_REAL_RECORDS=allowlist`. The invite is keyed by the inbox the address
-delivers to (`beta_signup.account_key`: case, +tags, Gmail dots and
-googlemail), the same folding the sign-up and sign-in caps use, so the
-person signing in as `Jane.Doe@gmail.com` matches an invite for
-`janedoe+beta@googlemail.com`. The typed address is kept for the owner's
+`CARE_REAL_RECORDS=allowlist`. The invite is keyed by `invites.invite_key`:
+case and the domain's ASCII form on every domain, and on Gmail the dots, a
++tag and googlemail too, so the person signing in as `Jane.Doe@gmail.com`
+matches an invite for `janedoe+beta@googlemail.com`. On any other domain a
++tag is kept: `bob+x@` may be someone other than `bob@`. The typed address is kept for the owner's
 list. Rows written before this keyed by the typed address; boot rewrites
 them, on SQLite and Postgres, with web and worker starting together.
 
@@ -74,8 +74,31 @@ def test_a_non_gmail_domain_is_not_dot_folded(svc):  # noqa: F811
     svc.invite_real_records("Jane.Doe@Example.org", "owner")
     assert svc.real_records_invited("janedoe@example.org") is False
     assert svc.real_records_invited("j.anedoe@example.org") is False
-    # Case and a +tag still fold on every domain.
-    assert svc.real_records_invited("JANE.DOE+x@example.ORG") is True
+    # Case folds on every domain.
+    assert svc.real_records_invited("JANE.DOE@example.ORG") is True
+
+
+def test_a_non_gmail_plus_tag_is_another_person(svc, monkeypatch):  # noqa: F811
+    """Fail closed: off Gmail, `+` may be an ordinary character, so a +tag
+    variant is a different mailbox, in both directions."""
+    approve_terms(monkeypatch)
+    app = _beta_app(svc, CARE_REAL_RECORDS="allowlist")
+    svc.invite_real_records("bob@corp.example", "owner")
+    assert svc.real_records_invited("bob+x@corp.example") is False
+    assert svc.real_records_invited("Bob@Corp.Example") is True
+    assert _starts_real(app, svc, monkeypatch, "bob+x@corp.example") == 503
+    svc.invite_real_records("carol+lab@corp.example", "owner")
+    assert svc.real_records_invited("carol@corp.example") is False
+    assert svc.real_records_invited("carol+lab@corp.example") is True
+
+
+def test_a_gmail_plus_tag_still_matches(svc, monkeypatch):  # noqa: F811
+    approve_terms(monkeypatch)
+    app = _beta_app(svc, CARE_REAL_RECORDS="allowlist")
+    svc.invite_real_records("bob@gmail.com", "owner")
+    assert svc.real_records_invited("bob+x@gmail.com") is True
+    assert svc.real_records_invited("b.o.b+y@googlemail.com") is True
+    assert _starts_real(app, svc, monkeypatch, "bob+x@gmail.com") == 200
 
 
 def test_the_allowlist_refuses_anyone_not_invited(svc, monkeypatch):  # noqa: F811
@@ -172,7 +195,8 @@ def test_list_shows_the_match_key_and_who_has_signed_up(monkeypatch):
 # --- the boot migration -----------------------------------------------------
 
 #: Rows as the code before this wrote them: keyed by the typed address,
-#: lowercased, with no display column. Two aliases of one inbox may both
+#: lowercased, with no display column. A non-Gmail +tag row keeps its own
+#: key. Two aliases of one Gmail inbox may both
 #: exist; the latest owner action between them wins (revoked at 30 beats
 #: invited at 20), and on a tie, revoked.
 OLD = [("jane.doe+beta@gmail.com", 10.0, "owner", None),
@@ -186,7 +210,7 @@ OLD = [("jane.doe+beta@gmail.com", 10.0, "owner", None),
        ("ef@gmail.com", 60.0, "ops", None)]
 
 WANT = {"janedoe@gmail.com": ("jane.doe+beta@gmail.com", "owner", None),
-        "bob@example.org": ("bob+x@example.org", "owner", None),
+        "bob+x@example.org": (None, "owner", None),
         "plain@example.org": (None, "owner", None),
         "ab@gmail.com": ("ab+old@googlemail.com", "owner", 30.0),
         "cd@gmail.com": (None, "owner", 40.0),
@@ -243,7 +267,8 @@ def test_an_old_invite_matches_its_variants_after_boot(kind, tmp_path):
     service = AccountService(config)
     try:
         assert service.real_records_invited("Jane.Doe@googlemail.com") is True
-        assert service.real_records_invited("bob@example.org") is True
+        assert service.real_records_invited("BOB+x@example.org") is True
+        assert service.real_records_invited("bob@example.org") is False
         assert service.real_records_invited("a.b@gmail.com") is False   # revoked
         assert service.real_records_invited("e.f+z@gmail.com") is True
         assert service.real_records_invited("stranger@example.org") is False
@@ -285,8 +310,12 @@ def test_web_and_worker_booting_together_both_come_up(kind, tmp_path,
         assert _rows(url) == WANT, f"trial {trial}"
 
 
-def test_invite_key_is_the_sign_up_mailbox():
+def test_invite_key_folds_like_the_caps_on_gmail_only():
     from careagents import beta_signup
     for v in VARIANTS + OTHERS:
-        assert invites.invite_key(v) == beta_signup.account_key(v)
+        if v.strip().lower().endswith(("@gmail.com", "@googlemail.com")):
+            assert invites.invite_key(v) == beta_signup.account_key(v), v
     assert invites.invite_key(INVITED) == "janedoe@gmail.com"
+    assert invites.invite_key(" Bob+X@Corp.Example ") == "bob+x@corp.example"
+    assert invites.invite_key("a.b@corp.example") == "a.b@corp.example"
+    assert invites.invite_key("") == invites.invite_key(None) == ""

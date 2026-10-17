@@ -405,9 +405,9 @@ class RealRecordInvite(Base):
     environment allowlist. Account-level data: an email, when, and who
     invited it. No health information.
 
-    One row per inbox: `email` is the match key (`invites.invite_key`, the
-    sign-up caps' folding of case, +tags and Gmail dots), so every alias of
-    an invited inbox matches; `display_email` is the address as the owner
+    One row per inbox: `email` is the match key (`invites.invite_key`: case
+    everywhere, and dots and +tags on Gmail only), so every alias of an
+    invited inbox matches; `display_email` is the address as the owner
     typed it, for their list. Revoking stamps `revoked_at`; inviting again
     clears it. A revoked invite blocks NEW real connections; existing ones
     keep working until the person disconnects them or the operator closes

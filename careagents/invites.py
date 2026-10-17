@@ -95,14 +95,24 @@ def mailbox_hash(email: str) -> str:
 
 
 def invite_key(email) -> str:
-    """What a real-record invite matches: the inbox an address delivers to
-    (`beta_signup.account_key`: case, +tags, Gmail dots, googlemail), the
-    folding the sign-up and sign-in caps use. `ca_real_record_invites` is
-    keyed by it, so every alias of an invited inbox matches and no other
-    inbox does. "" for no address."""
+    """What a real-record invite matches. `ca_real_record_invites` is keyed
+    by it. "" for no address.
+
+    This is the real-records gate, so it folds only what is known to reach
+    one inbox: the address lowercased with its domain in ASCII
+    (`beta_signup.ascii_email`), and on Gmail and googlemail the dots and
+    a +tag dropped (`beta_signup.mailbox`). On any other domain a +tag is
+    kept: where `+` is an ordinary character, `bob+x@` and `bob@` are two
+    people. The sign-up and sign-in caps fold wider (`account_key`); a cap
+    that over-folds costs a place, a gate that over-folds admits someone."""
     from careagents import beta_signup
     typed = (email or "").strip().lower()
-    return beta_signup.account_key(typed) if typed else ""
+    if not typed:
+        return ""
+    address = beta_signup.ascii_email(typed) or typed
+    if address.rpartition("@")[2] in beta_signup._GMAIL:
+        return beta_signup.mailbox(address)
+    return address
 
 
 class InvitePending(Base):
