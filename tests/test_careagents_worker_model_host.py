@@ -164,3 +164,69 @@ def test_the_boot_warning_never_stops_the_worker(cfg, monkeypatch):  # noqa: F81
         def session(self):
             raise RuntimeError("database gone")
     assert warn_real_records_unset(cfg, _Broken()) is False
+
+
+# --- the base URL is parsed once, the way requests parses it (#990 F1, F2) ---
+
+@pytest.mark.parametrize("base", [
+    "https://evil.example\\@api.openai.com/v1",     # parser differential
+    "https://api.openai.com@evil.example/v1",       # userinfo
+    "https://user:pw@api.openai.com/v1",            # userinfo, right host
+    "https://api.openai.com/v1?x=1",                 # query
+    "https://api.openai.com/v1#frag",                # fragment
+    "https://api.openai.com /v1",                    # whitespace
+    "https://api.openai.com\t/v1",                   # tab
+    "https://api.openai.com/v1\n",                   # newline
+    "https://api.openai.com\x00.evil.example/v1",    # control character
+    "http://api.openai.com/v1",                      # not https (F2)
+    "ftp://api.openai.com/v1",                       # not http(s)
+    "api.openai.com/v1",                             # no scheme
+])
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+def test_a_base_url_two_parsers_could_disagree_on_is_never_vetted(
+        base, provider):
+    """MUTATION: drop any part of the refusal set, or the https rule -> red.
+    Both at boot (real records on) and per turn (model_host_vetted)."""
+    env = ({"OPENAI_API_KEY": "k", "OPENAI_BASE_URL": base}
+           if provider == "openai"
+           else {"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": base})
+    assert _cfg(**env).model_host_vetted is False
+    with pytest.raises(ConfigError):
+        _cfg(CARE_REAL_RECORDS="on", **env)
+
+
+@pytest.mark.parametrize("base,host", [
+    ("https://API.OpenAI.com/v1/", "api.openai.com"),
+    ("https://api.groq.com:443/openai/v1", "api.groq.com"),
+    ("https://generativelanguage.googleapis.com/v1beta/openai",
+     "generativelanguage.googleapis.com"),
+])
+def test_the_gate_and_the_client_agree_on_the_host(base, host):
+    """The URL requests is given is rebuilt from the validated parts, so
+    the host it connects to is the host that was vetted."""
+    import requests
+    from urllib3.util import parse_url
+    c = _cfg(OPENAI_API_KEY="k", OPENAI_BASE_URL=base)
+    assert c.model_host_vetted is True and c.model_host == host
+    sent = requests.Request("POST", f"{c.openai_base}/chat/completions"
+                            ).prepare().url
+    assert parse_url(sent).host == host
+
+
+def test_the_anthropic_client_is_given_the_validated_base_url():
+    """The SDK must not read ANTHROPIC_BASE_URL with a parser of its own.
+    MUTATION: drop base_url from the client -> red."""
+    import types
+
+    from careagents import llm
+    seen = {}
+
+    class _Client:
+        def __init__(self, **kw):
+            seen.update(kw)
+    fake = types.SimpleNamespace(Anthropic=_Client)
+    c = _cfg(ANTHROPIC_API_KEY="k",
+             ANTHROPIC_BASE_URL="https://API.anthropic.com/")
+    llm._anthropic_client(fake, c, timeout=1.0, max_retries=0)
+    assert seen["base_url"] == "https://api.anthropic.com"
+    assert c.model_host == "api.anthropic.com" and c.model_host_vetted

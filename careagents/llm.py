@@ -342,9 +342,18 @@ def _anthropic_client(anthropic, cfg, *, timeout: float, max_retries: int):
         return anthropic.Anthropic(
             auth_token=cfg.anthropic_oauth_token,
             default_headers={"anthropic-beta": cfg.anthropic_oauth_beta},
-            timeout=timeout, max_retries=max_retries)
+            timeout=timeout, max_retries=max_retries, **_base_url(cfg))
     return anthropic.Anthropic(api_key=cfg.anthropic_api_key,
-                               timeout=timeout, max_retries=max_retries)
+                               timeout=timeout, max_retries=max_retries,
+                               **_base_url(cfg))
+
+
+def _base_url(cfg) -> dict:
+    """The validated Anthropic base URL from config (config.model_endpoint),
+    passed explicitly so the SDK never reads ANTHROPIC_BASE_URL itself: the
+    host the model-host gate approved is the host called."""
+    url = getattr(cfg, "anthropic_base_url", "")
+    return {"base_url": url} if url else {}
 
 
 def _deadline(cfg) -> float:
