@@ -76,6 +76,20 @@ def test_another_accounts_token_cannot_retry_the_owners_job(client):
     assert _status("task-retry-auth-2") == "failed"
 
 
+def test_the_owners_read_token_cannot_retry(client):
+    """A retry is a write; the read token CareAgents mints for chat is not
+    enough."""
+    _failed_job(client, OWNER, "oc-retry-auth-5", "task-retry-auth-5")
+
+    r, thread = _retry(client, "task-retry-auth-5", {
+        "X-Tenant-Id": OWNER,
+        "X-Step-Up-Token": generate_step_up_token(OWNER, scope="read")})
+
+    assert r.status_code == 401
+    assert not thread.called
+    assert _status("task-retry-auth-5") == "failed"
+
+
 def test_another_account_cannot_reach_the_owners_job_from_its_own_tenant(
         client):
     """A fully authorized caller for its own tenant still cannot see a job
