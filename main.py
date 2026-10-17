@@ -35,6 +35,23 @@ _ROOT_DIR = Path(__file__).resolve().parent
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
+class _ScrubCredentials(logging.Filter):
+    """Cut credential-shaped runs out of a third-party log line (FHI-60).
+
+    For werkzeug's development-server access line, which prints the raw
+    request path and query string. Production runs gunicorn without an
+    access log, so this is the local server only.
+    """
+
+    def filter(self, record):
+        record.msg = scrub_credentials(record.getMessage())
+        record.args = None
+        return True
+
+
+logging.getLogger("werkzeug").addFilter(_ScrubCredentials())
+
+
 class JSONFormatter(logging.Formatter):
     """Compact structured formatter used by production deployments."""
 

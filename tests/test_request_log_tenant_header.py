@@ -142,6 +142,23 @@ def test_a_write_never_logs_its_own_step_up_token(
     assert line["agent_id"] == "invalid"
 
 
+def test_the_dev_server_access_line_is_scrubbed_too(app, caplog,
+                                                    step_up_token):
+    """werkzeug prints the raw path and query string on the local server.
+
+    Emitted the way werkzeug's own _log does, because the test client never
+    goes through the dev server.
+    """
+    with caplog.at_level(logging.DEBUG):
+        logging.getLogger("werkzeug").info(
+            '%s - - [%s] "%s" %s %s', "127.0.0.1", "16/Oct/2026 22:00:00",
+            f"GET /r6/fhir/Patient/{step_up_token}?t={step_up_token} HTTP/1.1",
+            "400", "-")
+
+    _assert_absent(_everything_logged(caplog), step_up_token)
+    assert "/r6/fhir/Patient/[redacted]" in _everything_logged(caplog)
+
+
 def test_ordinary_ids_are_still_logged_as_sent(client, caplog, tenant_id):
     """The scrub must not cost the operator the correlation it exists for."""
     agent = "careagents:agent_" + "0123456789abcdef" * 2
