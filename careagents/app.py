@@ -848,7 +848,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             acct = svc.finish_authentication(request.get_json(force=True),
-                                             challenge)
+                                             challenge, method="passkey")
         except AuthError as exc:
             funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
@@ -1207,7 +1207,7 @@ def create_app(config: Config | None = None,
         me = current_account()
         if me is not None and me.email != email.strip().lower():
             return None
-        acct = svc.first_run_account(email)
+        acct = svc.first_run_account(email, sign_in=me is None)
         if acct is None:
             return None
         if me is None:
