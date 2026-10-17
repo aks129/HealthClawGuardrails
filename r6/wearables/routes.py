@@ -21,8 +21,9 @@ from markupsafe import escape
 
 from models import db
 from r6 import constant_time
-from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       require_open_tenant, tenant_from_request)
+from r6.access import (_TENANT_ID_PATTERN, Scope, TenantRejected,
+                       TenantSource, require_grant, require_open_tenant,
+                       tenant_from_request)
 from r6.audit import add_audit_event
 from r6.read_auth import authorize_tenant_read
 from r6.wearables.client import WearablesClient
@@ -124,6 +125,10 @@ def oauth_start():
         return jsonify({'error': f'unsupported provider: {provider}'}), 400
     if not tenant_id:
         return jsonify({'error': 'tenant_id required'}), 400
+    # Unauthenticated and sent upstream as `user_id=hc-<tenant_id>`, so it
+    # must at least be a tenant id (FHI-60). Fixed wording: never echoed.
+    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
+        return jsonify({'error': 'invalid tenant_id'}), 400
 
     wc = WearablesClient()
     if not wc.enabled():

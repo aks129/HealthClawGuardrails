@@ -39,10 +39,11 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 class _ScrubCredentials(logging.Filter):
     """Cut credential-shaped runs out of a third-party log line (FHI-60).
 
-    For werkzeug's development-server access line, which prints the raw
-    request path and query string. The query string is dropped and the rest
-    scrubbed. Production runs gunicorn without an access log, so this is the
-    local server only.
+    For two lines that print a raw request URL, query string included:
+    werkzeug's development-server access line (local only; production runs
+    gunicorn without an access log), and httpx's INFO "HTTP Request:" line
+    for every upstream call, which production does write. The query string
+    is dropped and the rest scrubbed.
     """
 
     def filter(self, record):
@@ -51,7 +52,8 @@ class _ScrubCredentials(logging.Filter):
         return True
 
 
-logging.getLogger("werkzeug").addFilter(_ScrubCredentials())
+for _name in ("werkzeug", "httpx"):
+    logging.getLogger(_name).addFilter(_ScrubCredentials())
 
 
 class JSONFormatter(logging.Formatter):
