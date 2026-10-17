@@ -252,10 +252,15 @@ def test_an_old_invite_matches_its_variants_after_boot(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", URLS)
-def test_web_and_worker_booting_together_both_come_up(kind, tmp_path):
+def test_web_and_worker_booting_together_both_come_up(kind, tmp_path,
+                                                     caplog):
     """Production starts web and worker at once on the same database. Every
-    boot comes up and the rows are rewritten once."""
-    for trial in range(5):
+    boot comes up and the rows are rewritten once. No boot needed the
+    retry: the lock serialises them, and the retry is only a backstop that
+    would otherwise hide a race."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="careagents.models")
+    for trial in range(12):
         (tmp_path / str(trial)).mkdir()
         url = _old_database(kind, tmp_path / str(trial))
         n = 4
@@ -274,6 +279,9 @@ def test_web_and_worker_booting_together_both_come_up(kind, tmp_path):
         for t in threads:
             t.join()
         assert errors == [], f"trial {trial}: {errors}"
+        retried = [r.getMessage() for r in caplog.records
+                   if "migration retried" in r.getMessage()]
+        assert retried == [], f"trial {trial}: {retried}"
         assert _rows(url) == WANT, f"trial {trial}"
 
 
