@@ -551,6 +551,13 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
             "pool_recycle": 3600,
             "pool_pre_ping": True,
         }
+    # Every engine, every dialect, supplied options or not: without it
+    # SQLAlchemy writes bound parameter values (tenant ids, resource JSON)
+    # into str(exc) and tracebacks, and from there into the log (FHI-60).
+    flask_app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        **(flask_app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}),
+        "hide_parameters": True,
+    }
 
     db.init_app(flask_app)
     register_model_metadata()

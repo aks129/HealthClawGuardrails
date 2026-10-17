@@ -534,7 +534,10 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: 3738 -> 3744 (FHI-60): connect-diagnostic's key allowlist and the comment
 #: on why it no longer writes its payload. Hashing and the payload summary
 #: live in r6/log_safety.py; the six log calls here only wrap their ids.
-_GOD_MODULE_LINES = 3744
+#: 3744 -> 3747 (FHI-60): purge and Fasten revoke log the exception class
+#: instead of a traceback, and connect-diagnostic logs Fasten's request id
+#: under the security ruling (r6/log_safety.py vendor_request_id).
+_GOD_MODULE_LINES = 3747
 
 
 def test_the_god_module_only_shrinks():

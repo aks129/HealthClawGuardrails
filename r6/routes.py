@@ -36,7 +36,7 @@ from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
-from r6.log_safety import loggable_id, payload_shape
+from r6.log_safety import loggable_id, payload_shape, vendor_request_id
 from r6.discovery_paths import (_is_exempt_discovery_path,
                                 refuse_resource_rule_on_exempt_path)
 from r6.resource_ids import refuse_malformed_resource_id
@@ -1922,7 +1922,8 @@ def record_connect_diagnostic():
     # WARNING, not INFO: this is a user-visible failure of the product's front
     # door, and it needs to be greppable in the same pass as an outage.
     logger.warning(
-        'connect-diagnostic %s tenant=%s %s', reference, loggable_id(tenant),
+        'connect-diagnostic %s tenant=%s request_id=%s %s', reference,
+        loggable_id(tenant), vendor_request_id(payload.get('request_id')),
         payload_shape(payload, raw, _CONNECT_DIAGNOSTIC_KEYS))
     return jsonify({'reference': reference}), 202
 
@@ -2038,9 +2039,10 @@ def purge_tenant_route():
             detail='tenant data purged on request',
         )
         db.session.commit()
-    except Exception:
+    except Exception as exc:
         db.session.rollback()
-        logger.exception('tenant purge failed for %s', loggable_id(tenant_id))
+        logger.error('tenant purge failed for %s: %s', loggable_id(tenant_id),
+                     type(exc).__name__)
         return jsonify({'error': 'purge failed', 'deleted': False}), 500
 
     total = purge_summary(deleted)
@@ -2077,8 +2079,9 @@ def fasten_revoke_route():
     from r6.fasten.revoke import revoke_tenant
     try:
         return jsonify(revoke_tenant(tenant_id)), 200
-    except Exception:
-        logger.exception('fasten revoke failed for %s', loggable_id(tenant_id))
+    except Exception as exc:
+        logger.error('fasten revoke failed for %s: %s', loggable_id(tenant_id),
+                     type(exc).__name__)
         return jsonify({'error': 'revoke failed', 'revoked': False}), 500
 
 

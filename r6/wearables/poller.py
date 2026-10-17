@@ -116,7 +116,8 @@ def run_once(
                 conn.last_sync_detail = str(exc)[:500]
                 logger.warning(
                     'wearable sync failed tenant=%s provider=%s: %s',
-                    loggable_id(conn.tenant_id), conn.provider, exc,
+                    loggable_id(conn.tenant_id), conn.provider,
+                    type(exc).__name__,
                 )
             try:
                 db.session.commit()
@@ -203,7 +204,7 @@ def _loop(app) -> None:
             summary = run_once(app)
             logger.info('wearables sync pass: %s', summary)
         except Exception as exc:  # noqa: BLE001
-            logger.error('wearables poller crashed: %s', exc)
+            logger.error('wearables poller crashed: %s', type(exc).__name__)
 
 
 def start_poller(app) -> bool:

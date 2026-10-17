@@ -207,7 +207,8 @@ def oauth_callback():
         db.session.commit()
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
-        logger.error('wearable connection commit failed: %s', exc)
+        logger.error('wearable connection commit failed: %s',
+                     type(exc).__name__)
         return jsonify({'error': 'commit failed'}), 500
 
     html = (

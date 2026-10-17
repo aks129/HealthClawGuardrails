@@ -103,6 +103,24 @@ def loggable_request_id(raw: str | None) -> str:
     return id_hash(raw)
 
 
+#: Fasten's request id is written as sent only when it is exactly a canonical
+#: dashed UUID (security ruling on #989): nothing else, undashed 32-hex
+#: included, is distinguishable from a token.
+_CANONICAL_UUID = re.compile(
+    r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+    r'-[0-9a-fA-F]{12}')
+
+
+def vendor_request_id(raw) -> str:
+    """A vendor request id as a log may write it: as sent when it is a
+    canonical UUID, ``-`` when absent, otherwise its hash."""
+    if raw is None or raw == '':
+        return '-'
+    if isinstance(raw, str) and _CANONICAL_UUID.fullmatch(raw):
+        return raw
+    return id_hash(raw)
+
+
 def payload_shape(payload: dict, raw: str, named: frozenset) -> str:
     """A caller's JSON object described without writing any of it.
 

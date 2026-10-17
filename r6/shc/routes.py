@@ -104,7 +104,7 @@ def medent_callback():
     error = request.args.get('error', '')
 
     if error:
-        logger.warning('MEDENT callback error: %s', error)
+        logger.warning('MEDENT callback error (len=%d)', len(error))
         return f"""
         <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
         <h2 style="color:#f87171">Authorization error: {escape(error)}</h2>
@@ -159,7 +159,7 @@ def hbo_callback():
     error = request.args.get('error', '')
 
     if error:
-        logger.warning('HBO callback error: %s', error)
+        logger.warning('HBO callback error (len=%d)', len(error))
         return f"""
         <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
         <h2 style="color:#f87171">Authorization error: {escape(error)}</h2>
