@@ -10,6 +10,7 @@ import logging
 from models import db
 from r6.models import AuditEventRecord
 from r6.health_context import get as _hc_get
+from r6.log_safety import loggable_id, scrub as scrub_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +92,14 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
         db.session.add(audit)
         nested.commit()
         db.session.commit()
-        logger.debug(
+        # The agent id can come straight from a request header, so it is
+        # hashed like the access log's; the resource id comes from the path
+        # and is scrubbed like it (FHI-60).
+        actor = loggable_id(agent_id) if agent_id else 'system'
+        logger.debug(scrub_credentials(
             f'AuditEvent recorded: {event_type} on {resource_type}/{resource_id} '
-            f'by {agent_id or "system"}'
-        )
+            f'by {actor}'
+        ))
     except Exception as exc:
         logger.error('Failed to record audit event: %s', type(exc).__name__)
         # Roll back ONLY the savepoint. A full db.session.rollback() here
