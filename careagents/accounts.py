@@ -26,9 +26,11 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
+# Its table goes in Base.metadata before any engine is built, as below.
+from careagents import checkins
 # Also puts the beta, invite and funnel tables in Base.metadata before any
 # engine is built.
-from careagents import beta_signup, checkins, funnel, invites
+from careagents import beta_signup, funnel, invites
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
