@@ -21,7 +21,7 @@ import datetime
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
-from careagents import labs_timeline, llm
+from careagents import causes, labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
 
@@ -48,11 +48,10 @@ GENERIC_FAILURE_TEXT = "Something went wrong on our side. Try asking again."
 RATE_LIMITED_TEXT = (
     "I'm getting more requests than I can answer right now. Nothing is wrong "
     "with your records — try asking again in a moment.")
-# Out of credit or quota. Says nothing about providers or billing: that is
-# the operator's problem, and careagents/llm.py logs it for them.
-UNAVAILABLE_TEXT = (
-    "The assistant is unavailable right now. Nothing is wrong with your "
-    "records — please try again later.")
+# The model key is out of credit or refused (#926). Says nothing about
+# providers or billing: that is the operator's problem, and the worker
+# emails the owner (careagents/worker.py). "We've been told" is that email.
+UNAVAILABLE_TEXT = "The assistant is unavailable right now; we've been told."
 
 
 def failure_text(exc: Exception) -> str:
@@ -64,7 +63,7 @@ def failure_text(exc: Exception) -> str:
     health records are broken. Everything else stays generic on purpose —
     exception internals are never patient-facing text.
     """
-    if isinstance(exc, llm.LLMOutOfCredit):
+    if causes.needs_owner(exc):
         return UNAVAILABLE_TEXT
     if isinstance(exc, llm.LLMRateLimited):
         return RATE_LIMITED_TEXT
