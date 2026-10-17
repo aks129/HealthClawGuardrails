@@ -443,7 +443,7 @@ class RunWorker:
             allowed, _used = self.accounts.claim_daily_turn(
                 context["account_id"], self.cfg.chat_turns_per_day)
             if not allowed:
-                self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
+                self._finish(run, {"text": beta.daily_limit_text(),
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return
