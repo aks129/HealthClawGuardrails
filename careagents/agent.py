@@ -367,12 +367,25 @@ def _only_absence_codes(res: dict) -> bool:
         k in _ALLERGY_STATUS_CODES or k in _NKA_CODES for k in keys)
 
 
+#: What a real allergy coded beside an absence concept is called when its
+#: substance has no terminology label (FHI-48). Never an absence, never
+#: dropped, never the record's own words.
+ALLERGY_UNNAMED = "an allergy, name not recognised"
+
+
 def _substance_label(res: dict) -> str:
     """The label on the first coding that keys to neither a status nor a
-    "no known allergy" concept, or "". That `display` is the engine's
-    terminology label, written after redaction (r6.terminology), so it
-    names the substance; `code.text` and an absence coding's display are
-    never read. A coding we cannot key on is no name either (FHI-48)."""
+    "no known allergy" concept, or "". `code.text` and an absence coding's
+    display are never read, and a coding we cannot key on is no name
+    either (FHI-48).
+
+    INVARIANT this relies on: the engine strips every upstream `display`
+    and `text` (r6.redaction.apply_redaction) and only then writes back a
+    label from r6/terminology.py, keyed by code. So the only `display` that
+    reaches CareAgents is the terminology label, as for every other record
+    named in _summarize_bundle. Pinned through the real engine, with a name
+    planted in the upstream display, by
+    tests/test_careagents_mixed_absence_allergy.py."""
     code = res.get("code")
     codings = code.get("coding") if isinstance(code, dict) else None
     for c in codings if isinstance(codings, list) else []:
@@ -565,8 +578,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             # the problem list too, and it read as a fact beside an empty
             # allergy list (#949 F3). A substance coded beside the absence
             # concept is a real allergy, named by that coding's label
-            # alone; with none, it stays an unlabeled record (FHI-48).
+            # alone (FHI-48); an allergy with no label says so plainly.
             text = _substance_label(res)
+            if not text and rt == "AllergyIntolerance":
+                # Still a real record the model must not treat as absent:
+                # the unreadable note below says how to talk about it.
+                item["unreadable"] = True
+                text = ALLERGY_UNNAMED
         lookup_reason = None
         if not text and resolve_ref is not None:
             # No inline code — the name may live behind medicationReference.

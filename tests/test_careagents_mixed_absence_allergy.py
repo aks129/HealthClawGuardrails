@@ -23,7 +23,7 @@ import logging
 
 import pytest
 
-from careagents.agent import _summarize_bundle
+from careagents.agent import ALLERGY_UNNAMED, _summarize_bundle
 from tests.test_beta_acceptance_rows import Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_first_answer import _first_turn
@@ -35,6 +35,14 @@ OID = "urn:oid:2.16.840.1.113883.6.96"
 NKA, NKDA, STATUS = "716186003", "409137002", "1631000175102"
 PENICILLIN = "91936005"     # r6/terminology.py: "Allergy to penicillin"
 CASHEW = "227493005"        # r6/terminology.py: "Cashew nut"
+UNLABELLED = "999999999"    # no terminology label
+#: A made-up patient name, planted where real feeds put one.
+FAKE_NAME = "QZXCANARY Zelda Quornwhistle"
+
+#: Fixture switch, never production: True makes the engine keep the
+#: upstream `display` through redaction. A mutation run flips it to prove the
+#: canary tests below catch a display that is not the terminology label.
+KEEP_UPSTREAM_DISPLAY = False
 
 
 def _bundle(*resources):
@@ -106,12 +114,13 @@ def test_a_display_on_the_absence_coding_is_never_the_name(absence):
 
 def test_an_unlabelled_substance_beside_an_absence_code_stays_a_record():
     """No terminology label for the substance: the record is still a real
-    allergy, said as an unlabeled one, never dropped and never an absence."""
+    allergy, said plainly, never dropped and never an absence."""
     [item] = _summarize_bundle(_bundle(_mixed(
         "m", {"system": SNOMED, "code": NKA},
-        {"system": SNOMED, "code": "999999999"}, text="No known allergy")))
-    assert item["name"] == "unlabeled record (SNOMED CT code)"
+        {"system": SNOMED, "code": UNLABELLED}, text="No known allergy")))
+    assert item["name"] == ALLERGY_UNNAMED == "an allergy, name not recognised"
     assert item["unreadable"] is True
+    assert "never absent" in item["note"]
     assert not item.get("no_known_allergy_record")
 
 
@@ -149,3 +158,64 @@ def test_real_feed_shape_reaches_the_model_named_by_its_substance(
     assert "unreadable" not in item
     _no_absence_words(item)
     _no_canary(json.dumps(out), caplog.text, _audit_details(chain))
+
+
+# --- canaries: a name in the upstream display never reaches the model -------
+#
+# `_substance_label` reads `display`. That is safe only because the engine
+# strips every upstream display and text and writes back nothing but the
+# terminology label. These run through the real engine so they fail if that
+# stops being true.
+
+def _keep_upstream_display(monkeypatch):
+    """The fixture-only mutation: redaction keeps every coding's display."""
+    import r6.redaction as redaction
+    original = redaction._redact_recursive
+
+    def leaky(obj):
+        kept = []
+
+        def walk(o):
+            if isinstance(o, dict):
+                if isinstance(o.get("coding"), list):
+                    kept.extend((c, c.get("display"))
+                                for c in o["coding"] if isinstance(c, dict))
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        walk(obj)
+        original(obj)
+        for coding, display in kept:
+            if display is not None:
+                coding["display"] = display
+    monkeypatch.setattr(redaction, "_redact_recursive", leaky)
+
+
+@pytest.mark.parametrize("order", ["substance-first", "absence-first"])
+@pytest.mark.parametrize("substance,expected", [
+    (PENICILLIN, "Allergy to penicillin"),   # (a) a terminology label
+    (UNLABELLED, ALLERGY_UNNAMED),           # (b) no label
+])
+def test_a_name_in_the_upstream_display_never_reaches_the_model(
+        cfg, svc, monkeypatch, caplog,  # noqa: F811
+        order, substance, expected):
+    caplog.set_level(logging.DEBUG)
+    chain = Chain(cfg, svc, monkeypatch)
+    if KEEP_UPSTREAM_DISPLAY:
+        _keep_upstream_display(monkeypatch)
+    monkeypatch.setattr("r6.terminology_resolver.resolve",
+                        lambda s, c: "No known allergy" if c == NKA else None)
+    sub = {"system": SNOMED, "code": substance, "display": FAKE_NAME}
+    nka = {"system": OID, "code": NKA, "display": FAKE_NAME}
+    codings = [sub, nka] if order == "substance-first" else [nka, sub]
+    _plant(chain, {**_mixed("fhi48-c-%s-%s" % (order, substance), *codings,
+                            text=FAKE_NAME), "recordedDate": "2024-01-02"})
+
+    out, system = _first_turn(chain, monkeypatch)
+
+    [item] = out["allergies"]
+    assert item["name"] == expected
+    _no_absence_words(item)
+    _no_canary(json.dumps(out), system, caplog.text, _audit_details(chain))
