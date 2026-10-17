@@ -32,8 +32,8 @@ import datetime as _dt
 import io
 
 import click
-from sqlalchemy import (Column, ForeignKey, Integer, String,
-                        UniqueConstraint, func, update)
+from sqlalchemy import (Column, Integer, String, UniqueConstraint, func,
+                        update)
 from sqlalchemy.exc import IntegrityError
 
 from careagents import funnel
@@ -57,13 +57,15 @@ _STEPS = tuple(m for m in funnel.MILESTONES if m != "feedback_sent")
 
 
 class SignInDay(Base):
-    """How many times one account signed in by one method on one UTC day."""
+    """How many times one account signed in by one method on one UTC day.
+    `account_id` is a plain pointer, not a foreign key, as on the funnel
+    row: the rows go with the account (`delete_for_account`), and a count
+    never blocks removing an account row."""
     __tablename__ = "ca_sign_in_days"
     __table_args__ = (UniqueConstraint(
         "account_id", "day", "method", name="uq_ca_sign_in_days"),)
     id = Column(String(32), primary_key=True, default=lambda: _uid("sin"))
-    account_id = Column(String(32), ForeignKey("ca_accounts.id"),
-                        nullable=False, index=True)
+    account_id = Column(String(32), nullable=False, index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
     method = Column(String(16), nullable=False)
     count = Column(Integer, nullable=False, default=0)
