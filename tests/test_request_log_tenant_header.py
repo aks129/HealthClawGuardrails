@@ -101,6 +101,21 @@ def test_a_credential_shaped_value_that_is_a_valid_id_is_still_withheld(
     assert line["request_id"] == "invalid"
 
 
+def test_free_text_in_the_headers_is_not_logged(client, caplog):
+    """No credential shape at all: the id pattern is what withholds it."""
+    text = "Synthetic Person 1970-01-01 see notes"
+    with caplog.at_level(logging.DEBUG):
+        client.get("/r6/fhir/Patient",
+                   headers={"X-Tenant-Id": text, "X-Agent-Id": text,
+                            "X-Request-Id": text})
+
+    assert "Synthetic Person" not in _everything_logged(caplog)
+    (line,) = _access_lines(caplog)
+    assert line["tenant_id"] == "invalid"
+    assert line["agent_id"] == "invalid"
+    assert line["request_id"] == "invalid"
+
+
 def test_a_token_in_the_path_is_cut_out_of_the_logged_path(
         client, caplog, step_up_token, tenant_id):
     with caplog.at_level(logging.DEBUG):
