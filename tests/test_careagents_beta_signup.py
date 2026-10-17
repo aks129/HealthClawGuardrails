@@ -580,6 +580,23 @@ def test_a_mobile_is_read_the_way_imessage_reads_it(made, typed, stored):
 
 # --- the rate limit -----------------------------------------------------------
 
+#: Past the per-client limit by five, whatever the limit is.
+_OVER = beta_signup.SUBMITS_PER_WINDOW + 5
+
+
+def test_a_family_on_one_home_wifi_can_all_join(made):
+    """One shared address for a household (patient re-walk on #979): a
+    failed email, a few re-sends and a dozen relatives must not lock the
+    next one out. The per-mailbox cap protects a victim's inbox."""
+    assert beta_signup.SUBMITS_PER_WINDOW >= 20
+    assert beta_signup.WINDOW_SECONDS == 600
+    app, _ = made()
+    c = app.test_client()
+    for i in range(20):
+        r = _post(c, email=f"relative{i}@example.com")
+        assert r.status_code != 429, i
+
+
 def test_submits_are_limited_per_ip(made):
     app, svc = made()
     c = app.test_client()
@@ -597,8 +614,8 @@ def test_x_forwarded_for_is_never_read(made):
     c = app.test_client()
     codes = [c.post("/beta", json=_form(email=f"t{i}@example.com"),
                     headers={"X-Forwarded-For": f"203.0.113.{i}"}
-                    ).status_code for i in range(10)]
-    assert codes.count(429) == 10 - beta_signup.SUBMITS_PER_WINDOW
+                    ).status_code for i in range(_OVER)]
+    assert codes.count(429) == _OVER - beta_signup.SUBMITS_PER_WINDOW
 
 
 def test_a_garbled_x_real_ip_falls_back_to_the_peer(made):
@@ -606,8 +623,8 @@ def test_a_garbled_x_real_ip_falls_back_to_the_peer(made):
     c = app.test_client()
     codes = [c.post("/beta", json=_form(email=f"t{i}@example.com"),
                     headers={"X-Real-IP": f"not-an-ip-{i}"}).status_code
-             for i in range(10)]
-    assert codes.count(429) == 10 - beta_signup.SUBMITS_PER_WINDOW
+             for i in range(_OVER)]
+    assert codes.count(429) == _OVER - beta_signup.SUBMITS_PER_WINDOW
 
 
 # --- the iMessage spots and the queue -----------------------------------------

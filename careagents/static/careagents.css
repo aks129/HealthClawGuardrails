@@ -1045,6 +1045,12 @@ textarea:focus-visible {
    warnings, the typed confirmation and the two buttons. */
 .modal-card .delete-warn { line-height: 1.55; }
 .modal-card .delete-warn + .field-label { margin-top: 20px; }
+/* The code sign-in inside the account delete dialog (_delete_modal.html). */
+.delete-code-step { margin-top: 14px; padding: 12px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+.delete-code-step .btn-block { margin-top: 10px; }
+.delete-code-step .field-label { margin-top: 12px; }
+.delete-code-step + .delete-warn { margin-top: 14px; }
 .modal-card #delete-cancel { margin-top: 12px; }
 .leaving p { margin: 14px 0; line-height: 1.55; }
 

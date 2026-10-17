@@ -705,8 +705,10 @@ def create_app(config: Config | None = None,
             return ("Connecting your own records isn't open yet, so you're "
                     "using made-up records.")
         if outcome == invites.NONE:
-            return ("For now you can use made-up records. Connecting your "
-                    "own records isn't open to you yet.")
+            # The hub's own words for an empty account, not "isn't open
+            # to you", which reads as being left out (patient re-walk).
+            return ("For now you're using made-up records. Connecting your "
+                    "own records is coming later in the beta.")
         return None
 
     @app.get("/settings")

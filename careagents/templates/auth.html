@@ -27,6 +27,9 @@
     {% endif %}
 
     <div id="err" class="form-error" hidden></div>
+    {# Next to "That code is wrong or expired.": the way on, in one tap. #}
+    <button class="linkish" id="resend-code" type="button" hidden>
+      Send a new code</button>
 
     <!-- Step: passkey-first (skipped when an existing account is enrolling) -->
     <div id="step-start" {% if enroll %}hidden{% endif %}>
