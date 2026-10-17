@@ -1086,6 +1086,13 @@ textarea:focus-visible {
   border-top: 1px solid var(--hairline); font-size: 15px; }
 .funnel-table td.num { font-family: var(--mono);
   font-variant-numeric: tabular-nums; text-align: right; }
+/* The Testers table: a stuck row is tinted and says why. */
+.testers-table th, .testers-table td { vertical-align: top;
+  white-space: nowrap; }
+.testers-table td.testers-wrap { white-space: normal; min-width: 16em; }
+.testers-table tr.is-stuck td { background: var(--warn-bg); }
+.testers-stuck { color: var(--warn-ink); font-weight: 700; }
+.testers-method { color: var(--ink-soft); font-family: var(--sans); }
 
 /* --- the hub around outcomes (hub critique 2026-10) ---------------------- */
 /* Waiting for your OK follows Ask your assistant now, so it needs the

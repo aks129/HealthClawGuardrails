@@ -28,7 +28,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
 from careagents import mail
 # Also puts the beta, invite and funnel tables in Base.metadata before any
 # engine is built.
-from careagents import beta_signup, funnel, invites
+from careagents import beta_signup, funnel, invites, signins
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
@@ -198,12 +198,14 @@ class AccountService:
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
+                acct.last_login_method = "email_code"
                 s.flush()
                 result = _detach(acct)
         if error:
             raise AuthError(error)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
+        funnel.safely(signins.count, self.session, result.id, "email_code")
         return result
 
     def has_connections(self, account_id: str) -> bool:
@@ -242,10 +244,13 @@ class AccountService:
             elif acct.email_verified_at is None:
                 acct.email_verified_at = now()
             acct.last_login_at = now()
+            acct.last_login_method = "signup_confirm"
             s.flush()
             result = _detach(acct)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
+        funnel.safely(signins.count, self.session, result.id,
+                      "signup_confirm")
         return result
 
     def ping(self) -> bool:
@@ -307,7 +312,11 @@ class AccountService:
 
     def finish_authentication(self, credential: dict,
                               expected_challenge: str,
-                              require_uv: bool = False) -> Account:
+                              require_uv: bool = False,
+                              method: str | None = "passkey") -> Account:
+        """Verify a passkey assertion. `method` is the sign-in it is
+        counted as (careagents/signins.py); None for a check that makes no
+        session, as the consent screen's."""
         raw_id = base64url_to_bytes(credential["rawId"])
         with self.session() as s:
             pk = s.query(Passkey).filter_by(credential_id=raw_id).first()
@@ -325,8 +334,13 @@ class AccountService:
             pk.sign_count = verification.new_sign_count
             acct = s.get(Account, pk.account_id)
             acct.last_login_at = now()
+            if method:
+                acct.last_login_method = method
             s.flush()
-            return _detach(acct)
+            result = _detach(acct)
+        if method:
+            funnel.safely(signins.count, self.session, result.id, method)
+        return result
 
     def has_passkey(self, account_id: str) -> bool:
         with self.session() as s:
@@ -832,7 +846,7 @@ class AccountService:
                 return False
             # People last: connections and agents point at them.
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, ActivityDay, Person):
+                          UsageDay, ActivityDay, signins.SignInDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)

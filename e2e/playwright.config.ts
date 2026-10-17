@@ -31,6 +31,10 @@ const CARE_ALLOW_DB = '/tmp/e2e-careagents-allow.db';
 // and can never be a real mailbox; nothing is ever sent anyway (the dev mail
 // stub logs to stderr).
 export const CARE_ALLOW_EMAIL = 'e2e-allowlisted@example.test';
+// The owner of the first CareAgents server (CARE_OWNER_EMAILS), for
+// careagents-admin-testers.spec.ts. Fixed for the same reason: owner
+// addresses are server env.
+export const CARE_OWNER_EMAIL = 'e2e-owner@example.test';
 
 export default defineConfig({
   testDir: './tests',
@@ -127,6 +131,8 @@ export default defineConfig({
         // careagents-checkin-wallet.spec.ts can reach it. It answers only
         // from the synthetic test patient.
         CARE_CHECKIN_WALLET: '1',
+        // Opens /admin/funnel to this one synthetic address.
+        CARE_OWNER_EMAILS: CARE_OWNER_EMAIL,
       },
     },
     {

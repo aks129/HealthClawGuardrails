@@ -46,6 +46,8 @@ _ALLOWED = {
     "ca_issue_days": {"id": String, "day": String, "kind": String,
                       "count": Integer},
     "ca_digest_days": {"day": String, "sent_at": Float},
+    "ca_sign_in_days": {"id": String, "account_id": String, "day": String,
+                        "method": String, "count": Integer},
     "ca_invite_links": {"id": String, "account_id": String, "code": String,
                         "cap": Integer, "used": Integer, "created_at": Float,
                         "revoked_at": Float},
@@ -285,7 +287,8 @@ def test_admin_page_refuses_signed_in_non_owners(svc, monkeypatch):  # noqa: F81
     assert c.get("/admin/funnel").status_code == 404
 
 
-def test_admin_page_shows_the_owner_counts_and_no_emails(svc, monkeypatch):  # noqa: F811
+def test_admin_page_shows_the_owner_counts_and_emails_only_in_testers(
+        svc, monkeypatch):  # noqa: F811
     app = _app(svc, CARE_OWNER_EMAILS=" Owner@Example.com ,x@example.com")
     other = app.test_client()
     _login(other, svc, monkeypatch, email="someone@example.com")
@@ -300,7 +303,11 @@ def test_admin_page_shows_the_owner_counts_and_no_emails(svc, monkeypatch):  # n
                     "Issues", "Invites per inviter"):
         assert heading in html
     assert "fasten failed" in html
-    assert "someone@example.com" not in html
+    # Owner decision 2026-10-16: a tester's email is on this page in the
+    # Testers table, and nowhere else on it.
+    testers, rest = html.split('id="funnel-days"', 1)
+    assert "someone@example.com" in testers
+    assert "someone@example.com" not in rest
 
 
 # --- the digest -------------------------------------------------------------

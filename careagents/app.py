@@ -970,7 +970,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             verified = svc.finish_authentication(
-                body.get("passkey") or {}, challenge, require_uv=True)
+                body.get("passkey") or {}, challenge, require_uv=True,
+                method=None)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception:  # noqa: BLE001
