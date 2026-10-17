@@ -28,7 +28,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
 from careagents import mail
 # Also puts the beta, invite and funnel tables in Base.metadata before any
 # engine is built.
-from careagents import beta_signup, funnel, invites
+from careagents import beta_signup, checkins, funnel, invites
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
@@ -837,6 +837,7 @@ class AccountService:
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)
             funnel.delete_for_account(s, account_id)
+            checkins.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.

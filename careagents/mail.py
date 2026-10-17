@@ -120,10 +120,12 @@ def send_notice(cfg, email: str, subject: str, line: str) -> str:
 
 
 def send_message(cfg, email: str, subject: str, html: str, text: str,
-                 reply_to: str | None = None) -> str:
+                 reply_to: str | None = None,
+                 cc: list[str] | None = None) -> str:
     """Send a short message whose HTML carries links (a beta tester's
-    email). The caller escapes anything a visitor typed, and passes only
-    an account's own address as `reply_to`. Returns SENT, NOT_SENT or
+    email). The caller escapes anything a visitor typed, and passes as
+    `reply_to` only an account's own address or the team inbox, and as
+    `cc` only the owner's configured addresses. Returns SENT, NOT_SENT or
     UNCONFIRMED, as send_code does; with no provider key nothing is sent
     and nothing is logged."""
     if not cfg.resend_api_key:
@@ -136,6 +138,8 @@ def send_message(cfg, email: str, subject: str, html: str, text: str,
                "text": text}
     if reply_to:
         payload["reply_to"] = reply_to
+    if cc:
+        payload["cc"] = list(cc)
     try:
         r = requests.post(
             "https://api.resend.com/emails",
