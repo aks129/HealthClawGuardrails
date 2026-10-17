@@ -298,10 +298,12 @@ class RunWorker:
             if causes.needs_owner(exc):
                 funnel.safely(funnel.alert_owner, self.accounts.session,
                               self.cfg, cause)
+            text = _failure_text(exc,
+                                 owner_told=bool(self.cfg.owner_emails))
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
-                    {"text": _failure_text(exc)})
+                    {"text": text})
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.failed",
@@ -310,7 +312,7 @@ class RunWorker:
                 # Only once the engine took this worker's failure: a worker
                 # that lost its lease lands here too, and the run may yet
                 # finish elsewhere with a real answer.
-                self._answer_failed_turn(run, _failure_text(exc))
+                self._answer_failed_turn(run, text)
             except HealthClawError:
                 logger.exception("could not record failure for run %s", run_id)
         else:

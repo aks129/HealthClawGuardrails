@@ -50,11 +50,14 @@ RATE_LIMITED_TEXT = (
     "with your records — try asking again in a moment.")
 # The model key is out of credit or refused (#926). Says nothing about
 # providers or billing: that is the operator's problem, and the worker
-# emails the owner (careagents/worker.py). "We've been told" is that email.
+# emails the owner (careagents/worker.py). "We've been told" is that email,
+# so it is said only where an owner address is configured to receive it.
 UNAVAILABLE_TEXT = "The assistant is unavailable right now; we've been told."
+UNAVAILABLE_UNTOLD_TEXT = (
+    "The assistant is unavailable right now. Please try again later.")
 
 
-def failure_text(exc: Exception) -> str:
+def failure_text(exc: Exception, *, owner_told: bool = False) -> str:
     """What the person reads when a turn fails.
 
     A rate limit is not a defect, and saying "something went wrong on our
@@ -64,7 +67,8 @@ def failure_text(exc: Exception) -> str:
     exception internals are never patient-facing text.
     """
     if causes.needs_owner(exc):
-        return UNAVAILABLE_TEXT
+        # `owner_told`: the caller emails the owner (CARE_OWNER_EMAILS set).
+        return UNAVAILABLE_TEXT if owner_told else UNAVAILABLE_UNTOLD_TEXT
     if isinstance(exc, llm.LLMRateLimited):
         return RATE_LIMITED_TEXT
     return GENERIC_FAILURE_TEXT
