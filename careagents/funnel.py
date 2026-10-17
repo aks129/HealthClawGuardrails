@@ -7,7 +7,10 @@ Two tables, both written by us from fixed names:
   the account joined through a personal invite link. No message, no record,
   no provider, no action kind.
 - `ca_issue_days`, one row per UTC day per issue kind: a count. No message,
-  no account, no error text.
+  no account, no error text. A chat_error is also counted under its cause,
+  one of the fixed codes in careagents/causes.py (#926).
+- `ca_owner_alerts`, one row per UTC hour in which the owner was emailed
+  that the model key is refused or out of credit. A time, nothing else.
 
 What each milestone means:
 
@@ -43,7 +46,7 @@ from sqlalchemy import (Column, Float, Integer, String, UniqueConstraint,
                         update)
 from sqlalchemy.exc import IntegrityError
 
-from careagents import mail
+from careagents import causes, mail
 from careagents.models import Base, _uid, now
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,9 @@ MILESTONES = ("joined", "confirmed", "first_answer", "connect_started",
 
 ISSUE_KINDS = ("chat_error", "run_replay_error", "fasten_failed",
                "sign_in_failed", "mail_failed", "rate_limited")
+
+#: What each chat_error was, counted beside it (careagents/causes.py).
+CHAT_ERROR_CAUSES = causes.CAUSES
 
 #: How often the worker's digest thread looks at the clock.
 DIGEST_TICK_SECONDS = 900
@@ -94,6 +100,15 @@ class DigestDay(Base):
     send, so two workers cannot both send one day."""
     __tablename__ = "ca_digest_days"
     day = Column(String(10), primary_key=True)             # UTC "YYYY-MM-DD"
+    sent_at = Column(Float, nullable=False)
+
+
+class OwnerAlert(Base):
+    """The UTC hours in which the owner was emailed about the model key:
+    the row is taken before the send, so there is at most one an hour
+    across every worker."""
+    __tablename__ = "ca_owner_alerts"
+    hour = Column(String(13), primary_key=True)            # "YYYY-MM-DDTHH"
     sent_at = Column(Float, nullable=False)
 
 
@@ -223,7 +238,7 @@ def count_issue(session_scope, kind: str,
     """Add one to today's count of `kind`. Increment first, insert if there
     was no row, and on a racing insert increment the row the other writer
     made (the `count_activity` pattern)."""
-    if kind not in ISSUE_KINDS:
+    if kind not in ISSUE_KINDS and kind not in CHAT_ERROR_CAUSES:
         raise ValueError(f"unknown issue kind {kind!r}")
     day = utc_day(moment)
     stmt = (update(IssueDay)
@@ -238,6 +253,53 @@ def count_issue(session_scope, kind: str,
     except IntegrityError:
         with session_scope() as s:
             s.execute(stmt)
+
+
+def count_chat_error(session_scope, cause: str) -> None:
+    """A failed chat turn: one chat_error, and one under its cause. Each
+    count is its own, so a failure on one never loses the other."""
+    if cause not in CHAT_ERROR_CAUSES:
+        raise ValueError(f"unknown chat error cause {cause!r}")
+    safely(count_issue, session_scope, "chat_error")
+    safely(count_issue, session_scope, cause)
+
+
+def alert_owner(session_scope, cfg, cause: str,
+                moment: _dt.datetime | None = None) -> str | None:
+    """Email CARE_OWNER_EMAILS that chat turns fail on the model key, at
+    most once a UTC hour. Returns the mail outcome, or None when there is
+    nobody to tell or this hour's email is already taken. The cause code is
+    the whole content: no account, no message."""
+    if not cfg.owner_emails:
+        return None
+    moment = moment or _dt.datetime.now(_dt.timezone.utc)
+    hour = moment.strftime("%Y-%m-%dT%H")
+    try:
+        with session_scope() as s:
+            if s.get(OwnerAlert, hour) is not None:
+                return None
+            s.add(OwnerAlert(hour=hour, sent_at=now()))
+    except IntegrityError:
+        return None
+    line = (f"Chat turns are failing on the model key ({cause}): it was "
+            f"refused or is out of credit. Testers are being told the "
+            f"assistant is unavailable. Check the provider account; the "
+            f"counts are on /admin/funnel.")
+    outcome = mail.NOT_SENT
+    for to in sorted(cfg.owner_emails):
+        try:
+            sent = mail.send_notice(cfg, to, "Assistant unavailable", line)
+        except Exception:  # noqa: BLE001 - the claim is released below
+            logger.warning("owner alert send raised")
+            sent = mail.NOT_SENT
+        if sent != mail.NOT_SENT:
+            outcome = sent
+    if outcome == mail.NOT_SENT:
+        # Nobody was told, so a later failure this hour may try again.
+        with session_scope() as s:
+            s.query(OwnerAlert).filter_by(hour=hour).delete()
+        note_mail(session_scope, cfg, outcome)
+    return outcome
 
 
 def safely(fn, *args, **kwargs) -> None:
@@ -275,7 +337,8 @@ def daily(session_scope, days: int = 7,
     days = max(1, int(days))
     labels = [utc_day(moment - _dt.timedelta(days=i)) for i in range(days)]
     rows = {d: {"day": d, **{m: 0 for m in MILESTONES}, "via_invite": 0,
-                **{k: 0 for k in ISSUE_KINDS}} for d in labels}
+                **{k: 0 for k in (*ISSUE_KINDS, *CHAT_ERROR_CAUSES)}}
+            for d in labels}
     reached = {m: 0 for m in MILESTONES}
     both = {(a, b): 0 for a, b in zip(MILESTONES, MILESTONES[1:])}
     with session_scope() as s:
@@ -294,13 +357,15 @@ def daily(session_scope, days: int = 7,
                 if getattr(f, a) is not None and getattr(f, b) is not None:
                     both[(a, b)] += 1
         for i in s.query(IssueDay).filter(IssueDay.day >= labels[-1]):
-            if i.day in rows and i.kind in ISSUE_KINDS:
+            if i.day in rows and (i.kind in ISSUE_KINDS
+                                  or i.kind in CHAT_ERROR_CAUSES):
                 rows[i.day][i.kind] += i.count or 0
         waiting = (s.query(beta_signup.BetaRequest)
                    .filter_by(status="pending").count())
         per_inviter = invites.per_inviter(s)
     window = {k: sum(r[k] for r in rows.values())
-              for k in (*MILESTONES, "via_invite", *ISSUE_KINDS)}
+              for k in (*MILESTONES, "via_invite", *ISSUE_KINDS,
+                        *CHAT_ERROR_CAUSES)}
     # Of the accounts that reached one step, how many also reached the
     # next. The steps are not strictly ordered (a phone can be linked on
     # made-up records), so "both" is counted, never "the later one".
@@ -330,6 +395,9 @@ def digest_text(report: dict, day: str) -> str:
     lines += ["", "Issues"]
     for k in ISSUE_KINDS:
         lines.append(f"{k}: {today[k]}  (7 days: {report['window'][k]})")
+    lines += ["", "chat_error by cause"]
+    for k in CHAT_ERROR_CAUSES:
+        lines.append(f"  {k}: {today[k]}  (7 days: {report['window'][k]})")
     lines += ["", "Details: /admin/funnel, or flask funnel daily"]
     return "\n".join(lines)
 
@@ -413,7 +481,8 @@ def register(app, svc, cfg, full_session=lambda: True) -> None:
         report = daily(svc.session, days=7)
         resp = app.make_response(render_template(
             "admin_funnel.html", report=report, milestones=MILESTONES,
-            issue_kinds=ISSUE_KINDS, today=report["days"][0]))
+            issue_kinds=ISSUE_KINDS, chat_error_causes=CHAT_ERROR_CAUSES,
+            today=report["days"][0]))
         resp.headers["Cache-Control"] = "no-store"
         return resp
 

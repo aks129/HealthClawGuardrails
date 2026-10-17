@@ -68,6 +68,18 @@
       </tbody>
     </table>
     </div>
+    <div class="funnel-scroll" id="funnel-chat-causes">
+    <table class="funnel-table">
+      <thead><tr><th>Chat error cause</th><th>Today</th><th>7 days</th></tr></thead>
+      <tbody>
+      {% for k in chat_error_causes %}
+      <tr><th>{{ k | replace("_", " ") }}</th>
+        <td class="num">{{ today[k] }}</td>
+        <td class="num">{{ report.window[k] }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
   </section>
 
   <section class="hub-section" id="funnel-inviters">

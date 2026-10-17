@@ -14,10 +14,11 @@ import re
 import signal
 import socket
 import threading
+import traceback
 import uuid
 from datetime import datetime, timezone
 
-from careagents import beta, funnel, llm, routing, tester_terms
+from careagents import beta, causes, funnel, llm, routing, tester_terms
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
@@ -129,6 +130,16 @@ def _parse_time(value: str | None) -> datetime | None:
 def _error_class(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name and name[0].isalpha() else "WorkerError"
+
+
+def _raised_at(exc: BaseException) -> str:
+    """Where `exc` was raised, as file:line in function. Code, not data:
+    unlike a formatted traceback it carries no part of the message."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "-"
+    f = frames[-1]
+    return f"{os.path.basename(f.filename)}:{f.lineno} in {f.name}"
 
 
 # One source of truth for patient-facing failure text — careagents/agent.py
@@ -245,8 +256,10 @@ class RunWorker:
                 payload={"status": "cancelled"})
         except RunDeadlineExceeded:
             heartbeat.stop()
-            funnel.safely(funnel.count_issue, self.accounts.session,
-                          "chat_error")
+            logger.warning("CareAgents run %s failed: cause=%s", run_id,
+                           causes.DEADLINE)
+            funnel.safely(funnel.count_chat_error, self.accounts.session,
+                          causes.DEADLINE)
             try:
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
@@ -275,13 +288,22 @@ class RunWorker:
                 error_class="AmbiguousToolOutcome")
         except Exception as exc:  # noqa: BLE001 - boundary records safe class
             heartbeat.stop()
-            logger.exception("CareAgents run %s failed", run_id)
-            funnel.safely(funnel.count_issue, self.accounts.session,
-                          "chat_error")
+            # The class, the cause code and where it was raised (#926);
+            # never the message, which can carry the question or answer.
+            cause = causes.cause_of(exc)
+            logger.error("CareAgents run %s failed: %s cause=%s at %s",
+                         run_id, _error_class(exc), cause, _raised_at(exc))
+            funnel.safely(funnel.count_chat_error, self.accounts.session,
+                          cause)
+            if causes.needs_owner(exc):
+                funnel.safely(funnel.alert_owner, self.accounts.session,
+                              self.cfg, cause)
+            text = _failure_text(exc,
+                                 owner_told=bool(self.cfg.owner_emails))
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
-                    {"text": _failure_text(exc)})
+                    {"text": text})
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.failed",
@@ -290,7 +312,7 @@ class RunWorker:
                 # Only once the engine took this worker's failure: a worker
                 # that lost its lease lands here too, and the run may yet
                 # finish elsewhere with a real answer.
-                self._answer_failed_turn(run, _failure_text(exc))
+                self._answer_failed_turn(run, text)
             except HealthClawError:
                 logger.exception("could not record failure for run %s", run_id)
         else:
