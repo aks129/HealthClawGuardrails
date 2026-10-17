@@ -195,6 +195,31 @@ def test_a_base_url_two_parsers_could_disagree_on_is_never_vetted(
         _cfg(CARE_REAL_RECORDS="on", **env)
 
 
+@pytest.mark.parametrize("base", [
+    "https://evil.example\\@api.openai.com/v1",
+    "https://api.openai.com@evil.example/v1",
+    "https://user:pw@api.openai.com/v1",
+    "https://api.openai.com/v1?x=1",
+    "https://api.openai.com/v1#frag",
+    "https://api.openai.com /v1",
+    "https://api.openai.com\t/v1",
+    "https://api.openai.com\x00.evil.example/v1",
+    "https://api.openai.com\x7f/v1",
+    "ftp://api.openai.com/v1",
+])
+def test_the_parser_refuses_each_shape_by_itself(base):
+    """Each rule on its own, not only the vetting verdict that several
+    rules guard at once: the URL is refused, so no host is named."""
+    from careagents.config import model_endpoint
+    assert model_endpoint(base) is None
+    assert _cfg(OPENAI_API_KEY="k", OPENAI_BASE_URL=base).model_host is None
+
+
+def test_the_client_url_is_rebuilt_from_the_validated_parts():
+    c = _cfg(OPENAI_API_KEY="k", OPENAI_BASE_URL="https://API.OpenAI.com/v1/")
+    assert c.openai_base == "https://api.openai.com/v1"
+
+
 @pytest.mark.parametrize("base,host", [
     ("https://API.OpenAI.com/v1/", "api.openai.com"),
     ("https://api.groq.com:443/openai/v1", "api.groq.com"),
