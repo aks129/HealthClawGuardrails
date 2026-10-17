@@ -74,7 +74,9 @@ def warn_if_unkeyed() -> None:
 def id_hash(raw: str) -> str:
     """The hash a log writes in place of `raw`: ``t:`` and 10 hex chars."""
     key = _key()
-    data = raw.encode('utf-8', 'surrogateescape')
+    # str() first: a few callers hold a non-string id from a JSON body, and
+    # a log line must never be the thing that raises.
+    data = str(raw).encode('utf-8', 'surrogateescape')
     if key is None:
         digest = hashlib.sha256(data).hexdigest()
     else:
@@ -99,6 +101,18 @@ def loggable_request_id(raw: str | None) -> str:
     if _OWN_REQUEST_ID.fullmatch(raw):
         return raw
     return id_hash(raw)
+
+
+def payload_shape(payload: dict, raw: str, named: frozenset) -> str:
+    """A caller's JSON object described without writing any of it.
+
+    Its size, the keys from `named` that it carries, and a count of the rest.
+    A key is caller-chosen text like any value, so an unexpected one is
+    counted, never written.
+    """
+    known = sorted(key for key in payload if key in named)
+    return (f"bytes={len(raw.encode('utf-8'))} "
+            f"keys={','.join(known) or '-'} other_keys={len(payload) - len(known)}")
 
 
 def scrub(text: str) -> str:

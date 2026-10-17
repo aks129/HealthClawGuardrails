@@ -531,7 +531,10 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: wraps onto one more line; the normalizing itself lives in search_fidelity.
 #: 3728 -> 3738 (FHI-53): the check-in branch of /internal/step-up-token and
 #: of $share-bundle. Only the dispatch is here; the handlers are r6/checkin.py.
-_GOD_MODULE_LINES = 3738
+#: 3738 -> 3744 (FHI-60): connect-diagnostic's key allowlist and the comment
+#: on why it no longer writes its payload. Hashing and the payload summary
+#: live in r6/log_safety.py; the six log calls here only wrap their ids.
+_GOD_MODULE_LINES = 3744
 
 
 def test_the_god_module_only_shrinks():

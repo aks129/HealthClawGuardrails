@@ -36,7 +36,7 @@ from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
-from r6.log_safety import loggable_id
+from r6.log_safety import loggable_id, payload_shape
 from r6.discovery_paths import (_is_exempt_discovery_path,
                                 refuse_resource_rule_on_exempt_path)
 from r6.resource_ids import refuse_malformed_resource_id
@@ -1876,9 +1876,7 @@ _CONNECT_DIAGNOSTIC_MAX_BYTES = 4096
 #: this must not become the one unaudited, unredacted write path into our logs.
 _CONNECT_DIAGNOSTIC_FORBIDDEN = ('resourceType', 'entry', 'identifier')
 
-#: The field names templates/fasten_connect.html sends. Only these are named
-#: in the log line; a key is caller-chosen text like any value, so others
-#: are counted, not written (FHI-60).
+#: The field names fasten_connect.html sends: the only keys the log names.
 _CONNECT_DIAGNOSTIC_KEYS = frozenset({'event_type', 'error', 'request_id'})
 
 
@@ -1908,10 +1906,8 @@ def record_connect_diagnostic():
         # what it rejected reflects the caller's string.
         return jsonify({'error': 'diagnostic payload too large'}), 413
 
-    # Unauthenticated, so the tenant is hashed and the payload is never
-    # written: only its size and which of the page's own field names it
-    # carries (FHI-60). Fasten's request id still reaches support through
-    # the patient, who sees it on the connect page.
+    # Unauthenticated: the tenant is hashed and the payload never written
+    # (FHI-60). The patient sees Fasten's request id on the connect page.
     try:
         tenant = tenant_from_request(sources=(TenantSource.HEADER,)).id
     except TenantRejected:
@@ -1923,14 +1919,11 @@ def record_connect_diagnostic():
         return jsonify({'error': 'diagnostic payload rejected'}), 422
 
     reference = f'ccd_{uuid.uuid4().hex[:12]}'
-    known = sorted(key for key in payload if key in _CONNECT_DIAGNOSTIC_KEYS)
     # WARNING, not INFO: this is a user-visible failure of the product's front
     # door, and it needs to be greppable in the same pass as an outage.
     logger.warning(
-        'connect-diagnostic %s tenant=%s bytes=%d keys=%s other_keys=%d',
-        reference, loggable_id(tenant), len(raw.encode('utf-8')),
-        ','.join(known) or '-',
-        len(payload) - len(known))
+        'connect-diagnostic %s tenant=%s %s', reference, loggable_id(tenant),
+        payload_shape(payload, raw, _CONNECT_DIAGNOSTIC_KEYS))
     return jsonify({'reference': reference}), 202
 
 
@@ -2047,13 +2040,11 @@ def purge_tenant_route():
         db.session.commit()
     except Exception:
         db.session.rollback()
-        logger.exception('tenant purge failed for %s',
-                         loggable_id(tenant_id))
+        logger.exception('tenant purge failed for %s', loggable_id(tenant_id))
         return jsonify({'error': 'purge failed', 'deleted': False}), 500
 
     total = purge_summary(deleted)
-    logger.info('tenant purge complete: %s rows for %s', total,
-                loggable_id(tenant_id))
+    logger.info('tenant purge complete: %s rows for %s', total, loggable_id(tenant_id))
     return jsonify({
         'tenant_id': tenant_id,
         'deleted': True,
@@ -2087,8 +2078,7 @@ def fasten_revoke_route():
     try:
         return jsonify(revoke_tenant(tenant_id)), 200
     except Exception:
-        logger.exception('fasten revoke failed for %s',
-                         loggable_id(tenant_id))
+        logger.exception('fasten revoke failed for %s', loggable_id(tenant_id))
         return jsonify({'error': 'revoke failed', 'revoked': False}), 500
 
 
@@ -2375,8 +2365,7 @@ def ingest_bundle():
             logger.warning(
                 'ingest-bundle entry %d failed (tenant=%s correlation=%s '
                 'exc_class=%s)',
-                idx, loggable_id(tenant_id), correlation_id,
-                type(exc).__name__)
+                idx, loggable_id(tenant_id), correlation_id, type(exc).__name__)
             errors.append({'index': idx, 'resourceType': rtype,
                            'code': 'ingest_error',
                            'correlation_id': correlation_id,
@@ -2425,8 +2414,7 @@ def ingest_bundle():
         db.session.rollback()
         logger.warning('ingest-bundle commit failed (tenant=%s '
                        'correlation=%s exc_class=%s)',
-                       loggable_id(tenant_id), correlation_id,
-                       type(exc).__name__)
+                       loggable_id(tenant_id), correlation_id, type(exc).__name__)
         return jsonify({'error': 'commit_failed',
                         'correlation_id': correlation_id,
                         'ingested': 0, 'skipped': skipped, 'failed': failed,
