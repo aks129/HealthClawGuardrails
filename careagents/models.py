@@ -328,6 +328,23 @@ class UsageDay(Base):
     turns = Column(Integer, default=0)
 
 
+class VoiceUsageDay(Base):
+    """Per-account daily speech spend: seconds transcribed, characters
+    spoken (careagents/voice.py). ElevenLabs bills both to the operator, so
+    the cap is durable and shared, like UsageDay.
+
+    Integers only. No audio, no transcript, no spoken text.
+    """
+    __tablename__ = "ca_voice_usage_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_voice_usage_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("vu"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
+    stt_seconds = Column(Integer, default=0)
+    tts_chars = Column(Integer, default=0)
+
+
 class ActivityDay(Base):
     """Per-account daily counts for the weekly number (beta spec 4.5).
 

@@ -2242,6 +2242,15 @@ class FakeClient:
         # stand-in carries it rather than 404ing a future caller.
         return f"step-up-{tenant}"
 
+    def mint_checkin_token(self, tenant, resource_types):
+        # The real one is uncached and spent by checkin_export; the relay
+        # itself is pinned against the real engine in
+        # tests/test_checkin_relay.py.
+        return f"checkin-{tenant}-{','.join(sorted(set(resource_types)))}"
+
+    def checkin_export(self, tenant, resource_types):
+        return b'{"resourceType": "Bundle", "type": "collection", "entry": []}'
+
     def seed(self, tenant):
         return 7
 
