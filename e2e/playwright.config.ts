@@ -13,9 +13,10 @@ const PORT = process.env.E2E_PORT || '5000';
 // HealthClaw.
 export const CARE_PORT = process.env.CARE_E2E_PORT || '5101';
 export const CARE_BASE_URL = `http://localhost:${CARE_PORT}`;
-// CARE_E2E_LOG moves it, so two runs on one machine do not share a log.
+// Overridable, like the ports, so parallel runs on one machine do not
+// share a database or a log. CI keeps the defaults.
 export const CARE_LOG = process.env.CARE_E2E_LOG || '/tmp/e2e-careagents.log';
-const CARE_DB = '/tmp/e2e-careagents.db';
+const CARE_DB = process.env.CARE_E2E_DB || '/tmp/e2e-careagents.db';
 
 // A THIRD app: the same CareAgents code with CARE_REAL_RECORDS=allowlist
 // (#553, council ruling 2026-09-02 D3). The switch is read once, at
@@ -24,8 +25,10 @@ const CARE_DB = '/tmp/e2e-careagents.db';
 // needs its own server, its own SQLite and its own log.
 export const CARE_ALLOW_PORT = process.env.CARE_ALLOW_E2E_PORT || '5102';
 export const CARE_ALLOW_BASE_URL = `http://localhost:${CARE_ALLOW_PORT}`;
-export const CARE_ALLOW_LOG = '/tmp/e2e-careagents-allow.log';
-const CARE_ALLOW_DB = '/tmp/e2e-careagents-allow.db';
+export const CARE_ALLOW_LOG =
+  process.env.CARE_ALLOW_E2E_LOG || '/tmp/e2e-careagents-allow.log';
+const CARE_ALLOW_DB =
+  process.env.CARE_ALLOW_E2E_DB || '/tmp/e2e-careagents-allow.db';
 // Fixed, and synthetic. The allowlist is server env, so the address the spec
 // signs in with has to be known before the server boots — it cannot be the
 // per-test unique address the other specs use. `.test` is reserved (RFC 2606)
@@ -78,7 +81,8 @@ export default defineConfig({
         // Explicit testing env keeps the app off the fail-closed production path.
         APP_ENV: 'testing',
         STEP_UP_SECRET: 'e2e-test-secret-not-for-production',
-        SQLALCHEMY_DATABASE_URI: 'sqlite:////tmp/e2e-healthclaw.db',
+        SQLALCHEMY_DATABASE_URI:
+          `sqlite:///${process.env.E2E_DB || '/tmp/e2e-healthclaw.db'}`,
         FLASK_ENV: 'testing',
         PORT,
       },
