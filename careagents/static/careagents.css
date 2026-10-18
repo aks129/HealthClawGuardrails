@@ -578,6 +578,13 @@ h1 em { font-style: normal; color: var(--accent-ink); }
 .surface.on span { color: var(--ok-ink); font-weight: 600; }
 .surface.soon { cursor: default; }
 .surface.soon b { color: var(--ink-soft); }
+/* Settings: "Phone app" opens to say how to add it to the home screen. */
+.surface.phone-app { display: block; }
+.phone-app > summary { display: grid; grid-template-columns: 1fr auto;
+  min-height: 32px; align-content: center; list-style: none; }
+.phone-app > summary::-webkit-details-marker { display: none; }
+.phone-app > summary span { color: var(--accent-ink); text-decoration: underline; }
+.phone-app p { margin: 10px 0 0; font-size: 16px; }
 #im-surface { position: relative; padding-right: 44px; }
 #im-surface::after { content: ""; position: absolute; right: 16px; top: 50%;
   width: 20px; height: 20px; margin-top: -10px; background: var(--ink-soft);
@@ -1033,6 +1040,15 @@ textarea:focus-visible {
 .beta-err { margin: 18px 0 0; }
 .beta-err + .btn-primary { margin-top: 12px; }
 .beta-keep { margin-top: 12px; }
+.beta-done p { margin: 0 0 12px; }
+/* _in_app_hint.html: inside an app's built-in browser only. */
+.in-app-hint { margin: 16px 0; padding: 14px 16px; border-radius: 12px;
+  border: 1px solid var(--practice-line); background: var(--practice-bg);
+  font-size: 16px; }
+.in-app-hint p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.in-app-hint .inline-msg { margin: 10px 0 0; }
+.beta-done .btn-block + .btn-block { margin-top: 8px; }
+.beta-done a.btn-block { text-decoration: none; }
 /* The mobile field's hint on /beta, and the /feedback boxes. */
 .beta-page .field-hint { font-size: 16px; color: var(--ink-soft);
   margin: 8px 0 0; }

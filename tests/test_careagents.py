@@ -2242,6 +2242,15 @@ class FakeClient:
         # stand-in carries it rather than 404ing a future caller.
         return f"step-up-{tenant}"
 
+    def mint_checkin_token(self, tenant, resource_types):
+        # The real one is uncached and spent by checkin_export; the relay
+        # itself is pinned against the real engine in
+        # tests/test_checkin_relay.py.
+        return f"checkin-{tenant}-{','.join(sorted(set(resource_types)))}"
+
+    def checkin_export(self, tenant, resource_types):
+        return b'{"resourceType": "Bundle", "type": "collection", "entry": []}'
+
     def seed(self, tenant):
         return 7
 
@@ -6536,7 +6545,9 @@ def test_the_landing_page_does_not_promise_a_provider_login_the_beta_closes(
     goes rather than being made conditional."""
     body = app.test_client().get("/").get_data(as_text=True)
     assert "verified login" not in body
-    assert "connect your records" in body
+    # While real records are closed it says they come later (patient
+    # tester, 2026-10-16), not "then connect your records".
+    assert "Connecting your own records comes later in the beta." in body
 
 
 def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):

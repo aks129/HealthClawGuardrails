@@ -208,7 +208,9 @@ def test_a_join_without_a_live_code_is_an_ordinary_join(
     app, svc = made(RESEND_API_KEY="re_test")
     c = app.test_client()
     r = _post(c, email="plain@example.com", invite="f" * 32)
-    assert r.status_code == 200 and r.get_json() == {"ok": True}
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "sent": True}
+    # A dead code names nobody: the ordinary subject.
+    assert sent[-1][1].startswith("Confirm you asked to test CareAgents")
     token = _confirm_token(sent[-1][3])
     assert c.post("/beta/confirm", data={"t": token}).status_code == 200
     assert _invite_row(svc, "plain@example.com") is None
