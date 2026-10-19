@@ -137,27 +137,41 @@ class TestPrivacyReconciliation:
         # audit rows (r6/purge.py).
         body = _privacy_prose(client)
         assert 'careagents beta testers' in body
-        assert 'made up sample patient' in body
-        assert 'accepts the tester terms before any records come in' in body
-        assert 'delete removes that connection\'s records' in body
+        assert 'sample patient whose records are made up' in body
+        assert 'no real health data is involved' not in body
+        assert ('accepts the tester terms before any of their records come in'
+                in body)
+        assert 'delete removes that source\'s records' in body
         assert 'right away' in body
-        assert 'log of when your records were looked at' in body
 
     def test_careagents_retention_names_everything_that_survives(self, client):
         # A retention statement that lists only the audit trail reads as the
-        # exhaustive list. The first draft of this paragraph also said the
-        # tenant held "nothing else about you", which contradicts
-        # docs/beta-tester-guide.md's own data table. Self-serve account
-        # deletion shipped in #554 (POST /api/account/delete, Settings), so
-        # the old "no self-serve button, email support" line is false and
-        # must not come back; what outlives it is the PHI-free audit log.
+        # exhaustive list. It is not. After account delete
+        # (accounts.delete_account, #554) these outlive it: the engine's
+        # PHI-free audit rows and TenantClosure tombstone (r6/purge.py);
+        # hashed mailbox / handle rows (BetaMailCap, InviteJoin,
+        # ImessageHandleState and its STOP flag); aggregate day counts and
+        # Sendblue delivery rows. The old "no self-serve button, email
+        # support" line became false with #554 and must not come back.
         body = _privacy_prose(client)
         assert 'nothing else about you' not in body
         assert 'no self serve' not in body
-        assert "careagents' own database holds no health data" in body
-        assert 'your passkey' in body
+        assert 'one thing outlives deletion' not in body
+        assert "careagents' own database holds no health records" in body
         assert 'delete your whole account yourself in settings' in body
-        assert 'one thing outlives deletion' in body
+        for survivor in ('log of when your records were looked at',
+                         'each deleted space was closed',
+                         'scrambled codes made from your email address and '
+                         'messaging number',
+                         'keep honoring a stop',
+                         'daily totals that count everyone together'):
+            assert survivor in body, survivor
+
+    def test_rights_section_says_deletion_is_immediate(self, client):
+        body = _privacy_prose(client)
+        assert 'completes within 30 days' not in body
+        assert 'deletion happens right away' in body
+        assert 'healthclaw never sells your data' in body
 
 
 class TestCareAgentsSurfaceCopy:

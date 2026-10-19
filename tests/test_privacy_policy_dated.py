@@ -20,7 +20,7 @@ PRIVACY = Path(__file__).resolve().parent.parent / "templates" / "privacy.html"
 DATE_RE = re.compile(r"Last updated: ([A-Z][a-z]+ \d{1,2}, \d{4})")
 
 PINNED_DATE = "October 19, 2026"
-PINNED_BODY_SHA = "a660e9927d4c7b680b2f78f3654c1cc462d61ff955e1592c9513231a1760b723"
+PINNED_BODY_SHA = "4abd1648bf59e375432b97ac0945c52fa4be9ef4d15c5fcd233c1f861959ae1d"
 
 
 def _date_and_body_sha():

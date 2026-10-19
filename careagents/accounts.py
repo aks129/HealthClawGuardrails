@@ -33,7 +33,8 @@ from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
                                Passkey, Person, RealRecordInvite, RefundDay,
-                               SendblueMessage, Surface, UsageDay, make_engine,
+                               SendblueMessage, Surface, UsageDay,
+                               VoiceUsageDay, make_engine,
                                make_session_factory, now)
 from careagents.models import REFUNDS_PER_DAY
 
@@ -978,9 +979,23 @@ class AccountService:
             acct = s.get(Account, account_id)
             if acct is None:
                 return False
-            # People last: connections and agents point at them.
+            # Sign-in links texted to the account's messaging numbers carry
+            # the number itself, so they go too. The per-number STOP flag
+            # and counters stay: keyed by a hash, not the number, and a STOP
+            # must outlive the account that sent it.
+            handles = [h for (h,) in s.query(Surface.handle).filter(
+                Surface.account_id == account_id, Surface.kind == "imessage",
+                Surface.handle.isnot(None))]
+            if handles:
+                s.query(ImessageLink).filter(
+                    ImessageLink.handle.in_(handles)).delete(
+                        synchronize_session=False)
+            # People last: connections and agents point at them. Every
+            # table with a foreign key to ca_accounts is listed here
+            # (tests/test_careagents_account_delete_voice.py enumerates them).
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, RefundDay, ActivityDay, Person):
+                          UsageDay, RefundDay, ActivityDay, VoiceUsageDay,
+                          Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)
@@ -1521,6 +1536,10 @@ class AccountService:
                     st = s.get(ImessageHandleState, _handle_key(x.handle))
                     if st is not None:
                         st.link_count, st.link_window_start = 0, None
+                    # Its sign-in links hold the number; they go with the
+                    # binding (#1004).
+                    s.query(ImessageLink).filter_by(handle=x.handle).delete(
+                        synchronize_session=False)
                 s.delete(x)
             return len(rows)
 
@@ -1535,17 +1554,18 @@ class AccountService:
 
     def imessage_stop(self, handle: str, also: str | None = None) -> bool:
         """Unbind the handle (and the raw spelling `also`, for a row bound
-        before normalization), void its unused sign-in links, and remember
+        before normalization), delete its sign-in links, and remember
         the STOP. True if this is news: not already opted out."""
         names = list({h for h in (handle, also) if h})
         with self.session() as s:
             s.query(Surface).filter(
                 Surface.kind == "imessage", Surface.handle.in_(names),
                 Surface.status == "active").delete(synchronize_session=False)
+            # Deleted, not stamped: a link row holds the number, and a
+            # missing link is refused like a used one (#1004).
             s.query(ImessageLink).filter(
-                ImessageLink.handle.in_(names),
-                ImessageLink.used_at.is_(None)).update(
-                    {"used_at": now()}, synchronize_session=False)
+                ImessageLink.handle.in_(names)).delete(
+                    synchronize_session=False)
             st = self._handle_state(s, handle)
             first = st.opted_out_at is None
             st.opted_out_at = st.opted_out_at or now()

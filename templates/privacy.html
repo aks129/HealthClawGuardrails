@@ -15,8 +15,9 @@
         Effective: March 29, 2026 &middot; Last updated: October 19, 2026
       </p>
       <p class="legal__meta">
-        Changes on October 19, 2026: rewrote the CareAgents beta testers section to cover testers who connect
-        their own records, what the AI model receives, and self-serve account deletion.
+        Changes on October 19, 2026: rewrote the CareAgents beta testers section (testers' own records, what
+        the AI model receives, account deletion and what stays after it); section 8 now says deletion is
+        immediate and that the no-training promise is HealthClaw's own.
       </p>
     </div>
 
@@ -132,27 +133,43 @@
       </p>
       <h3>CareAgents beta testers</h3>
       <p>
-        Every tester starts with a made-up sample patient. No real health data is involved.
+        Every tester starts with a sample patient whose records are made up.
       </p>
       <p>
-        Some testers are invited to connect their own records from their patient portal, through Fasten Health.
-        Each tester reads and accepts the tester terms before any records come in. Your records, and your chats
-        with your assistant, are stored in a private space for your account in HealthClaw.
-        CareAgents' own database holds no health data: just your account, your email address, your passkey,
-        which sources you connected, and counts that hold no health details.
+        Some testers are invited to use their own records: from their patient portal through Fasten Health, or
+        from a file or device they add. Each tester reads and accepts the tester terms before any of their
+        records come in. HealthClaw stores those records, and your chats with your assistant, in a private
+        space for each source you connect.
       </p>
       <p>
-        To answer you, your assistant sends your records to an AI model from Anthropic, OpenAI, Google or Groq,
-        with your name and other details taken out. The model gets what you type exactly as you type it.
+        CareAgents' own database holds no health records. It holds your account: your email address and passkey;
+        the first name and mobile number you gave us; a messaging number you linked; the nicknames and
+        relationships of people you care for; your assistant's settings; which sources and apps you connected;
+        your invite link; and counts of how you use the app.
+      </p>
+      <p>
+        To answer you, your assistant sends your records to an AI model from Anthropic, OpenAI, Google or Groq.
+        Before they go, names are cut to initials, birth dates to the year, and ID numbers, street addresses,
+        phone numbers and email addresses are removed. The model gets what you type exactly as you type it.
       </p>
       <p>
         You can stop at any time. Disconnect stops new records and keeps the ones already here.
-        Delete removes that connection's records, your chats and anything waiting for your OK, right away.
+        Delete removes that source's records, your chats and anything waiting for your OK, right away.
         You can also delete your whole account yourself in Settings. That deletes the records from every
-        connection first, then your email address, your passkey and the rest of your account.
-        One thing outlives deletion: our log of when your records were looked at, including the deletion itself.
-        It has no health details in it.
+        source first, then everything CareAgents holds about you listed above.
       </p>
+      <p>
+        Some things stay after you delete, and none of them are health records:
+      </p>
+      <ul>
+        <li>our log of when your records were looked at or shared, including the deletion itself;</li>
+        <li>a note that each deleted space was closed, with only its id and the time;</li>
+        <li>scrambled codes made from your email address and messaging number, not the address or number
+            itself, which we use to limit how many messages we send, to stop an invite being used twice, and to
+            keep honoring a STOP you texted;</li>
+        <li>daily totals that count everyone together, and records that a text was delivered, with no
+            number or words in them.</li>
+      </ul>
 
       <h2 id="third-party">5. Third-Party Services</h2>
       <p>The software may connect to the following external services, depending on configuration:</p>
@@ -205,12 +222,12 @@
       <ul>
         <li><strong>Disconnect</strong> any data source at any time</li>
         <li><strong>Export</strong> your data as standard FHIR at any time</li>
-        <li><strong>Request deletion</strong> of your tenant and all stored records — deletion completes within
-            30 days and is confirmed to you</li>
+        <li><strong>Delete</strong> your tenant and all stored records from the CareAgents app — deletion
+            happens right away, and the app tells you when it is done. The PHI-free audit trail is kept.</li>
         <li><strong>Review the audit trail</strong> of every access to your records</li>
       </ul>
       <p>
-        We never sell your data, never use it for advertising, and never use it to train AI models.
+        HealthClaw never sells your data, never uses it for advertising, and never uses it to train AI models.
       </p>
       <p>
         If you have submitted data through the public demo and wish to request deletion, contact us at
