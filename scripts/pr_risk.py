@@ -46,6 +46,7 @@ SIGNALS = (
     "display_text_touched",
     "test_deleted",
     "test_skipped",
+    "test_patches_engine",
 )
 
 
@@ -345,7 +346,12 @@ _TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)\s*\(")
 _SKIP = re.compile(
     r"\bmark\.(?:skip|skipif|xfail)\b|\bpytest\.(?:skip|xfail|importorskip)\("
     r"|#\s*noqa\b|\bunittest\.skip|\bpytest_(?:collection_modifyitems|ignore_collect)\b"
-    r"|\b(?:it|test|describe)\.skip\(|\bxit\(")
+    r"|\bpytest\.exit\(|\b(?:it|test|describe)\.skip\(|\bxit\(")
+# A test that swaps out engine code can make a guardrail test pass against a
+# stub. Aliased imports and getattr evade this; it is a tripwire, not a proof.
+_PATCHES_ENGINE = re.compile(
+    r"\b(?:monkeypatch\.(?:setattr|setitem|delattr)|patch(?:\.object|\.dict)?)"
+    r"\(\s*[\"']?r6\.")
 
 
 def _joined_added_runs(f: dict) -> list[tuple[int, str]]:
@@ -414,6 +420,8 @@ def detect_signals(files: list[dict]) -> list[dict]:
                 hit("display_text_touched", f, no)
             if _SKIP.search(text) and not prose:
                 hit("test_skipped", f, no)
+            if is_test and _PATCHES_ENGINE.search(text):
+                hit("test_patches_engine", f, no)
 
         for no, text in f["removed"]:
             key = text.strip()
@@ -539,7 +547,7 @@ def render_comment(result: dict | None, head_sha: str = "",
             lines.append("")
             lines.append("</details>")
     lines.append("")
-    lines.append("Rubric: `.github/pr-risk.yml` on the default branch. "
+    lines.append("Rubric: `.github/pr-risk.yml` on `main`. "
                  "Scorer: `scripts/pr_risk.py`.")
     body = "\n".join(lines) + "\n"
     if len(body) > COMMENT_MAX:

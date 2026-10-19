@@ -96,13 +96,14 @@ jobs:
 
             // 1. Withdraw the previous verdict before anything else can throw:
             //    drop every risk:/owner-look: label and set owner-look:yes.
+            //    owner-look:yes goes on first, so no instant has neither.
             //    addLabels creates a label that does not exist yet.
+            await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['owner-look:yes'] });
             const before = (await github.rest.issues.listLabelsOnIssue(
               { owner, repo, issue_number, per_page: 100 })).data.map(l => l.name);
             for (const name of before.filter(n => isVerdict(n) && n !== 'owner-look:yes')) {
               await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
             }
-            await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['owner-look:yes'] });
 
             // 2. Read the score. Any failure stays owner-look YES, never a quiet R0.
             let level = null, look = true, body;

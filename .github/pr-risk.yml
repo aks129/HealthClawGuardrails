@@ -17,11 +17,12 @@
 default_level: 1
 
 paths:
-  # R0: prose and tests. A deleted or skipped test is caught by a signal.
+  # R0: prose and test modules. A deleted or skipped test is caught by a
+  # signal. Other files under tests/ (helpers, fixtures) are the R1 default.
   - {level: 0, glob: "docs/**"}
   - {level: 0, glob: "*.md"}
   - {level: 0, glob: "**/*.md"}
-  - {level: 0, glob: "tests/**"}
+  - {level: 0, glob: "tests/**/test_*.py"}
 
   # R1: UI, copy, non-CI scripts. Also the default for anything unlisted.
   - {level: 1, glob: "docs/qa/**"}
@@ -44,7 +45,12 @@ paths:
   - {level: 2, glob: "migrations/**"}
   - {level: 2, glob: "r6/database_migrations.py"}
   - {level: 2, glob: ".github/**"}
-  - {level: 2, glob: "pyproject.toml"}
+  - {level: 2, glob: "pyproject.toml"}  # includes [tool.pytest]
+  # Test-runner config: an addopts line can deselect the conformance suite.
+  - {level: 2, glob: "**/pytest.ini"}
+  - {level: 2, glob: "**/setup.cfg"}
+  - {level: 2, glob: "**/tox.ini"}
+  - {level: 2, glob: "**/pyproject.toml"}
   - {level: 2, glob: "uv.lock"}
   - {level: 2, glob: "**/package.json"}
   - {level: 2, glob: "**/package-lock.json"}
@@ -96,6 +102,13 @@ paths:
   - {level: 3, glob: "careagents/templates/approvals.html"}
   - {level: 3, glob: "careagents/templates/consent.html"}
   - {level: 3, glob: "careagents/static/consent.js"}
+  # What those pages extend or include runs inside them, so it is the gate
+  # too: action_approve/action_review extend review_base.html and include
+  # _review_handlers.html; approvals/consent extend careagents base.html.
+  # Listed by name; a new extends/include on a gate page needs a row here.
+  - {level: 3, glob: "templates/review_base.html"}
+  - {level: 3, glob: "templates/_review_handlers.html"}
+  - {level: 3, glob: "careagents/templates/base.html"}
   - {level: 3, glob: "services/agent-orchestrator/src/**/*auth*"}
   - {level: 3, glob: ".env*"}
   - {level: 3, glob: "**/.env*"}
@@ -124,4 +137,5 @@ signals:
   new_env_secret: 3       # a newly read env var or Actions secret named like a secret
   display_text_touched: 2  # application code reads "display" or "text"
   test_deleted: 2         # a test file deleted, or a test function removed
-  test_skipped: 2         # skip/xfail/noqa or a collection hook added
+  test_skipped: 2         # skip/xfail/noqa/pytest.exit or a collection hook added
+  test_patches_engine: 2  # a test monkeypatches or mock-patches r6.*

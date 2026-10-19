@@ -69,6 +69,13 @@ def signals(result):
     ("docs/specs/x.md", 1), ("somewhere/new_thing.txt", 1),
     # R0: prose and tests.
     ("docs/notes.md", 0), ("README.md", 0), ("tests/test_something.py", 0),
+    ("tests/actions/test_x.py", 0),
+    # Round 2: helpers under tests/, runner config, what gate pages pull in.
+    ("tests/approval_helpers.py", 1), ("tests/evals/data.json", 1),
+    ("tests/pytest.ini", 2), ("setup.cfg", 2), ("tox.ini", 2),
+    ("services/x/pyproject.toml", 2), ("conftest.py", 2),
+    ("templates/_review_handlers.html", 3), ("templates/review_base.html", 3),
+    ("careagents/templates/base.html", 3), ("templates/action_approve.html", 3),
 ])
 def test_path_floor(path, level):
     result = pr_risk.score(diff(path, added=["x = 1"]), RUBRIC)
@@ -161,6 +168,12 @@ SIGNAL_ROWS = [
     ("tests/test_x.py", ["@pytest.mark.xfail(strict=True)"], [], "test_skipped"),
     ("scripts/x.py", ["import os  # noqa: F401"], [], "test_skipped"),
     ("tests/test_x.py", ["def test_b():"], [], None),
+    ("tests/test_x.py", ["    pytest.exit('done', returncode=0)"], [], "test_skipped"),
+    ("tests/test_x.py", ["    monkeypatch.setattr('r6.access.require_grant', fake)"], [], "test_patches_engine"),
+    ("tests/test_x.py", ["    with patch(\"r6.redaction.apply_redaction\"):"], [], "test_patches_engine"),
+    ("tests/test_x.py", ["    with mock.patch.object(r6.stepup, 'x'):"], [], "test_patches_engine"),
+    ("tests/test_x.py", ["    monkeypatch.setattr('careagents.llm.call', fake)"], [], None),
+    ("scripts/x.py", ["    monkeypatch.setattr('r6.access.require_grant', fake)"], [], None),
 ]
 
 
