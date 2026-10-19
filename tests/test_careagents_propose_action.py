@@ -472,3 +472,14 @@ def test_other_kinds_are_not_held_to_the_number(cfg, svc, monkeypatch):  # noqa:
     c, fake, agent = _app(cfg, svc, monkeypatch)
     r = c.post(f"/review/{agent}/act-1/submit", json={"nka": "true"})
     assert r.status_code == 200
+
+
+@pytest.mark.parametrize("purpose", text_self.PURPOSES)
+@pytest.mark.parametrize("origin", ["https://care.example", ""])
+def test_every_fixed_text_passes_the_engines_red_flag_screen(purpose, origin):
+    """The engine screens payload.body at propose; a template it refused
+    would make the tool fail for everyone."""
+    from r6.actions.safety import screen_text
+    body = text_self.body_for(purpose, origin)
+    assert screen_text(body) is None
+    assert "STOP" in body and len(body) <= 160
