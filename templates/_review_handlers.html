@@ -173,6 +173,21 @@
           // confirmation exists, so that is a claim this page never observed.
           // State what the 409 does establish — the person already approved
           // it — and let the status resolve the rest.
+          // The CareAgents relay's 409 for a text whose number is not the
+          // account's own: refused BEFORE any review was recorded, so it is
+          // not "already approved" and there is nothing to poll for. Approve
+          // goes; Decline stays, because declining it is the way out.
+          // Keyed on the code alone: the relay sends it only with its 409.
+          if (res.b.error === 'not_your_number') {
+            btn.disabled = true;
+            btn.hidden = true;
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent = res.b.message ||
+              'This text is not going to the phone number linked to your ' +
+              'account, so it cannot be approved here. You can decline it.';
+            return;
+          }
+
           if (res.r.status === 409) {
             btn.disabled = true;             // never invite a second send here
             gateMsg.className = 'alert alert-secondary';

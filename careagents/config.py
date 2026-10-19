@@ -216,6 +216,21 @@ class Config:
             x.strip().lower()
             for x in (e.get("CARE_REAL_RECORDS_ALLOWLIST") or "").split(",")
             if x.strip())
+        # The chat's propose_action tool: a fixed text to the account's own
+        # verified iMessage number, approved only on the review page.
+        # Shaped like CARE_REAL_RECORDS: `off`, `allowlist` (account emails
+        # in CARE_ACTIONS_SMS_ALLOWLIST) or `on`. Unset is `off`: a deploy
+        # that forgets it must not start texting people.
+        self.actions_sms = (
+            e.get("CARE_ACTIONS_SMS") or "off").strip().lower()
+        if self.actions_sms not in ("off", "allowlist", "on"):
+            raise ConfigError(
+                "CARE_ACTIONS_SMS must be one of off, allowlist, on "
+                f"(got {self.actions_sms!r})")
+        self.actions_sms_allowlist = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_ACTIONS_SMS_ALLOWLIST") or "").split(",")
+            if x.strip())
         # Sole public hostname (#264, D7). When set, a request whose Host
         # header differs is answered 308 to the same path and query on this
         # host, so the platform's own *.up.railway.app name is not a second
@@ -445,6 +460,16 @@ class Config:
         if self.anthropic_api_key or self.anthropic_oauth_token:
             return "anthropic"
         return "openai"
+
+    def actions_sms_open_for(self, email) -> bool:
+        """May this account be offered propose_action? See CARE_ACTIONS_SMS
+        above. The allowlist is read only in `allowlist` mode."""
+        if self.actions_sms == "on":
+            return True
+        if self.actions_sms == "allowlist":
+            email = (email or "").strip().lower()
+            return bool(email) and email in self.actions_sms_allowlist
+        return False
 
     def real_records_open_for(self, email, invited=None) -> bool:
         """May this account START a real-record connection? See

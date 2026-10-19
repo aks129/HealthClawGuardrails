@@ -215,6 +215,27 @@ _CARED_FOR_REVIEW_WORDS = (
 )
 
 
+#: A text (propose_action, or one staged another way) whose number is not
+#: the account's verified phone. Said by the relay's 409 and by the review
+#: page in place of Approve; Decline still works.
+_NOT_YOUR_NUMBER = ("This text is not going to the phone number linked to "
+                    "your account, so it can't be approved here. You can "
+                    "decline it.")
+
+#: The engine approve page's own markup, each reworded once by the relay
+#: for a text to a number that is not the account's. Pinned against
+#: templates/action_approve.html by tests/test_careagents_propose_action.py.
+_NOT_YOUR_NUMBER_PAGE = (
+    ('<div class="form-check mt-2 p-3 bg-body-secondary rounded">',
+     '<div class="form-check mt-2 p-3 bg-body-secondary rounded" hidden>'),
+    ('<div id="review-gate-msg" class="alert alert-secondary" role="alert">',
+     '<div id="review-gate-msg" class="alert alert-warning" role="alert" '
+     'data-not-your-number>' + _NOT_YOUR_NUMBER + '</div><div hidden>'),
+    ('id="approve-btn" class="btn btn-primary btn-lg" disabled>',
+     'id="approve-btn" class="btn btn-primary btn-lg" disabled hidden>'),
+)
+
+
 def _connection_is_live(ctx: dict) -> bool:
     """Whether an agent context's connection may still reach the tenant's
     requests: not revoked (#215). The one rule for every approval surface,
@@ -2840,12 +2861,27 @@ def create_app(config: Config | None = None,
         if not ctx:
             return None
         try:
-            hc.action_status(ctx["tenant"], action_id)
+            action = hc.action_status(ctx["tenant"], action_id)
         except HealthClawError as exc:
             if _engine_said_absent(exc):
                 return None
             raise OwnershipUnknown from exc
-        return ctx
+        # The status rides along, so the text check below reads the same
+        # answer that proved ownership.
+        return dict(ctx, action=action if isinstance(action, dict) else {})
+
+    def _text_not_yours(action):
+        """True for an sms whose number is not the signed-in account's
+        verified phone now: staged by another surface or a raw POST, or the
+        iMessage binding changed since. The same number rule propose_action
+        used (careagents/text_self.py). Only sms is held to it."""
+        if action.get("kind") != "sms":
+            return False
+        payload = action.get("payload")
+        phone = payload.get("phone") if isinstance(payload, dict) else None
+        acct = current_account()
+        mine = svc.verified_phone(acct.id, cfg.imessage_reverify_days * 86400)
+        return not (mine and isinstance(phone, str) and phone == mine)
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
@@ -2937,6 +2973,11 @@ def create_app(config: Config | None = None,
                                      whose=whose)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
+        if _text_not_yours(ctx.get("action") or {}):
+            # "Not your number" in place of Approve; Decline stays. The
+            # submit refuses it as well, before anything is recorded.
+            for old, new in _NOT_YOUR_NUMBER_PAGE:
+                html = html.replace(old, new, 1)
         if sample and whose:
             # The person's own line, as on their chat page, then the
             # approved message about the form, not "your" form.
@@ -2968,17 +3009,24 @@ def create_app(config: Config | None = None,
     @login_required
     def review_submit(agent_id, action_id):
         try:
-            tenant = _agent_owns_action(agent_id, action_id)
+            ctx = _agent_action_context(agent_id, action_id)
         except OwnershipUnknown:
             return jsonify({"error": "review_unavailable",
                             "message": _REVIEW_UNCHECKABLE}), 503
-        if not tenant:
+        if not ctx:
             return jsonify({"error": "not yours"}), 404
+        tenant = ctx["tenant"]
         if svc.is_paused(current_account().id):
             # Before the review is submitted, so nothing is confirmed or
             # executed for a paused account (beta spec 4.6, #856 review F1).
             return jsonify({"error": "records_paused",
                             "message": beta.PAUSED_HUB_TEXT}), 423
+        if _text_not_yours(ctx.get("action") or {}):
+            # BEFORE submit_review: that POST is what writes the consent
+            # record, so a check after it would refuse a text already
+            # approved. Nothing was recorded, so `confirmed` is false.
+            return jsonify({"error": "not_your_number", "confirmed": False,
+                            "message": _NOT_YOUR_NUMBER}), 409
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)

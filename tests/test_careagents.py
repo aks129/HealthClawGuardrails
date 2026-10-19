@@ -2275,6 +2275,11 @@ class FakeClient:
     def start_form_action(self, tenant):
         return "act-1"
 
+    def propose_sms(self, tenant, phone, body):
+        self.proposed_sms = getattr(self, "proposed_sms", []) + [
+            {"tenant": tenant, "phone": phone, "body": body}]
+        return "act-sms"
+
     def pending_actions(self, tenant):
         return [{"id": "act-1", "kind": "form-fill", "to": None,
                  "status": "awaiting_confirmation"}]

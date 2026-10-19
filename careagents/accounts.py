@@ -1327,6 +1327,8 @@ class AccountService:
                  if a.person_id else None)
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
                     "account_id": a.account_id,
+                    # For flags kept by account email (CARE_ACTIONS_SMS).
+                    "email": acct.email if acct else "",
                     "connection": _conn_dict(conn),
                     "person": ({"kind": p.kind, "relationship": p.relation}
                                if p else {"kind": "self"}),
@@ -1488,6 +1490,30 @@ class AccountService:
         with self.session() as s:
             s.execute(update(Surface).where(Surface.id == surface_id)
                       .values(last_inbound_at=now()))
+
+    def verified_phone(self, account_id: str,
+                       reverify_seconds: float) -> str | None:
+        """The account's own phone number as E.164, or None: from an active
+        iMessage binding whose handle is a number (an Apple ID email does
+        not count) and is not due to re-confirm. Keyed on the account, not
+        an agent. Two different numbers is no number: which one the person
+        meant is not ours to guess."""
+        from careagents.imessage import normalize_handle, reverify_due
+        with self.session() as s:
+            rows = (s.query(Surface)
+                    .filter(Surface.account_id == account_id,
+                            Surface.kind == "imessage",
+                            Surface.status == "active").all())
+            surfaces = [_surf_dict(x) | _reverify_fields(x) for x in rows]
+        numbers = set()
+        for x in surfaces:
+            handle = normalize_handle(x.get("handle"))
+            if not handle or "@" in handle:
+                continue
+            if reverify_due(x, now(), reverify_seconds):
+                continue
+            numbers.add(handle)
+        return numbers.pop() if len(numbers) == 1 else None
 
     def imessage_mark_reverify(self, surface_id: str,
                                verified_at: float | None) -> bool:

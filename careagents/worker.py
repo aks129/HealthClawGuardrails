@@ -17,10 +17,10 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-from careagents import beta, funnel, llm, routing, tester_terms
+from careagents import beta, funnel, llm, routing, tester_terms, text_self
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
-                              TOOL_LABELS, TOOLS,
+                              TOOL_LABELS, tools_for_turn,
                               failure_text as agent_failure_text,
                               records_arriving,
                               tool_error_result as agent_tool_error_result,
@@ -518,6 +518,14 @@ class RunWorker:
 
         lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
+
+        def sms_phone() -> str | None:
+            return text_self.sms_phone_for(
+                self.cfg, self.accounts, context["account_id"],
+                context.get("email") or "")
+        # Built per turn: propose_action is offered only with a number to
+        # text, and _execute_tool asks again when it is called.
+        offered = tools_for_turn(sms_phone())
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
             self._mark(context["account_id"], "first_answer")
@@ -533,7 +541,7 @@ class RunWorker:
                     for call in ((checkpoints[-1].get("payload") or {}).get(
                         "tool_calls") or []))) else None
             if pending_checkpoint is None:
-                tools = TOOLS if round_number < MAX_TOOL_ROUNDS else []
+                tools = offered if round_number < MAX_TOOL_ROUNDS else []
                 turn = llm.complete(self.cfg, prompt, history, tools)
                 # The provider call may outlive the lease or hard deadline.
                 # Never checkpoint or persist a late result after the
@@ -584,7 +592,8 @@ class RunWorker:
                 result_event = tool_results.get(call_id)
                 if result_event is None:
                     result_event = self._execute_durable_tool(
-                        run, call, emitted, labels, arriving=arriving)
+                        run, call, emitted, labels, arriving=arriving,
+                        sms_phone=sms_phone)
                     tool_results[call_id] = result_event
                 history.append({"role": "tool", "tool_call_id": call_id,
                                 "content": result_event.get("content") or "{}"})
@@ -594,7 +603,8 @@ class RunWorker:
     def _execute_durable_tool(self, run: dict, call: dict,
                               emitted: set[tuple[str, str]],
                               labels: dict = TOOL_LABELS,
-                              arriving: bool = False) -> dict:
+                              arriving: bool = False,
+                              sms_phone=None) -> dict:
         run_id = str(run["id"])
         tenant = str(run["tenant_id"])
         provider_call_id = str(call["id"])
@@ -633,7 +643,8 @@ class RunWorker:
                     self.hc, tenant, tool_name, arguments, side_events,
                     agent_id=str(run.get("agent_id") or ""),
                     surface=str(run.get("surface") or ""),
-                    origin=self.cfg.origin, arriving=arriving)
+                    origin=self.cfg.origin, arriving=arriving,
+                    sms_phone=sms_phone)
             except HealthClawError as exc:
                 content = agent_tool_error_result(exc)
             envelope = {"content": content, "ui_events": side_events}
