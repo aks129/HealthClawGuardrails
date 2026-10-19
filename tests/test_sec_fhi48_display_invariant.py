@@ -126,10 +126,10 @@ def test_the_resolver_is_only_ever_handed_system_and_code(
     caplog.set_level(logging.DEBUG)
     chain = Chain(cfg, svc, monkeypatch)
     seen: list = []
-    _stub_resolver(monkeypatch, seen, {"7980": "Penicillin G"})
+    _stub_resolver(monkeypatch, seen, {"70618": "Penicillin G"})
     _plant(chain, _allergy("x-res", {"system": OID, "code": NKA,
                                      "display": NAME},
-                           {"system": RXNORM, "code": "7980",
+                           {"system": RXNORM, "code": "70618",
                             "display": NAME}))
     [item] = _run(chain, monkeypatch, caplog)["allergies"]
     assert item["name"] == "Penicillin G"
