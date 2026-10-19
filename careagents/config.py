@@ -202,6 +202,15 @@ class Config:
             if x.strip())
         # Where the worker sends the once-a-day funnel digest. Unset = off.
         self.digest_to = (e.get("CARE_DIGEST_TO") or "").strip()
+        # The day-2 and day-7 tester check-in emails (careagents/checkins.py).
+        # Off by default. Each CCs CARE_CHECKIN_CC (comma-separated), or the
+        # owner emails when unset; with neither, none is sent.
+        self.checkin_emails = e.get(
+            "CARE_CHECKIN_EMAILS", "").lower() in ("1", "true", "yes")
+        self.checkin_cc = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_CHECKIN_CC") or "").split(",")
+            if x.strip())
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
