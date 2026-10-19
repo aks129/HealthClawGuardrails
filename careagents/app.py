@@ -31,6 +31,7 @@ import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 from markupsafe import Markup, escape
+from sqlalchemy.exc import SQLAlchemyError
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code,
@@ -336,6 +337,13 @@ def create_app(config: Config | None = None,
     hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
                                     public_base=cfg.healthclaw_public_base)
     svc = accounts or AccountService(cfg)
+    # Spent and expired sign-in links hold a number; ones made before #1004
+    # deleted them are swept here, once per start. Idempotent, and a failure
+    # must not stop the app serving.
+    try:
+        svc.prune_imessage_links()
+    except SQLAlchemyError:
+        logger.warning("imessage link sweep failed at start", exc_info=True)
     # Exposed for deterministic integration tests and process diagnostics.
     # Production Gunicorn never executes this worker object; the systemd/OCI
     # worker service constructs its own clients and calls careagents.worker.

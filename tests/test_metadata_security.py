@@ -161,6 +161,8 @@ class TestPrivacyReconciliation:
         assert 'delete your whole account yourself in settings' in body
         for survivor in ('log of when your records were looked at',
                          'each deleted space was closed',
+                         'permissions you gave apps through the connector',
+                         'expire after 31 days',
                          'scrambled codes made from your email address and '
                          'messaging number',
                          'keep honoring a stop',
@@ -170,6 +172,8 @@ class TestPrivacyReconciliation:
     def test_rights_section_says_deletion_is_immediate(self, client):
         body = _privacy_prose(client)
         assert 'completes within 30 days' not in body
+        assert 'export your data as standard fhir at any time' not in body
+        assert 'with notes and identifiers removed' in body
         assert 'deletion happens right away' in body
         assert 'healthclaw never sells your data' in body
 

@@ -17,7 +17,7 @@
       <p class="legal__meta">
         Changes on October 19, 2026: rewrote the CareAgents beta testers section (testers' own records, what
         the AI model receives, account deletion and what stays after it); section 8 now says deletion is
-        immediate and that the no-training promise is HealthClaw's own.
+        immediate, what an export holds, and that the no-training promise is HealthClaw's own.
       </p>
     </div>
 
@@ -164,6 +164,8 @@
       <ul>
         <li>our log of when your records were looked at or shared, including the deletion itself;</li>
         <li>a note that each deleted space was closed, with only its id and the time;</li>
+        <li>records of the permissions you gave apps through the connector: which app, what it could do, and
+            when; they hold no health data and expire after 31 days;</li>
         <li>scrambled codes made from your email address and messaging number, not the address or number
             itself, which we use to limit how many messages we send, to stop an invite being used twice, and to
             keep honoring a STOP you texted;</li>
@@ -221,7 +223,7 @@
       <p>If you use the hosted connector (via Claude, ChatGPT, or another MCP client), you can:</p>
       <ul>
         <li><strong>Disconnect</strong> any data source at any time</li>
-        <li><strong>Export</strong> your data as standard FHIR at any time</li>
+        <li><strong>Export</strong> a FHIR copy of your records, with notes and identifiers removed, through the connector</li>
         <li><strong>Delete</strong> your tenant and all stored records from the CareAgents app — deletion
             happens right away, and the app tells you when it is done. The PHI-free audit trail is kept.</li>
         <li><strong>Review the audit trail</strong> of every access to your records</li>

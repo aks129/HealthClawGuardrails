@@ -98,3 +98,66 @@ def test_unlinking_or_stop_removes_texted_links(svc):  # noqa: F811
         assert s.query(ImessageLink).count() == 0
     # The STOP itself is kept.
     assert svc.imessage_opted_out(b)
+
+
+def _link_count(svc, handle=None):  # noqa: F811
+    with svc.session() as s:
+        q = s.query(ImessageLink)
+        return (q.filter_by(handle=handle) if handle else q).count()
+
+
+def test_a_voided_link_is_deleted(svc):  # noqa: F811
+    number = "+15550100005"
+    token = svc.issue_imessage_link(number)
+    svc.void_imessage_link(svc.peek_imessage_link(token))
+    assert _link_count(svc, number) == 0
+    assert svc.peek_imessage_link(token) is None
+
+
+def test_spent_and_expired_links_of_unbound_numbers_are_pruned(svc):  # noqa: F811
+    from careagents.models import now
+    aid = _acct(svc)
+    bound, gone, live = "+15550100006", "+15550100007", "+15550100008"
+    with svc.session() as s:
+        s.add(Surface(account_id=aid, kind="imessage", handle=bound,
+                      status="active"))
+        # Made before #1004: a spent link for a bound number, a spent and
+        # an expired one for a number nobody bound.
+        s.add(ImessageLink(token_hash="a" * 64, handle=bound,
+                           exp=now() + 60, used_at=now()))
+        s.add(ImessageLink(token_hash="b" * 64, handle=gone,
+                           exp=now() + 60, used_at=now()))
+        s.add(ImessageLink(token_hash="c" * 64, handle=gone, exp=now() - 1))
+    assert svc.issue_imessage_link(live)          # issuing prunes
+    assert _link_count(svc, gone) == 0
+    assert _link_count(svc, bound) == 1           # goes with its binding
+    assert _link_count(svc, live) == 1            # unused and live
+    assert svc.prune_imessage_links() == 0        # idempotent
+
+
+def test_the_app_sweeps_old_links_at_start(cfg, svc):  # noqa: F811
+    from careagents.app import create_app
+    from careagents.models import now
+    from tests.test_careagents import FakeClient
+    with svc.session() as s:
+        s.add(ImessageLink(token_hash="d" * 64, handle="+15550100009",
+                           exp=now() - 1))
+    create_app(config=cfg, client=FakeClient(), accounts=svc)
+    assert _link_count(svc) == 0
+
+
+def test_a_bind_that_loses_a_race_reads_as_expired(svc, monkeypatch):  # noqa: F811
+    from sqlalchemy.orm.exc import StaleDataError
+
+    def lost(*a, **k):
+        raise StaleDataError("DELETE expected 1 row, 0 matched")
+    monkeypatch.setattr(svc, "_bind_imessage_handle", lost)
+    assert svc.bind_imessage_handle(_acct(svc), "+15550100010") == "expired"
+
+
+def test_claiming_a_link_deleted_underneath_reads_as_expired(svc):  # noqa: F811
+    aid = _acct(svc)
+    number = "+15550100011"
+    link_id = svc.peek_imessage_link(svc.issue_imessage_link(number))
+    svc.imessage_stop(number)                     # deletes the link
+    assert svc.claim_imessage_link(link_id, aid) == "expired"

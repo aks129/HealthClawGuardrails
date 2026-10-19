@@ -486,6 +486,9 @@ def bind_by_code(deps: Deps, handle: str, code: str,
         also=raw)
     if outcome == "taken":
         return {"error": "handle taken", "reply": TAKEN_TEXT}, 409
+    if outcome == "expired":
+        # A disconnect raced the bind and deleted its code (#1004).
+        return {"error": "unknown code", "reply": CODE_FAILED_TEXT}, 404
     notify_connected(deps, surface["account_id"], handle)
     return {"ok": True, "reply": WELCOME_TEXT}, 200
 
