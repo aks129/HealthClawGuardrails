@@ -1664,7 +1664,38 @@ def _checkin_organization(original, res):
     return out
 
 
-def _checkin_profile(resource, *, patient_id):
+#: The one meta coding the check-in export carries across: HL7 v3 ActReason
+#: HTEST, "this is test data". Matched by system AND code, exactly as
+#: written: a lookalike under another system, or this system spelt another
+#: way, is some other tag and is dropped with the rest.
+_TEST_MARKER = ('http://terminology.hl7.org/CodeSystem/v3-ActReason', 'HTEST')
+
+
+def _test_markers(stored_meta):
+    """The HTEST marker in a record's meta as stored, by slot.
+
+    Returns {'tag': [coding]} and/or {'security': [coding]}, each coding
+    built from empty: our system, our code, and the display from
+    r6/terminology.py. Nothing of the stored coding is copied, so an upstream
+    `display` (or any other key) cannot ride along. A slot that carried the
+    marker gets it once, however often it was written."""
+    if not isinstance(stored_meta, dict):
+        return {}
+    system, code = _TEST_MARKER
+    out = {}
+    for slot in ('tag', 'security'):
+        codings = stored_meta.get(slot)
+        if isinstance(codings, dict):
+            codings = [codings]
+        if isinstance(codings, list) and any(
+                isinstance(c, dict) and c.get('system') == system
+                and c.get('code') == code for c in codings):
+            out[slot] = [{'system': system, 'code': code,
+                          'display': _terminology_mod.lookup(system, code)}]
+    return out
+
+
+def _checkin_profile(resource, *, patient_id, stored_meta=None):
     """Check-in profile (FHI-53): what a clinic's check-in receives, per
     resource, for the patient the CareAgents server named.
 
@@ -1680,6 +1711,10 @@ def _checkin_profile(resource, *, patient_id):
     - Coverage restores member and group numbers and payor references by
       allow-list (_checkin_coverage); an Organization is reduced to the payor
       name and NAIC id (_checkin_organization).
+    - The HTEST test-data marker goes back on `meta.tag` or `meta.security`,
+      wherever `stored_meta` carried it (_test_markers). `stored_meta` is the
+      record's meta as stored: `to_fhir_json` has already replaced `meta` on
+      `resource`. Every other tag stays dropped.
 
     Stateless and per-resource, beside _intake_profile, so slice 14 can
     route it through fhir_response. Which rows reach it (types in the token,
@@ -1713,6 +1748,17 @@ def _checkin_profile(resource, *, patient_id):
         res = _checkin_organization(resource, res)
     _drop_related_person_refs(res)
     _codes_with_our_text(res)
+    # After _codes_with_our_text, which removes every display: this one is
+    # ours, and the code system's own.
+    for slot, codings in _test_markers(stored_meta).items():
+        meta = res.get('meta')
+        if not isinstance(meta, dict):
+            meta = res['meta'] = {}
+        kept = meta.get(slot)
+        kept = [c for c in kept if isinstance(c, dict) and (
+            c.get('system'), c.get('code')) != _TEST_MARKER] \
+            if isinstance(kept, list) else []
+        meta[slot] = kept + codings
     return res
 
 
