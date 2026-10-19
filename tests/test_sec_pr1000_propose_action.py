@@ -217,3 +217,78 @@ def test_callbacks_need_the_secret_and_the_right_sid(world, monkeypatch):  # noq
     assert _action(chain, other)["status"] == "awaiting_confirmation"
     assert _action(chain, mine)["status"] == "executing"
     assert len(twilio.sent) == 1
+
+
+# --- re-attack of the fix (f4040577): near-miss texts must all refuse --------
+
+def _stage_raw(chain, payload):
+    """The MCP server's / a raw caller's path: propose, then commit."""
+    r = chain.engine.post("/r6/actions/propose",
+                          headers={"X-Tenant-Id": TENANT},
+                          json={"kind": "sms", "payload": payload})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    aid = r.get_json()["id"]
+    r = chain.engine.post(f"/r6/actions/{aid}/commit",
+                          headers=chain.hc._headers(TENANT))
+    assert r.status_code == 202, r.get_data(as_text=True)
+    return aid
+
+
+_NEAR_MISSES = {
+    "body trailing space": lambda b: {"body": b + " "},
+    "body leading space": lambda b: {"body": " " + b},
+    "body newline": lambda b: {"body": b + "\n"},
+    "body nbsp": lambda b: {"body": b.replace(" ", " ", 1)},
+    "body zero-width": lambda b: {"body": b + "​"},
+    "body homoglyph": lambda b: {"body": b.replace("CareAgents",
+                                                   "CаreAgents", 1)},
+    "body other origin": lambda b: {"body": text_self.body_for(
+        "visit_prep", "http://evil.example")},
+    "body no origin": lambda b: {"body": text_self.body_for("reminder", "")},
+    "body two fixed texts": lambda b: {"body": b + " " + b},
+    "to capital": lambda b: {"to": "Your phone"},
+    "to trailing space": lambda b: {"to": "your phone "},
+    "to nbsp": lambda b: {"to": "your phone"},
+    "to the number": lambda b: {"to": PHONE},
+    "to missing": lambda b: {"to": None},
+    "phone spaced": lambda b: {"phone": "+1 555 555 0123"},
+    "phone no plus": lambda b: {"phone": "15555550123"},
+    "phone trailing space": lambda b: {"phone": PHONE + " "},
+    "phone fullwidth": lambda b: {"phone": "+１５５５５"
+                                           "５５０１２"
+                                           "３"},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_NEAR_MISSES))
+def test_a_near_miss_of_the_fixed_text_is_refused(world, name,  # noqa: F811
+                                                  caplog):
+    chain, c, twilio = world
+    caplog.set_level(logging.DEBUG)
+    payload = {"to": text_self.RECIPIENT_LABEL, "phone": PHONE,
+               "body": _fixed(chain)}
+    payload.update(_NEAR_MISSES[name](payload["body"]))
+    payload = {k: v for k, v in payload.items() if v is not None}
+    aid = _stage_raw(chain, payload)
+    page = c.get(f"/review/{chain.agent}/{aid}").get_data(as_text=True)
+    assert "data-not-your-number" in page
+    r = _submit(c, chain.agent, aid)
+    assert r.status_code == 409, (name, r.get_json())
+    assert _confirmations(chain, aid) == 0
+    assert twilio.sent == []
+    # The refusal's log line names the action and a reason, nothing sent.
+    logged = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "5555550123" not in logged and "visit prep" not in logged
+    assert "evil.example" not in logged
+
+
+def test_the_exact_fixed_text_to_my_number_is_approvable_by_design(
+        world):  # noqa: F811
+    """By design: a raw stage of exactly what propose_action would stage is
+    the same text to the same phone, and still needs the person's tap."""
+    chain, c, twilio = world
+    aid = _stage_raw(chain, {"to": text_self.RECIPIENT_LABEL, "phone": PHONE,
+                             "body": _fixed(chain)})
+    assert _submit(c, chain.agent, aid).get_json()["confirmed"] is True
+    [(_m, _u, data)] = twilio.sent
+    assert data["To"] == PHONE and data["Body"] == _fixed(chain)
