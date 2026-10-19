@@ -107,6 +107,41 @@ def test_chat_js_draws_the_done_form_card_on_load():
     assert "addFormDoneCard(log.dataset.doneForm)" in js
 
 
+def test_the_newest_finished_form_is_the_one_shown_done(
+        cfg, svc, monkeypatch):
+    """Two forms finished this week: the card links the newer one. The
+    fake lists the older first, so a sort that is dropped or reversed
+    links last week's form (QA of #998)."""
+    fake = OutcomeClient(pending=[], recent=[
+        {**_done_form("act-old"), "updated_at": "2026-10-14T09:00:00Z"},
+        {**_done_form("act-new"), "updated_at": "2026-10-18T09:00:00Z"}])
+    c, agent, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    html = c.get(f"/chat?agent={agent}").get_data(as_text=True)
+    assert 'data-done-form="act-new"' in html
+    assert "act-old" not in html
+
+
+def test_a_disconnected_connection_draws_no_done_form(cfg, svc, monkeypatch):
+    """A revoked connection is not a pathway to its requests (#215): the
+    chat neither asks for its recent actions nor draws a done card."""
+    class Counting(OutcomeClient):
+        recent_calls = 0
+
+        def recent_actions(self, tenant):
+            Counting.recent_calls += 1
+            return super().recent_actions(tenant)
+
+    fake = Counting(pending=[], recent=[_done_form()])
+    c, agent, conn = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    with c.session_transaction() as sess:
+        account_id = sess["account_id"]
+    assert svc.revoke_connection(account_id, conn) is True
+    r = c.get(f"/chat?agent={agent}")
+    assert r.status_code == 200
+    assert "data-done-form" not in r.get_data(as_text=True)
+    assert Counting.recent_calls == 0
+
+
 # --- 4. the visit brief is one tap from the chat -----------------------------
 
 def test_the_brief_card_links_to_the_visit_brief_page():
