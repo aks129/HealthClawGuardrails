@@ -29,9 +29,10 @@ from sqlalchemy import text as sql
 
 from careagents import feedback, funnel
 from careagents.models import Base
-from tests.test_careagents_beta_signup import _cfg, _visible
+from tests.test_careagents_beta_signup import _visible
 from tests.test_careagents_feedback import (  # noqa: F401 - fixtures
     _signed_in, made, sent)
+from tests.test_careagents_funnel import _svc_cfg
 
 MARKER = "okapi-marker-4417"
 RUN = "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b"
@@ -565,7 +566,8 @@ def test_the_digest_lists_yesterdays_errors_by_route_and_flags_by_reason(
         got.append(text)
         return mail.SENT
     monkeypatch.setattr(mail, "send_message", fake_send)
-    cfg = _cfg(CARE_DIGEST_TO="owner@example.com")
+    # Not _cfg(): on Postgres it drops the tables made() just built.
+    cfg = _svc_cfg(svc, CARE_DIGEST_TO="owner@example.com")
     assert funnel.send_digest_if_due(svc.session, cfg, now) == mail.SENT
     (text,) = got
     errors = text[text.index("Server errors by route"):
