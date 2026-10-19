@@ -219,3 +219,22 @@ def test_auth_page_variants_keep_one_email_button_and_no_hidden_passkey_path(
 def test_admin_funnel_stays_owner_only(cfg, svc, monkeypatch):
     c, _agent, _ = _signed_in(_app(cfg, svc, FakeClient()), svc, monkeypatch)
     assert c.get("/admin/funnel").status_code == 404
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    "#998 review L2: a pending lookup that fails leaves `reviews` empty, so "
+    "an older form is drawn 'ready, you approved it' while a newer one may "
+    "be waiting. Misleading, not a bypass: nothing is approved by the card."))
+def test_a_failed_pending_lookup_draws_no_done_form(cfg, svc, monkeypatch):
+    from careagents.healthclaw import HealthClawError
+
+    class PendingDown(OutcomeClient):
+        def pending_actions(self, tenant):
+            raise HealthClawError("pending unavailable", 503)
+
+    fake = PendingDown(recent=[
+        {"id": "act-old", "kind": "form-fill", "status": "completed",
+         "updated_at": "2026-10-18T00:00:00Z"}])
+    c, agent, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    html = c.get(f"/chat?agent={agent}").get_data(as_text=True)
+    assert "data-done-form" not in html
