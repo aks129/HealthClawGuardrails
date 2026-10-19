@@ -137,6 +137,76 @@ def _entry(resource):
     return {'fullUrl': url, 'resource': resource} if url else None
 
 
+def collect(tenant, types, patient_id, profile):
+    """The entries an export sends, and the types among them.
+
+    Only `types`, only rows of the one patient (a Patient by id, anything
+    else by its subject/patient/beneficiary reference), not deleted, and
+    only rows that carry an allow-listed claim for their own type, read
+    BEFORE `profile` runs (a profile may drop `meta.profile`). Each row goes
+    through `profile`, then the payor Organizations the exported Coverage
+    references are fetched by id in this tenant, never by type. An entry
+    without a fullUrl we would serve is not sent."""
+    rows = R6Resource.query.filter(
+        R6Resource.tenant_id == tenant.id,
+        R6Resource.is_deleted == False,  # noqa: E712
+        R6Resource.resource_type.in_(types),
+    ).order_by(R6Resource.resource_type, R6Resource.id).all()
+
+    own = f'Patient/{patient_id}'
+    entries = []
+    type_set = set()
+    payor_ids = set()
+    for row in rows:
+        stored = row.to_fhir_json()
+        if row.resource_type == 'Patient':
+            if row.id != patient_id:
+                continue
+        else:
+            ref = next((r.get('reference') for r in (
+                stored.get('subject'), stored.get('patient'),
+                stored.get('beneficiary')) if isinstance(r, dict)), None)
+            if ref != own:
+                continue
+        if not has_claim(stored):
+            continue
+        resource = profile(
+            stored, patient_id=patient_id, stored_meta=stored_meta(row))
+        entry = _entry(resource)
+        if entry is None:
+            continue
+        entries.append(entry)
+        type_set.add(row.resource_type)
+        for payor in resource.get('payor') or []:
+            payor_ids.add(payor['reference'].split('/', 1)[1])
+
+    if payor_ids:
+        orgs = R6Resource.query.filter(
+            R6Resource.tenant_id == tenant.id,
+            R6Resource.is_deleted == False,  # noqa: E712
+            R6Resource.resource_type == 'Organization',
+            R6Resource.id.in_(sorted(payor_ids)),
+        ).order_by(R6Resource.id).all()
+        for org in orgs:
+            entry = _entry(profile(
+                org.to_fhir_json(), patient_id=patient_id,
+                stored_meta=stored_meta(org)))
+            if entry is not None:
+                entries.append(entry)
+                type_set.add('Organization')
+    return entries, type_set
+
+
+def collection(entries):
+    """A `collection` Bundle of `entries`, stamped now."""
+    return {
+        'resourceType': 'Bundle',
+        'type': 'collection',
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        'entry': entries,
+    }
+
+
 def mint(tenant_id, body):
     """The check-in branch of issue_step_up_token (r6/routes.py), behind its
     `_internal_mint_authorized` gate. A ttl, aud, op or scope in the body is
@@ -205,60 +275,9 @@ def export(tenant, body):
                  absent_status=401, rejected_status=401)
     access.require_grant(**grant)
 
-    rows = R6Resource.query.filter(
-        R6Resource.tenant_id == tenant.id,
-        R6Resource.is_deleted == False,  # noqa: E712
-        R6Resource.resource_type.in_(types),
-    ).order_by(R6Resource.resource_type, R6Resource.id).all()
-
-    own = f'Patient/{patient_id}'
-    entries = []
-    type_set = set()
-    payor_ids = set()
-    for row in rows:
-        stored = row.to_fhir_json()
-        if row.resource_type == 'Patient':
-            if row.id != patient_id:
-                continue
-        else:
-            ref = next((r.get('reference') for r in (
-                stored.get('subject'), stored.get('patient'),
-                stored.get('beneficiary')) if isinstance(r, dict)), None)
-            if ref != own:
-                continue
-        if not has_claim(stored):
-            continue
-        resource = access._checkin_profile(
-            stored, patient_id=patient_id, stored_meta=stored_meta(row))
-        entry = _entry(resource)
-        if entry is None:
-            continue
-        entries.append(entry)
-        type_set.add(row.resource_type)
-        for payor in resource.get('payor') or []:
-            payor_ids.add(payor['reference'].split('/', 1)[1])
-
-    if payor_ids:
-        orgs = R6Resource.query.filter(
-            R6Resource.tenant_id == tenant.id,
-            R6Resource.is_deleted == False,  # noqa: E712
-            R6Resource.resource_type == 'Organization',
-            R6Resource.id.in_(sorted(payor_ids)),
-        ).order_by(R6Resource.id).all()
-        for org in orgs:
-            entry = _entry(access._checkin_profile(
-                org.to_fhir_json(), patient_id=patient_id,
-                stored_meta=stored_meta(org)))
-            if entry is not None:
-                entries.append(entry)
-                type_set.add('Organization')
-
-    bundle = {
-        'resourceType': 'Bundle',
-        'type': 'collection',
-        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
-        'entry': entries,
-    }
+    entries, type_set = collect(tenant, types, patient_id,
+                                access._checkin_profile)
+    bundle = collection(entries)
     payload = json.dumps(bundle)
     if len(payload.encode('utf-8')) > MAX_BUNDLE_BYTES:
         add_audit_event(

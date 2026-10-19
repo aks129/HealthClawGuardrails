@@ -1186,6 +1186,7 @@ class Profile(Enum):
     PATIENT_CONTROLLED = 'patient-controlled'  # r6/redaction.py:180
     INTAKE = 'intake'                          # r6/routes.py _intake_strip
     CHECKIN = 'checkin'                        # _checkin_profile (FHI-53)
+    KTC = 'ktc'                                # _ktc_profile (SHL PR 1)
 
 
 _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn',
@@ -1747,6 +1748,10 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
     elif rtype == 'Organization':
         res = _checkin_organization(resource, res)
     _drop_related_person_refs(res)
+    # FHI-66 slot: a per-resource element allow-list belongs here, the one
+    # step both checkin and ktc (_ktc_profile) run through. Redaction above
+    # is a deny-list, so an element it does not name (a top-level
+    # `patientName`, `code.Text`) still leaves.
     _codes_with_our_text(res)
     # After _codes_with_our_text, which removes every display: this one is
     # ours, and the code system's own.
@@ -1759,6 +1764,21 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
             c.get('system'), c.get('code')) != _TEST_MARKER] \
             if isinstance(kept, list) else []
         meta[slot] = kept + codings
+    return res
+
+
+def _ktc_profile(resource, *, patient_id, stored_meta=None):
+    """Kill the Clipboard profile: what a SMART Health Link to a clinic's
+    EHR carries, per resource. Exactly _checkin_profile (redaction, our
+    labels from r6/terminology.py, the HTEST marker kept), and then no
+    `meta.profile`: the KTC spec says senders SHOULD NOT claim profiles and
+    receivers SHALL NOT require them. Which rows reach it is the route's job
+    (r6/ktc.py), and their claims are read before this strips them."""
+    res = _checkin_profile(resource, patient_id=patient_id,
+                           stored_meta=stored_meta)
+    meta = res.get('meta')
+    if isinstance(meta, dict):
+        meta.pop('profile', None)
     return res
 
 
@@ -1799,9 +1819,9 @@ def fhir_response(payload, *, profile: Profile, status: int = 200,
     elif profile is Profile.INTAKE:
         body = _intake_profile(payload)
     else:
-        # Profile.CHECKIN is per-resource and needs the exported patient;
-        # $share-bundle calls _checkin_profile itself until slice 14 routes
-        # it here. Refused rather than falling through to another profile.
+        # Profile.CHECKIN and Profile.KTC are per-resource and need the
+        # exported patient; their exports call the profile themselves until
+        # slice 14 routes them here. Refused rather than falling through.
         raise ValueError(f'fhir_response does not serve {profile.value} yet')
 
     response = jsonify(body)
