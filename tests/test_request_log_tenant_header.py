@@ -307,3 +307,32 @@ def test_careagents_never_logs_a_token_sent_in_these_headers(
         c.post("/api/chat", json={"message": "hi"}, headers=headers)
 
     _assert_absent(_everything_logged(caplog), step_up_token)
+
+
+def test_an_agent_id_the_engine_would_reject_is_stored_hashed(
+        client, step_up_token, tenant_id):
+    """The audit row's agent column is String(128), and Postgres enforces it:
+    a step-up token pasted into X-Agent-Id failed the audit write (and so the
+    request) as a DataError. An id outside the engine's id rule is stored as
+    its log hash, which also keeps the pasted credential out of the table."""
+    from r6.audit import record_audit_event
+    from r6.models import AuditEventRecord
+
+    assert len(step_up_token) > 128
+    for raw in (step_up_token, "has spaces in it"):
+        record_audit_event("read", "Patient", agent_id=raw,
+                           tenant_id=tenant_id)
+        AuditEventRecord.query.filter_by(
+            tenant_id=tenant_id, agent_id=id_hash(raw)).one()
+        assert not AuditEventRecord.query.filter_by(agent_id=raw).count()
+
+
+def test_a_well_formed_agent_id_is_stored_as_sent(client, tenant_id):
+    from r6.audit import record_audit_event
+    from r6.models import AuditEventRecord
+
+    agent = "careagents:agent_" + "a" * 100
+    record_audit_event("read", "Patient", agent_id=agent, tenant_id=tenant_id)
+    row = AuditEventRecord.query.filter_by(
+        tenant_id=tenant_id, agent_id=agent).one()
+    assert row.agent_id == agent

@@ -7,12 +7,29 @@ operations, privacy, security, maintenance, and performance analysis.
 """
 
 import logging
+import re
 from models import db
 from r6.models import AuditEventRecord
 from r6.health_context import get as _hc_get
-from r6.log_safety import loggable_id, scrub as scrub_credentials
+from r6.log_safety import id_hash, loggable_id, scrub as scrub_credentials
 
 logger = logging.getLogger(__name__)
+
+#: The engine's id rule, and the width of `AuditEventRecord.agent_id`.
+_STORABLE_AGENT_ID = re.compile(r'[A-Za-z0-9._:-]{1,128}')
+
+
+def _storable_agent_id(agent_id):
+    """The agent id as the audit row may hold it.
+
+    It usually comes straight from the `X-Agent-Id` header. One outside the
+    engine's id rule is stored as its log hash: an over-long value overflowed
+    the column on Postgres and failed the audit write, and a credential
+    pasted into the header must not land in the audit table (FHI-60).
+    """
+    if isinstance(agent_id, str) and _STORABLE_AGENT_ID.fullmatch(agent_id):
+        return agent_id
+    return id_hash(agent_id)
 
 
 class AuditWriteError(RuntimeError):
@@ -35,8 +52,8 @@ def _new_audit_event(event_type, resource_type=None, resource_id=None,
         context_id=context_id,
         tenant_id=tenant_id,
         agent_id=(
-            agent_id
-            or _hc_get('audit_agent_default', 'healthclaw-guardrails')
+            _storable_agent_id(agent_id) if agent_id
+            else _hc_get('audit_agent_default', 'healthclaw-guardrails')
         ),
         outcome=outcome,
         outcome_detail_code=outcome_detail_code,
