@@ -614,7 +614,8 @@ def test_the_hub_and_sign_in_read_plainly(app, svc, monkeypatch):  # noqa: F811
             "list.") in " ".join(hub.split())
     auth = (ROOT / "careagents" / "templates" / "auth.html").read_text()
     assert "can't be phished" not in auth
-    assert "can't be stolen by a fake site" in auth
+    # The emailed code leads (patient walk 2026-10-18), in plain words.
+    assert "We'll email you an 8-digit code to sign in." in auth
     js = (ROOT / "careagents" / "static" / "home.js").read_text()
     assert '"ready."' not in js
 

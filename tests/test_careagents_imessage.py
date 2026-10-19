@@ -892,7 +892,7 @@ def test_auth_puts_the_link_line_under_the_heading(cfg, svc, monkeypatch):  # no
     page = phone.get("/auth").get_data(as_text=True)
     after_h1 = page[page.index("</h1>"):]
     assert after_h1.index("Sign in to connect your phone") < after_h1.index(
-        "Sign in with your face")
+        "We'll email you an 8-digit code")
 
 
 def test_disconnect_success_is_not_drawn_as_an_error():
