@@ -44,6 +44,18 @@ CAREAGENTS_PATHS = ("careagents", "deploy/careagents", "pyproject.toml", "uv.loc
 CURRENT, BEHIND, WITHIN_GRACE, UNKNOWN = 0, 1, 2, 3
 
 _SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
+_MARKER = re.compile(r"\A[0-9a-f]{7,40}(-dirty)?\Z")
+
+
+def clean_build(value: object) -> str:
+    """The /healthz `build` value, or "unknown" if it is not a deploy marker.
+
+    It comes from the network and ends up in a public issue body, inside a
+    code fence and an HTML comment. Anything that is not a sha (optionally
+    `-dirty`) is replaced before it is printed anywhere.
+    """
+    text = value if isinstance(value, str) else ""
+    return text if _MARKER.match(text) else "unknown"
 
 
 def fetch_healthz(url: str = HEALTHZ, timeout: float = 10.0) -> dict:
@@ -83,6 +95,8 @@ def wait(sha: str, timeout: float, interval: float, fetch=fetch_healthz,
             health = fetch()
         except Exception as err:  # noqa: BLE001 - mid-rollout blips are expected
             health = {"error": type(err).__name__}
+        if isinstance(health, dict) and "build" in health:
+            health = {**health, "build": clean_build(health["build"])}
         if health != last:
             print(f"healthz: {json.dumps(health, sort_keys=True)}", flush=True)
             last = health
@@ -118,23 +132,26 @@ def is_ancestor(ancestor: str, descendant: str) -> bool | None:
 
 
 def drift_verdict(deployed: str, latest: str, latest_time: int, now: float,
-                  grace: float, contains) -> tuple[int, str]:
+                  grace: float, contains, on_main) -> tuple[int, str]:
     """Decide drift. `contains(latest, deployed)` answers whether the deployed
-    build includes `latest` (True/False/None for unresolvable).
+    build includes `latest`; `on_main(deployed)` whether the build is a commit
+    on `main`. Each returns True/False, or None when git cannot resolve it.
 
     A build that includes the newest CareAgents commit is current even when it
     is not that commit: a manual deploy from a later `main` tip ships the same
-    CareAgents code. A build that is `unknown`, `-dirty`, or not a commit on
-    `main` cannot be shown to include it, so it counts as behind (#258).
+    CareAgents code. It must also BE on `main`: a build from an unmerged branch
+    descends from main too, and is the unreviewed code this alarm exists to
+    catch. A build that is `unknown`, `-dirty`, or not on `main` counts as
+    behind (#258).
     """
     if same_build(deployed, latest):
         return CURRENT, f"production runs {deployed}, the newest CareAgents commit"
     if _SHA.match(deployed or ""):
         included = contains(latest, deployed)
-        if included:
+        if included and on_main(deployed):
             return CURRENT, (f"production runs {deployed}, which includes the "
                              f"newest CareAgents commit {latest[:12]}")
-        why = "is not a commit on main" if included is None else "predates it"
+        why = "predates it" if included is False else "is not a commit on main"
     else:
         why = "is not a commit we shipped"
     age = max(0, int(now - latest_time))
@@ -147,7 +164,7 @@ def drift_verdict(deployed: str, latest: str, latest_time: int, now: float,
 def drift(grace: float, ref: str, fetch=fetch_healthz, now=time.time) -> int:
     try:
         health = fetch()
-        deployed = str(health.get("build", ""))
+        deployed = clean_build(health.get("build"))
     except Exception as err:  # noqa: BLE001 - reported, never a verdict
         print(f"could not read {HEALTHZ}: {type(err).__name__}: {err}")
         return UNKNOWN
@@ -157,7 +174,7 @@ def drift(grace: float, ref: str, fetch=fetch_healthz, now=time.time) -> int:
         print(f"could not read main: {err}")
         return UNKNOWN
     code, detail = drift_verdict(deployed, latest, latest_time, now(), grace,
-                                 is_ancestor)
+                                 is_ancestor, lambda sha: is_ancestor(sha, ref))
     label = {CURRENT: "current", BEHIND: "BEHIND", WITHIN_GRACE: "behind, within grace"}[code]
     print(f"{label}: {detail}")
     print(f"deployed={deployed}")

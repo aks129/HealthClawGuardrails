@@ -2,8 +2,11 @@
 .github/workflows/careagents-deploy.yml, careagents-drift.yml)."""
 
 import importlib.util
+import json
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -93,41 +96,62 @@ def _never(*_):
 
 
 def test_drift_current_when_deployed_is_the_newest_careagents_commit():
-    code, _ = release.drift_verdict("4f2a91cbeef1", SHA, NOW - 99_999, NOW, 7200, _never)
+    code, _ = release.drift_verdict("4f2a91cbeef1", SHA, NOW - 99_999, NOW, 7200, _never, _never)
     assert code == release.CURRENT
 
 
 def test_drift_current_when_deployed_is_a_later_main_commit():
     # A deploy from a main tip that did not itself touch CareAgents.
     code, _ = release.drift_verdict("8abc80c96290", SHA, NOW - 99_999, NOW, 7200,
-                                    lambda a, d: True)
+                                    lambda a, d: True, lambda d: True)
     assert code == release.CURRENT
 
 
 def test_drift_behind_past_the_grace():
     code, detail = release.drift_verdict("000000000000", SHA, NOW - 7201, NOW, 7200,
-                                         lambda a, d: False)
+                                         lambda a, d: False, _never)
     assert code == release.BEHIND
     assert "4f2a91cbeef1" in detail
 
 
 def test_drift_within_grace_does_not_alarm():
     code, _ = release.drift_verdict("000000000000", SHA, NOW - 600, NOW, 7200,
-                                    lambda a, d: False)
+                                    lambda a, d: False, _never)
     assert code == release.WITHIN_GRACE
 
 
 @pytest.mark.parametrize("deployed", ["unknown", "4f2a91cbeef1-dirty", ""])
 def test_drift_an_unshipped_marker_counts_as_behind(deployed):
-    code, _ = release.drift_verdict(deployed, SHA, NOW - 7201, NOW, 7200, _never)
+    code, _ = release.drift_verdict(deployed, SHA, NOW - 7201, NOW, 7200, _never, _never)
     assert code == release.BEHIND
 
 
 def test_drift_a_build_git_cannot_resolve_counts_as_behind():
     code, detail = release.drift_verdict("abcdefabcdef", SHA, NOW - 7201, NOW, 7200,
-                                         lambda a, d: None)
+                                         lambda a, d: None, _never)
     assert code == release.BEHIND
     assert "not a commit on main" in detail
+
+
+def test_drift_a_descendant_that_is_not_on_main_counts_as_behind():
+    # Built from an unmerged branch: it contains main, but main never had it.
+    code, detail = release.drift_verdict("abcdefabcdef", SHA, NOW - 7201, NOW, 7200,
+                                         lambda a, d: True, lambda d: False)
+    assert code == release.BEHIND
+    assert "not a commit on main" in detail
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("4f2a91cbeef1", "4f2a91cbeef1"),
+    ("4f2a91cbeef1-dirty", "4f2a91cbeef1-dirty"),
+    ("unknown", "unknown"),
+    ("```\n@x -->", "unknown"),
+    ("4f2a91cbeef1\ndeployed=x", "unknown"),
+    (None, "unknown"),
+    (12345, "unknown"),
+])
+def test_clean_build_passes_only_deploy_markers(value, expected):
+    assert release.clean_build(value) == expected
 
 
 def test_is_ancestor_reads_git_exit_codes():
@@ -157,6 +181,9 @@ def test_deploy_workflow_ships_only_main_and_never_overlaps():
     job = wf["jobs"]["deploy"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert re.fullmatch(r"\d+\.\d+\.\d+", job["env"]["RAILWAY_CLI_VERSION"])
+    assert re.fullmatch(r"[0-9a-f]{64}", job["env"]["RAILWAY_CLI_SHA256"])
+    assert job["environment"] == "careagents-production"
+    assert job["env"]["RAILWAY_PROJECT_ID"] == "835e92df-ebaa-4aa1-bfb5-cb1b346d385e"
 
 
 def test_deploy_workflow_follows_the_runbook_stage_and_upload():
@@ -181,6 +208,27 @@ def test_deploy_workflow_follows_the_runbook_stage_and_upload():
     for step in steps[1:]:
         assert step.get("if") == "steps.gate.outputs.skip == 'false'", step
     assert "careagents_release.py wait" in steps[-1]["run"]
+
+
+@pytest.mark.parametrize("project_id,ok", [
+    ("835e92df-ebaa-4aa1-bfb5-cb1b346d385e", True),
+    ("835e92df-ebaa-4aa1-bfb5-cb1b346d385f", False),
+    (None, False),
+])
+def test_the_project_check_admits_only_the_exact_project_id(tmp_path, project_id, ok):
+    steps = _workflow("careagents-deploy.yml")["jobs"]["deploy"]["steps"]
+    upload = next(s["run"] for s in steps if s.get("name", "").startswith("Upload"))
+    code = re.search(r"python3 -c '\n(.*?)\n' ", upload, re.S).group(1)
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"id": project_id, "name": "awake-serenity",
+                                  "services": {"edges": ["secret-ish"]}}))
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(status)], capture_output=True, text=True,
+        env={**os.environ, "RAILWAY_PROJECT_ID": "835e92df-ebaa-4aa1-bfb5-cb1b346d385e"})
+    assert (result.returncode == 0) is ok, result.stderr
+    assert "secret-ish" not in result.stdout + result.stderr
+    if ok:
+        assert result.stdout.strip() == "awake-serenity"
 
 
 def test_drift_workflow_has_history_and_alarms_only_past_the_grace():

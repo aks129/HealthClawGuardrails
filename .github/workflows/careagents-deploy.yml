@@ -7,7 +7,7 @@ name: careagents-deploy
 # "Deploy and confirm it worked" in docs/runbooks/careagents-durable-worker.md.
 #
 # Pause: disable this workflow in the Actions tab. Without the RAILWAY_TOKEN
-# secret it skips with a notice instead of failing.
+# environment secret it skips with a notice instead of failing.
 
 on:
   push:
@@ -23,29 +23,40 @@ on:
 permissions:
   contents: read
 
-# Queue, never cancel: a cancelled run can leave web and worker on different
-# uploads. The next run in the queue deploys the newer main anyway.
+# Never cancel a running deploy: a cancelled run can leave web and worker on
+# different uploads. GitHub keeps at most one run PENDING behind it, so the
+# newest pending run wins and older pending ones are cancelled before they
+# start. That is fine, because each run deploys its own (newer) main commit.
 concurrency:
   group: careagents-deploy
   cancel-in-progress: false
 
 jobs:
   deploy:
-    # workflow_dispatch can be run from any branch; only main ships.
+    # A convenience only: this line lives in the file on the ref being run, so
+    # a branch can delete it. The real guard is the environment below, whose
+    # deployment branch policy (set server-side by the owner) admits main only
+    # and which holds RAILWAY_TOKEN as an environment secret.
     if: github.ref == 'refs/heads/main'
+    environment: careagents-production
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_CLI_VERSION: "5.63.1"
-      RAILWAY_PROJECT: awake-serenity
+      # sha256 of railway-v5.63.1-x86_64-unknown-linux-musl.tar.gz, from the
+      # release's published asset digest. Bump both together.
+      RAILWAY_CLI_SHA256: cbb559de44cd304cf9d6598a4ea77575035a0e6e3215370bb3b105b8f48235cc
+      RAILWAY_PROJECT_ID: 835e92df-ebaa-4aa1-bfb5-cb1b346d385e
       RAILWAY_ENVIRONMENT: production
     steps:
+      # Only a boolean leaves the secrets context here, never the token.
       - name: Check for the deploy token
         id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.RAILWAY_TOKEN != '' }}
         run: |
-          if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::notice::RAILWAY_TOKEN is not set; skipping the CareAgents deploy. See docs/runbooks/careagents-auto-deploy.md."
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::notice::RAILWAY_TOKEN is not set in the careagents-production environment; skipping the CareAgents deploy. See docs/runbooks/careagents-auto-deploy.md."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -54,11 +65,20 @@ jobs:
       - uses: actions/checkout@v7
         if: steps.gate.outputs.skip == 'false'
 
+      # The release binary, checksum-verified, rather than `npm install -g`:
+      # no install scripts, no unpinned transitive packages, and no token in
+      # this step's environment either way.
       - name: Install the Railway CLI
         if: steps.gate.outputs.skip == 'false'
         run: |
-          npm install -g "@railway/cli@${RAILWAY_CLI_VERSION}"
-          railway --version
+          ASSET="railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$ASSET" \
+            "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/$ASSET"
+          echo "${RAILWAY_CLI_SHA256}  $RUNNER_TEMP/$ASSET" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$ASSET" -C "$RUNNER_TEMP/bin" railway
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/railway" --version
 
       # The runbook's stage, verbatim: these four, then the stamp LAST so a
       # stale BUILD_SHA copied in with careagents/ is overwritten. Staged under
@@ -79,21 +99,28 @@ jobs:
           echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
 
-      # `cd` into the stage, never `railway up <path>`. Fail closed if the
-      # token does not resolve to the real project: an unlinked `railway up`
-      # creates a brand-new project and deploys there (runbook, first run).
+      # The only step that sees the token. `cd` into the stage, never
+      # `railway up <path>`. Fail closed unless the token resolves to the real
+      # project by ID: an unlinked `railway up` creates a brand-new project
+      # (runbook, first run). This log is public, so only the project name is
+      # printed, never the status JSON (it lists services, volumes and ids).
       - name: Upload web and worker from the same stage
         if: steps.gate.outputs.skip == 'false'
         env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           STAGE: ${{ steps.stage.outputs.stage }}
         run: |
           cd "$STAGE"
-          STATUS="$(railway status)"
-          echo "$STATUS"
-          if ! printf '%s' "$STATUS" | grep -q "$RAILWAY_PROJECT"; then
-            echo "::error::the token does not resolve to project $RAILWAY_PROJECT; not uploading"
-            exit 1
-          fi
+          railway status --json > "$RUNNER_TEMP/status.json"
+          PROJECT_NAME="$(python3 -c '
+          import json, os, sys
+          status = json.load(open(sys.argv[1]))
+          if status.get("id") != os.environ["RAILWAY_PROJECT_ID"]:
+              sys.exit("the token does not resolve to the CareAgents project; not uploading")
+          print(status.get("name", ""))
+          ' "$RUNNER_TEMP/status.json")"
+          rm -f "$RUNNER_TEMP/status.json"
+          echo "deploying to project $PROJECT_NAME"
           railway up --service careagents        --environment "$RAILWAY_ENVIRONMENT" --detach --no-gitignore
           railway up --service careagents-worker --environment "$RAILWAY_ENVIRONMENT" --detach --no-gitignore
 
