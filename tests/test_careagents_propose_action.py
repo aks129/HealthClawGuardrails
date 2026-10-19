@@ -483,3 +483,107 @@ def test_every_fixed_text_passes_the_engines_red_flag_screen(purpose, origin):
     body = text_self.body_for(purpose, origin)
     assert screen_text(body) is None
     assert "STOP" in body and len(body) <= 160
+
+
+# The page's own script, run as served. Asserting on the HTML alone passed
+# while the browser showed something else: the approve page calls
+# evaluate() on load, which rewrites #review-gate-msg (QA on #1000, seen at
+# 375px against a running stack). A minimal DOM is enough: the elements the
+# script reads by id are real objects, everything else absorbs calls.
+_GATE_HARNESS = r"""
+const html = require('fs').readFileSync(process.argv[1], 'utf8');
+const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+  .map(m => m[1]).filter(s => s.includes('review-gate-msg'));
+if (scripts.length !== 1) {
+  console.log(JSON.stringify({error: 'scripts: ' + scripts.length}));
+  process.exit(0);
+}
+function stub() {
+  const f = function () { return stub(); };
+  return new Proxy(f, {
+    get(t, k) {
+      if (k === Symbol.toPrimitive) return () => '';
+      if (k === 'then') return undefined;
+      if (!(k in t)) t[k] = stub();
+      return t[k];
+    },
+    set(t, k, v) { t[k] = v; return true; },
+  });
+}
+function el(props) {
+  const o = Object.assign({addEventListener() {}, setAttribute() {},
+    removeAttribute() {}, getAttribute() { return '/review/a/b/submit'; },
+    appendChild() {}, classList: {add() {}, remove() {}, toggle() {}},
+    style: {}}, props);
+  return new Proxy(o, {get(t, k) { if (!(k in t)) t[k] = stub(); return t[k]; }});
+}
+const gate = /<div id="review-gate-msg" class="([^"]*)"[^>]*>([^<]*)</.exec(html);
+const approveHidden = /id="approve-btn"[^>]*\bhidden\b/.test(html);
+const ack = el({checked: false});
+const els = {
+  'review-gate-msg': el({className: gate[1], textContent: gate[2].trim()}),
+  'approve-btn': el({disabled: true, hidden: approveHidden}),
+  'decline-btn': el({disabled: false, hidden: false}),
+  'ack': ack,
+};
+els['review-form'] = el({querySelector(sel) { return sel === '#ack' ? ack : stub(); }});
+global.document = new Proxy({getElementById(id) { return els[id] || el({}); },
+  querySelector() { return stub(); }, querySelectorAll() { return []; },
+  addEventListener() {}}, {get(t, k) { if (!(k in t)) t[k] = stub(); return t[k]; }});
+global.window = new Proxy({addEventListener() {}, location: {href: ''}},
+  {get(t, k) { if (!(k in t)) t[k] = stub(); return t[k]; }});
+global.fetch = () => new Promise(() => {});
+global.setTimeout = () => 0; global.setInterval = () => 0;
+try { new Function(scripts[0])(); } catch (e) {
+  console.log(JSON.stringify({error: String(e)})); process.exit(0); }
+const g = els['review-gate-msg'], a = els['approve-btn'];
+console.log(JSON.stringify({text: g.textContent, cls: g.className,
+                            approveHidden: a.hidden}));
+"""
+
+
+def _run_gate_script(html, tmp_path):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    page = tmp_path / "page.html"
+    page.write_text(html)
+    out = subprocess.run([node, "-e", _GATE_HARNESS, str(page)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_not_your_number_is_what_the_page_still_says_after_its_script_runs(
+        cfg, svc, monkeypatch, tmp_path):  # noqa: F811
+    """Design §4: the page shows "not your number" in place of Approve. The
+    served markup says it; the page's load-time evaluate() must not replace
+    it with "tick the box", a box the page has hidden."""
+    fake = _SmsFake(OTHER)
+    c, _fake, agent = _app(cfg, svc, monkeypatch, fake)
+    _bind(svc)
+    html = c.get(f"/review/{agent}/act-sms").get_data(as_text=True)
+    seen = _run_gate_script(html, tmp_path)
+    assert "error" not in seen, seen
+    assert "not going to the phone number linked to your account" in \
+        seen["text"], seen
+    assert "tick the box" not in seen["text"], seen
+    assert seen["approveHidden"] is True, seen
+
+
+def test_the_gate_harness_sees_the_ordinary_page_as_the_browser_does(
+        cfg, svc, monkeypatch, tmp_path):  # noqa: F811
+    """The harness's control: for the account's own number the script runs
+    and leaves the ordinary "tick the box" prompt, so a pass above is the
+    page and not a harness that never ran the script."""
+    fake = _SmsFake(PHONE)
+    c, _fake, agent = _app(cfg, svc, monkeypatch, fake)
+    _bind(svc)
+    html = c.get(f"/review/{agent}/act-sms").get_data(as_text=True)
+    seen = _run_gate_script(html, tmp_path)
+    assert "error" not in seen, seen
+    assert seen["text"] == ("Read the request above, then tick the box to "
+                            "continue."), seen
+    assert seen["approveHidden"] is False, seen
