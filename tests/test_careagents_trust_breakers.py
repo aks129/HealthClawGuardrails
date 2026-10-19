@@ -30,6 +30,8 @@ def test_the_signed_out_landing_page_offers_sign_in(cfg, svc):
         as_text=True)
     assert 'href="/auth">Get started</a>' in page
     assert re.search(r'<a[^>]*href="/auth"[^>]*>Sign in</a>', page)
+    # Beside the button, before the note: above the fold at 375x560.
+    assert page.index(">Sign in</a>") < page.index("Start with made-up")
 
 
 def test_a_signed_in_landing_page_has_no_sign_in(cfg, svc, monkeypatch):
@@ -103,7 +105,7 @@ def test_chat_js_draws_the_done_form_card_on_load():
     card = card[:card.index("\n  }\n")]
     # The review page shows a finished form with its PDF; no bearer link
     # is put in the chat page.
-    assert '"/review/" + AGENT + "/" + actionId' in card
+    assert '"/review/" + AGENT + "/" + encodeURIComponent(actionId)' in card
     assert "addFormDoneCard(log.dataset.doneForm)" in js
 
 
@@ -147,6 +149,10 @@ def test_a_disconnected_connection_draws_no_done_form(cfg, svc, monkeypatch):
 def test_the_brief_card_links_to_the_visit_brief_page():
     js = (STATIC / "chat.js").read_text()
     assert 'ev.kind === "brief"' in js
+    # Drawn after the streamed answer, on done, not above it.
+    done = js[js.index('ev.type === "done"'):]
+    done = done[:done.index("\n        }\n")]
+    assert "if (state.brief) addBriefCard();" in done
     card = js[js.index("function addBriefCard"):]
     card = card[:card.index("\n  }\n")]
     assert '"/brief?agent=" + AGENT' in card

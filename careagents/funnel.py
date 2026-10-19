@@ -329,8 +329,9 @@ def daily(session_scope, days: int = 7,
           moment: _dt.datetime | None = None) -> dict:
     """Counts per UTC day, newest first: how many accounts reached each
     milestone that day, how many joined through an invite, and each kind of
-    issue. Plus the totals for the window, conversion between consecutive
-    steps over all time, and invites per inviter. Integers and account ids
+    issue. Plus the totals for the window, conversion between neighbouring
+    steps over all time (`confirmed` left out: it is how an account joined,
+    not a step after joining), and invites per inviter. Integers and account ids
     only. Reads whole small tables: the beta is tens of accounts.
 
     `details` is, per day, each detail kind split by its detail (endpoint

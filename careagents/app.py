@@ -2127,6 +2127,8 @@ def create_app(config: Config | None = None,
         # all: a card there would promise an approval the relay refuses
         # (security review of #853).
         reviews = []
+        # Only a lookup that answered says no form is waiting (#998 L2).
+        pending_known = False
         if conn.get("status") != "revoked":
             try:
                 reviews = [{"id": a["id"],
@@ -2135,6 +2137,7 @@ def create_app(config: Config | None = None,
                             "form": a.get("kind") == "form-fill"}
                            for a in hc.pending_actions(ctx["tenant"])
                            if a.get("id")]
+                pending_known = True
             except HealthClawError:
                 logger.warning("pending reviews unavailable for agent %s",
                                agent_id)
@@ -2144,14 +2147,16 @@ def create_app(config: Config | None = None,
         # form this week is drawn as done, linking to its review page,
         # which shows the PDF. Not while a form waits: that one is next.
         done_form = None
-        if (conn.get("status") != "revoked"
-                and not any(r["form"] for r in reviews)):
+        if pending_known and not any(r["form"] for r in reviews):
             try:
                 done = sorted(
                     (a for a in hc.recent_actions(ctx["tenant"])
                      if a.get("id") and a.get("kind") == "form-fill"
                      and a.get("status") == "completed"),
-                    key=lambda a: a.get("updated_at") or "", reverse=True)
+                    # str(): an engine row with a numeric time must not
+                    # 500 the chat (#998 L1).
+                    key=lambda a: str(a.get("updated_at") or ""),
+                    reverse=True)
                 done_form = done[0]["id"] if done else None
             except HealthClawError:
                 logger.warning("recent forms unavailable for agent %s",

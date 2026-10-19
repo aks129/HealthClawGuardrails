@@ -349,7 +349,7 @@
                                        : "Your intake form is ready"));
     c.appendChild(el("p", null, "You checked and approved it."));
     const a = el("a", "btn-primary", "Open the form");
-    a.href = "/review/" + AGENT + "/" + actionId;
+    a.href = "/review/" + AGENT + "/" + encodeURIComponent(actionId);
     c.appendChild(a);
     log.appendChild(c); scroll();
   }
@@ -561,8 +561,10 @@
           addReviewCard(ev.action_id, ev.review_url);
         else if (ev.type === "card" && ev.kind === "pdf")
           addPdfCard(ev.url);
+        // Drawn once the answer is in (on done), beside its "the full
+        // brief is on the Visit brief page", not above the answer.
         else if (ev.type === "card" && ev.kind === "brief")
-          addBriefCard();
+          state.brief = true;
         else if (ev.type === "card" && ev.kind === "lab-timeline")
           addLabTimelineCard(ev.topic || "");
         else if (ev.type === "text") {
@@ -586,6 +588,7 @@
             const next = document.getElementById("connect-next");
             if (next) next.hidden = false;
           }
+          if (state.brief) addBriefCard();
         }
       }
     }

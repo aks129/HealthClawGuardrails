@@ -183,14 +183,11 @@ def test_the_done_card_href_is_rooted_on_review():
           / "chat.js").read_text()
     card = js[js.index("function addFormDoneCard"):]
     card = card[:card.index("\n  }\n")]
-    assert re.search(r'a\.href = "/review/" \+ AGENT \+ "/" \+ actionId', card)
+    assert re.search(r'a\.href = "/review/" \+ AGENT \+ "/" \+ '
+                     r'encodeURIComponent\(actionId\)', card)
     assert "innerHTML" not in card
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "#998 review L1: sorted() on a str/int updated_at raises TypeError, "
-    "which the HealthClawError catch does not cover, so the chat 500s. "
-    "Engine-trust robustness, not a disclosure; fails closed."))
 def test_updated_at_of_mixed_types_does_not_500_the_chat(cfg, svc, monkeypatch):
     """The sort key is `updated_at or ""`. An engine that sent a number for
     one row must not take the chat page down (only HealthClawError is
@@ -221,10 +218,6 @@ def test_admin_funnel_stays_owner_only(cfg, svc, monkeypatch):
     assert c.get("/admin/funnel").status_code == 404
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "#998 review L2: a pending lookup that fails leaves `reviews` empty, so "
-    "an older form is drawn 'ready, you approved it' while a newer one may "
-    "be waiting. Misleading, not a bypass: nothing is approved by the card."))
 def test_a_failed_pending_lookup_draws_no_done_form(cfg, svc, monkeypatch):
     from careagents.healthclaw import HealthClawError
 
