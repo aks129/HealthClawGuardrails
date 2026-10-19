@@ -14,13 +14,15 @@ guardrail layer; careagents holds identity + pointers only.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import quote
@@ -40,7 +42,7 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, causes, feedback, funnel, invites
+from careagents import beta_signup, causes, errors, feedback, funnel, invites
 from careagents import checkin_wallet
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -54,6 +56,10 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: What the hub says when HealthClaw cannot be reached to set up or
+#: refresh records: a sentence and what to do, never "service unavailable".
+RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
+                     "Please try again in a minute.")
 #: What a link session is told when it reaches for more than the sample.
 REAUTH_TEXT = ("For that, sign in again with a code we email you. Your chat "
                "stays as it is.")
@@ -70,6 +76,15 @@ _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
 
 #: The one address patient-facing copy sends people to.
 CONTACT_EMAIL = "contactus@healthclaw.io"
+
+#: Sign-in code requests one client address may make per window. Sized for
+#: a family on one home Wi-Fi, each asking for codes and asking again; the
+#: per-address caps in accounts.py protect each inbox.
+CODE_REQUESTS_PER_IP = 30
+CODE_REQUEST_WINDOW = 600
+#: Client addresses the code-request limiter remembers before it forgets
+#: the oldest.
+CODE_REQUEST_KEYS = 4096
 
 
 def contact_links(text) -> Markup:
@@ -744,6 +759,8 @@ def create_app(config: Config | None = None,
                  if a["is_primary"] and a["person"]["kind"] == "self"), ""),
             assistants=assistants,
             tones=list(PERSONAS.items()),
+            # The hub card's own words ("Tone: calm"), so the two match.
+            tone_words=hub_view.TONE_WORDS,
             routine_catalog=advisors.routine_catalog(),
             imessage_handle=cfg.imessage_handle,
             # Every connected phone, masked, each with its own Disconnect.
@@ -759,10 +776,59 @@ def create_app(config: Config | None = None,
 
     # --- email code auth -----------------------------------------------------
 
+    code_requests: OrderedDict[str, deque] = OrderedDict()
+    # gunicorn runs several threads per worker: reading, counting and
+    # re-inserting a window is one step, or a racing burst beats the limit.
+    code_requests_lock = threading.Lock()
+
+    def _code_request_client() -> str:
+        # As /feedback and /beta do: X-Real-IP, never X-Forwarded-For, whose
+        # entries can be the client's own words. The edge must overwrite
+        # X-Real-IP with the connecting address (Railway's does); passed
+        # through from the client, it would pick its own bucket.
+        raw = (request.headers.get("X-Real-IP") or "").strip()
+        try:
+            return str(ipaddress.ip_address(raw))
+        except ValueError:
+            return request.remote_addr or ""
+
+    def _code_request_wait(key: str) -> int:
+        """0 and counted, or the whole seconds until this client may ask."""
+        moment = time.time()
+        with code_requests_lock:
+            window = code_requests.pop(key, None) or deque()
+            while window and moment - window[0] > CODE_REQUEST_WINDOW:
+                window.popleft()
+            wait = 0
+            if len(window) >= CODE_REQUESTS_PER_IP:
+                oldest = window[len(window) - CODE_REQUESTS_PER_IP]
+                wait = max(1, math.ceil(oldest + CODE_REQUEST_WINDOW
+                                        - moment))
+            else:
+                window.append(moment)
+            code_requests[key] = window             # newest last
+            while len(code_requests) > CODE_REQUEST_KEYS:
+                code_requests.popitem(last=False)   # forget the oldest key
+            return wait
+
     @app.post("/api/auth/email")
     def auth_email():
         email = (request.get_json(silent=True) or {}).get("email", "")
         purpose = "verify"
+        # Per client address, before any address is looked at: one network
+        # asking for codes to many inboxes. Keyed on the network alone, so
+        # the answer says nothing about the address asked for. A 429 with a
+        # sentence, not the resend wait: that answer tells the person a code
+        # went out moments ago, and from here none did.
+        wait = _code_request_wait(_code_request_client())
+        if wait:
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
+            minutes = math.ceil(wait / 60)
+            return jsonify({
+                "error": ("Too many code requests from this network. Try "
+                          f"again in {minutes} minute"
+                          f"{'' if minutes == 1 else 's'}."),
+                "retry_after": wait}), 429
         try:
             retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
@@ -781,19 +847,19 @@ def create_app(config: Config | None = None,
             # inbox with no idea whether to wait or retry.
             return jsonify({"error": str(exc), "sent": False}), 502
         if retry_after:
-            # The cooldown suppressed the send (#262). 200, not 4xx: the
-            # request was handled correctly and the person still holds a live
-            # code, so the UI still advances to code entry. But claiming
-            # "sent" here is the lie — it strands whoever's first email never
-            # arrived, telling them to wait for something nobody sent.
+            # The resend wait, or a per-address cap, suppressed the send
+            # (#262). 200, not 4xx: the request was handled correctly and the
+            # address was sent a code recently, so the UI still advances to
+            # code entry and shows the wait. But claiming "sent" here is the
+            # lie — it strands whoever's first email never arrived, telling
+            # them to wait for something nobody sent.
             #
-            # Not an enumeration oracle: this branch turns only on whether a
-            # code was requested for this address moments ago — a state the
-            # requester just created themselves — never on whether an account
-            # exists. start_email_code touches ca_email_tokens alone; accounts
-            # are created at verify. The genuine-send and cooldown responses
-            # are byte-identical for an address with an account and one
-            # without.
+            # Not an enumeration oracle: this branch turns only on the codes
+            # already requested for this address, and their wrong guesses —
+            # states requesters created — never on whether an account exists.
+            # start_email_code touches ca_email_tokens alone; accounts are
+            # created at verify. The genuine-send and wait responses are
+            # byte-identical for an address with an account and one without.
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
@@ -853,7 +919,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             acct = svc.finish_authentication(request.get_json(force=True),
-                                             challenge)
+                                             challenge, method="passkey")
         except AuthError as exc:
             funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
@@ -1132,7 +1198,7 @@ def create_app(config: Config | None = None,
             try:
                 hc.seed(tenant)
             except HealthClawError:
-                return jsonify({"error": "records service unavailable"}), 503
+                return jsonify({"error": RECORDS_DOWN_TEXT}), 503
         cid = svc.add_connection(acct.id, connector_id, tenant, plan["label"],
                                  status=plan["status"],
                                  provider=plan.get("provider"),
@@ -1212,7 +1278,7 @@ def create_app(config: Config | None = None,
         me = current_account()
         if me is not None and me.email != email.strip().lower():
             return None
-        acct = svc.first_run_account(email)
+        acct = svc.first_run_account(email, sign_in=me is None)
         if acct is None:
             return None
         if me is None:
@@ -1452,7 +1518,7 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True)
         if not isinstance(body, dict) or body.get("confirm") != "DELETE":
             return jsonify({"error": "confirm_required",
-                            "message": "Type DELETE to confirm."}), 400
+                            "message": "Type the word delete to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
@@ -1563,7 +1629,7 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True) or {}
         if body.get("confirm") != "DELETE":
             return jsonify({"error": "confirm_required",
-                            "message": "Type DELETE to confirm."}), 400
+                            "message": "Type the word delete to confirm."}), 400
         purged = 0
         for conn in svc.list_home(acct.id)["connections"]:
             try:
@@ -1667,7 +1733,7 @@ def create_app(config: Config | None = None,
                 svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
                                 hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
-            return jsonify({"error": "records service unavailable"}), 503
+            return jsonify({"error": RECORDS_DOWN_TEXT}), 503
 
         out = {"status": "reauth", "connection_id": conn_id}
         if plan.get("reauth_url"):
@@ -1878,7 +1944,7 @@ def create_app(config: Config | None = None,
                 hc.seed(plan["tenant"])
             except HealthClawError:
                 svc.remove_empty_person(acct.id, person)
-                return jsonify({"error": "records service unavailable"}), 503
+                return jsonify({"error": RECORDS_DOWN_TEXT}), 503
             cid = svc.add_connection(acct.id, "sample", plan["tenant"],
                                      plan["label"], status="active",
                                      provider=plan.get("provider"),
@@ -2017,6 +2083,8 @@ def create_app(config: Config | None = None,
             past = [dict(m, content=beta.under_banner(str(m.get("content")
                                                           or ""), frame))
                     if m.get("role") != "user" else m for m in past]
+        # Retries of a broken chat replay as one failure, not a wall.
+        past = errors.collapse_failed_turns(past)
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is
@@ -3646,8 +3714,11 @@ def create_app(config: Config | None = None,
             created = svc.invite_real_records(email, invited_by)
         except (AuthError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"invited {email.strip().lower()}" if created
-                   else f"{email.strip().lower()} was already invited")
+        typed, key = email.strip().lower(), invites.invite_key(email)
+        click.echo(f"invited {typed}" if created
+                   else f"{typed} was already invited")
+        if key != typed:
+            click.echo(f"matches the inbox {key} (any alias of it)")
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
@@ -3669,7 +3740,9 @@ def create_app(config: Config | None = None,
 
     @_invites.command("list")
     def _invites_list():
-        rows = svc.real_record_invites()
+        """Each invite: as typed, the inbox it matches, when and by whom,
+        live or revoked, and whether that inbox has signed up yet."""
+        rows = invites.real_record_rows(svc.session)
         if not rows:
             click.echo("no invites")
         for r in rows:
@@ -3677,18 +3750,21 @@ def create_app(config: Config | None = None,
             state = ("revoked " + datetime.fromtimestamp(
                 r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
                      if r["revoked_at"] else "live")
-            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
-                       f"by {r['invited_by']:<20} {state}")
+            joined = "signed up" if r["signed_up"] else "not signed up"
+            click.echo(f"{r['display']:<40} matches {r['key']:<32} "
+                       f"{when:%Y-%m-%d} by {r['invited_by']:<20} "
+                       f"{state:<18} {joined}")
 
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
     operator_cli.register(app, svc)
     beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
+    errors.register(app, svc, cfg)
     invites.register(app, svc, cfg, beta_signup.page_context)
     funnel.register(app, svc, cfg, full_session=lambda: not session.get(
         _VIA_LINK))
-    checkin_wallet.register(app, svc, cfg, full_session=lambda: not session.get(
-        _VIA_LINK))
+    checkin_wallet.register(app, svc, cfg, hc,
+                            full_session=lambda: not session.get(_VIA_LINK))
 
     return app

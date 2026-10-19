@@ -426,7 +426,7 @@ def test_the_safety_page_says_what_is_tested_and_the_grade(app, svc):  # noqa: F
     assert ("Each day we test that your name is hidden, every look at your "
             "records is logged, and nothing is sent without your OK. "
             "Today's grade: A.") in words
-    report = re.search(r'<a [^>]*>\s*Technical report\s*</a>', page)
+    report = re.search(r'<a [^>]*>\s*See every test we run\s*</a>', page)
     assert report and "$conformance" in report.group(0)
     for word in JARGON:
         assert word.lower() not in words.lower(), word
@@ -457,7 +457,7 @@ def test_the_safety_page_goes_back_where_the_person_came_from(
         cfg, svc, monkeypatch):  # noqa: F811
     """#884 G7: signed out, "Back" to the landing page; signed in with an
     assistant, "Back to chat"; signed in without one, "Back to
-    CareAgents". On the same line as "Technical report"."""
+    CareAgents". On the same line as "See every test we run"."""
     from careagents.app import create_app
     a = create_app(config=cfg, client=FakeClient(), accounts=svc)
     a.config["TESTING"] = True
@@ -465,7 +465,7 @@ def test_the_safety_page_goes_back_where_the_person_came_from(
     page = c.get("/safety").get_data(as_text=True)
     assert _back_link(page) == ("/", "Back")
     row = re.search(r'<p class="safety-links">.*?</p>', page, re.S).group(0)
-    assert "Technical report" in row and 'class="safety-back"' in row
+    assert "See every test we run" in row and 'class="safety-back"' in row
 
     _login(c, svc, monkeypatch)
     assert _back_link(c.get("/safety").get_data(as_text=True)) == (
