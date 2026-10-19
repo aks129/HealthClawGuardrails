@@ -354,6 +354,31 @@
     log.appendChild(c); scroll();
   }
 
+  // A form approved before this page loaded (data-done-form). Its review
+  // page shows it finished with the PDF, so no bearer link is put here.
+  function addFormDoneCard(actionId) {
+    const c = el("div", "card pdf");
+    c.appendChild(el("h4", null, WHOSE ? "The intake form is ready"
+                                       : "Your intake form is ready"));
+    c.appendChild(el("p", null, "You checked and approved it."));
+    const a = el("a", "btn-primary", "Open the form");
+    a.href = "/review/" + AGENT + "/" + encodeURIComponent(actionId);
+    c.appendChild(a);
+    log.appendChild(c); scroll();
+  }
+
+  // The answer summarizes the brief and points at the page; this is the
+  // way there (patient walk 2026-10-18).
+  function addBriefCard() {
+    const c = el("div", "card");
+    c.appendChild(el("h4", null, "Visit brief"));
+    c.appendChild(el("p", null, "The full brief, to read or show your doctor."));
+    const a = el("a", "btn-primary", "Open the visit brief");
+    a.href = "/brief?agent=" + AGENT;
+    c.appendChild(a);
+    log.appendChild(c); scroll();
+  }
+
   // --- lab timeline ------------------------------------------------------
   // Rendered inline, NOT as an iframe of HealthClaw's lab-trends MCP App.
   // That app is same-origin to the engine and authenticates with a step-up
@@ -549,6 +574,10 @@
           addReviewCard(ev.action_id, ev.review_url);
         else if (ev.type === "card" && ev.kind === "pdf")
           addPdfCard(ev.url);
+        // Drawn once the answer is in (on done), beside its "the full
+        // brief is on the Visit brief page", not above the answer.
+        else if (ev.type === "card" && ev.kind === "brief")
+          state.brief = true;
         else if (ev.type === "card" && ev.kind === "lab-timeline")
           addLabTimelineCard(ev.topic || "");
         else if (ev.type === "text") {
@@ -572,6 +601,7 @@
             const next = document.getElementById("connect-next");
             if (next) next.hidden = false;
           }
+          if (state.brief) addBriefCard();
         }
       }
     }
@@ -675,6 +705,7 @@
   try { pendingReviews = JSON.parse(log.dataset.pendingReviews || "[]"); }
   catch (e) { pendingReviews = []; }
   pendingReviews.forEach((r) => addReviewCard(r.id, null, r.form ? null : r.label));
+  if (log.dataset.doneForm) addFormDoneCard(log.dataset.doneForm);
 
   // A texted answer cannot carry a chart, so it links here with ?chart=
   // (careagents/imessage.py run_reply). The topic only narrows the series;

@@ -260,12 +260,14 @@ def test_auth_opens_on_the_email_step_with_the_email_filled_in(made, sent):
     assert page.index('id="email-btn"') < page.index('id="passkey-btn"')
 
 
-def test_auth_without_a_confirm_is_unchanged(made):
+def test_auth_without_a_confirm_leads_with_the_code_too(made):
+    """The emailed code leads for everyone (patient walk 2026-10-18); only
+    the prefilled address is the confirm's."""
     app, _ = made()
     page = app.test_client().get("/auth").get_data(as_text=True)
     passkey = re.search(r'<button[^>]*id="passkey-btn"[^>]*>', page).group(0)
-    assert "btn-primary" in passkey
-    assert page.index('id="passkey-btn"') < page.index('id="email-btn"')
+    assert "btn-primary" not in passkey
+    assert page.index('id="email-btn"') < page.index('id="passkey-btn"')
     assert 'value="' not in re.search(r'<input[^>]*id="email"[^>]*>',
                                       page).group(0)
 

@@ -787,10 +787,8 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
 #: screen (tests/test_careagents_feedback.py checks each one).
 NEXT_STEPS = (
     'Open careagents.cloud and tap "Get started".',
-    # The big button on that screen is the passkey one; say where the
-    # email box is.
-    'Under "or use your email", type the same email you used to join the '
-    'beta and tap "Email me a code".',
+    'Type the same email you used to join the beta and tap '
+    '"Email me a code".',
     'We email you an 8-digit code. Type it in and tap "Continue".',
     'If it offers a passkey, you can set one up or tap "Skip for now".',
     'On your hub, tap "Chat" to open the made-up records. Ask a question, '

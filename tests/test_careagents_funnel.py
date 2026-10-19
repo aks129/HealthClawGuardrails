@@ -222,21 +222,16 @@ def test_daily_report_counts_days_conversion_and_inviters(svc, monkeypatch):  # 
     assert len(report["days"]) == 3
     assert report["days"][0]["joined"] == 2
     assert report["days"][0]["via_invite"] == 1
-    joined_to_confirmed = report["conversion"][0]
-    assert joined_to_confirmed["from_n"] == 2
-    # Conversion counts accounts that reached both steps: `a` answered
-    # without a confirmed beta request, so confirmed -> first_answer is
-    # 0 of 0, not 1 of 0.
-    answered = next(c for c in report["conversion"]
-                    if c["to"] == "first_answer")
-    assert (answered["from_n"], answered["to_n"]) == (0, 0)
-    assert answered["percent"] is None
+    # `confirmed` is not in the chain (how an account joined, not a step
+    # after joining): joined -> first_answer counts both accounts.
+    answered = report["conversion"][0]
+    assert (answered["from"], answered["to"]) == ("joined", "first_answer")
+    assert (answered["from_n"], answered["to_n"],
+            answered["percent"]) == (2, 1, 50)
     funnel.mark(svc.session, a.id, "confirmed")
     report = funnel.daily(svc.session, days=1)
-    answered = next(c for c in report["conversion"]
-                    if c["to"] == "first_answer")
-    assert (answered["from_n"], answered["to_n"],
-            answered["percent"]) == (1, 1, 100)
+    assert report["reached"]["confirmed"] == 1
+    assert report["conversion"][0]["from_n"] == 2
     assert report["per_inviter"] == [{"inviter_id": a.id, "joined": 1}]
 
 
