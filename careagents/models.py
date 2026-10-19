@@ -328,6 +328,43 @@ class UsageDay(Base):
     turns = Column(Integer, default=0)
 
 
+#: How many failed turns one account may be given back per UTC day. A
+#: failure still costs the operator its model call, so the refund is
+#: bounded: past it, a failed turn counts like any other.
+REFUNDS_PER_DAY = 3
+
+
+class RefundDay(Base):
+    """How many failed turns one account was given back on one UTC day
+    (AccountService.refund_daily_turn). Counts only, like UsageDay. Its own
+    table so `ca_usage_days`, whose shape older databases are migrated
+    from, keeps its columns."""
+    __tablename__ = "ca_refund_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_refund_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("rfd"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False)               # UTC "YYYY-MM-DD"
+    count = Column(Integer, nullable=False, default=0)
+
+
+class VoiceUsageDay(Base):
+    """Per-account daily speech spend: seconds transcribed, characters
+    spoken (careagents/voice.py). ElevenLabs bills both to the operator, so
+    the cap is durable and shared, like UsageDay.
+
+    Integers only. No audio, no transcript, no spoken text.
+    """
+    __tablename__ = "ca_voice_usage_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_voice_usage_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("vu"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
+    stt_seconds = Column(Integer, default=0)
+    tts_chars = Column(Integer, default=0)
+
+
 class ActivityDay(Base):
     """Per-account daily counts for the weekly number (beta spec 4.5).
 
@@ -515,6 +552,15 @@ def _ensure_columns(engine) -> None:
             _add_column(engine, "ca_agents", "routines", "VARCHAR(255)")
         if "person_id" not in cols:
             _add_column(engine, "ca_agents", "person_id", "VARCHAR(32)")
+    if "ca_beta_mail_caps" in tables:
+        # The rolling day's send times (beta_signup.claim_mail) and the
+        # last "how to sign in" email (claim_already). A row from before
+        # them reads as one email, at sent_at.
+        cols = {c["name"] for c in insp.get_columns("ca_beta_mail_caps")}
+        if "sends" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "sends", "VARCHAR(128)")
+        if "already_at" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "already_at", "FLOAT")
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:

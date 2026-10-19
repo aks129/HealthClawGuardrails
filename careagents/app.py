@@ -42,7 +42,7 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, feedback, funnel, invites
+from careagents import beta_signup, errors, feedback, funnel, invites
 from careagents import checkin_wallet
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -56,6 +56,10 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: What the hub says when HealthClaw cannot be reached to set up or
+#: refresh records: a sentence and what to do, never "service unavailable".
+RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
+                     "Please try again in a minute.")
 #: What a link session is told when it reaches for more than the sample.
 REAUTH_TEXT = ("For that, sign in again with a code we email you. Your chat "
                "stays as it is.")
@@ -750,6 +754,8 @@ def create_app(config: Config | None = None,
                  if a["is_primary"] and a["person"]["kind"] == "self"), ""),
             assistants=assistants,
             tones=list(PERSONAS.items()),
+            # The hub card's own words ("Tone: calm"), so the two match.
+            tone_words=hub_view.TONE_WORDS,
             routine_catalog=advisors.routine_catalog(),
             imessage_handle=cfg.imessage_handle,
             # Every connected phone, masked, each with its own Disconnect.
@@ -1187,7 +1193,7 @@ def create_app(config: Config | None = None,
             try:
                 hc.seed(tenant)
             except HealthClawError:
-                return jsonify({"error": "records service unavailable"}), 503
+                return jsonify({"error": RECORDS_DOWN_TEXT}), 503
         cid = svc.add_connection(acct.id, connector_id, tenant, plan["label"],
                                  status=plan["status"],
                                  provider=plan.get("provider"),
@@ -1507,7 +1513,7 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True)
         if not isinstance(body, dict) or body.get("confirm") != "DELETE":
             return jsonify({"error": "confirm_required",
-                            "message": "Type DELETE to confirm."}), 400
+                            "message": "Type the word delete to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
@@ -1618,7 +1624,7 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True) or {}
         if body.get("confirm") != "DELETE":
             return jsonify({"error": "confirm_required",
-                            "message": "Type DELETE to confirm."}), 400
+                            "message": "Type the word delete to confirm."}), 400
         purged = 0
         for conn in svc.list_home(acct.id)["connections"]:
             try:
@@ -1722,7 +1728,7 @@ def create_app(config: Config | None = None,
                 svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
                                 hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
-            return jsonify({"error": "records service unavailable"}), 503
+            return jsonify({"error": RECORDS_DOWN_TEXT}), 503
 
         out = {"status": "reauth", "connection_id": conn_id}
         if plan.get("reauth_url"):
@@ -1933,7 +1939,7 @@ def create_app(config: Config | None = None,
                 hc.seed(plan["tenant"])
             except HealthClawError:
                 svc.remove_empty_person(acct.id, person)
-                return jsonify({"error": "records service unavailable"}), 503
+                return jsonify({"error": RECORDS_DOWN_TEXT}), 503
             cid = svc.add_connection(acct.id, "sample", plan["tenant"],
                                      plan["label"], status="active",
                                      provider=plan.get("provider"),
@@ -2072,6 +2078,8 @@ def create_app(config: Config | None = None,
             past = [dict(m, content=beta.under_banner(str(m.get("content")
                                                           or ""), frame))
                     if m.get("role") != "user" else m for m in past]
+        # Retries of a broken chat replay as one failure, not a wall.
+        past = errors.collapse_failed_turns(past)
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is
@@ -3721,10 +3729,11 @@ def create_app(config: Config | None = None,
     operator_cli.register(app, svc)
     beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
+    errors.register(app, svc, cfg)
     invites.register(app, svc, cfg, beta_signup.page_context)
     funnel.register(app, svc, cfg, full_session=lambda: not session.get(
         _VIA_LINK))
-    checkin_wallet.register(app, svc, cfg, full_session=lambda: not session.get(
-        _VIA_LINK))
+    checkin_wallet.register(app, svc, cfg, hc,
+                            full_session=lambda: not session.get(_VIA_LINK))
 
     return app

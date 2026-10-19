@@ -31,31 +31,37 @@ def _pc(tenant):
                                   "/command-center/api/openclaw/sessions"])
 def test_both_infra_routes_refuse_a_dead_token_and_accept_a_live_one(
         client, app, env, monkeypatch, path):
+    """SEC941-PRE1: a live tenant token never opened these once they became
+    operator-only, so the "live" control is the internal secret. A token,
+    live or dead, gets the same 403 either side of a Disconnect."""
     from r6.command_center import gateway, projector
     monkeypatch.setattr(gateway, "list_sessions", lambda force=False: [])
     monkeypatch.setattr(projector, "system_status", lambda: {"ok": True})
     c = app.test_client()
-    live = c.get(f"{path}?tenant={CA}", headers={"X-Step-Up-Token": _pc(CA)})
-    assert live.status_code == 200          # control: reachable before
+    live = c.get(path, headers={"X-Internal-Secret": SECRET})
+    assert live.status_code == 200          # control: the operator reaches it
+    before = c.get(f"{path}?tenant={CA}", headers={"X-Step-Up-Token": _pc(CA)})
+    assert before.status_code == 403
     r = client.post("/r6/fhir/internal/fasten-revoke",
                     json={"tenant_id": CA},
                     headers={"X-Internal-Secret": SECRET})
     assert r.status_code == 200
     dead = c.get(f"{path}?tenant={CA}", headers={"X-Step-Up-Token": _pc(CA)})
-    assert dead.status_code == 401
-    # Header-only tenant source is checked the same way.
+    assert dead.status_code == 403
+    # Header-only tenant source is refused the same way.
     dead = c.get(path, headers={"X-Step-Up-Token": _pc(CA), "X-Tenant-Id": CA})
-    assert dead.status_code == 401
+    assert dead.status_code == 403
+    assert c.get(path, headers={"X-Internal-Secret": SECRET}).status_code == 200
 
 
 @pytest.mark.parametrize("path", ["/command-center/api/system",
                                   "/command-center/api/openclaw/sessions"])
 def test_public_tenant_still_needs_a_credential_on_infra_routes(
         app, env, path):
-    """Why the builder kept has_grant: authorize_tenant_read would wave a
-    public tenant through with no credential."""
+    """A public tenant waves through read-auth with no credential; these
+    routes are operator-only, so it gets the operator refusal."""
     r = app.test_client().get(f"{path}?tenant=desktop-demo")
-    assert r.status_code == 401
+    assert r.status_code == 403
 
 
 @pytest.mark.parametrize("blank", [" ", "\t\n", " ", "  "])
