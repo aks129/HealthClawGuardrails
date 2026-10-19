@@ -180,12 +180,12 @@ def _setup_fasten_connection(app):
 # POST /r6/actions/callback/<provider>     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/webhook                     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/connections                 |  x  | x |    |    |    |      |  x   |  x
-# POST /fasten/jobs/<id>/retry             |  x  | x |    |    |    |      |  x   |     <- S-14
+# POST /fasten/jobs/<id>/retry             |  x  | x |    | x  |    |      |  x   |  x  <- #912
 # POST /r6/smbp/enroll                     |  x  | x |    |    |    |      |  x   |  x
 # POST /r6/smbp/reading                    |  x  | x |    | x  |    |      |  x   |  x
 # GET  /r6/smbp/report/<id>?format=pdf     |  x  | x | x  |    |    |      |  x   |  x
 # POST /shc/ingest                         |  x  | x |    |    |    |  x   |  x   |  x
-# POST /r6/ops/reap                        |  x  | x |    | x  |    |      |      |  x  <- #304
+# POST /r6/ops/reap                        |     |   |    |    |    |  x   |      |  x  <- #304 fixed (#308)
 # POST /wearables/sync-now                 |  x  | x |    | x  |    |      |      |  x  <- #304
 #
 # x* = the guard exempts public/synthetic tenants by design.
@@ -512,14 +512,16 @@ MATRIX: tuple = (
         id="fasten-retry-job",
         method="POST", path="/fasten/jobs/guard-matrix-task/retry",
         endpoint="fasten.retry_job",
-        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER}),
-        anon_refusal=(400,),
-        note="S-14: re-runs a full ingest and emits NO AuditEvent — the only "
-             "ingest trigger in the matrix without one. The absence is "
-             "pinned by test_audit_absent_where_the_matrix_says_absent so "
-             "restoring it forces this row to be updated in the same PR. "
-             "TENANT_FORMAT arrived with access-kernel slice 9; before it a "
-             "malformed id reached the job lookup as the partition key.",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400,), step_up_missing_status=401,
+        note="Re-runs a full ingest, so it is a write. Until #912 the tenant "
+             "header alone authorized it and it emitted no AuditEvent "
+             "(S-14); it now needs a tenant-bound write grant, checked "
+             "before the job lookup, and audits a successful retry "
+             "(test_fasten_retry_emits_an_audit_event). TENANT_FORMAT "
+             "arrived with access-kernel slice 9; before it a malformed id "
+             "reached the job lookup as the partition key.",
     ),
     Row(
         id="smbp-enroll",
@@ -971,12 +973,12 @@ def test_step_up_row_refuses_a_token_bound_to_another_audience(
 
 
 #: Read gates that take a step-up token without asking for an audience:
-#: r6/read_auth.py (instance read and search) and the command center's
-#: session-or-step-up predicate.
+#: r6/read_auth.py (instance read and search). The command center's
+#: /api/system left this list in SEC941-PRE1: it is operator-only now, so no
+#: tenant token reads it (tests/test_sec941_operator_gate.py).
 _AUDIENCE_FREE_READS = (
     "/r6/fhir/Patient/guard-matrix-pt",
     "/r6/fhir/Condition",
-    f"/command-center/api/system?tenant={PRIVATE_TENANT}",
 )
 
 
@@ -1335,14 +1337,12 @@ def test_a_refused_write_leaves_no_resource_behind(client, tenant_id):
         "a write refused for want of a step-up token still persisted a row")
 
 
-def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
-                                                   monkeypatch):
-    """/fasten/jobs/<id>/retry emits no AuditEvent (S-14). Pinned as absent.
+def test_fasten_retry_emits_an_audit_event(client, app, tenant_id,
+                                           auth_headers, monkeypatch):
+    """/fasten/jobs/<id>/retry writes an AuditEvent (S-14, closed by #912).
 
-    MUTATION: add a record_audit_event call to r6/fasten/routes.py retry_job.
-    This test goes red — deliberately. An absence recorded in the matrix is a
-    claim like any other; when S-14 is fixed this is what forces the matrix
-    row to be updated in the same PR rather than months later.
+    MUTATION: remove the add_audit_event call from r6/fasten/routes.py
+    retry_job. This used to pin the absence; the row now carries AUDIT.
     """
     from models import db
     from r6.fasten import routes as fasten_routes
@@ -1357,7 +1357,7 @@ def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
 
     with app.app_context():
         # A live connection row: retry refuses (and audits) a job whose
-        # connection is revoked or gone, which is not the absence pinned here.
+        # connection is revoked or gone, which is not the success audited here.
         db.session.add(FastenConnection(
             org_connection_id="guard-matrix-conn", tenant_id=tenant_id,
             connection_status="authorized"))
@@ -1373,17 +1373,17 @@ def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
     # audits the read, so the count would grow on its own and the assertion
     # would pass or fail for a reason unrelated to retry_job.
     with app.app_context():
-        before = AuditEventRecord.query.count()
+        before = AuditEventRecord.query.filter_by(
+            tenant_id=tenant_id, event_type="fasten_import_retried").count()
 
     resp = client.post("/fasten/jobs/guard-matrix-task/retry",
-                       headers={"X-Tenant-Id": tenant_id})
+                       headers=auth_headers)
     assert resp.status_code == 202, resp.get_data(as_text=True)
 
     with app.app_context():
-        after = AuditEventRecord.query.count()
-    assert after == before, (
-        "retry_job now emits an AuditEvent — S-14 is fixed. Add AUDIT to the "
-        "fasten-retry-job row's guard set and delete this test in the same PR.")
+        after = AuditEventRecord.query.filter_by(
+            tenant_id=tenant_id, event_type="fasten_import_retried").count()
+    assert after == before + 1, "a successful retry emitted no AuditEvent"
 
 
 # ---------------------------------------------------------------------------
@@ -1414,17 +1414,16 @@ def test_a_write_lands_only_in_the_tenant_that_authorized_it(client, tenant_id,
         "another tenant can read a resource written under this tenant")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#304: /r6/ops/reap validates a step-up token bound to ONE tenant "
-           "and then sweeps ProposedAction.query.filter_by(status=...) across "
-           "EVERY tenant, driving state transitions and Telegram pushes on "
-           "records the caller has no claim to.")
 def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
-    """A reap authenticated for tenant A must not transition tenant B's actions.
+    """#304, fixed by #308: a tenant credential cannot drive the global reap.
 
-    MUTATION (once fixed): delete the tenant predicate from the three sweep
-    queries in r6/ops/routes.py reap().
+    Was a strict xfail ("validates a step-up token bound to ONE tenant and
+    then sweeps every tenant"). /r6/ops/* is now operator-only: a tenant's
+    step-up token gets 403 and transitions nothing; the internal secret
+    reaps, globally and by design (see the ops-reap row).
+
+    MUTATION: make r6/ops/routes.py _auth_error_or_none return None -> the
+    tenant-token half goes red (200, and the foreign action expires).
     """
     from datetime import timedelta
 
@@ -1441,16 +1440,22 @@ def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
         db.session.commit()
         victim_id = victim.id
 
-    resp = client.post("/r6/ops/reap",
-                       headers={"X-Tenant-Id": PRIVATE_TENANT,
-                                "X-Step-Up-Token": token_for(PRIVATE_TENANT)})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-
+    refused = client.post("/r6/ops/reap",
+                          headers={"X-Tenant-Id": PRIVATE_TENANT,
+                                   "X-Step-Up-Token": token_for(
+                                       PRIVATE_TENANT)})
+    assert refused.status_code == 403, refused.get_data(as_text=True)
     with app.app_context():
         after = db.session.get(ProposedAction, victim_id)
         assert after.status == "awaiting_confirmation", (
-            f"a reap authenticated for {PRIVATE_TENANT} moved "
+            f"a reap with only a {PRIVATE_TENANT} token moved "
             f"{FOREIGN_TENANT}'s action to {after.status}")
+
+    reaped = client.post("/r6/ops/reap",
+                         headers={"X-Internal-Secret": MINT_SECRET})
+    assert reaped.status_code == 200, reaped.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(ProposedAction, victim_id).status == "expired"
 
 
 def test_wearables_sync_only_touches_the_authenticated_tenant(client, app,

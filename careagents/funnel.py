@@ -11,6 +11,9 @@ Two tables, both written by us from fixed names:
   one of the fixed codes in careagents/causes.py (#926).
 - `ca_owner_alerts`, one row per UTC hour in which the owner was emailed
   that the model key is refused or out of credit. A time, nothing else.
+- `ca_issue_detail_days`, the same count split one step further for two
+  kinds: a server error by the route's endpoint name (never its URL), and
+  a flagged answer by its reason code. Both come from fixed lists.
 
 What each milestone means:
 
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import re
 from functools import wraps
 
 import click
@@ -56,7 +60,24 @@ MILESTONES = ("joined", "confirmed", "first_answer", "connect_started",
               "action_approved", "feedback_sent")
 
 ISSUE_KINDS = ("chat_error", "run_replay_error", "fasten_failed",
-               "sign_in_failed", "mail_failed", "rate_limited")
+               "sign_in_failed", "mail_failed", "rate_limited",
+               "server_error", "answer_flagged")
+
+#: Why a person flagged an answer ("This wasn't right", static/chat.js),
+#: as the code the page sends and the words it shows (a product ruling on
+#: #980). "unsafe" stays: it is the safety signal most worth counting.
+FLAG_LABELS = (("wrong", "Wrong"), ("confusing", "Confusing"),
+               ("not_what_asked", "Didn't do what I asked"),
+               ("unsafe", "Felt unsafe or worrying"),
+               ("other", "Something else"))
+FLAG_REASONS = tuple(code for code, _ in FLAG_LABELS)
+
+#: The kinds counted one step further, in `ca_issue_detail_days`.
+DETAIL_KINDS = ("server_error", "answer_flagged")
+
+#: A Flask endpoint name, as the code names it. The caller also checks it
+#: is one of the app's own endpoints; this is the shape the table accepts.
+_ENDPOINT = re.compile(r"\A[A-Za-z0-9_.]{1,64}\Z")
 
 #: What each chat_error was, counted beside it (careagents/causes.py).
 CHAT_ERROR_CAUSES = causes.CAUSES
@@ -92,6 +113,19 @@ class IssueDay(Base):
     id = Column(String(32), primary_key=True, default=lambda: _uid("iss"))
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
     kind = Column(String(24), nullable=False)
+    count = Column(Integer, nullable=False, default=0)
+
+
+class IssueDetailDay(Base):
+    """One kind of issue on one UTC day, split by a detail from a fixed
+    list: the endpoint name of a route that failed, or a flag's reason."""
+    __tablename__ = "ca_issue_detail_days"
+    __table_args__ = (UniqueConstraint(
+        "day", "kind", "detail", name="uq_ca_issue_detail_days"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("isd"))
+    day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
+    kind = Column(String(24), nullable=False)
+    detail = Column(String(64), nullable=False)
     count = Column(Integer, nullable=False, default=0)
 
 
@@ -302,6 +336,34 @@ def alert_owner(session_scope, cfg, cause: str,
     return outcome
 
 
+def count_detail(session_scope, kind: str, detail: str,
+                 moment: _dt.datetime | None = None) -> None:
+    """Add one to today's `kind`, and to its count split by `detail`. A
+    detail that is not an endpoint name (server_error) or a reason code
+    (answer_flagged) is refused before anything is written."""
+    if kind not in DETAIL_KINDS:
+        raise ValueError(f"unknown detail kind {kind!r}")
+    if kind == "answer_flagged" and detail not in FLAG_REASONS:
+        raise ValueError("unknown flag reason")
+    if kind == "server_error" and not _ENDPOINT.match(detail or ""):
+        raise ValueError("not an endpoint name")
+    count_issue(session_scope, kind, moment)
+    day = utc_day(moment)
+    stmt = (update(IssueDetailDay)
+            .where(IssueDetailDay.day == day, IssueDetailDay.kind == kind,
+                   IssueDetailDay.detail == detail)
+            .values(count=IssueDetailDay.count + 1))
+    with session_scope() as s:
+        if s.execute(stmt).rowcount:
+            return
+    try:
+        with session_scope() as s:
+            s.add(IssueDetailDay(day=day, kind=kind, detail=detail, count=1))
+    except IntegrityError:
+        with session_scope() as s:
+            s.execute(stmt)
+
+
 def safely(fn, *args, **kwargs) -> None:
     """Call a counter and never let it fail the caller."""
     try:
@@ -331,7 +393,10 @@ def daily(session_scope, days: int = 7,
     milestone that day, how many joined through an invite, and each kind of
     issue. Plus the totals for the window, conversion between consecutive
     steps over all time, and invites per inviter. Integers and account ids
-    only. Reads whole small tables: the beta is tens of accounts."""
+    only. Reads whole small tables: the beta is tens of accounts.
+
+    `details` is, per day, each detail kind split by its detail (endpoint
+    name or reason code) with its count."""
     from careagents import beta_signup, invites
     moment = moment or _dt.datetime.now(_dt.timezone.utc)
     days = max(1, int(days))
@@ -360,6 +425,12 @@ def daily(session_scope, days: int = 7,
             if i.day in rows and (i.kind in ISSUE_KINDS
                                   or i.kind in CHAT_ERROR_CAUSES):
                 rows[i.day][i.kind] += i.count or 0
+        details = {d: {k: {} for k in DETAIL_KINDS} for d in labels}
+        for i in s.query(IssueDetailDay).filter(
+                IssueDetailDay.day >= labels[-1]):
+            if i.day in details and i.kind in DETAIL_KINDS:
+                split = details[i.day][i.kind]
+                split[i.detail] = split.get(i.detail, 0) + (i.count or 0)
         waiting = (s.query(beta_signup.BetaRequest)
                    .filter_by(status="pending").count())
         per_inviter = invites.per_inviter(s)
@@ -377,7 +448,8 @@ def daily(session_scope, days: int = 7,
                            "to_n": both[(a, b)], "percent": rate})
     return {"days": [rows[d] for d in labels], "window": window,
             "reached": reached, "conversion": conversion,
-            "requests_waiting": waiting, "per_inviter": per_inviter}
+            "requests_waiting": waiting, "per_inviter": per_inviter,
+            "details": details}
 
 
 def digest_text(report: dict, day: str) -> str:
@@ -398,6 +470,15 @@ def digest_text(report: dict, day: str) -> str:
     lines += ["", "chat_error by cause"]
     for k in CHAT_ERROR_CAUSES:
         lines.append(f"  {k}: {today[k]}  (7 days: {report['window'][k]})")
+    split = report.get("details", {}).get(day, {})
+    errors = split.get("server_error", {})
+    lines += ["", "Server errors by route"]
+    lines += ([f"{route}: {n}" for route, n in sorted(
+        errors.items(), key=lambda kv: (-kv[1], kv[0]))] or ["none"])
+    flags = split.get("answer_flagged", {})
+    lines += ["", "Flagged answers by reason"]
+    lines += [f"{label}: {flags.get(code, 0)}"
+              for code, label in FLAG_LABELS]
     lines += ["", "Details: /admin/funnel, or flask funnel daily"]
     return "\n".join(lines)
 
@@ -425,6 +506,10 @@ def send_digest_if_due(session_scope, cfg,
     report["window"] = {k: sum(r[k] for r in report["days"])
                         for k in report["window"]}
     text = digest_text(report, day)
+    # Sign-ins for the day, counts only: never an address (signins.py).
+    from careagents import signins
+    text += "\n" + "\n".join(signins.digest_lines(
+        signins.day_counts(session_scope, day)))
     html = "<pre style='font-family:monospace'>" + text.replace(
         "&", "&amp;").replace("<", "&lt;") + "</pre>"
     try:
@@ -461,6 +546,8 @@ def register(app, svc, cfg, full_session=lambda: True) -> None:
     """The owner page /admin/funnel and the `funnel` command group.
     `full_session()` says the session came from a code or passkey sign-in,
     not a beta confirm link (careagents/app.py, full_sign_in_required)."""
+    # Imported here: signins builds on this module.
+    from careagents import signins
 
     def owner_only(fn):
         @wraps(fn)
@@ -482,9 +569,26 @@ def register(app, svc, cfg, full_session=lambda: True) -> None:
         resp = app.make_response(render_template(
             "admin_funnel.html", report=report, milestones=MILESTONES,
             issue_kinds=ISSUE_KINDS, chat_error_causes=CHAT_ERROR_CAUSES,
-            today=report["days"][0]))
+            today=report["days"][0],
+            testers=signins.testers(svc.session),
+            testers_cap=signins.TESTERS_CAP))
         resp.headers["Cache-Control"] = "no-store"
         return resp
+
+    @app.get("/admin/funnel/testers.csv")
+    @owner_only
+    def admin_testers_csv():
+        """The testers table as a file. It holds addresses: owner only,
+        never cached."""
+        resp = app.make_response(signins.testers_csv(
+            signins.testers(svc.session)))
+        resp.mimetype = "text/csv"
+        resp.headers["Content-Disposition"] = (
+            "attachment; filename=careagents-testers.csv")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    signins.register_cli(app, svc)
 
     @app.cli.group("funnel")
     def funnel_group():

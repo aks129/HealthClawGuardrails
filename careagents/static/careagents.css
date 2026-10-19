@@ -578,6 +578,13 @@ h1 em { font-style: normal; color: var(--accent-ink); }
 .surface.on span { color: var(--ok-ink); font-weight: 600; }
 .surface.soon { cursor: default; }
 .surface.soon b { color: var(--ink-soft); }
+/* Settings: "Phone app" opens to say how to add it to the home screen. */
+.surface.phone-app { display: block; }
+.phone-app > summary { display: grid; grid-template-columns: 1fr auto;
+  min-height: 32px; align-content: center; list-style: none; }
+.phone-app > summary::-webkit-details-marker { display: none; }
+.phone-app > summary span { color: var(--accent-ink); text-decoration: underline; }
+.phone-app p { margin: 10px 0 0; font-size: 16px; }
 #im-surface { position: relative; padding-right: 44px; }
 #im-surface::after { content: ""; position: absolute; right: 16px; top: 50%;
   width: 20px; height: 20px; margin-top: -10px; background: var(--ink-soft);
@@ -1033,6 +1040,15 @@ textarea:focus-visible {
 .beta-err { margin: 18px 0 0; }
 .beta-err + .btn-primary { margin-top: 12px; }
 .beta-keep { margin-top: 12px; }
+.beta-done p { margin: 0 0 12px; }
+/* _in_app_hint.html: inside an app's built-in browser only. */
+.in-app-hint { margin: 16px 0; padding: 14px 16px; border-radius: 12px;
+  border: 1px solid var(--practice-line); background: var(--practice-bg);
+  font-size: 16px; }
+.in-app-hint p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.in-app-hint .inline-msg { margin: 10px 0 0; }
+.beta-done .btn-block + .btn-block { margin-top: 8px; }
+.beta-done a.btn-block { text-decoration: none; }
 /* The mobile field's hint on /beta, and the /feedback boxes. */
 .beta-page .field-hint { font-size: 16px; color: var(--ink-soft);
   margin: 8px 0 0; }
@@ -1086,6 +1102,20 @@ textarea:focus-visible {
   border-top: 1px solid var(--hairline); font-size: 15px; }
 .funnel-table td.num { font-family: var(--mono);
   font-variant-numeric: tabular-nums; text-align: right; }
+/* The Testers table: a stuck row is tinted and says why. */
+/* The owner page uses the full width: the Testers table is wide. */
+.hub.hub-wide { max-width: none; }
+.testers-table th, .testers-table td { vertical-align: top;
+  white-space: nowrap; }
+.testers-table td.testers-email { white-space: normal;
+  overflow-wrap: anywhere; min-width: 12em; max-width: 22em; }
+.testers-table .num-text { font-family: var(--mono);
+  font-variant-numeric: tabular-nums; }
+.testers-milestones summary { cursor: pointer; }
+.testers-milestones[open] { white-space: normal; max-width: 16em; }
+.testers-table tr.is-stuck td { background: var(--warn-bg); }
+.testers-stuck { color: var(--warn-ink); font-weight: 700; }
+.testers-method { color: var(--ink-soft); font-family: var(--sans); }
 
 /* --- the hub around outcomes (hub critique 2026-10) ---------------------- */
 /* Waiting for your OK follows Ask your assistant now, so it needs the
@@ -1210,3 +1240,36 @@ textarea:focus-visible {
 .add-person-form .field { width: 100%; box-sizing: border-box; }
 .add-person-form .btn-block { margin-top: 12px; }
 .field-optional { font-weight: 400; color: var(--ink-soft); }
+
+/* --- beta feedback: error pages, report context, flag an answer --------- */
+.error-page h1 { font-size: 28px; }
+.feedback-context { font-size: 15px; color: var(--ink-soft); }
+/* "This wasn't right": quiet under the answer, a 44px tap target. */
+.flag { align-self: flex-start; max-width: min(65ch, 88%); margin-top: -6px; }
+.flag-open { background: none; border: 0; padding: 10px 4px; min-height: 44px;
+  font: inherit; font-size: 15px; color: var(--ink-soft); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px; }
+.flag-open:hover { color: var(--accent-ink); }
+.flag-sheet { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--radius); padding: 12px 14px; }
+.flag-ask { font-weight: 600; margin-bottom: 8px; }
+.flag-reasons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.flag-reason { min-height: 44px; padding: 6px 12px; font: inherit; font-size: 15px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--field-line); border-radius: 999px; cursor: pointer; }
+.flag-reason[aria-pressed="true"] { background: var(--accent-tint);
+  border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.flag-note { width: 100%; box-sizing: border-box; resize: vertical; }
+.flag-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;
+  position: sticky; bottom: 0; padding: 8px 0; background: var(--surface); }
+.flag-actions .btn-primary, .flag-actions .btn-secondary { margin-top: 0;
+  min-height: 44px; padding: 10px 18px; font-size: 16px; }
+.flag-send:disabled { opacity: .5; cursor: not-allowed; }
+.flag-status { font-size: 15px; color: var(--critical-ink); margin-top: 6px; }
+.flag-status:empty { display: none; }
+.flag-done { font-size: 15px; color: var(--ink-soft); padding: 10px 4px; }
+/* "Report a problem" beside a failed chat turn: the same quiet weight. */
+.report-link { align-self: flex-start; margin-top: -6px; padding: 10px 4px;
+  min-height: 44px; box-sizing: border-box; font-size: 15px;
+  color: var(--ink-soft); text-underline-offset: 3px; }
+.report-link:hover { color: var(--accent-ink); }
