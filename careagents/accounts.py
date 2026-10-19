@@ -32,11 +32,16 @@ from careagents import beta_signup, funnel, invites
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
-                               Passkey, Person, RealRecordInvite,
+                               Passkey, Person, RealRecordInvite, RefundDay,
                                SendblueMessage, Surface, UsageDay, make_engine,
                                make_session_factory, now)
+from careagents.models import REFUNDS_PER_DAY
 
 logger = logging.getLogger(__name__)
+
+
+class _NothingToRefund(Exception):
+    """No charged turn to give back: rolls the refund's transaction back."""
 
 CODE_TTL = 600  # 10 minutes
 MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
@@ -44,6 +49,18 @@ RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts
                         # while a recent one is still in flight
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
 SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
+# Per-address caps on sign-in codes, as rolling windows over when each code
+# was issued. Every code counts, burned and used ones included: a burned code
+# is one whose guesses were spent, so leaving it out would hand back a fresh
+# set of guesses at once.
+CODES_PER_HOUR = 10
+CODES_PER_DAY = 20
+WRONG_GUESSES_PER_DAY = 25  # across all of an address's codes
+HOUR = 3600
+DAY = 86_400
+#: Postgres advisory-lock class for one address's codes; the second key is
+#: derived from the address (_lock_codes). Distinct from _INVITE_LOCK_KEY.
+_CODES_LOCK_KEY = 9_280_002
 #: People someone can add to care for. Each mints and seeds a sample tenant,
 #: so the number is bounded.
 MAX_OTHER_PEOPLE = 4
@@ -97,53 +114,122 @@ class AccountService:
     def _hash(code: str) -> str:
         return hashlib.sha256(code.encode()).hexdigest()
 
+    def _lock_codes(self, s, email: str) -> None:
+        """Make reading an address's codes and writing after them one step.
+
+        Racing requests otherwise all read the same count and all pass a cap.
+        Postgres takes an advisory lock on the address's inbox (mailbox) for
+        the transaction, so variants of one inbox wait for each other. SQLite
+        takes its write lock when a write statement starts, so a write that
+        changes nothing goes first and a racing request waits for the commit
+        before it reads."""
+        if self.engine.dialect.name == "postgresql":
+            key = beta_signup.mailbox(email)
+            k = int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],
+                               "big", signed=True)
+            # The two-key form takes two 32-bit integers.
+            s.execute(text("SELECT pg_advisory_xact_lock("
+                           "CAST(:c AS integer), CAST(:k AS integer))"),
+                      {"c": _CODES_LOCK_KEY, "k": k})
+        else:
+            s.execute(text("UPDATE ca_email_tokens SET used = used "
+                           "WHERE 1 = 0"))
+
+    @staticmethod
+    def _same_inbox(email: str):
+        """Every code for the inbox the address delivers to: one Gmail inbox
+        is reached by plus-tags, dots and googlemail, and they share its
+        caps. The typed address also matches codes issued before `mailbox`
+        was recorded."""
+        return or_(EmailToken.mailbox == beta_signup.mailbox(email),
+                   EmailToken.email == email)
+
+    @classmethod
+    def _issued_within(cls, s, email: str, window: int) -> list:
+        """Every code issued for the address's inbox in the last `window`
+        seconds, oldest first. exp is issue time + CODE_TTL; there is no
+        issue column."""
+        return (s.query(EmailToken)
+                .filter(cls._same_inbox(email))
+                .filter(EmailToken.exp >= now() - window + CODE_TTL)
+                .order_by(EmailToken.exp.asc()).all())
+
+    @staticmethod
+    def _code_wait(day: list) -> float:
+        """Seconds until the address may be sent another code; <= 0 is now.
+
+        `day` is _issued_within(DAY). A cap of N over a window frees up when
+        the code that brought the count to N leaves that window."""
+        t = now()
+        issued = [tok.exp - CODE_TTL for tok in day]
+        waits = [0.0]
+        if issued:
+            waits.append(issued[-1] + RESEND_COOLDOWN - t)
+        hour = [at for at in issued if at >= t - HOUR]
+        if len(hour) >= CODES_PER_HOUR:
+            waits.append(hour[len(hour) - CODES_PER_HOUR] + HOUR - t)
+        if len(issued) >= CODES_PER_DAY:
+            waits.append(issued[len(issued) - CODES_PER_DAY] + DAY - t)
+        guesses = sum(tok.attempts or 0 for tok in day)
+        for tok, at in zip(day, issued):
+            if guesses < WRONG_GUESSES_PER_DAY:
+                break
+            # This code's wrong guesses stop counting when it leaves the
+            # window.
+            guesses -= tok.attempts or 0
+            waits.append(at + DAY - t)
+        return max(waits)
+
     def start_email_code(self, email: str, purpose: str = "verify") -> int:
         """Mint and send a one-time code.
 
         Returns 0 when a code was actually sent, otherwise the whole seconds
-        until another may be requested. The cooldown branch is not a failure —
-        the person still holds a live code — but it is not a send either, and
-        the caller must not report one it never observed (#262).
+        until another may be requested: the resend wait, or a per-address cap
+        on codes or on wrong guesses. A wait is not a failure, but it is not a
+        send either, and the caller must not report one it never observed
+        (#262). Every branch reads ca_email_tokens alone, so the answer is the
+        same whether or not the address has an account.
         """
         email = email.strip().lower()
         if "@" not in email or len(email) > 255:
             raise AuthError("Enter a valid email address.")
         code = None
         with self.session() as s:
-            # If a code was minted very recently, don't send another — this
-            # both avoids code-spam and stops an attacker from resetting the
-            # per-code attempt counter by re-requesting.
-            recent = (s.query(EmailToken)
-                      .filter_by(email=email, used=False)
-                      .filter(EmailToken.exp >= now())
-                      .order_by(EmailToken.exp.desc()).first())
-            if recent is not None:
-                # exp is mint-time + CODE_TTL, so whatever the code has left
-                # beyond its post-cooldown life is the cooldown that remains.
-                remaining = ((recent.exp - now())
-                             - (CODE_TTL - RESEND_COOLDOWN))
-                if remaining > 0:
-                    # Round up: never tell someone to retry a moment early.
-                    return max(1, math.ceil(remaining))
-            # One live code at a time: retire any prior unused codes so an
-            # attacker can't accumulate many simultaneously-valid guesses.
-            s.query(EmailToken).filter_by(
-                email=email, used=False).update({"used": True})
+            self._lock_codes(s, email)
+            # Any code issued in the window holds the next one back: unused,
+            # used or burned. Counting only unused codes let a burned code be
+            # replaced at once, which reset the per-code attempt count.
+            wait = self._code_wait(self._issued_within(s, email, DAY))
+            if wait > 0:
+                # Round up: never tell someone to retry a moment early.
+                return max(1, math.ceil(wait))
+            # One live code per inbox: retire any prior unused codes, the
+            # inbox's other variants' included, so an attacker can't
+            # accumulate many simultaneously-valid guesses.
+            (s.query(EmailToken)
+             .filter(self._same_inbox(email), EmailToken.used.is_(False))
+             .update({"used": True}, synchronize_session=False))
             code = f"{secrets.randbelow(CODE_MAX):08d}"
-            s.add(EmailToken(email=email, code_hash=self._hash(code),
-                             purpose=purpose, exp=now() + CODE_TTL))
+            # Sent to the address as typed; counted against its inbox.
+            tok = EmailToken(email=email, code_hash=self._hash(code),
+                             purpose=purpose, exp=now() + CODE_TTL,
+                             mailbox=beta_signup.mailbox(email))
+            s.add(tok)
+            s.flush()
+            token_id = tok.id
         # Three outcomes, and each one leaves the just-minted code in a
         # different place. Compared by identity against the named states, never
         # truthiness-tested — every state is a truthy string precisely so that
         # a `if not send_code(...)` cannot be written here again.
         outcome = mail.send_code(self.cfg, email, code, purpose)
         if outcome == mail.NOT_SENT:
-            # Burn the code we just minted. It was never delivered, and leaving
-            # it live would make the resend cooldown above swallow the person's
-            # retry — reporting "sent" without sending anything.
+            # Remove the code we just minted. It was never delivered, and
+            # leaving it would make the resend wait above swallow the person's
+            # retry — reporting "sent" without sending anything. Deleted, not
+            # burned: a burned code counts toward the wait and the caps, and
+            # this one never left.
             with self.session() as s:
-                s.query(EmailToken).filter_by(
-                    email=email, used=False).update({"used": True})
+                s.query(EmailToken).filter_by(id=token_id).delete()
             raise MailError(
                 "We couldn't send your code just now. Please try again.")
         if outcome != mail.SENT:
@@ -155,7 +241,7 @@ class AccountService:
             raise MailUnconfirmed(
                 "We couldn't confirm your code was sent. Check your inbox — "
                 "if nothing arrives, ask for another code in 30 seconds.")
-        # SENT: no cooldown to report. The early return above is the only path
+        # SENT: no wait to report. The early return above is the only path
         # that reports one (#262).
         return 0
 
@@ -169,6 +255,8 @@ class AccountService:
         result: _Row | None = None
         made = False
         with self.session() as s:
+            # Parallel guesses must not each read the same attempt count.
+            self._lock_codes(s, email)
             # Fetch the single live code by email (not by hash) so a wrong
             # guess is counted against it and the code can be burned.
             tok = (s.query(EmailToken)
@@ -177,6 +265,14 @@ class AccountService:
                    .order_by(EmailToken.exp.desc()).first())
             if tok is None:
                 error = "That code is wrong or expired."
+            elif (sum(t.attempts or 0
+                      for t in self._issued_within(s, email, DAY))
+                  >= WRONG_GUESSES_PER_DAY):
+                # The day's wrong guesses, across every code, are spent: no
+                # code is accepted, the right one included, until the oldest
+                # of them leaves the window.
+                tok.used = True
+                error = "Too many attempts — request a new code."
             elif (tok.attempts or 0) >= MAX_CODE_ATTEMPTS:
                 tok.used = True
                 error = "Too many attempts — request a new code."
@@ -713,7 +809,8 @@ class AccountService:
             (s.query(Account).filter(Account.id == account_id)
              .update({"sample_claim_at": None}, synchronize_session=False))
 
-    def claim_daily_turn(self, account_id: str, cap: int) -> tuple[bool, int]:
+    def claim_daily_turn(self, account_id: str, cap: int,
+                         day: str | None = None) -> tuple[bool, int]:
         """Count one chat turn against today's cap. Returns (allowed, used).
 
         Durable and shared, unlike the in-process burst limiter — a restart or
@@ -726,9 +823,13 @@ class AccountService:
         under the cap or changes nothing. With no row yet, insert one; the
         unique (account_id, day) turns a racing insert into a retry of the
         UPDATE, the same shape as count_activity.
+
+        `day` is today's UTC day by default. The worker passes the day it
+        records on the run, so a refund gives back that day's turn and
+        never a later day's (refund_daily_turn).
         """
         from datetime import datetime, timezone
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         turns = func.coalesce(UsageDay.turns, 0)
         charge = (update(UsageDay)
                   .where(UsageDay.account_id == account_id,
@@ -758,6 +859,53 @@ class AccountService:
             except IntegrityError:
                 continue        # a peer made today's row: charge it instead
         raise RuntimeError("could not charge today's turn")
+
+    def refund_daily_turn(self, account_id: str, day: str) -> bool:
+        """Give back one turn charged on `day`, for a turn that failed on
+        our side. Returns whether a turn was given back.
+
+        At most REFUNDS_PER_DAY a day: a failure still cost a model call.
+        One transaction takes one of the day's refunds (a conditional
+        UPDATE under the limit, or the day's first row) and takes one turn
+        off (a conditional UPDATE above zero). If either finds nothing, the
+        whole of it rolls back, so a refund never makes a negative count,
+        never passes the limit, and never spends a refund it did not give.
+        A racing first row is retried, as claim_daily_turn does.
+        Exactly-once per run is the caller's (worker.py marks the run
+        before it refunds)."""
+        refunds = func.coalesce(RefundDay.count, 0)
+        take = (update(RefundDay)
+                .where(RefundDay.account_id == account_id,
+                       RefundDay.day == day, refunds < REFUNDS_PER_DAY)
+                .values(count=refunds + 1)
+                .execution_options(synchronize_session=False))
+        for _ in range(3):
+            try:
+                with self.session() as s:
+                    if not s.execute(take).rowcount:
+                        if s.query(RefundDay.id).filter_by(
+                                account_id=account_id, day=day).first():
+                            return False            # the day's refunds spent
+                        s.add(RefundDay(account_id=account_id, day=day,
+                                        count=1))
+                        s.flush()
+                    row = (s.query(UsageDay.id)
+                           .filter(UsageDay.account_id == account_id,
+                                   UsageDay.day == day, UsageDay.turns > 0)
+                           .first())
+                    if row is None or not s.execute(
+                            update(UsageDay)
+                            .where(UsageDay.id == row.id, UsageDay.turns > 0)
+                            .values(turns=UsageDay.turns - 1)
+                            .execution_options(
+                                synchronize_session=False)).rowcount:
+                        raise _NothingToRefund
+                    return True
+            except _NothingToRefund:
+                return False
+            except IntegrityError:
+                continue        # a peer made the day's refund row first
+        return False
 
     @staticmethod
     def _turns_today(s, account_id: str, day: str) -> int:
@@ -868,7 +1016,7 @@ class AccountService:
                 return False
             # People last: connections and agents point at them.
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, ActivityDay, Person):
+                          UsageDay, RefundDay, ActivityDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)

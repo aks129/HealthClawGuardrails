@@ -230,6 +230,15 @@ def inviter_first_name(s, account_id: str) -> str | None:
     return None
 
 
+def inviter_name_for_code(session_scope, code, default_cap: int) -> str | None:
+    """The inviter's first name for a live code (`inviter_first_name`), or
+    None: unknown, revoked and full codes name nobody."""
+    with session_scope() as s:
+        link = _live(s, code, default_cap)
+        return (inviter_first_name(s, link.account_id)
+                if link is not None else None)
+
+
 def note_pending(session_scope, email: str, code, default_cap: int) -> bool:
     """Remember that the request for `email` came through `code`. Ignored
     (False) when the code is not a live link, or is the address's own link.

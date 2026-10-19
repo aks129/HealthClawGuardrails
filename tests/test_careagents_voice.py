@@ -242,7 +242,8 @@ def test_a_missing_or_odd_duration_is_none(seconds):
     assert _client(http).transcribe(b"a", "audio/webm").seconds is None
 
 
-@pytest.mark.parametrize("audio", [b"", b"x" * (voice.MAX_UPLOAD_BYTES + 1)])
+@pytest.mark.parametrize("audio", [b"", b"x" * (voice.MAX_UPLOAD_BYTES + 1)],
+                         ids=["empty", "oversize"])
 def test_empty_or_oversize_audio_never_reaches_elevenlabs(audio):
     http = FakeHTTP()
     with pytest.raises(ValueError):
@@ -286,7 +287,8 @@ def test_a_refused_speak_is_an_exception_at_the_call():
     assert http.response.closed
 
 
-@pytest.mark.parametrize("text", ["", "   ", "x" * (voice.TTS_MAX_CHARS + 1)])
+@pytest.mark.parametrize("text", ["", "   ", "x" * (voice.TTS_MAX_CHARS + 1)],
+                         ids=["empty", "blank", "too-long"])
 def test_speak_never_truncates_and_never_sends_nothing(text):
     http = FakeHTTP()
     with pytest.raises(ValueError):
