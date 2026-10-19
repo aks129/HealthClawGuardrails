@@ -217,9 +217,10 @@ def test_a_forced_call_without_a_number_stages_nothing():
 @pytest.mark.parametrize("extra", [
     {"phone": OTHER}, {"to": OTHER}, {"body": "Jane Roe's A1c is 9.1"},
     {"number": OTHER}])
-def test_an_extra_argument_refuses_the_call_and_logs_its_name_only(
+def test_an_extra_argument_refuses_the_call_and_logs_its_count_only(
         caplog, extra):
-    """MUTATION: pass `phone` through from the arguments -> red."""
+    """MUTATION: pass `phone` through from the arguments -> red. A name is
+    as model-written as a value, so neither is logged (security F2)."""
     fake = FakeClient()
     caplog.set_level(logging.WARNING, logger="careagents.agent")
     out, events = _call(fake, {"purpose": "reminder", **extra})
@@ -227,8 +228,8 @@ def test_an_extra_argument_refuses_the_call_and_logs_its_name_only(
     assert not getattr(fake, "proposed_sms", [])
     assert events == []
     [key] = extra
-    assert key in caplog.text
-    assert extra[key] not in caplog.text
+    assert "1 unexpected argument(s)" in caplog.text
+    assert repr(key) not in caplog.text and extra[key] not in caplog.text
 
 
 def test_an_unknown_purpose_refuses_the_call():
@@ -333,9 +334,12 @@ def test_text_surfaces_name_the_text_and_the_page_not_a_form():
 class _SmsFake(FakeClient):
     """An sms waiting for review, to `phone`. Records every review POST."""
 
-    def __init__(self, phone):
+    def __init__(self, phone, *, to="your phone", body=None):
         super().__init__()
-        self.phone = phone
+        self.phone, self.to = phone, to
+        # cfg's CARE_ORIGIN, as propose_action would have written it.
+        self.body = body or text_self.body_for("visit_prep",
+                                               "http://localhost")
         self.reviews, self.confirms, self.declines = [], [], []
 
     def action_status(self, tenant, action_id):
@@ -344,8 +348,8 @@ class _SmsFake(FakeClient):
                 .HealthClawError("not found", 404)
         return {"id": "act-sms", "kind": "sms", "to": "your phone",
                 "status": "awaiting_confirmation",
-                "payload": {"to": "your phone", "phone": self.phone,
-                            "body": "CareAgents: ..."}}
+                "payload": {"to": self.to, "phone": self.phone,
+                            "body": self.body}}
 
     def submit_review(self, tenant, action_id, decisions):
         self.reviews.append(action_id)
@@ -369,7 +373,7 @@ class _SmsFake(FakeClient):
             return 200, render_template(
                 "action_approve.html", tenant_id=tenant, action_id=action_id,
                 kind_label="Text message", body_label="Message",
-                to="your phone", phone=self.phone, body="CareAgents: ...",
+                to="your phone", phone=self.phone, body=self.body,
                 fixes=[], fix_record=None, fix_version=None)
 
 
@@ -587,3 +591,96 @@ def test_the_gate_harness_sees_the_ordinary_page_as_the_browser_does(
     assert seen["text"] == ("Read the request above, then tick the box to "
                             "continue."), seen
     assert seen["approveHidden"] is False, seen
+
+
+
+# --- review round 1 (#1000): the approval check is the whole propose rule ---
+
+@pytest.mark.parametrize("kw", [
+    {"to": OTHER}, {"to": "Dr. Example's office"},
+    {"body": "CareAgents: account locked, sign in at http://x.example"},
+    {"body": text_self.body_for("visit_prep", "http://elsewhere.example")}],
+    ids=["to-number", "to-label", "body-foreign", "body-other-origin"])
+def test_a_text_to_my_number_with_other_words_or_label_is_refused(
+        cfg, svc, monkeypatch, caplog, kw):  # noqa: F811
+    """Security F1: the number alone is not the rule. propose_action writes
+    the label and the words too, so the approval holds both."""
+    fake = _SmsFake(PHONE, **kw)
+    c, _fake, agent = _app(cfg, svc, monkeypatch, fake)
+    _bind(svc)
+    caplog.set_level(logging.INFO, logger="careagents.app")
+    r = c.post(f"/review/{agent}/act-sms/submit", json={"ack": "true"})
+    assert r.status_code == 409
+    assert r.get_json()["error"] == "not_your_number"
+    assert fake.reviews == [] and fake.confirms == []
+    # One PHI-free line: the action id and the reason, nothing else.
+    [line] = [m.getMessage() for m in caplog.records
+              if "text approval refused" in m.getMessage()]
+    assert "act-sms" in line
+    assert line.rsplit(": ", 1)[1] in ("label", "words")
+    assert "5555550123" not in line and "CareAgents:" not in line
+
+
+@pytest.mark.parametrize("why", ["flag-off", "not-allowlisted", "paused"])
+def test_a_text_to_my_number_is_refused_when_texting_is_closed(
+        cfg, svc, monkeypatch, why):  # noqa: F811
+    """Security F3: the approval asks text_self.sms_phone_for, so turning
+    CARE_ACTIONS_SMS off stops texts already waiting."""
+    fake = _SmsFake(PHONE)
+    c, _fake, agent = _app(cfg, svc, monkeypatch, fake)
+    _bind(svc)
+    if why == "flag-off":
+        cfg.actions_sms = "off"
+    elif why == "not-allowlisted":
+        cfg.actions_sms = "allowlist"
+        cfg.actions_sms_allowlist = frozenset({"x@example.com"})
+    else:
+        svc.set_paused(EMAIL, True)
+    r = c.post(f"/review/{agent}/act-sms/submit", json={"ack": "true"})
+    assert r.status_code in (409, 423)
+    if why != "paused":     # a paused account is refused earlier, 423
+        assert r.get_json()["error"] == "not_your_number"
+    assert fake.reviews == [] and fake.confirms == []
+
+
+def _prompt_seen(cfg, svc, monkeypatch, c, fake, agent_id):  # noqa: F811
+    from careagents import agent as agent_mod
+    from careagents.worker import RunWorker
+    seen = []
+
+    class _Done:
+        text, tool_calls, raw_tool_calls = "ok", [], []
+
+    def _complete(_cfg, system, _history, tools):
+        seen.append((system, [t["name"] for t in tools]))
+        return _Done()
+    monkeypatch.setattr(agent_mod.llm, "complete", _complete)
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": "text me",
+                                  "request_id": f"p-{len(fake.events)}"},
+               buffered=False)
+    r.close()
+    RunWorker(cfg, fake, svc, "prompt-worker").run_once()
+    return seen[0]
+
+
+def test_with_no_phone_the_model_is_told_how_to_link_one(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """QA F2 (design 9): no verified number -> the tool is absent and the
+    agent says how to link a phone, rather than nothing or a promise."""
+    c, fake, agent_id = _app(cfg, svc, monkeypatch)
+    system, tools = _prompt_seen(cfg, svc, monkeypatch, c, fake, agent_id)
+    assert "propose_action" not in tools
+    assert text_self.LINK_PHONE_NOTE in system
+    assert "iMessage" in text_self.LINK_PHONE_NOTE
+
+
+def test_the_link_phone_note_is_absent_with_a_phone_or_the_flag_off(
+        cfg, svc, monkeypatch):  # noqa: F811
+    c, fake, agent_id = _app(cfg, svc, monkeypatch, flag="off")
+    system, _ = _prompt_seen(cfg, svc, monkeypatch, c, fake, agent_id)
+    assert text_self.LINK_PHONE_NOTE not in system
+    cfg.actions_sms = "on"
+    _bind(svc)
+    system, tools = _prompt_seen(cfg, svc, monkeypatch, c, fake, agent_id)
+    assert "propose_action" in tools
+    assert text_self.LINK_PHONE_NOTE not in system

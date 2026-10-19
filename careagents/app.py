@@ -43,7 +43,7 @@ from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents import beta_signup, errors, feedback, funnel, invites
-from careagents import checkin_wallet
+from careagents import checkin_wallet, text_self
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -229,7 +229,8 @@ _NOT_YOUR_NUMBER_PAGE = (
     ('<div class="form-check mt-2 p-3 bg-body-secondary rounded">',
      '<div class="form-check mt-2 p-3 bg-body-secondary rounded" hidden>'),
     ('<div id="review-gate-msg" class="alert alert-secondary" role="alert">',
-     '<div id="review-gate-msg" class="alert alert-warning" role="alert" '
+     '<div id="review-gate-msg" class="alert alert-warning not-your-number" '
+     'role="alert" '
      'data-not-your-number>' + _NOT_YOUR_NUMBER + '</div><div hidden>'),
     ('id="approve-btn" class="btn btn-primary btn-lg" disabled>',
      'id="approve-btn" class="btn btn-primary btn-lg" disabled hidden>'),
@@ -2871,17 +2872,35 @@ def create_app(config: Config | None = None,
         return dict(ctx, action=action if isinstance(action, dict) else {})
 
     def _text_not_yours(action):
-        """True for an sms whose number is not the signed-in account's
-        verified phone now: staged by another surface or a raw POST, or the
-        iMessage binding changed since. The same number rule propose_action
-        used (careagents/text_self.py). Only sms is held to it."""
+        """True for an sms CareAgents will not approve now. Only sms is
+        held to this. It must be what propose_action would have staged for
+        the signed-in account at this moment: text_self.sms_phone_for
+        (CARE_ACTIONS_SMS open for it, not paused, one verified phone)
+        answers this number, `to` is the fixed label, and the words are one
+        of the fixed texts. A text staged by another surface or a raw POST,
+        an iMessage binding changed since, or the flag turned off all
+        refuse. Logs the action id and the reason, never the number or
+        the words."""
         if action.get("kind") != "sms":
             return False
         payload = action.get("payload")
-        phone = payload.get("phone") if isinstance(payload, dict) else None
+        payload = payload if isinstance(payload, dict) else {}
         acct = current_account()
-        mine = svc.verified_phone(acct.id, cfg.imessage_reverify_days * 86400)
-        return not (mine and isinstance(phone, str) and phone == mine)
+        mine = text_self.sms_phone_for(cfg, svc, acct.id, acct.email)
+        if not mine:
+            reason = "no_phone_to_text"
+        elif payload.get("phone") != mine:
+            reason = "number"
+        elif payload.get("to") != text_self.RECIPIENT_LABEL:
+            reason = "label"
+        elif payload.get("body") not in {text_self.body_for(p, cfg.origin)
+                                         for p in text_self.PURPOSES}:
+            reason = "words"
+        else:
+            return False
+        logger.info("text approval refused for action %s: %s",
+                    str(action.get("id") or "")[:64], reason)
+        return True
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false

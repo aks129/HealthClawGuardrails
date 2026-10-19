@@ -525,7 +525,13 @@ class RunWorker:
                 context.get("email") or "")
         # Built per turn: propose_action is offered only with a number to
         # text, and _execute_tool asks again when it is called.
-        offered = tools_for_turn(sms_phone())
+        phone_now = sms_phone()
+        offered = tools_for_turn(phone_now)
+        if (phone_now is None and not context.get("paused")
+                and self.cfg.actions_sms_open_for(context.get("email") or "")):
+            # Open to this account, but no phone to text: the model says
+            # how to link one instead of promising a text (design 9).
+            prompt = f"{prompt}\n\n{text_self.LINK_PHONE_NOTE}"
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
             self._mark(context["account_id"], "first_answer")

@@ -29,6 +29,13 @@ OTHER_EMAIL = "sec-other@example.com"
 CANARY = "Zebulon Canaryfield"
 
 
+def _fixed(chain):
+    """A text propose_action would have written: the only approvable kind."""
+    return text_self.body_for(
+        "visit_prep",
+        chain.app.extensions["careagents_runtime"]["config"].origin)
+
+
 def _submit(c, agent, action_id):
     return c.post(f"/review/{agent}/{action_id}/submit", json={"ack": "true"})
 
@@ -79,7 +86,7 @@ def test_another_account_cannot_see_or_approve_the_text(world, monkeypatch):  # 
 
 def test_a_second_submit_sends_nothing_more(world, monkeypatch):  # noqa: F811
     chain, c, twilio = world
-    action_id = chain.hc.propose_sms(TENANT, PHONE, "CareAgents: synthetic")
+    action_id = chain.hc.propose_sms(TENANT, PHONE, _fixed(chain))
     first = _submit(c, chain.agent, action_id)
     assert first.status_code == 200 and first.get_json()["confirmed"] is True
     second = _submit(c, chain.agent, action_id)
@@ -133,8 +140,6 @@ def test_the_happy_path_logs_no_number_body_or_secret(world, monkeypatch,  # noq
     assert SECRET not in text
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finding F2: argument names are model text, and the refusal logs them"))
 def test_an_extra_argument_name_is_not_written_to_the_log(caplog):
     """The refusal logs the model's argument NAMES, on the reasoning that a
     value could be anything the model was fed. A name is exactly as
@@ -155,10 +160,6 @@ def test_an_extra_argument_name_is_not_written_to_the_log(caplog):
 
 # --- V3: what the approval-time check does not hold -------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finding F1: review_submit checks an sms's number but not its words. A "
-    "raw propose to the account's own number with any body is approvable, "
-    "and Twilio sends that body from the CareAgents number."))
 def test_a_text_with_foreign_words_to_my_number_is_not_approvable(world):  # noqa: F811
     chain, c, twilio = world
     body = "CareAgents: account locked, sign in at http://evil.example/x"
@@ -167,11 +168,6 @@ def test_a_text_with_foreign_words_to_my_number_is_not_approvable(world):  # noq
     assert twilio.sent == [], (r.status_code, twilio.sent)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finding F3: the approval check reads verified_phone directly, not "
-    "text_self.sms_phone_for, so CARE_ACTIONS_SMS=off does not gate it, "
-    "contrary to sms_phone_for's docstring ('and again before an approval "
-    "is submitted')."))
 def test_with_the_flag_off_no_text_is_approvable(world):  # noqa: F811
     chain, c, twilio = world
     chain.app.extensions["careagents_runtime"]["config"].actions_sms = "off"
@@ -202,7 +198,7 @@ def test_a_raw_propose_cannot_put_the_number_in_audit_detail(world):  # noqa: F8
 
 def test_callbacks_need_the_secret_and_the_right_sid(world, monkeypatch):  # noqa: F811
     chain, c, twilio = world
-    mine = chain.hc.propose_sms(TENANT, PHONE, "CareAgents: synthetic")
+    mine = chain.hc.propose_sms(TENANT, PHONE, _fixed(chain))
     assert _submit(c, chain.agent, mine).get_json()["confirmed"] is True
     other = chain.hc.propose_sms(TENANT, OTHER, "CareAgents: synthetic")
     url = "/r6/actions/callback/twilio?action_id=%s&secret=%s"

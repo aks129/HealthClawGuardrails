@@ -24,6 +24,15 @@ _OPENERS = {
     "reminder": "CareAgents: you have a reminder from your assistant.",
 }
 
+#: Added to the prompt when texting is open to the account but it has no
+#: single verified phone, so the tool is absent (design section 9).
+LINK_PHONE_NOTE = (
+    "Texting the person's phone is not set up: no phone number is linked "
+    "to their account. If they ask to be texted or reminded by text, say "
+    "you can't text them yet, and that they can link their phone from "
+    "their CareAgents home page by connecting iMessage. Do not offer to "
+    "text them until then.")
+
 #: Said to the model and kept in the tool result.
 APPROVAL_NOTE = "Only the review page approves; a text reply cannot."
 

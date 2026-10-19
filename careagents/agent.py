@@ -1180,9 +1180,10 @@ def _propose_text(hc: HealthClawClient, tenant: str, args: object,
                       "link their phone in CareAgents.")
     extra = sorted(set(args) - {"purpose"}) if isinstance(args, dict) else []
     if not isinstance(args, dict) or extra:
-        # Key names only: a value could be anything the model was fed.
-        logger.warning("propose_action refused: unexpected arguments %s",
-                       [str(k)[:40] for k in extra])
+        # The count only: a name is as model-written as a value, and
+        # either could carry what the model was fed.
+        logger.warning("propose_action refused: %d unexpected argument(s)",
+                       len(extra))
         return refuse("propose_action takes only a purpose. Nothing was "
                       "staged.")
     purpose = args.get("purpose")
