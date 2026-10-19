@@ -839,10 +839,9 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 _HAS_GRANT_CALLSITES: frozenset[str] = frozenset({
     'r6/agent_runs/routes.py:_tenant_authorized',
     'r6/actions/routes.py:action_status',
-    # Slice 18: the session-or-token predicate guarding system status and the
-    # sessions list. The tenant is read by the kernel in the order the site
-    # always used.
-    'r6/command_center/routes.py:_require_session_or_stepup',
+    # Slice 18's site, command_center _require_session_or_stepup, is gone:
+    # SEC941-PRE1 put system status and the sessions list behind the
+    # internal secret, so no tenant grant opens them any more.
     # Slice 19: read-auth's step-up branch. The tenant is the one the read
     # gate already resolved; the bearer alias is accepted as before.
     'r6/read_auth.py:authorize_tenant_read',
@@ -1589,7 +1588,19 @@ def test_there_is_no_profile_member_meaning_no_redaction():
     MUTATION: add Profile.NONE -> red.
     """
     assert {p.name for p in Profile} == {'STANDARD', 'PATIENT_CONTROLLED',
-                                         'INTAKE'}
+                                         'INTAKE', 'CHECKIN', 'KTC'}
+
+
+def test_fhir_response_refuses_the_checkin_profile_until_it_is_routed():
+    """Profile.CHECKIN must never fall through to another profile's body.
+
+    MUTATION: turn the `elif profile is Profile.INTAKE` in fhir_response
+    back into a bare `else` -> red (CHECKIN would be served as intake).
+    """
+    with pytest.raises(ValueError):
+        fhir_response({'resourceType': 'Patient'}, profile=Profile.CHECKIN)
+    with pytest.raises(ValueError):
+        fhir_response({'resourceType': 'Patient'}, profile=Profile.KTC)
 
 
 def test_the_standard_profile_strips_upstream_display_and_adds_a_disclaimer(
@@ -1846,7 +1857,16 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # registered on r6_blueprint read the tenant through the
                      # kernel, behind enforce_tenant_id, which asks it too.
                      'r6/brief/routes.py', 'r6/caregaps/routes.py',
-                     'r6/labs/routes.py', 'r6/quality/routes.py'}
+                     'r6/labs/routes.py', 'r6/quality/routes.py',
+                     # FHI-53: the check-in branch of $share-bundle is born
+                     # on the kernel — require_grant for its single-use,
+                     # audience- and operation-bound token, and
+                     # _checkin_profile beside _intake_profile. It lives
+                     # here rather than in r6/routes.py, which only shrinks.
+                     'r6/checkin.py',
+                     # SHL PR 1: the ktc branch, the check-in's sibling,
+                     # born on the kernel the same way.
+                     'r6/ktc.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

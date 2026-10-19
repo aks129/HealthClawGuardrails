@@ -14,13 +14,15 @@ guardrail layer; careagents holds identity + pointers only.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import quote
@@ -40,7 +42,9 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, feedback, funnel, invites
+from careagents import beta_signup, causes, errors, feedback, funnel, invites
+from careagents import checkin_wallet
+from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -53,6 +57,10 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: What the hub says when HealthClaw cannot be reached to set up or
+#: refresh records: a sentence and what to do, never "service unavailable".
+RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
+                     "Please try again in a minute.")
 #: What a link session is told when it reaches for more than the sample.
 REAUTH_TEXT = ("For that, sign in again with a code we email you. Your chat "
                "stays as it is.")
@@ -69,6 +77,15 @@ _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
 
 #: The one address patient-facing copy sends people to.
 CONTACT_EMAIL = "contactus@healthclaw.io"
+
+#: Sign-in code requests one client address may make per window. Sized for
+#: a family on one home Wi-Fi, each asking for codes and asking again; the
+#: per-address caps in accounts.py protect each inbox.
+CODE_REQUESTS_PER_IP = 30
+CODE_REQUEST_WINDOW = 600
+#: Client addresses the code-request limiter remembers before it forgets
+#: the oldest.
+CODE_REQUEST_KEYS = 4096
 
 
 def contact_links(text) -> Markup:
@@ -102,6 +119,11 @@ def chat_links(text) -> Markup:
 # chosen to end the 25s hold while leaving room for a loaded engine; it is not
 # a measured optimum, and a p99 from production should replace it.
 _ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
+
+#: Consecutive failed run-event reads before the browser stream says the
+#: turn failed (#926). A read that met a closing keep-alive connection
+#: succeeds on the next try; an engine that is really gone does not.
+_REPLAY_MAX_MISSES = 3
 
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
@@ -183,6 +205,20 @@ class OwnershipUnknown(Exception):
 #: The engine review page's tab title ends "— HealthClaw Guardrails".
 _REVIEW_TAB_BRAND = re.compile(
     r"(<title>[^<]*?)HealthClaw Guardrails(\s*</title>)")
+
+#: The engine's sample review speaks to the account holder: its banner is
+#: the holder's line, and the approved form is "your form ... send it to
+#: your new doctor". In the review of someone the holder cares for, these
+#: exact strings are reworded here, so the engine never learns a person
+#: exists and nothing reaches it (patient test on #952). Each is pinned
+#: against the engine's own template by
+#: tests/test_careagents_cared_for_wording.py.
+_CARED_FOR_REVIEW_WORDS = (
+    ("'Confirmed. Your form is ready. '", "'Confirmed. The form is ready. '"),
+    ("'Open your form (PDF)'", "'Open the form (PDF)'"),
+    ("' to save it, print it or send it to your new doctor.'",
+     "' to save it or print it.'"),
+)
 
 
 def _connection_is_live(ctx: dict) -> bool:
@@ -690,8 +726,10 @@ def create_app(config: Config | None = None,
             return ("Connecting your own records isn't open yet, so you're "
                     "using made-up records.")
         if outcome == invites.NONE:
-            return ("For now you can use made-up records. Connecting your "
-                    "own records isn't open to you yet.")
+            # The hub's own words for an empty account, not "isn't open
+            # to you", which reads as being left out (patient re-walk).
+            return ("For now you're using made-up records. Connecting your "
+                    "own records is coming later in the beta.")
         return None
 
     @app.get("/settings")
@@ -724,6 +762,8 @@ def create_app(config: Config | None = None,
                  if a["is_primary"] and a["person"]["kind"] == "self"), ""),
             assistants=assistants,
             tones=list(PERSONAS.items()),
+            # The hub card's own words ("Tone: calm"), so the two match.
+            tone_words=hub_view.TONE_WORDS,
             routine_catalog=advisors.routine_catalog(),
             imessage_handle=cfg.imessage_handle,
             # Every connected phone, masked, each with its own Disconnect.
@@ -739,10 +779,59 @@ def create_app(config: Config | None = None,
 
     # --- email code auth -----------------------------------------------------
 
+    code_requests: OrderedDict[str, deque] = OrderedDict()
+    # gunicorn runs several threads per worker: reading, counting and
+    # re-inserting a window is one step, or a racing burst beats the limit.
+    code_requests_lock = threading.Lock()
+
+    def _code_request_client() -> str:
+        # As /feedback and /beta do: X-Real-IP, never X-Forwarded-For, whose
+        # entries can be the client's own words. The edge must overwrite
+        # X-Real-IP with the connecting address (Railway's does); passed
+        # through from the client, it would pick its own bucket.
+        raw = (request.headers.get("X-Real-IP") or "").strip()
+        try:
+            return str(ipaddress.ip_address(raw))
+        except ValueError:
+            return request.remote_addr or ""
+
+    def _code_request_wait(key: str) -> int:
+        """0 and counted, or the whole seconds until this client may ask."""
+        moment = time.time()
+        with code_requests_lock:
+            window = code_requests.pop(key, None) or deque()
+            while window and moment - window[0] > CODE_REQUEST_WINDOW:
+                window.popleft()
+            wait = 0
+            if len(window) >= CODE_REQUESTS_PER_IP:
+                oldest = window[len(window) - CODE_REQUESTS_PER_IP]
+                wait = max(1, math.ceil(oldest + CODE_REQUEST_WINDOW
+                                        - moment))
+            else:
+                window.append(moment)
+            code_requests[key] = window             # newest last
+            while len(code_requests) > CODE_REQUEST_KEYS:
+                code_requests.popitem(last=False)   # forget the oldest key
+            return wait
+
     @app.post("/api/auth/email")
     def auth_email():
         email = (request.get_json(silent=True) or {}).get("email", "")
         purpose = "verify"
+        # Per client address, before any address is looked at: one network
+        # asking for codes to many inboxes. Keyed on the network alone, so
+        # the answer says nothing about the address asked for. A 429 with a
+        # sentence, not the resend wait: that answer tells the person a code
+        # went out moments ago, and from here none did.
+        wait = _code_request_wait(_code_request_client())
+        if wait:
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
+            minutes = math.ceil(wait / 60)
+            return jsonify({
+                "error": ("Too many code requests from this network. Try "
+                          f"again in {minutes} minute"
+                          f"{'' if minutes == 1 else 's'}."),
+                "retry_after": wait}), 429
         try:
             retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
@@ -761,19 +850,19 @@ def create_app(config: Config | None = None,
             # inbox with no idea whether to wait or retry.
             return jsonify({"error": str(exc), "sent": False}), 502
         if retry_after:
-            # The cooldown suppressed the send (#262). 200, not 4xx: the
-            # request was handled correctly and the person still holds a live
-            # code, so the UI still advances to code entry. But claiming
-            # "sent" here is the lie — it strands whoever's first email never
-            # arrived, telling them to wait for something nobody sent.
+            # The resend wait, or a per-address cap, suppressed the send
+            # (#262). 200, not 4xx: the request was handled correctly and the
+            # address was sent a code recently, so the UI still advances to
+            # code entry and shows the wait. But claiming "sent" here is the
+            # lie — it strands whoever's first email never arrived, telling
+            # them to wait for something nobody sent.
             #
-            # Not an enumeration oracle: this branch turns only on whether a
-            # code was requested for this address moments ago — a state the
-            # requester just created themselves — never on whether an account
-            # exists. start_email_code touches ca_email_tokens alone; accounts
-            # are created at verify. The genuine-send and cooldown responses
-            # are byte-identical for an address with an account and one
-            # without.
+            # Not an enumeration oracle: this branch turns only on the codes
+            # already requested for this address, and their wrong guesses —
+            # states requesters created — never on whether an account exists.
+            # start_email_code touches ca_email_tokens alone; accounts are
+            # created at verify. The genuine-send and wait responses are
+            # byte-identical for an address with an account and one without.
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
@@ -833,7 +922,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             acct = svc.finish_authentication(request.get_json(force=True),
-                                             challenge)
+                                             challenge, method="passkey")
         except AuthError as exc:
             funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
@@ -1112,7 +1201,7 @@ def create_app(config: Config | None = None,
             try:
                 hc.seed(tenant)
             except HealthClawError:
-                return jsonify({"error": "records service unavailable"}), 503
+                return jsonify({"error": RECORDS_DOWN_TEXT}), 503
         cid = svc.add_connection(acct.id, connector_id, tenant, plan["label"],
                                  status=plan["status"],
                                  provider=plan.get("provider"),
@@ -1192,7 +1281,7 @@ def create_app(config: Config | None = None,
         me = current_account()
         if me is not None and me.email != email.strip().lower():
             return None
-        acct = svc.first_run_account(email)
+        acct = svc.first_run_account(email, sign_in=me is None)
         if acct is None:
             return None
         if me is None:
@@ -1432,7 +1521,7 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True)
         if not isinstance(body, dict) or body.get("confirm") != "DELETE":
             return jsonify({"error": "confirm_required",
-                            "message": "Type DELETE to confirm."}), 400
+                            "message": "Type the word delete to confirm."}), 400
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
@@ -1477,8 +1566,18 @@ def create_app(config: Config | None = None,
             }), 502
         # Read before the unlink: deleting a connection deletes the
         # assistants that read it, and the person is told which (#853).
-        gone = [a["name"] for a in svc.list_home(acct.id)["agents"]
+        home = svc.list_home(acct.id)
+        gone = [a["name"] for a in home["agents"]
                 if a["connection_id"] == conn_id]
+        # Whose records, and whether that person leaves the hub with them,
+        # as the dialog said before the tap (patient test on #952).
+        row = next((r for r in hub_view.build(home, time.time())["records"]
+                    if r["id"] == conn_id), {})
+        label = (f"{conn['label']} ({row['whose']})" if row.get("whose")
+                 else conn["label"])
+        left = (hub_view.person_name(hub_view.person_of(
+                    home, conn.get("person_id")))
+                if row.get("leaves") else "")
         svc.delete_connection(acct.id, conn_id)
         # The count is the one the card showed. The engine's resource count
         # includes kinds the card leaves out, so "15 stored items" beside a
@@ -1493,11 +1592,11 @@ def create_app(config: Config | None = None,
             "records_deleted": n,
             "assistants_deleted": gone,
             "audit_retained": True,
-            "message": _deleted_sentence(n, conn["label"], gone),
+            "message": _deleted_sentence(n, label, gone, left),
         })
 
     def _deleted_sentence(n: int | None, label: str,
-                          gone: list[str]) -> str:
+                          gone: list[str], left: str = "") -> str:
         if n is None:
             lead = f"Your records in {label} were deleted."
         elif n == 1:
@@ -1509,6 +1608,8 @@ def create_app(config: Config | None = None,
                      f"{'was' if len(gone) == 1 else 'were'} deleted too, "
                      f"because {'it' if len(gone) == 1 else 'they'} read "
                      "these records.")
+        if left:
+            lead += f" {left} was removed from your hub too."
         return (lead + " We keep a log of who looked at your records, with "
                 "no health details in it, and this deletion is in it.")
 
@@ -1531,7 +1632,7 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True) or {}
         if body.get("confirm") != "DELETE":
             return jsonify({"error": "confirm_required",
-                            "message": "Type DELETE to confirm."}), 400
+                            "message": "Type the word delete to confirm."}), 400
         purged = 0
         for conn in svc.list_home(acct.id)["connections"]:
             try:
@@ -1635,7 +1736,7 @@ def create_app(config: Config | None = None,
                 svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
                                 hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
-            return jsonify({"error": "records service unavailable"}), 503
+            return jsonify({"error": RECORDS_DOWN_TEXT}), 503
 
         out = {"status": "reauth", "connection_id": conn_id}
         if plan.get("reauth_url"):
@@ -1846,7 +1947,7 @@ def create_app(config: Config | None = None,
                 hc.seed(plan["tenant"])
             except HealthClawError:
                 svc.remove_empty_person(acct.id, person)
-                return jsonify({"error": "records service unavailable"}), 503
+                return jsonify({"error": RECORDS_DOWN_TEXT}), 503
             cid = svc.add_connection(acct.id, "sample", plan["tenant"],
                                      plan["label"], status="active",
                                      provider=plan.get("provider"),
@@ -1902,11 +2003,18 @@ def create_app(config: Config | None = None,
         # A person's primary assistant is not removed, here as on the card
         # (owner decision D5, SEC951-L1): only an older account's extras
         # are. Deleting the account, or the records it reads, still goes.
-        primary = {a["id"] for a in hub_view.assistants(
+        primary = {a["id"]: a["person"] for a in hub_view.assistants(
             svc.list_home(acct.id))["assistants"] if a["is_primary"]}
         if agent_id in primary:
-            return jsonify({"error": "This is your assistant, so it "
-                                     "can't be removed."}), 409
+            # Mom's says so, not "your assistant" (FHI-44). By relationship,
+            # never the nickname: a JSON error is a string any client may
+            # one day render raw (security review of #952, I1).
+            name = hub_view.relation_of(primary[agent_id])
+            return jsonify({"error": (
+                f"This is the assistant for {name}, so it can't be "
+                "removed on its own. To remove it, delete their records on "
+                "your hub." if name else
+                "This is your assistant, so it can't be removed.")}), 409
         if not svc.delete_agent(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})
@@ -1964,12 +2072,22 @@ def create_app(config: Config | None = None,
             past, history_lost = [], True
         conn = ctx.get("connection") or {}
         sample = conn.get("kind") == "sample"
+        # Someone the holder cares for (FHI-44). `who` is their relationship
+        # ("your parent") for anything a model can read back: the sample
+        # line every answer opens with, and a starter tap. `name` may be
+        # the nickname and is for this page's own words only.
+        person = hub_view.person_of(svc.list_home(acct.id),
+                                    ctx["agent"].get("person_id"))
+        who = hub_view.relation_of(person)
+        frame = beta.sample_frame(who)
         if sample:
             # The banner above the log says the records are made up, so a
             # replayed answer does not say it again (beta.under_banner).
             past = [dict(m, content=beta.under_banner(str(m.get("content")
-                                                          or "")))
+                                                          or ""), frame))
                     if m.get("role") != "user" else m for m in past]
+        # Retries of a broken chat replay as one failure, not a wall.
+        past = errors.collapse_failed_turns(past)
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is
@@ -2055,9 +2173,19 @@ def create_app(config: Config | None = None,
                 has_labs = False
         has_records = (any(totals.values()) if totals is not None
                        else bool(conn.get("last_count")))
+        # Intake leads, always: that path ends in an approval, which is
+        # what the product is for (spec section 5). A tap is sent to the
+        # model as the person's message, so someone they care for is named
+        # by relationship, never by nickname (FHI-44).
+        mine = "my " + who[len("your "):] if who.startswith("your ") else (
+            "someone I care for" if who else "")
         starters = [s for s, ok in (
-            ("Make my visit brief", has_records),
-            ("Explain my latest labs", has_labs)) if ok]
+            ((f"Fill out a new doctor's intake form for {mine}" if mine
+              else "Fill out my intake form for a new doctor"), True),
+            ((f"Make a visit brief for {mine}" if mine
+              else "Make my visit brief"), has_records),
+            ((f"Explain the latest labs for {mine}" if mine
+              else "Explain my latest labs"), has_labs)) if ok]
         # The "Open the review" card is a turn event, and history keeps only
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.
@@ -2067,6 +2195,8 @@ def create_app(config: Config | None = None,
         # all: a card there would promise an approval the relay refuses
         # (security review of #853).
         reviews = []
+        # Only a lookup that answered says no form is waiting (#998 L2).
+        pending_known = False
         if conn.get("status") != "revoked":
             try:
                 reviews = [{"id": a["id"],
@@ -2075,10 +2205,30 @@ def create_app(config: Config | None = None,
                             "form": a.get("kind") == "form-fill"}
                            for a in hc.pending_actions(ctx["tenant"])
                            if a.get("id")]
+                pending_known = True
             except HealthClawError:
                 logger.warning("pending reviews unavailable for agent %s",
                                agent_id)
                 reviews = []
+        # Approved, its card is gone and the reply above still says the
+        # form isn't done (patient walk 2026-10-18). The newest finished
+        # form this week is drawn as done, linking to its review page,
+        # which shows the PDF. Not while a form waits: that one is next.
+        done_form = None
+        if pending_known and not any(r["form"] for r in reviews):
+            try:
+                done = sorted(
+                    (a for a in hc.recent_actions(ctx["tenant"])
+                     if a.get("id") and a.get("kind") == "form-fill"
+                     and a.get("status") == "completed"),
+                    # str(): an engine row with a numeric time must not
+                    # 500 the chat (#998 L1).
+                    key=lambda a: str(a.get("updated_at") or ""),
+                    reverse=True)
+                done_form = done[0]["id"] if done else None
+            except HealthClawError:
+                logger.warning("recent forms unavailable for agent %s",
+                               agent_id)
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
@@ -2090,6 +2240,7 @@ def create_app(config: Config | None = None,
                                importing=importing,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               done_form=done_form,
                                starters=starters,
                                # A link session reaches it through a code
                                # sign-in first (/auth, #920 F1).
@@ -2101,11 +2252,12 @@ def create_app(config: Config | None = None,
                                    and svc.has_passkey(acct.id)),
                                connect_next=_chat_connect_next(acct, sample),
                                link_session=bool(session.get(_VIA_LINK)),
-                               sample_line=(beta.SAMPLE_FRAME
-                                            if sample else None),
+                               sample_line=frame if sample else None,
                                # "Mom's records" when they are not the
                                # holder's own (spec section 5).
-                               whose=_whose(acct, ctx["agent"]))
+                               whose=hub_view.whose_records(person),
+                               # The greeting's words only, never sent.
+                               name=person.get("nickname") or who)
 
     def _whose(acct, agent, mid: bool = False) -> str:
         """Whose records this assistant reads, as the chat header and the
@@ -2142,8 +2294,11 @@ def create_app(config: Config | None = None,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
                                care_gaps_note=_parse_care_gaps_reason(raw),
-                               sample_line=(beta.SAMPLE_FRAME if sample
-                                            else None))
+                               sample_line=(beta.sample_frame(
+                                   hub_view.relation_of(hub_view.person_of(
+                                       svc.list_home(acct.id),
+                                       ctx["agent"].get("person_id"))))
+                                   if sample else None))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
@@ -2251,6 +2406,7 @@ def create_app(config: Config | None = None,
         # at 90 seconds is no likelier to finish in the next 250ms than one
         # at 5, and a token that just arrived is likely followed by another.
         empty_streak = 0
+        misses = 0
         yield "data: " + json.dumps({
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
@@ -2259,7 +2415,22 @@ def create_app(config: Config | None = None,
                 with acting_for(account_id):
                     page = hc.agent_run_events(tenant, run_id, after=cursor,
                                                limit=100)
-            except HealthClawError:
+            except HealthClawError as exc:
+                # The class and status only: the message is engine text.
+                misses += 1
+                logger.warning(
+                    "run event read %d/%d failed for tenant %s: %s status=%s",
+                    misses, _REPLAY_MAX_MISSES, tenant, type(exc).__name__,
+                    exc.status)
+                # #926: one failed read is not a failed run. A poll that
+                # lands as the engine closes an idle keep-alive connection
+                # (gunicorn's 2s, the same as the poll's backoff cap) never
+                # reaches the engine, and ending here showed "Something went
+                # wrong" on a run that went on to complete. The read has no
+                # side effect and resumes at `cursor`, so it is tried again.
+                if misses < _REPLAY_MAX_MISSES:
+                    time.sleep(cfg.run_sse_poll_seconds)
+                    continue
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
                 # reason (#219). Only this projection ends: the run is durable
@@ -2267,12 +2438,12 @@ def create_app(config: Config | None = None,
                 # text is the same generic sentence every other failure uses —
                 # an exception message here would be the first place engine
                 # internals reached a patient's screen.
-                logger.warning("run event stream failed for tenant %s", tenant)
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
                     "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
                 return
+            misses = 0
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -2321,7 +2492,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "message must be 1-2000 characters"}), 400
         workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
@@ -2345,7 +2517,7 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.DAILY_LIMIT_TEXT,
+                    "message": beta.daily_limit_text(),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -2360,13 +2532,15 @@ def create_app(config: Config | None = None,
         created, user_message_id = hc.claim_inbound_message(
             tenant, text, agent["id"], conversation_id, "web", request_id)
         if created is None or not user_message_id:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return jsonify({"error": "message store unavailable"}), 503
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
-        except HealthClawError:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+        except HealthClawError as exc:
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.cause_of(exc))
             return jsonify({"error": "run queue unavailable"}), 503
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
@@ -2571,7 +2745,7 @@ def create_app(config: Config | None = None,
         # cannot be read is said, and never fails the count above: the
         # pending number is the one a person acts on.
         try:
-            recent = _recent_outcomes(tenants, bool(data["agents"]))
+            recent = _recent_outcomes(tenants, bool(data["agents"]), data)
         except HealthClawError:
             logger.warning("recent outcomes unavailable for account %s",
                            acct.id)
@@ -2585,7 +2759,7 @@ def create_app(config: Config | None = None,
     #: engine's window; the hub shows the newest few.
     _RECENT_SHOWN = 5
 
-    def _recent_outcomes(tenants, has_assistant):
+    def _recent_outcomes(tenants, has_assistant, home):
         """The hub's "done" and "didn't finish" lines (#847), newest first.
 
         Read from the engine on every visit and stored nowhere. A completed
@@ -2608,6 +2782,12 @@ def create_app(config: Config | None = None,
                 # a recipient read as though it had been sent (#853).
                 if a.get("to") and a.get("kind") != "form-fill":
                     item["to"] = a["to"]
+                # Whose, as the pending queues say it (patient test on
+                # #952): "Intake form (Mom's records): Ready."
+                whose = hub_view.whose_records(
+                    hub_view.person_of(home, conn.get("person_id")))
+                if whose:
+                    item["whose"] = whose
                 if agent:
                     item["agent_name"] = agent["name"]
                     item["chat"] = url_for("chat", agent=agent["id"])
@@ -2653,7 +2833,7 @@ def create_app(config: Config | None = None,
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
-    def _form_past_review(tenant, agent_id, action_id):
+    def _form_past_review(tenant, agent_id, action_id, whose=""):
         """A form the engine no longer offers for review: ready with its PDF,
         still being made, or done. The PDF link comes from the action's
         outcome, as the post-approve screen reads it (/api/form)."""
@@ -2683,7 +2863,8 @@ def create_app(config: Config | None = None,
         # (the intake rail, or an engine that names no kind) is "your form".
         is_form = status.get("kind") in (None, "form-fill")
         return render_template("form_done.html", state=shown, link=link,
-                               agent_id=agent_id, is_form=is_form)
+                               agent_id=agent_id, is_form=is_form,
+                               whose=whose)
 
     def _agent_owns_action(agent_id, action_id):
         """The tenant that owns this action, or None if it is not this
@@ -2771,6 +2952,12 @@ def create_app(config: Config | None = None,
         # someone else as "I". Decided from the connection, never the request,
         # and from the same read that resolved the tenant.
         sample = (ctx.get("connection") or {}).get("kind") == "sample"
+        # Someone the holder cares for: their records named on the page,
+        # the nickname escaped and kept here, never sent to the engine.
+        acct = current_account()
+        person = hub_view.person_of(svc.list_home(acct.id),
+                                    ctx["agent"].get("person_id"))
+        whose = hub_view.whose_records(person)
         try:
             status, html = (hc.fetch_review_page(tenant, action_id,
                                                  voice="sample")
@@ -2796,9 +2983,20 @@ def create_app(config: Config | None = None,
                                        message=_REVIEW_UNCHECKABLE), 503
             # Past review. The texted "Your intake form is ready" link lands
             # here after approval, so show the form, not a dead end (#875).
-            return _form_past_review(tenant, agent_id, action_id)
+            return _form_past_review(tenant, agent_id, action_id,
+                                     whose=whose)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
+        if sample and whose:
+            # The person's own line, as on their chat page, then the
+            # approved message about the form, not "your" form.
+            html = html.replace(
+                f'role="note">{beta.SAMPLE_FRAME}</div>',
+                f'role="note">'
+                f'{escape(beta.sample_frame(hub_view.relation_of(person)))}'
+                '</div>', 1)
+            for old, new in _CARED_FOR_REVIEW_WORDS:
+                html = html.replace(old, new, 1)
         # The engine names its own product in the tab; here the page is
         # CareAgents', reached from a CareAgents chat or text.
         return _REVIEW_TAB_BRAND.sub(r"\1CareAgents\2", html, count=1)
@@ -3073,7 +3271,7 @@ def create_app(config: Config | None = None,
                            tester_terms.CONSENT_VERSION):
             return None
         if svc.daily_turns_used(account_id) >= cfg.chat_turns_per_day:
-            return beta.DAILY_LIMIT_TEXT
+            return beta.daily_limit_text()
         return None
 
     def _imessage_queue_turn(ctx, text, request_id, conversation_id):
@@ -3542,8 +3740,11 @@ def create_app(config: Config | None = None,
             created = svc.invite_real_records(email, invited_by)
         except (AuthError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"invited {email.strip().lower()}" if created
-                   else f"{email.strip().lower()} was already invited")
+        typed, key = email.strip().lower(), invites.invite_key(email)
+        click.echo(f"invited {typed}" if created
+                   else f"{typed} was already invited")
+        if key != typed:
+            click.echo(f"matches the inbox {key} (any alias of it)")
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
@@ -3565,7 +3766,9 @@ def create_app(config: Config | None = None,
 
     @_invites.command("list")
     def _invites_list():
-        rows = svc.real_record_invites()
+        """Each invite: as typed, the inbox it matches, when and by whom,
+        live or revoked, and whether that inbox has signed up yet."""
+        rows = invites.real_record_rows(svc.session)
         if not rows:
             click.echo("no invites")
         for r in rows:
@@ -3573,16 +3776,22 @@ def create_app(config: Config | None = None,
             state = ("revoked " + datetime.fromtimestamp(
                 r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
                      if r["revoked_at"] else "live")
-            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
-                       f"by {r['invited_by']:<20} {state}")
+            joined = "signed up" if r["signed_up"] else "not signed up"
+            click.echo(f"{r['display']:<40} matches {r['key']:<32} "
+                       f"{when:%Y-%m-%d} by {r['invited_by']:<20} "
+                       f"{state:<18} {joined}")
 
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
     operator_cli.register(app, svc)
     beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
+    errors.register(app, svc, cfg)
     invites.register(app, svc, cfg, beta_signup.page_context)
     funnel.register(app, svc, cfg, full_session=lambda: not session.get(
         _VIA_LINK))
+    checkin_wallet.register(app, svc, cfg, hc,
+                            full_session=lambda: not session.get(_VIA_LINK))
+    checkins.register(app, svc, cfg)
 
     return app

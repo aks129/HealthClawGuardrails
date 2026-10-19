@@ -426,7 +426,7 @@ def test_the_safety_page_says_what_is_tested_and_the_grade(app, svc):  # noqa: F
     assert ("Each day we test that your name is hidden, every look at your "
             "records is logged, and nothing is sent without your OK. "
             "Today's grade: A.") in words
-    report = re.search(r'<a [^>]*>\s*Technical report\s*</a>', page)
+    report = re.search(r'<a [^>]*>\s*See every test we run\s*</a>', page)
     assert report and "$conformance" in report.group(0)
     for word in JARGON:
         assert word.lower() not in words.lower(), word
@@ -457,7 +457,7 @@ def test_the_safety_page_goes_back_where_the_person_came_from(
         cfg, svc, monkeypatch):  # noqa: F811
     """#884 G7: signed out, "Back" to the landing page; signed in with an
     assistant, "Back to chat"; signed in without one, "Back to
-    CareAgents". On the same line as "Technical report"."""
+    CareAgents". On the same line as "See every test we run"."""
     from careagents.app import create_app
     a = create_app(config=cfg, client=FakeClient(), accounts=svc)
     a.config["TESTING"] = True
@@ -465,7 +465,7 @@ def test_the_safety_page_goes_back_where_the_person_came_from(
     page = c.get("/safety").get_data(as_text=True)
     assert _back_link(page) == ("/", "Back")
     row = re.search(r'<p class="safety-links">.*?</p>', page, re.S).group(0)
-    assert "Technical report" in row and 'class="safety-back"' in row
+    assert "See every test we run" in row and 'class="safety-back"' in row
 
     _login(c, svc, monkeypatch)
     assert _back_link(c.get("/safety").get_data(as_text=True)) == (
@@ -550,9 +550,11 @@ def test_the_review_card_names_the_assistant(cfg, svc, monkeypatch):  # noqa: F8
     page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
     assert 'window.CARE_AGENT_NAME = "Juniper";' in page
     js = (ROOT / "careagents" / "static" / "chat.js").read_text()
-    assert ('AGENT_NAME + " filled it in from your records. Check each " +\n'
-            '        "medication and allergy. Nothing is made until you '
-            'approve."') in js
+    # The holder's words are unchanged; someone they care for is named
+    # instead of "your records" (FHI-44).
+    assert ('AGENT_NAME + " filled it in from " + (WHOSE || "your records") +'
+            '\n        ". Check each medication and allergy. Nothing is made '
+            'until you " +\n        "approve."') in js
 
 
 def test_chat_bubbles_carry_no_stray_whitespace(cfg, svc, monkeypatch):  # noqa: F811
@@ -612,7 +614,8 @@ def test_the_hub_and_sign_in_read_plainly(app, svc, monkeypatch):  # noqa: F811
             "list.") in " ".join(hub.split())
     auth = (ROOT / "careagents" / "templates" / "auth.html").read_text()
     assert "can't be phished" not in auth
-    assert "can't be stolen by a fake site" in auth
+    # The emailed code leads (patient walk 2026-10-18), in plain words.
+    assert "We'll email you an 8-digit code to sign in." in auth
     js = (ROOT / "careagents" / "static" / "home.js").read_text()
     assert '"ready."' not in js
 

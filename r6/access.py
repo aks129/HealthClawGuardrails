@@ -37,6 +37,8 @@ from r6 import fhir_proxy as _fhir_proxy_mod
 from r6 import health_compliance as _compliance_mod
 from r6 import redaction as _redaction_mod
 from r6 import stepup as _stepup_mod
+from r6 import terminology as _terminology_mod
+from r6.safe_read import coding_system as _coding_system
 from r6.models import AuditEventRecord
 from r6.read_auth import TENANT_SESSION_KEY
 
@@ -213,7 +215,8 @@ class Scope(Enum):
 
     TENANT_BOUND maps to validate_step_up_token(require_scope=None) and
     accepts a read-scoped token. WRITE maps to require_scope='write' and
-    rejects one. The names say what the check does, not what the caller
+    accepts only a scope in r6.stepup.WRITE_SCOPES, so it rejects a
+    read-scoped token and any scope it does not know (FHI-57). The names say what the check does, not what the caller
     wishes it did — the exact mistake behind _RESOURCE_ID_PATTERN.
     """
 
@@ -319,6 +322,7 @@ _PUBLIC_REASONS = frozenset({
     'Invalid token signature',
     'Step-up token expired',
     'Read-scoped token cannot authorize this operation',
+    'Token scope cannot authorize this operation',
     'Token audience mismatch',
     'Token operation mismatch',
     'Token already used (replay)',
@@ -1181,6 +1185,8 @@ class Profile(Enum):
     STANDARD = 'standard'                      # r6/redaction.py:22 + add_disclaimer
     PATIENT_CONTROLLED = 'patient-controlled'  # r6/redaction.py:180
     INTAKE = 'intake'                          # r6/routes.py _intake_strip
+    CHECKIN = 'checkin'                        # _checkin_profile (FHI-53)
+    KTC = 'ktc'                                # _ktc_profile (SHL PR 1)
 
 
 _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn',
@@ -1218,6 +1224,564 @@ def _intake_profile(resource):
     return res
 
 
+_V2_0203 = 'http://terminology.hl7.org/CodeSystem/v2-0203'
+_COVERAGE_CLASS = 'http://terminology.hl7.org/CodeSystem/coverage-class'
+_NAIC_SYSTEM = 'urn:oid:2.16.840.1.113883.6.300'
+
+#: A payor reference the check-in keeps: an Organization, by an id the store
+#: could hold. Anything else (a RelatedPerson, a Patient, a URL) is dropped.
+_PAYOR_REF = re.compile(r'Organization/[A-Za-z0-9\-.]{1,255}')
+
+
+def _is_ssn_identifier(ident):
+    """An SSN by identifier system, either spelling, or by ANY type coding
+    whose code is `SS`, whatever system the coding names: an upstream that
+    invents its own SSN system still says what it is in the type, and the
+    v2-0203 URL itself has more than one spelling (the R3
+    http://hl7.org/fhir/v2/0203 among them). Over-matching an `SS` from some
+    other code system costs one identifier; under-matching leaks an SSN."""
+    if not isinstance(ident, dict):
+        return False
+    if ident.get('system') in _SSN_SYSTEMS:
+        return True
+    concept = ident.get('type')
+    codings = concept.get('coding') if isinstance(concept, dict) else None
+    return isinstance(codings, list) and any(
+        isinstance(c, dict) and c.get('code') == 'SS' for c in codings)
+
+
+#: The second, independent SSN check (#963 security delta D1). The first,
+#: _is_ssn_identifier, knows the two standard systems and the v2-0203 `SS`
+#: code; an upstream that labels an SSN its own way (a local system named
+#: "ssn", a `type.text`, a local code `SSN`) passes it. This one reads the
+#: labels and the value instead, and over-matches on purpose: a dropped
+#: identifier costs one identifier, a missed one leaks an SSN.
+_SSN_LABEL = re.compile(r'ssn|social.?security', re.IGNORECASE)
+# Searched, not full-matched (#963 security D2): `SSN:555-66-7777`,
+# `444 55 6666` and `444.55.6666` all carry one. The lookarounds keep a
+# longer digit run (a 10-digit member id) from matching.
+_SSN_VALUE = re.compile(r'(?<!\d)\d{3}[\s.-]?\d{2}[\s.-]?\d{4}(?!\d)')
+
+
+def _value_looks_like_ssn(value):
+    """True for a string that contains an SSN's digits or names itself one.
+    The strict screen, for Patient identifier values."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return bool(_SSN_VALUE.search(value) or _SSN_LABEL.search(value))
+
+
+#: Coverage values only (owner ruling 2026-10-14, QA #963): member, group
+#: and plan numbers are often a bare 9 digits, so a Coverage value is
+#: dropped as an SSN only when it is labelled one or written in SSN form
+#: with BOTH separators. Patient identifiers keep the strict _SSN_VALUE.
+_SSN_SEPARATED = re.compile(r'(?<!\d)\d{3}[\s.-]\d{2}[\s.-]\d{4}(?!\d)')
+
+
+def _coverage_value_looks_like_ssn(value):
+    """A Coverage subscriberId, MB/SN identifier value or class.value that
+    names itself an SSN or contains a separated SSN."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return bool(_SSN_SEPARATED.search(value) or _SSN_LABEL.search(value))
+
+
+def _coverage_identifier_is_ssn(ident):
+    """The Coverage MB/SN restore's screen: the standard SSN labels, a local
+    SSN label, or a Coverage value that looks like an SSN by the rule above.
+    """
+    return (_is_ssn_identifier(ident) or _ssn_labelled(ident)
+            or _coverage_value_looks_like_ssn(ident.get('value')))
+
+
+def _ssn_labelled(ident):
+    """True when the identifier's system, any type coding's code, or its
+    `type.text` reads as an SSN label."""
+    if not isinstance(ident, dict):
+        return False
+    labels = [ident.get('system')]
+    concept = ident.get('type')
+    if isinstance(concept, dict):
+        labels.append(concept.get('text'))
+        codings = concept.get('coding')
+        if isinstance(codings, list):
+            labels.extend(c.get('code') for c in codings
+                          if isinstance(c, dict))
+    return any(isinstance(label, str) and _SSN_LABEL.search(label)
+               for label in labels)
+
+
+def _looks_like_ssn(ident):
+    """Patient identifiers (strict): an SSN label, or an SSN anywhere in the
+    value, bare 9 digits included."""
+    if not isinstance(ident, dict):
+        return False
+    return _ssn_labelled(ident) or _value_looks_like_ssn(ident.get('value'))
+
+
+def _is_ssn_class(ident):
+    """Either check. Every SSN decision in the check-in profile asks this."""
+    return _is_ssn_identifier(ident) or _looks_like_ssn(ident)
+
+
+def _has_coding(concept, system, codes):
+    """True when CodeableConcept `concept` has a coding of `system` with a
+    code in `codes`. Read off the stored record, so every shape is checked."""
+    if not isinstance(concept, dict):
+        return False
+    codings = concept.get('coding')
+    if not isinstance(codings, list):
+        return False
+    return any(isinstance(c, dict) and c.get('system') == system
+               and c.get('code') in codes for c in codings)
+
+
+def _coding_of(concept, system, codes):
+    """The first matching coding as {system, code}: no display, no text."""
+    for c in concept.get('coding'):
+        if (isinstance(c, dict) and c.get('system') == system
+                and c.get('code') in codes):
+            return {'system': system, 'code': c['code']}
+    return None
+
+
+def _drop_related_person_refs(obj):
+    """Remove every Reference to a RelatedPerson, at any depth, in place.
+
+    A RelatedPerson is somebody else: a check-in names the patient and,
+    for Coverage, the patient's own plan, never a relative or a guarantor."""
+    if isinstance(obj, list):
+        obj[:] = [v for v in obj if not _is_related_person_ref(v)]
+        for v in obj:
+            _drop_related_person_refs(v)
+    elif isinstance(obj, dict):
+        for key in [k for k, v in obj.items() if _is_related_person_ref(v)]:
+            obj.pop(key)
+        for v in obj.values():
+            _drop_related_person_refs(v)
+
+
+def _is_related_person_ref(value):
+    return (isinstance(value, dict)
+            and isinstance(value.get('reference'), str)
+            and 'RelatedPerson/' in value['reference'])
+
+
+#: Coverage.status values (R4 FinancialResourceStatusCodes).
+_COVERAGE_STATUS = frozenset({'active', 'cancelled', 'draft',
+                              'entered-in-error'})
+
+
+#: A code we pass through: a code, not a sentence (#963 security delta).
+_CODE_SHAPE = re.compile(r'[A-Za-z0-9._-]{1,64}')
+
+
+def _codes_only(concept):
+    """A CodeableConcept reduced to its codings' system and code: no
+    display, no text, no extension. None when nothing coded is left."""
+    codings = concept.get('coding') if isinstance(concept, dict) else None
+    kept = [{'system': c['system'], 'code': c['code']}
+            for c in codings or [] if isinstance(c, dict)
+            and isinstance(c.get('system'), str)
+            and isinstance(c.get('code'), str)
+            and _CODE_SHAPE.fullmatch(c['code'])]
+    return {'coding': kept} if kept else None
+
+
+def _checkin_coverage(original, res, patient_id):
+    """Coverage under `checkin`, built from EMPTY (#963 security review F3).
+    Nothing the redacted copy happened to keep (`network`, `dependent`,
+    `costToBeneficiary`, an extension) can leave: only the keys below, each
+    read off the stored record by allow-list. The payor's NAME comes from
+    its own Organization record (the export's second lookup), never
+    `display`.
+
+    A Coverage reaches this function only when the token's `op` named
+    Coverage, which is the per-item consent; nothing here re-checks it."""
+    res = {k: res[k] for k in ('resourceType', 'id', 'meta') if k in res}
+    if original.get('status') in _COVERAGE_STATUS:
+        res['status'] = original['status']
+    for key in ('type', 'relationship'):
+        coded = _codes_only(original.get(key))
+        if coded:
+            res[key] = coded
+    period = original.get('period')
+    if isinstance(period, dict):
+        kept = {k: period[k] for k in ('start', 'end')
+                if isinstance(period.get(k), str)}
+        if kept:
+            res['period'] = kept
+
+    subscriber_id = original.get('subscriberId')
+    # Subscriber ids were historically sometimes SSNs: one with an SSN's
+    # shape is dropped, by the same value check as identifiers (#963).
+    if (isinstance(subscriber_id, str) and 0 < len(subscriber_id) <= 64
+            and not _coverage_value_looks_like_ssn(subscriber_id)):
+        res['subscriberId'] = subscriber_id
+
+    idents = []
+    for ident in original.get('identifier') or []:
+        if not isinstance(ident, dict) or _coverage_identifier_is_ssn(ident):
+            continue
+        if not _has_coding(ident.get('type'), _V2_0203, ('MB', 'SN')):
+            continue
+        system, value = ident.get('system'), ident.get('value')
+        if isinstance(value, str) and value:
+            kept = {'type': {'coding': [_coding_of(
+                ident['type'], _V2_0203, ('MB', 'SN'))]},
+                'value': value}
+            if isinstance(system, str):
+                kept['system'] = system
+            idents.append(kept)
+    res.pop('identifier', None)
+    if idents:
+        res['identifier'] = idents
+
+    classes = []
+    for cls in original.get('class') or []:
+        if not isinstance(cls, dict):
+            continue
+        if not _has_coding(cls.get('type'), _COVERAGE_CLASS,
+                           ('group', 'plan')):
+            continue
+        value = cls.get('value')
+        # A group or plan number with an SSN in it is dropped (#963 D2).
+        if (isinstance(value, str) and value
+                and not _coverage_value_looks_like_ssn(value)):
+            # class.name is dropped, not left as a truncated stub.
+            classes.append({'type': {'coding': [_coding_of(
+                cls['type'], _COVERAGE_CLASS, ('group', 'plan'))]},
+                'value': value})
+    res.pop('class', None)
+    if classes:
+        res['class'] = classes
+
+    own = f'Patient/{patient_id}'
+    for key in ('subscriber', 'policyHolder', 'beneficiary'):
+        ref = original.get(key)
+        res.pop(key, None)
+        if isinstance(ref, dict) and ref.get('reference') == own:
+            res[key] = {'reference': own}
+
+    payors = []
+    for ref in original.get('payor') or []:
+        target = ref.get('reference') if isinstance(ref, dict) else None
+        if isinstance(target, str) and _PAYOR_REF.fullmatch(target):
+            payors.append({'reference': target})
+    res.pop('payor', None)
+    if payors:
+        res['payor'] = payors
+    return res
+
+
+#: The sub-elements a check-in releases from each Patient identity field
+#: (#963 security review F5). Copying the field by key released anything
+#: nested in it: an extension's valueReference.display, an address `text`.
+_HUMAN_NAME_KEYS = ('use', 'family', 'given', 'prefix', 'suffix')
+_ADDRESS_KEYS = ('use', 'type', 'line', 'city', 'district', 'state',
+                 'postalCode', 'country')
+_CONTACT_POINT_KEYS = ('system', 'value', 'use', 'rank')
+
+
+def _element(value, keys):
+    """`value` reduced to `keys` whose values are strings, lists of
+    strings, or (for `rank`) an int. Anything else is dropped."""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in keys:
+        v = value.get(key)
+        if isinstance(v, str) or (key == 'rank' and isinstance(v, int)
+                                  and not isinstance(v, bool)):
+            out[key] = v
+        elif isinstance(v, list) and v and all(isinstance(i, str) for i in v):
+            out[key] = v
+    return out or None
+
+
+def _patient_identity(original):
+    """name, birthDate, address and telecom, element by element."""
+    out = {}
+    for key, keys in (('name', _HUMAN_NAME_KEYS), ('address', _ADDRESS_KEYS),
+                      ('telecom', _CONTACT_POINT_KEYS)):
+        items = original.get(key)
+        kept = [e for e in (_element(i, keys) for i in items or []
+                            if isinstance(items, list)) if e]
+        if kept:
+            out[key] = kept
+    if isinstance(original.get('birthDate'), str):
+        out['birthDate'] = original['birthDate']
+    return out
+
+
+#: OMB race and ethnicity categories (CDC Race & Ethnicity code system) and
+#: the two null flavors US Core allows in their place, with OUR label for
+#: each: the code system's own display. It is the extension's required
+#: `text`; check-in output carries no `coding.display` (QA ruling B), and
+#: upstream `text` and `display` are never used (owner ruling 2026-10-14).
+_CDC_RACE_ETHNICITY = 'urn:oid:2.16.840.1.113883.6.238'
+_NULL_FLAVOR = 'http://terminology.hl7.org/CodeSystem/v3-NullFlavor'
+_OMB_LABELS = {
+    'race': {
+        (_CDC_RACE_ETHNICITY, '1002-5'): 'American Indian or Alaska Native',
+        (_CDC_RACE_ETHNICITY, '2028-9'): 'Asian',
+        (_CDC_RACE_ETHNICITY, '2054-5'): 'Black or African American',
+        (_CDC_RACE_ETHNICITY, '2076-8'):
+            'Native Hawaiian or Other Pacific Islander',
+        (_CDC_RACE_ETHNICITY, '2106-3'): 'White',
+        (_NULL_FLAVOR, 'UNK'): 'unknown',
+        (_NULL_FLAVOR, 'ASKU'): 'asked but unknown',
+    },
+    'ethnicity': {
+        (_CDC_RACE_ETHNICITY, '2135-2'): 'Hispanic or Latino',
+        (_CDC_RACE_ETHNICITY, '2186-5'): 'Not Hispanic or Latino',
+        (_NULL_FLAVOR, 'UNK'): 'unknown',
+        (_NULL_FLAVOR, 'ASKU'): 'asked but unknown',
+    },
+}
+_US_CORE_SD = 'http://hl7.org/fhir/us/core/StructureDefinition/us-core-'
+
+
+def _omb_extension(ext, kind):
+    """A us-core-race/-ethnicity extension rebuilt from its ombCategory
+    codings alone, each in _OMB_LABELS[kind], with `text` set from OUR
+    labels. `detailed` codes and anything unmapped are dropped; with no
+    mapped category left the extension is invalid (text is 1..1), so None.
+    """
+    labels = _OMB_LABELS[kind]
+    kept = []
+    for sub in ext.get('extension') or []:
+        coding = sub.get('valueCoding') if isinstance(sub, dict) else None
+        if (isinstance(sub, dict) and sub.get('url') == 'ombCategory'
+                and isinstance(coding, dict)):
+            key = (coding.get('system'), coding.get('code'))
+            if key in labels and key not in [k for k, _ in kept]:
+                kept.append((key, labels[key]))
+    if not kept:
+        return None
+    subs = [{'url': 'ombCategory', 'valueCoding': {
+        'system': system, 'code': code}} for (system, code), _ in kept]
+    subs.append({'url': 'text',
+                 'valueString': ', '.join(label for _, label in kept)})
+    return {'url': _US_CORE_SD + kind, 'extension': subs}
+
+
+def _patient_extensions(original):
+    """Patient.extension for a check-in: race and ethnicity only, rebuilt
+    by _omb_extension. Every other upstream extension is dropped."""
+    out = []
+    for ext in original.get('extension') or []:
+        if not isinstance(ext, dict):
+            continue
+        for kind in ('race', 'ethnicity'):
+            if ext.get('url') == _US_CORE_SD + kind:
+                rebuilt = _omb_extension(ext, kind)
+                if rebuilt:
+                    out.append(rebuilt)
+    return out
+
+
+#: Identifier.use (R4 IdentifierUse), the only values copied.
+_IDENTIFIER_USE = frozenset({'usual', 'official', 'temp', 'secondary', 'old'})
+
+
+def _patient_identifiers(original):
+    """Patient.identifier WITH values, for a check-in only (owner ruling
+    2026-10-14: the patient consented to this item). SSN-class identifiers
+    are removed by system and by any `SS` type coding. Each kept identifier
+    carries system, value, use and a code-only type; an identifier without
+    a string value is dropped rather than sent as a stub."""
+    out = []
+    for ident in original.get('identifier') or []:
+        if not isinstance(ident, dict) or _is_ssn_class(ident):
+            continue
+        value = ident.get('value')
+        if not (isinstance(value, str) and value):
+            continue
+        kept = {}
+        if ident.get('use') in _IDENTIFIER_USE:
+            kept['use'] = ident['use']
+        if isinstance(ident.get('system'), str):
+            kept['system'] = ident['system']
+        coded = _codes_only(ident.get('type'))
+        if coded:
+            kept['type'] = coded
+        kept['value'] = value
+        out.append(kept)
+    return out
+
+
+def _codes_with_our_text(obj):
+    """Check-in output only (QA recheck of #963, ruling B): no `display`
+    anywhere, and each CodeableConcept's `text` is OUR label for its first
+    recognised coding, from r6/terminology.py, or absent.
+
+    The relabel that apply_redaction runs writes our label into
+    `coding.display`, and a validator checks that against the code system's
+    own display (CVX 150, RxNorm 314076 failed). `display` is optional, so
+    it goes; the label moves to `text`, where it is ours to choose. A
+    Reference.display is upstream text and was already stripped; this
+    removes any that remain all the same.
+    """
+    if isinstance(obj, list):
+        for item in obj:
+            _codes_with_our_text(item)
+        return
+    if not isinstance(obj, dict):
+        return
+    obj.pop('display', None)
+    codings = obj.get('coding')
+    if isinstance(codings, list):
+        label = next((lbl for lbl in (
+            _terminology_mod.lookup(_coding_system(c), c.get('code'))
+            for c in codings if isinstance(c, dict)) if lbl), None)
+        if label:
+            obj['text'] = label
+        else:
+            obj.pop('text', None)
+    for value in obj.values():
+        _codes_with_our_text(value)
+
+
+def _checkin_organization(original, res):
+    """A payor Organization: its stored `name`, `active`, the NAIC
+    identifier, and nothing else a front desk does not need (no address,
+    telecom, contact)."""
+    out = {k: res[k] for k in ('resourceType', 'id', 'meta') if k in res}
+    # us-core-organization requires `active` (QA recheck of #963).
+    if isinstance(original.get('active'), bool):
+        out['active'] = original['active']
+    name = original.get('name')
+    if isinstance(name, str) and name:
+        out['name'] = name
+    naic = [{'system': _NAIC_SYSTEM, 'value': i['value']}
+            for i in original.get('identifier') or []
+            if isinstance(i, dict) and i.get('system') == _NAIC_SYSTEM
+            and isinstance(i.get('value'), str) and i['value']]
+    if naic:
+        out['identifier'] = naic
+    return out
+
+
+#: The one meta coding the check-in export carries across: HL7 v3 ActReason
+#: HTEST, "this is test data". Matched by system AND code, exactly as
+#: written: a lookalike under another system, or this system spelt another
+#: way, is some other tag and is dropped with the rest.
+_TEST_MARKER = ('http://terminology.hl7.org/CodeSystem/v3-ActReason', 'HTEST')
+
+
+def _test_markers(stored_meta):
+    """The HTEST marker in a record's meta as stored, by slot.
+
+    Returns {'tag': [coding]} and/or {'security': [coding]}, each coding
+    built from empty: our system, our code, and the display from
+    r6/terminology.py. Nothing of the stored coding is copied, so an upstream
+    `display` (or any other key) cannot ride along. A slot that carried the
+    marker gets it once, however often it was written."""
+    if not isinstance(stored_meta, dict):
+        return {}
+    system, code = _TEST_MARKER
+    out = {}
+    for slot in ('tag', 'security'):
+        codings = stored_meta.get(slot)
+        if isinstance(codings, dict):
+            codings = [codings]
+        if isinstance(codings, list) and any(
+                isinstance(c, dict) and c.get('system') == system
+                and c.get('code') == code for c in codings):
+            out[slot] = [{'system': system, 'code': code,
+                          'display': _terminology_mod.lookup(system, code)}]
+    return out
+
+
+def _checkin_profile(resource, *, patient_id, stored_meta=None):
+    """Check-in profile (FHI-53): what a clinic's check-in receives, per
+    resource, for the patient the CareAgents server named.
+
+    The intake rules first: apply_redaction (every upstream `display` and
+    `text` stripped, then relabelled by code), a Patient's name, birthDate,
+    address and telecom verbatim, top-level note/narrative/conclusion gone.
+    Then the check-in rules on top:
+
+    - SSN-class identifiers go by either system spelling AND by v2-0203
+      type `SS` under any system.
+    - Every RelatedPerson reference goes, at any depth, and `contained`
+      goes whole (a contained RelatedPerson is still somebody else).
+    - Coverage restores member and group numbers and payor references by
+      allow-list (_checkin_coverage); an Organization is reduced to the payor
+      name and NAIC id (_checkin_organization).
+    - The HTEST test-data marker goes back on `meta.tag` or `meta.security`,
+      wherever `stored_meta` carried it (_test_markers). `stored_meta` is the
+      record's meta as stored: `to_fhir_json` has already replaced `meta` on
+      `resource`. Every other tag stays dropped.
+
+    Stateless and per-resource, beside _intake_profile, so slice 14 can
+    route it through fhir_response. Which rows reach it (types in the token,
+    the one patient, rows with a claim) is the route's job.
+    """
+    res = _redaction_mod.apply_redaction(resource)
+    rtype = resource.get('resourceType')
+    if rtype == 'Patient':
+        for key in ('name', 'birthDate', 'address', 'telecom', 'identifier',
+                    'extension'):
+            res.pop(key, None)
+        res.update(_patient_identity(resource))
+        idents = _patient_identifiers(resource)
+        if idents:
+            res['identifier'] = idents
+        exts = _patient_extensions(resource)
+        if exts:
+            res['extension'] = exts
+    for key in ('note', 'text', 'conclusion', 'contained'):
+        res.pop(key, None)
+    idents = res.get('identifier')
+    if isinstance(idents, list):
+        kept = [i for i in idents if not _is_ssn_class(i)]
+        if kept:
+            res['identifier'] = kept
+        else:
+            res.pop('identifier', None)
+    if rtype == 'Coverage':
+        res = _checkin_coverage(resource, res, patient_id)
+    elif rtype == 'Organization':
+        res = _checkin_organization(resource, res)
+    _drop_related_person_refs(res)
+    # FHI-66 slot: a per-resource element allow-list belongs here, the one
+    # step both checkin and ktc (_ktc_profile) run through. Redaction above
+    # is a deny-list, so an element it does not name (a top-level
+    # `patientName`, `code.Text`) still leaves.
+    _codes_with_our_text(res)
+    # After _codes_with_our_text, which removes every display: this one is
+    # ours, and the code system's own.
+    for slot, codings in _test_markers(stored_meta).items():
+        meta = res.get('meta')
+        if not isinstance(meta, dict):
+            meta = res['meta'] = {}
+        kept = meta.get(slot)
+        kept = [c for c in kept if isinstance(c, dict) and (
+            c.get('system'), c.get('code')) != _TEST_MARKER] \
+            if isinstance(kept, list) else []
+        meta[slot] = kept + codings
+    return res
+
+
+def _ktc_profile(resource, *, patient_id, stored_meta=None):
+    """Kill the Clipboard profile: what a SMART Health Link to a clinic's
+    EHR carries, per resource. Exactly _checkin_profile (redaction, our
+    labels from r6/terminology.py, the HTEST marker kept), and then no
+    `meta.profile`: the KTC spec says senders SHOULD NOT claim profiles and
+    receivers SHALL NOT require them. Which rows reach it is the route's job
+    (r6/ktc.py), and their claims are read before this strips them."""
+    res = _checkin_profile(resource, patient_id=patient_id,
+                           stored_meta=stored_meta)
+    meta = res.get('meta')
+    if isinstance(meta, dict):
+        meta.pop('profile', None)
+    return res
+
+
 def fhir_response(payload, *, profile: Profile, status: int = 200,
                   resource_type: str | None = None, etag: str | None = None,
                   patient_id: str | None = None):
@@ -1252,8 +1816,13 @@ def fhir_response(payload, *, profile: Profile, status: int = 200,
     elif profile is Profile.PATIENT_CONTROLLED:
         body = _redaction_mod.apply_patient_controlled_redaction(
             payload, patient_id)
-    else:
+    elif profile is Profile.INTAKE:
         body = _intake_profile(payload)
+    else:
+        # Profile.CHECKIN and Profile.KTC are per-resource and need the
+        # exported patient; their exports call the profile themselves until
+        # slice 14 routes them here. Refused rather than falling through.
+        raise ValueError(f'fhir_response does not serve {profile.value} yet')
 
     response = jsonify(body)
     response.status_code = status

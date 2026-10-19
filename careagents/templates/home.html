@@ -18,6 +18,8 @@
      a delete's count, a disconnect's result (#847). #}
   <p class="hub-notice" id="hub-notice" role="status" aria-live="polite" hidden></p>
 
+  {% include "_in_app_hint.html" %}
+
   {# An operator paused this account (beta spec 4.6). One calm line; the
      record cards below say Paused and offer no Refresh or Upload. #}
   {% if paused %}
@@ -253,7 +255,7 @@
         <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
         {% endif %}
         <details class="card-menu source-menu">
-          <summary aria-label="More for {{ c.label }}">More</summary>
+          <summary aria-label="More for {{ c.label }}{% if c.whose %} ({{ c.whose }}){% endif %}">More</summary>
           {% if not paused and c.kind != 'direct' and not c.is_sample and not (c.kind == 'fasten' and c.status == 'pending') %}
           {# Not on a Fasten card still connecting: a Refresh there stored a
              mid-import count (QA940-F1b), and the connect link above is that
@@ -267,7 +269,8 @@
           {% endif %}
           <button type="button" class="conn-delete" data-conn="{{ c.id }}"
                   data-label="{{ c.label }}" data-whose="{{ c.whose }}"
-                  data-readers="{{ c.readers }}">Delete</button>
+                  data-readers="{{ c.readers }}"
+                  data-leaves="{{ c.leaves }}">Delete</button>
         </details>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
@@ -379,7 +382,8 @@
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">No new records arrive from this one.</div>
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}"
+                data-leaves="{{ c.leaves }}">Delete</button>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}

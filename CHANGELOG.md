@@ -7,6 +7,35 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-10 — The check-in release
+
+2.1 readies the engine for SMART Health Check-in and moves CareAgents into an
+invite-only beta. The summary and what is *not* in 2.1 are in
+[docs/releases/2.1.0.md](docs/releases/2.1.0.md). The full list is the
+[compare view](https://github.com/aks129/HealthClawGuardrails/compare/v2.0.0...v2.1.0).
+
+### Engine
+
+- A `checkin` export profile, reached only with a one-use step-up token issued
+  for its audience and the agreed item set (FHI-53).
+- Coverage member, group and plan IDs, plus the payor name, in that export
+  only. SSN-labelled or SSN-formatted values are dropped.
+- Allow-listed US Core and C4DIC profile claims only (FHI-52).
+- A step-up token is refused outside its scope, and audiences are checked
+  both ways (FHI-57).
+- A code-only record-source `meta.tag` and migration `0011_record_source`
+  (FHI-42).
+- Absence concepts are written as a recorded entry, never as a name (FHI-43).
+- Upstream paging links are dropped. A bare id is accepted for `patient`.
+- A US Core test patient covering all six check-in items (FHI-51).
+
+### CareAgents
+
+- Invite-only beta controls, the patient connect journey, one assistant per
+  person, iMessage by text, and model routing with approved hosts only.
+- A SMART Health Check-in web wallet behind `CARE_CHECKIN_WALLET`, synthetic
+  only (FHI-54).
+
 ## [2.0.0] — 2026-09-24 — The synthetic-beta release
 
 2.0 is the synthetic-beta release. The guardrails are on by default and

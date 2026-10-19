@@ -29,6 +29,7 @@ on all resource access paths (not just context ingestion).
 
 from r6.record_source import stamp as _stamp_record_source
 from r6.record_source import strip_meta as _strip_record_source
+from r6.us_core_profiles import filter_meta as _filter_profiles
 
 import json
 import re
@@ -380,6 +381,9 @@ def _redact_recursive(obj):
     # a tag in our record-source system is ours alone to set (#956): both go,
     # at every depth, top level included. Our own stamp is put back after.
     _strip_record_source(obj.get('meta'))
+    # meta.profile is free URI text too: only allow-listed canonicals stay
+    # (FHI-52). Idempotent, so a stored resource filtered once is unchanged.
+    _filter_profiles(obj.get('meta'))
 
     # A Coding.system is a URI string. Anything else (a list, an object, a
     # number) is not a system, made labelling raise for every read on the

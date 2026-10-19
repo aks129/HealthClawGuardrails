@@ -132,6 +132,15 @@ ROWS = [
         body={'resourceType': 'Observation'}, headers=_HUMAN_CONFIRMED),
     Row('fhir-share-bundle', 'r6/routes.py:share_bundle',
         'POST', '/r6/fhir/$share-bundle', 401, body={}),
+    Row('fhir-share-bundle-checkin', 'r6/checkin.py:export',
+        'POST', '/r6/fhir/$share-bundle', 401,
+        body={'profile': 'checkin', 'patient_id': 'non-ascii-probe',
+              'resource_types': ['Patient']}),
+    Row('fhir-share-bundle-ktc', 'r6/ktc.py:export',
+        'POST', '/r6/fhir/$share-bundle', 401,
+        body={'profile': 'ktc', 'patient_id': 'non-ascii-probe',
+              'resource_types': ['Patient']},
+        env={'KTC_EXPORT_ENABLED': 'true'}),
     Row('actions-rx-transfer-propose',
         'r6/actions/routes.py:propose_rx_transfer',
         'POST', '/r6/actions/rx-transfer/propose', 401,
@@ -174,6 +183,10 @@ ROWS = [
         body={'resourceType': 'Bundle', 'type': 'collection', 'entry': []},
         env={'READ_AUTH_ENABLED': 'true'},
         denied_message='Bundle ingestion requires a tenant-bound write token'),
+    # #912. The grant is checked before the job lookup, so the task need not
+    # exist.
+    Row('fasten-retry-job', 'r6/fasten/routes.py:retry_job',
+        'POST', '/fasten/jobs/no-such-task/retry', 401),
 ]
 
 

@@ -284,4 +284,5 @@ def test_exploit_cap_skip_then_accept_reaches_model_uncharged(
     from careagents import beta
     answers = [row["content"] for rows in fake.logged.values()
                for row in rows if row["role"] == "assistant"]
-    assert answers.count(beta.DAILY_LIMIT_TEXT) == 2
+    assert sum(a.startswith(beta.DAILY_LIMIT_TEXT + " More in ")
+               for a in answers) == 2

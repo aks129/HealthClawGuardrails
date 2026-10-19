@@ -256,3 +256,29 @@ def test_a_cancelling_concurrency_group_is_keyed_on_the_event_when_a_workflow_ha
             f"but its concurrency group {group!r} does not name the event, so "
             f"a run of one kind cancels a run of another")
     assert checked >= 1, "no workflow cancels in-progress across several triggers; the scan is broken"
+
+
+def test_the_second_reviewer_is_pinned_and_answers_only_maintainer_comments():
+    """pr-agent runs third-party code with the API key and a token that
+    writes to pull requests. A tag can be moved to other code, so the action
+    is pinned to a commit. Anyone can comment on a public repository, so a
+    slash command starts a run only from the owner, a member or a
+    collaborator.
+
+    MUTATION: pin pr-agent back to `@v0.46.0` -> red naming the ref. Drop the
+    author_association clause from the job `if:` -> red.
+    """
+    workflow = _workflow("pr-agent.yml")
+    job = workflow["jobs"]["pr-agent"]
+    uses = [step["uses"] for step in job["steps"]
+            if step.get("uses", "").startswith("The-PR-Agent/pr-agent@")]
+    assert len(uses) == 1, uses
+    assert re.search(r"@[0-9a-f]{40}$", uses[0]), uses[0]
+
+    condition = " ".join(job["if"].split())
+    comment_branch = condition[condition.index("github.event_name == 'issue_comment'"):]
+    assert "github.event.comment.author_association" in comment_branch
+    for role in ("OWNER", "MEMBER", "COLLABORATOR"):
+        assert f'"{role}"' in comment_branch, role
+    assert '"CONTRIBUTOR"' not in comment_branch
+    assert '"NONE"' not in comment_branch

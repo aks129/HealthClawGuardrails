@@ -57,10 +57,11 @@
      (#928 F6), so say how to get it rather than leave the section out. #}
   <section class="hub-section" id="invite-section">
     <div class="section-head"><h2>Invite friends and family</h2></div>
-    <p class="card-note">Your invite link is one step away. We'll email you a
-      code to confirm it's you, then bring you back here.</p>
+    <p class="card-note">You opened CareAgents from the link in our email.
+      Before we make your invite link, we email you a code to check it's
+      you. Then we bring you back here.</p>
     <a class="btn-primary btn-block" id="invite-signin"
-       href="/auth?invite=1">Sign in to get your invite link</a>
+       href="/auth?invite=1">Email me a code for my invite link</a>
   </section>
   {% endif %}
 
@@ -87,7 +88,14 @@
       {% else %}
       <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
       {% endif %}
-      <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
+      {# Not an app store app: the web app added to the home screen. #}
+      <details class="surface phone-app"><summary><b>Phone app</b>
+        <span>add to your home screen</span></summary>
+        <p>iPhone: open this page in Safari, tap the Share button, then
+          tap "Add to Home Screen".</p>
+        <p>Android: open this page in Chrome, tap the menu (three dots),
+          then tap "Add to Home screen".</p>
+      </details>
     </div>
     <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
        hidden></p>
@@ -123,12 +131,14 @@
      (owner decision D3). assistant_settings.js posts each form. #}
   {% if assistants %}
   <section class="hub-section" id="assistant-settings">
-    <div class="section-head"><h2>Your assistant</h2></div>
     {% set several = assistants | length > 1 %}
+    {# Plural over several, as for someone you care for (FHI-45). #}
+    <div class="section-head"><h2>{{ "Your assistants" if several else "Your assistant" }}</h2></div>
     {% for a in assistants %}
     <form class="assistant-settings hub-card" data-agent="{{ a.id }}">
-      <div class="hub-card-name">{{ a.name }}{% if a.person.kind == 'other' %}
-        {# hub.for_line, the hub's rule: never "your other". #}
+      <div class="hub-card-name">{{ a.name }}{% if a.for_line %}
+        {# hub.for_line, the hub's rule: never "your other", and "For
+           you" once someone you care for is here. #}
         <span class="hub-card-sub">{{ a.for_line }}</span>{% endif %}</div>
       {# An account from before keeps several assistants (owner decision
          D5): each says which records it reads, so they are told apart. #}
@@ -139,7 +149,7 @@
         <legend>Tone</legend>
         {% for key, p in tones %}
         <label class="choice-row"><input type="radio" name="tone-{{ a.id }}"
-          value="{{ key }}" {% if a.persona == key %}checked{% endif %}><span>{{ p.name }}</span></label>
+          value="{{ key }}" {% if a.persona == key %}checked{% endif %}><span>{{ tone_words[key] | capitalize }}</span></label>
         {% endfor %}
       </fieldset>
       <fieldset class="choice-group assistant-routines">
@@ -149,7 +159,7 @@
           {% if r.name in a.routines %}checked{% endif %}><span>{{ r.name }}</span></label>
         {% endfor %}
       </fieldset>
-      <p class="card-note">These change what your assistant pays attention
+      <p class="card-note">These change what {{ a.name }} pays attention
         to, not what it can read.</p>
       <div class="card-actions">
         <button type="submit" class="pill">Save</button>

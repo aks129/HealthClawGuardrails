@@ -168,6 +168,7 @@ def _setup_fasten_connection(app):
 # POST /r6/fhir/internal/bind-telegram     |     | x |    | x  |    |      |  x   |  x
 # POST /r6/fhir/demo/agent-loop            |     |   |    |    |    |  x*  |  x   |  x
 # POST /r6/fhir/$share-bundle              |  x  | x |    | x  |    |      |  x   |  x
+# POST /r6/fhir/$share-bundle (checkin)    |  x  | x |    | x  |    |      |  x   |  x
 # POST .../QuestionnaireResponse/$extract  |  x  | x | x  | x  |    |      |  x   |  x
 # POST /r6/actions/propose                 |  x  | x |    |    |    |      |  x   |  x
 # POST /r6/actions/rx-transfer/propose     |  x  | x | x  | x  |    |      |  x   |  x
@@ -179,12 +180,12 @@ def _setup_fasten_connection(app):
 # POST /r6/actions/callback/<provider>     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/webhook                     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/connections                 |  x  | x |    |    |    |      |  x   |  x
-# POST /fasten/jobs/<id>/retry             |  x  | x |    |    |    |      |  x   |     <- S-14
+# POST /fasten/jobs/<id>/retry             |  x  | x |    | x  |    |      |  x   |  x  <- #912
 # POST /r6/smbp/enroll                     |  x  | x |    |    |    |      |  x   |  x
 # POST /r6/smbp/reading                    |  x  | x |    | x  |    |      |  x   |  x
 # GET  /r6/smbp/report/<id>?format=pdf     |  x  | x | x  |    |    |      |  x   |  x
 # POST /shc/ingest                         |  x  | x |    |    |    |  x   |  x   |  x
-# POST /r6/ops/reap                        |  x  | x |    | x  |    |      |      |  x  <- #304
+# POST /r6/ops/reap                        |     |   |    |    |    |  x   |      |  x  <- #304 fixed (#308)
 # POST /wearables/sync-now                 |  x  | x |    | x  |    |      |      |  x  <- #304
 #
 # x* = the guard exempts public/synthetic tenants by design.
@@ -347,6 +348,22 @@ MATRIX: tuple = (
              "of the three the plan pins alongside create and update.",
     ),
     Row(
+        id="share-bundle-checkin",
+        method="POST", path="/r6/fhir/$share-bundle", endpoint="r6.share_bundle",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400,), step_up_missing_status=401,
+        body={"profile": "checkin", "patient_id": "guard-matrix-pt",
+              "resource_types": ["Patient"]},
+        note="The check-in profile (FHI-53) on the same route. Its gate is "
+             "TENANT_BOUND with aud checkin-export, op from the body's types "
+             "and a consumed nonce, so the body IS parsed before the grant — "
+             "silently, to read the profile and the types. "
+             "parses_body_before_step_up stays False because that flag "
+             "measures an unparseable body: it parses to nothing, falls to "
+             "the intake branch, and gets the same 401 as a well-formed one.",
+    ),
+    Row(
         id="sdc-extract",
         method="POST", path="/r6/fhir/QuestionnaireResponse/$extract",
         endpoint="r6.sdc_extract",
@@ -495,14 +512,16 @@ MATRIX: tuple = (
         id="fasten-retry-job",
         method="POST", path="/fasten/jobs/guard-matrix-task/retry",
         endpoint="fasten.retry_job",
-        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER}),
-        anon_refusal=(400,),
-        note="S-14: re-runs a full ingest and emits NO AuditEvent — the only "
-             "ingest trigger in the matrix without one. The absence is "
-             "pinned by test_audit_absent_where_the_matrix_says_absent so "
-             "restoring it forces this row to be updated in the same PR. "
-             "TENANT_FORMAT arrived with access-kernel slice 9; before it a "
-             "malformed id reached the job lookup as the partition key.",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400,), step_up_missing_status=401,
+        note="Re-runs a full ingest, so it is a write. Until #912 the tenant "
+             "header alone authorized it and it emitted no AuditEvent "
+             "(S-14); it now needs a tenant-bound write grant, checked "
+             "before the job lookup, and audits a successful retry "
+             "(test_fasten_retry_emits_an_audit_event). TENANT_FORMAT "
+             "arrived with access-kernel slice 9; before it a malformed id "
+             "reached the job lookup as the partition key.",
     ),
     Row(
         id="smbp-enroll",
@@ -888,6 +907,151 @@ def test_step_up_row_refuses_an_expired_token(client, app, row, secrets):
 
 
 @pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+def test_step_up_row_refuses_an_unknown_scope(client, app, row, secrets):
+    """A token whose scope claim is not an allow-listed write scope writes
+    nothing (FHI-57).
+
+    MUTATION: put the write gate in r6/stepup.py validate_step_up_token back
+    to `payload.get('scope') == 'read'`, so it refuses read and nothing else.
+    Every row in this parametrization goes red at once.
+
+    The gate used to be a denylist of one. Any scope string but 'read' —
+    'checkin', 'admin', '' — passed every write gate, so the first new scope
+    anybody minted would have been write-capable everywhere. 'checkin' is
+    used because it is the scope string a check-in export would be most
+    tempted to mint.
+    """
+    resp = call(client, row,
+                headers={"X-Tenant-Id": PRIVATE_TENANT,
+                         "X-Step-Up-Token": token_for(PRIVATE_TENANT,
+                                                      scope="checkin")},
+                app=app)
+    assert resp.status_code == row.step_up_missing_status, (
+        f"{row.method} {row.path} answered {resp.status_code} to a token "
+        f"scoped 'checkin'; expected {row.step_up_missing_status}")
+
+
+#: Audiences a token can be minted for. 'action-approval' is the one main
+#: mints today (r6/actions/routes.py issue_action_approval_token); the other
+#: stands for any purpose-bound token added after it.
+_FOREIGN_AUDIENCES = ("action-approval", "checkin-export")
+
+
+@pytest.mark.parametrize("audience", _FOREIGN_AUDIENCES)
+@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+def test_step_up_row_refuses_a_token_bound_to_another_audience(
+        client, app, row, audience, secrets):
+    """A token minted for one purpose authorizes that purpose and nothing
+    else (FHI-57, #963 security review F1).
+
+    MUTATION: in r6/stepup.py validate_step_up_token, check the audience
+    only `if require_audience is not None` again. Every row except
+    actions-confirm/decline (which ask for 'action-approval' and refuse on
+    the operation) goes red.
+
+    The token here has no scope claim, the full-capability shape the
+    approval credential is minted with, so the audience is the only thing
+    that can refuse it.
+    """
+    if audience == "action-approval" and row.id in ("actions-confirm",
+                                                    "actions-decline"):
+        pytest.skip(
+            "this IS the row's audience. Its operation binding is "
+            "test_confirm_requires_an_action_bound_single_use_token's; with "
+            "no action seeded the gate binds no operation and the route "
+            "answers 404 Unknown action, which writes nothing")
+    resp = call(client, row,
+                headers={"X-Tenant-Id": PRIVATE_TENANT,
+                         "X-Step-Up-Token": token_for(
+                             PRIVATE_TENANT, audience=audience,
+                             operation="guard-matrix-op")},
+                app=app)
+    assert resp.status_code == row.step_up_missing_status, (
+        f"{row.method} {row.path} answered {resp.status_code} to a token "
+        f"bound to audience {audience!r}; expected "
+        f"{row.step_up_missing_status}")
+
+
+#: Read gates that take a step-up token without asking for an audience:
+#: r6/read_auth.py (instance read and search). The command center's
+#: /api/system left this list in SEC941-PRE1: it is operator-only now, so no
+#: tenant token reads it (tests/test_sec941_operator_gate.py).
+_AUDIENCE_FREE_READS = (
+    "/r6/fhir/Patient/guard-matrix-pt",
+    "/r6/fhir/Condition",
+)
+
+
+@pytest.mark.parametrize("audience", _FOREIGN_AUDIENCES)
+@pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
+def test_an_audience_bound_token_reads_nothing(client, app, monkeypatch,
+                                               path, audience):
+    """The read half of the same rule. Before it, a check-in token minted
+    for {Patient} read any type and any patient in the tenant for its whole
+    TTL, even after the export had spent it.
+
+    MUTATION: as above. Every case goes red; the control below stays green,
+    which is what shows the audience, not the path, is being measured.
+    """
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
+    resp = client.get(path, headers={
+        "X-Tenant-Id": PRIVATE_TENANT,
+        "X-Step-Up-Token": token_for(PRIVATE_TENANT, scope="read",
+                                     audience=audience,
+                                     operation="guard-matrix-op")})
+    assert resp.status_code == 401, (
+        f"GET {path} answered {resp.status_code} to a token bound to "
+        f"audience {audience!r}")
+
+
+@pytest.mark.parametrize("claim", ["checkin", "admin", ""])
+@pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
+def test_a_read_gate_refuses_an_unknown_scope(client, app, monkeypatch, path,
+                                              claim):
+    """Read gates keep an allow-list too, READ_SCOPES = {none, read, write}
+    (#962 security review): a narrow scope minted later must not read the
+    whole tenant by default.
+
+    MUTATION: drop the `elif require_scope is None` branch in
+    r6/stepup.py validate_step_up_token -> red.
+    """
+    import base64
+    import hashlib
+    import hmac
+    import os
+    import time
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
+    # Hand-signed: generate_step_up_token omits an empty scope.
+    body = base64.urlsafe_b64encode(json.dumps({
+        "exp": int(time.time()) + 300, "tid": PRIVATE_TENANT, "sub": "t",
+        "nonce": uuid.uuid4().hex, "scope": claim}).encode()).decode()
+    sig = hmac.new(os.environ["STEP_UP_SECRET"].encode(), body.encode(),
+                   hashlib.sha256).hexdigest()
+    resp = client.get(path, headers={"X-Tenant-Id": PRIVATE_TENANT,
+                                     "X-Step-Up-Token": f"{body}.{sig}"})
+    assert resp.status_code == 401, (
+        f"GET {path} answered {resp.status_code} to scope {claim!r}")
+
+
+@pytest.mark.parametrize("claim", [None, "read", "write"])
+@pytest.mark.parametrize("path", _AUDIENCE_FREE_READS)
+def test_a_token_without_an_audience_still_reads(client, app, monkeypatch,
+                                                 path, claim):
+    """Control: tokens minted before audiences existed, with any scope in
+    READ_SCOPES, keep reading."""
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    _seed_resource(app, PRIVATE_TENANT, "Patient", "guard-matrix-pt")
+    resp = client.get(path, headers={
+        "X-Tenant-Id": PRIVATE_TENANT,
+        "X-Step-Up-Token": token_for(PRIVATE_TENANT, scope=claim)})
+    assert resp.status_code == 200, (
+        f"GET {path} refused a tenant-bound token with no audience "
+        f"({resp.status_code})")
+
+
+@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
 def test_the_step_up_gate_runs_before_the_body_is_parsed(client, app, row,
                                                          secrets):
     """A credentialless caller WITH a tenant header still gets the step-up
@@ -1173,14 +1337,12 @@ def test_a_refused_write_leaves_no_resource_behind(client, tenant_id):
         "a write refused for want of a step-up token still persisted a row")
 
 
-def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
-                                                   monkeypatch):
-    """/fasten/jobs/<id>/retry emits no AuditEvent (S-14). Pinned as absent.
+def test_fasten_retry_emits_an_audit_event(client, app, tenant_id,
+                                           auth_headers, monkeypatch):
+    """/fasten/jobs/<id>/retry writes an AuditEvent (S-14, closed by #912).
 
-    MUTATION: add a record_audit_event call to r6/fasten/routes.py retry_job.
-    This test goes red — deliberately. An absence recorded in the matrix is a
-    claim like any other; when S-14 is fixed this is what forces the matrix
-    row to be updated in the same PR rather than months later.
+    MUTATION: remove the add_audit_event call from r6/fasten/routes.py
+    retry_job. This used to pin the absence; the row now carries AUDIT.
     """
     from models import db
     from r6.fasten import routes as fasten_routes
@@ -1195,7 +1357,7 @@ def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
 
     with app.app_context():
         # A live connection row: retry refuses (and audits) a job whose
-        # connection is revoked or gone, which is not the absence pinned here.
+        # connection is revoked or gone, which is not the success audited here.
         db.session.add(FastenConnection(
             org_connection_id="guard-matrix-conn", tenant_id=tenant_id,
             connection_status="authorized"))
@@ -1211,17 +1373,17 @@ def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
     # audits the read, so the count would grow on its own and the assertion
     # would pass or fail for a reason unrelated to retry_job.
     with app.app_context():
-        before = AuditEventRecord.query.count()
+        before = AuditEventRecord.query.filter_by(
+            tenant_id=tenant_id, event_type="fasten_import_retried").count()
 
     resp = client.post("/fasten/jobs/guard-matrix-task/retry",
-                       headers={"X-Tenant-Id": tenant_id})
+                       headers=auth_headers)
     assert resp.status_code == 202, resp.get_data(as_text=True)
 
     with app.app_context():
-        after = AuditEventRecord.query.count()
-    assert after == before, (
-        "retry_job now emits an AuditEvent — S-14 is fixed. Add AUDIT to the "
-        "fasten-retry-job row's guard set and delete this test in the same PR.")
+        after = AuditEventRecord.query.filter_by(
+            tenant_id=tenant_id, event_type="fasten_import_retried").count()
+    assert after == before + 1, "a successful retry emitted no AuditEvent"
 
 
 # ---------------------------------------------------------------------------
@@ -1252,17 +1414,16 @@ def test_a_write_lands_only_in_the_tenant_that_authorized_it(client, tenant_id,
         "another tenant can read a resource written under this tenant")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#304: /r6/ops/reap validates a step-up token bound to ONE tenant "
-           "and then sweeps ProposedAction.query.filter_by(status=...) across "
-           "EVERY tenant, driving state transitions and Telegram pushes on "
-           "records the caller has no claim to.")
 def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
-    """A reap authenticated for tenant A must not transition tenant B's actions.
+    """#304, fixed by #308: a tenant credential cannot drive the global reap.
 
-    MUTATION (once fixed): delete the tenant predicate from the three sweep
-    queries in r6/ops/routes.py reap().
+    Was a strict xfail ("validates a step-up token bound to ONE tenant and
+    then sweeps every tenant"). /r6/ops/* is now operator-only: a tenant's
+    step-up token gets 403 and transitions nothing; the internal secret
+    reaps, globally and by design (see the ops-reap row).
+
+    MUTATION: make r6/ops/routes.py _auth_error_or_none return None -> the
+    tenant-token half goes red (200, and the foreign action expires).
     """
     from datetime import timedelta
 
@@ -1279,16 +1440,22 @@ def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
         db.session.commit()
         victim_id = victim.id
 
-    resp = client.post("/r6/ops/reap",
-                       headers={"X-Tenant-Id": PRIVATE_TENANT,
-                                "X-Step-Up-Token": token_for(PRIVATE_TENANT)})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-
+    refused = client.post("/r6/ops/reap",
+                          headers={"X-Tenant-Id": PRIVATE_TENANT,
+                                   "X-Step-Up-Token": token_for(
+                                       PRIVATE_TENANT)})
+    assert refused.status_code == 403, refused.get_data(as_text=True)
     with app.app_context():
         after = db.session.get(ProposedAction, victim_id)
         assert after.status == "awaiting_confirmation", (
-            f"a reap authenticated for {PRIVATE_TENANT} moved "
+            f"a reap with only a {PRIVATE_TENANT} token moved "
             f"{FOREIGN_TENANT}'s action to {after.status}")
+
+    reaped = client.post("/r6/ops/reap",
+                         headers={"X-Internal-Secret": MINT_SECRET})
+    assert reaped.status_code == 200, reaped.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(ProposedAction, victim_id).status == "expired"
 
 
 def test_wearables_sync_only_touches_the_authenticated_tenant(client, app,

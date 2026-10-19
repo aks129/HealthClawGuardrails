@@ -14,10 +14,12 @@ import re
 import signal
 import socket
 import threading
+import traceback
 import uuid
 from datetime import datetime, timezone
 
-from careagents import beta, funnel, llm, routing, tester_terms
+from careagents import beta, causes, checkins, funnel, llm, routing
+from careagents import tester_terms
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
@@ -28,6 +30,7 @@ from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError, act_as,
                                    acting_for)
+from careagents.hub import relation_of
 from careagents.personas import system_prompt
 
 logger = logging.getLogger(__name__)
@@ -130,6 +133,16 @@ def _error_class(exc: Exception) -> str:
     return name if name and name[0].isalpha() else "WorkerError"
 
 
+def _raised_at(exc: BaseException) -> str:
+    """Where `exc` was raised, as file:line in function. Code, not data:
+    unlike a formatted traceback it carries no part of the message."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "-"
+    f = frames[-1]
+    return f"{os.path.basename(f.filename)}:{f.lineno} in {f.name}"
+
+
 # One source of truth for patient-facing failure text — careagents/agent.py
 # owns it so the worker, the streamed chat, and the SMS collapse cannot
 # drift apart again. Re-exported here because this module's callers and
@@ -140,6 +153,10 @@ _failure_text = agent_failure_text
 #: The run event that says this run's daily turn is already charged. Empty
 #: payload; the browser projection drops event types it does not know.
 CHARGED_EVENT = "agent.charged"
+
+#: The run event that says this failed run's turn was given back. Its
+#: payload is the UTC day the turn was charged on, as CHARGED_EVENT's is.
+REFUNDED_EVENT = "agent.charge_refunded"
 
 #: Consecutive heartbeat failures before the lease is given up. The interval
 #: is a third of the lease, so two misses still leave a third of it to
@@ -244,14 +261,18 @@ class RunWorker:
                 payload={"status": "cancelled"})
         except RunDeadlineExceeded:
             heartbeat.stop()
-            funnel.safely(funnel.count_issue, self.accounts.session,
-                          "chat_error")
+            logger.warning("CareAgents run %s failed: cause=%s", run_id,
+                           causes.DEADLINE)
+            funnel.safely(funnel.count_chat_error, self.accounts.session,
+                          causes.DEADLINE)
+            refund = self._mark_refund(run)
             try:
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.deadline_exceeded",
                     payload={"status": "failed"},
                     error_class="RunDeadlineExceeded")
+                self._refund(refund)
                 # This worker failed it, so this worker answers. When the
                 # engine got there first it wrote the answer itself.
                 self._answer_failed_turn(run, _failure_text(
@@ -274,26 +295,80 @@ class RunWorker:
                 error_class="AmbiguousToolOutcome")
         except Exception as exc:  # noqa: BLE001 - boundary records safe class
             heartbeat.stop()
-            logger.exception("CareAgents run %s failed", run_id)
-            funnel.safely(funnel.count_issue, self.accounts.session,
-                          "chat_error")
+            # The class, the cause code and where it was raised (#926);
+            # never the message, which can carry the question or answer.
+            cause = causes.cause_of(exc)
+            logger.error("CareAgents run %s failed: %s cause=%s at %s",
+                         run_id, _error_class(exc), cause, _raised_at(exc))
+            funnel.safely(funnel.count_chat_error, self.accounts.session,
+                          cause)
+            if causes.needs_owner(exc):
+                funnel.safely(funnel.alert_owner, self.accounts.session,
+                              self.cfg, cause)
+            text = _failure_text(exc,
+                                 owner_told=bool(self.cfg.owner_emails))
+            refund = self._mark_refund(run)
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
-                    {"text": _failure_text(exc)})
+                    {"text": text})
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.failed",
                     payload={"status": "failed"},
                     error_class=_error_class(exc))
+                self._refund(refund)
                 # Only once the engine took this worker's failure: a worker
                 # that lost its lease lands here too, and the run may yet
                 # finish elsewhere with a real answer.
-                self._answer_failed_turn(run, _failure_text(exc))
+                self._answer_failed_turn(run, text)
             except HealthClawError:
                 logger.exception("could not record failure for run %s", run_id)
         else:
             heartbeat.stop()
+
+    def _mark_refund(self, run: dict) -> tuple[str, str] | None:
+        """Before a failed run is closed: if its turn was charged and not
+        yet given back, mark it given back on the run and return (account,
+        day) for `_refund`. None when there is nothing to give back.
+
+        A turn that failed on our side must not use up the day's cap. The
+        marker goes first, while this worker still owns the run (the
+        engine takes no events on a closed run), so no run is given back
+        twice: a second worker sees the marker. The turn itself is given
+        back only once this worker's failure is accepted (`_refund`): a
+        worker that lost its lease lands in the same branch, and the run
+        may yet finish elsewhere. Every miss errs toward the cap, never
+        past it. A charge from before the day was recorded is kept.
+
+        It reads what `_execute_turn` left on the run (`_refund`), never the
+        engine again: this branch runs outside the turn's `acting_for`
+        block, so a read here would not be labelled with the account."""
+        info = run.get("_refund") or {}
+        account_id, day = info.get("account_id"), info.get("day")
+        if info.get("refunded") or not account_id or not day:
+            return None
+        if info.get("answered"):
+            # A model round already answered, so the model call was paid
+            # for: the turn counts, as any answered turn does.
+            return None
+        try:
+            self.hc.append_agent_run_event(
+                str(run["id"]), self.worker_id, REFUNDED_EVENT, {"day": day})
+            info["refunded"] = True
+            return account_id, day
+        except Exception:  # noqa: BLE001 - a refund never fails a failure
+            logger.warning("could not mark run %s for a refund", run.get("id"))
+            return None
+
+    def _refund(self, refund: tuple[str, str] | None) -> None:
+        """Give back the turn `_mark_refund` marked. Never raises."""
+        if refund is None:
+            return
+        try:
+            self.accounts.refund_daily_turn(*refund)
+        except Exception:  # noqa: BLE001 - a refund never fails a failure
+            logger.warning("could not give back a failed turn")
 
     def _mark(self, account_id: str, milestone: str) -> None:
         """A funnel milestone (careagents/funnel.py). Never fails a turn."""
@@ -347,6 +422,14 @@ class RunWorker:
             self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
+        if (context["connection"].get("kind") != "sample"
+                and not self.cfg.model_host_vetted):
+            # Fail closed per turn, before any record read or model call:
+            # real records go only to an approved model host. The boot check
+            # in config.py runs only where CARE_REAL_RECORDS is set, and this
+            # process may not have it. Anything not sample counts as real.
+            raise llm.ModelHostNotApproved(
+                "model host not approved for real records")
         if context["connection"].get("kind") != "sample":
             # The weekly number (beta spec 4.5): integers only. A retried run
             # can count twice; the weekly figure counts accounts, so that
@@ -363,10 +446,13 @@ class RunWorker:
         # a text thread gets the texting style (careagents/personas.py).
         # From the engine's import, not the stored status (QA945-F1).
         arriving = records_arriving(self.hc, tenant, context["connection"])
+        # Someone the holder cares for, by relationship ("your parent"),
+        # in the prompt and the sample line alike (FHI-44).
+        who = relation_of(context.get("person") or {})
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
             surface=str(run.get("surface") or ""), sample=sample,
-            arriving=arriving, routines=agent.get("routines"))
+            arriving=arriving, routines=agent.get("routines"), who=who)
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -426,6 +512,17 @@ class RunWorker:
                 final_checkpoint = payload
 
         charged = any(event.get("type") == CHARGED_EVENT for event in events)
+        # What a failure needs to give the turn back, kept on the run, so
+        # the failure branch reads nothing more from the engine
+        # (`_mark_refund`): the account, the day it was charged, whether it
+        # was already given back, and whether a model round has answered.
+        charge = next((e for e in events if e.get("type") == CHARGED_EVENT),
+                      None)
+        run["_refund"] = {
+            "account_id": context["account_id"],
+            "day": str(((charge or {}).get("payload") or {}).get("day") or ""),
+            "refunded": any(e.get("type") == REFUNDED_EVENT for e in events),
+            "answered": bool(checkpoints)}
         if not checkpoints and not charged:
             # The day's allowance is charged here, where the model is called
             # and after turn_block passed (#856 sign-off F4): a turn admitted
@@ -436,17 +533,21 @@ class RunWorker:
             # marker was charged before markers existed. A worker that dies
             # between the charge and the marker still charges twice: the
             # error is toward the cap, never past it.
+            # The day goes on the marker, so a refund gives back this day's
+            # turn even when the run fails after midnight.
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             allowed, _used = self.accounts.claim_daily_turn(
-                context["account_id"], self.cfg.chat_turns_per_day)
+                context["account_id"], self.cfg.chat_turns_per_day, day=day)
             if not allowed:
-                self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
+                self._finish(run, {"text": beta.daily_limit_text(),
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return
             self.hc.append_agent_run_event(
-                run_id, self.worker_id, CHARGED_EVENT, {})
+                run_id, self.worker_id, CHARGED_EVENT, {"day": day})
+            run["_refund"]["day"] = day
 
-        lead = beta.SAMPLE_FRAME if sample else ""
+        lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
@@ -490,6 +591,9 @@ class RunWorker:
                     pending_checkpoint)
                 checkpoints.append({"type": "agent.checkpoint",
                                     "payload": pending_checkpoint})
+                # A model round answered: the turn's cost is spent, and a
+                # later failure no longer gives the turn back.
+                run["_refund"]["answered"] = True
                 history.append({
                     "role": "assistant", "content": turn.text,
                     "tool_calls": pending_checkpoint["tool_calls"],
@@ -682,10 +786,37 @@ class _IdleBackoff:
             return interval
 
 
+def warn_real_records_unset(cfg: Config, accounts: AccountService) -> bool:
+    """At boot: warn, never fail, when this worker has CARE_REAL_RECORDS off
+    but real-record connections exist, which only the web can have made.
+    The worker still refuses each real-record turn whose model host is not
+    approved; the warning says the setting should be mirrored here."""
+    if cfg.real_records != "off":
+        return False
+    from careagents.models import Connection
+    try:
+        with accounts.session() as s:
+            real = (s.query(Connection.id)
+                    .filter(Connection.kind != "sample").first())
+    except Exception:  # noqa: BLE001 - a boot warning never stops a worker
+        logger.warning("could not check for real-record connections")
+        return False
+    if real is None:
+        return False
+    logger.warning(
+        "CARE_REAL_RECORDS is unset on this worker but real-record "
+        "connections exist: mirror the web's CARE_REAL_RECORDS here. Model "
+        "host %s is %s for real records; unapproved, their turns are "
+        "refused.", cfg.model_host,
+        "approved" if cfg.model_host_vetted else "NOT approved")
+    return True
+
+
 def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
+    warn_real_records_unset(cfg, accounts)
     # The routing counts (careagents/routing.py) write through this pool
     # rather than opening one of their own.
     routing.use_session_scope(getattr(accounts, "session", None))
@@ -730,6 +861,12 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
         threads.append(threading.Thread(
             target=funnel.run_digest, args=(accounts.session, cfg, stop),
             daemon=False, name="careagents-digest"))
+    if cfg.checkin_emails:
+        # Day-2 and day-7 tester check-ins (careagents/checkins.py). Each is
+        # claimed once across workers before it is sent.
+        threads.append(threading.Thread(
+            target=checkins.run, args=(accounts.session, cfg, stop),
+            daemon=False, name="careagents-checkins"))
     for thread in threads:
         thread.start()
     for thread in threads:

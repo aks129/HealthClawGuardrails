@@ -779,7 +779,7 @@
       const label = btn.dataset.label || "these records";
       const agreed = await askToDelete(
         btn.dataset.whose ? label + " (" + btn.dataset.whose + ")" : label,
-        btn.dataset.readers || "");
+        btn.dataset.readers || "", btn.dataset.leaves || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -837,7 +837,7 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label, readers) {
+  function askToDelete(label, readers, leaves) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
@@ -851,16 +851,90 @@
         : "";
       who.hidden = !readers;
     }
+    // The only records of someone the holder cares for: deleting them
+    // takes that person off the hub too, said before the tap (FHI-45).
+    const gone = $("delete-leaves");
+    if (gone) {
+      gone.textContent = leaves || "";
+      gone.hidden = !leaves;
+    }
     input.value = "";
     ok.disabled = true;
     const dlg = openDialog($("delete-modal"));
-    input.oninput = () => { ok.disabled = !deleteTyped(input.value); };
+    // A third gate when the page came from the email link: the code
+    // sign-in the server requires, done in the dialog (codeGate).
+    const gate = codeGate(() => input.oninput());
+    input.oninput = () => {
+      ok.disabled = !deleteTyped(input.value);
+      if (gate && !gate.done()) ok.disabled = true;
+    };
     ok.onclick = () => { if (deleteTyped(input.value)) dlg.close(true); };
+    if (gate) {
+      const typed = ok.onclick;
+      ok.onclick = () => { if (gate.done()) typed(); };
+    }
     // Enter goes through the same check; there is no form here to submit.
     input.onkeydown = (e) => { if (e.key === "Enter") ok.onclick(); };
     $("delete-cancel").onclick = () => dlg.close(false);
     input.focus();
     return dlg.result;
+  }
+
+  // Deleting the account needs a code sign-in once the page was opened by
+  // the link in our email (the server's full_sign_in_required). The dialog
+  // does it in place (_delete_modal.html), to the account's own address,
+  // so the delete is never a dead end. The server still decides: this only
+  // gets the person to the sign-in it asks for. Text only, never markup.
+  let codeDone = false;
+  function codeGate(onDone) {
+    const step = $("delete-code-step");
+    if (!step) return null;
+    const email = step.dataset.email || "";
+    const why = $("delete-code-why");
+    const entry = $("delete-code-entry");
+    const send = $("delete-code-send");
+    const note = $("delete-code-note");
+    const err = $("delete-code-err");
+    const oops = (m) => { err.textContent = m; err.hidden = false; };
+    const finished = () => {
+      why.textContent = "That's you. Now type delete below to finish.";
+      send.hidden = true;
+      entry.hidden = true;
+      err.hidden = true;
+    };
+    if (codeDone) finished();
+    send.onclick = async () => {
+      err.hidden = true;
+      send.disabled = true;
+      const res = await post("/api/auth/email", { email });
+      send.disabled = false;
+      if (!res.ok) {
+        return oops(refusal(res.d, "We couldn't send a code. Please try again."));
+      }
+      // Only `true` is a send we saw (#262, #220), as on the sign-in page.
+      if (res.d.sent === true) {
+        note.textContent = "We sent an 8-digit code to " + email + ".";
+      } else if (res.d.sent === false) {
+        note.textContent = "We sent a code moments ago to " + email +
+          ". You can ask for a new one in " + res.d.retry_after + " seconds.";
+      } else {
+        note.textContent = res.d.notice ||
+          "We couldn't confirm the code reached " + email + ".";
+      }
+      entry.hidden = false;
+      send.textContent = "Send a new code";
+      $("delete-code").focus();
+    };
+    $("delete-code-check").onclick = async () => {
+      err.hidden = true;
+      const res = await post("/api/auth/verify",
+        { email, code: $("delete-code").value.trim() });
+      if (!res.ok) return oops(refusal(res.d, "That code is wrong or expired."));
+      codeDone = true;
+      finished();
+      onDone();
+    };
+    return { done: () => codeDone };
   }
 
   // After a re-authorization, poll until the provider delivers, then report
@@ -920,7 +994,9 @@
   // The one contact address (#856), linked by showRecent.
   const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
-    const what = r.label + (r.to ? " to " + r.to : "") + ": ";
+    // Whose, when not the holder's own (patient test on #952).
+    const what = r.label + (r.whose ? " (" + r.whose + ")" : "") +
+      (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
     if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
