@@ -201,6 +201,33 @@ def test_stop_processed_before_a_code_bind_it_followed_still_wins(
     assert r.status_code == 200 and not r.get_json().get("reply")
 
 
+def test_a_stop_before_the_code_is_parsed_still_beats_that_code(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """The receive time is taken when the text arrives, not when
+    bind_by_code starts: a STOP processed while the code text is still
+    being looked up (handle_inbound's surface lookup) also wins. Pins the
+    capture in handle_inbound; bind_by_code's own default would miss it."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    code = c.post("/api/surfaces/imessage",
+                  json={"agent_id": agent_id}).get_json()["code"]
+    real = svc.find_surface_by_handle
+    fired = []
+
+    def stop_during_lookup(*a, **kw):
+        if not fired:
+            fired.append(1)
+            svc.imessage_stop(PHONE, also=PHONE)
+        return real(*a, **kw)
+    monkeypatch.setattr(svc, "find_surface_by_handle", stop_during_lookup)
+    r = c.post("/api/surfaces/imessage/inbound",
+               headers={"X-Internal-Secret": "mint-secret"},
+               json={"handle": PHONE, "text": f"care {code}"})
+    assert fired
+    assert svc.find_surface_by_handle(PHONE) is None
+    assert svc.imessage_opted_out(PHONE)
+    assert r.status_code == 200 and not r.get_json().get("reply")
+
+
 # --- F4: SQLite, the bind's read must take the write lock -----------------
 
 @pytest.mark.skipif(PG.startswith("postgres"),
