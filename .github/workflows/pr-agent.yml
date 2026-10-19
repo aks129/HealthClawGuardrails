@@ -7,6 +7,10 @@ name: pr-agent
 # /improve, /ask and /describe typed into a PR comment. Two reviewers with
 # different prompts miss different things.
 #
+# Only the owner, members and collaborators can start a run from a comment:
+# on a public repository anyone can comment, and each run spends the API
+# key on whatever the comment asks.
+#
 # Runs on `pull_request_target`, like claude-pr-review.yml, for the same
 # reason: tests/test_ci_hardening.py refuses write permissions on anything
 # triggered by `pull_request`, and this job needs `pull-requests: write` to
@@ -52,7 +56,8 @@ jobs:
       github.event.sender.type != 'Bot' &&
       (
         (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/'))
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/') &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       )
     runs-on: ubuntu-latest
     steps:
@@ -68,8 +73,9 @@ jobs:
 
       - name: The PR Agent
         if: steps.keycheck.outputs.has_key == 'true'
-        # v0.44.0 = ab6ec54bfeb37933ddb74259338752e9272016c6
-        uses: The-PR-Agent/pr-agent@v0.45.0
+        # Pinned to a commit: a tag can be moved, and this step holds the
+        # API key and a token that writes to pull requests.
+        uses: The-PR-Agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The same secret name claude-pr-review.yml reads; no OpenAI key.

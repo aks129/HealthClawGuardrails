@@ -142,6 +142,10 @@ _failure_text = agent_failure_text
 #: payload; the browser projection drops event types it does not know.
 CHARGED_EVENT = "agent.charged"
 
+#: The run event that says this failed run's turn was given back. Its
+#: payload is the UTC day the turn was charged on, as CHARGED_EVENT's is.
+REFUNDED_EVENT = "agent.charge_refunded"
+
 #: Consecutive heartbeat failures before the lease is given up. The interval
 #: is a third of the lease, so two misses still leave a third of it to
 #: recover in; one miss ending the run was the whole of the defect.
@@ -247,12 +251,14 @@ class RunWorker:
             heartbeat.stop()
             funnel.safely(funnel.count_issue, self.accounts.session,
                           "chat_error")
+            refund = self._mark_refund(run)
             try:
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.deadline_exceeded",
                     payload={"status": "failed"},
                     error_class="RunDeadlineExceeded")
+                self._refund(refund)
                 # This worker failed it, so this worker answers. When the
                 # engine got there first it wrote the answer itself.
                 self._answer_failed_turn(run, _failure_text(
@@ -278,6 +284,7 @@ class RunWorker:
             logger.exception("CareAgents run %s failed", run_id)
             funnel.safely(funnel.count_issue, self.accounts.session,
                           "chat_error")
+            refund = self._mark_refund(run)
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
@@ -287,6 +294,7 @@ class RunWorker:
                     event_type="run.failed",
                     payload={"status": "failed"},
                     error_class=_error_class(exc))
+                self._refund(refund)
                 # Only once the engine took this worker's failure: a worker
                 # that lost its lease lands here too, and the run may yet
                 # finish elsewhere with a real answer.
@@ -295,6 +303,49 @@ class RunWorker:
                 logger.exception("could not record failure for run %s", run_id)
         else:
             heartbeat.stop()
+
+    def _mark_refund(self, run: dict) -> tuple[str, str] | None:
+        """Before a failed run is closed: if its turn was charged and not
+        yet given back, mark it given back on the run and return (account,
+        day) for `_refund`. None when there is nothing to give back.
+
+        A turn that failed on our side must not use up the day's cap. The
+        marker goes first, while this worker still owns the run (the
+        engine takes no events on a closed run), so no run is given back
+        twice: a second worker sees the marker. The turn itself is given
+        back only once this worker's failure is accepted (`_refund`): a
+        worker that lost its lease lands in the same branch, and the run
+        may yet finish elsewhere. Every miss errs toward the cap, never
+        past it. A charge from before the day was recorded is kept.
+
+        It reads what `_execute_turn` left on the run (`_refund`), never the
+        engine again: this branch runs outside the turn's `acting_for`
+        block, so a read here would not be labelled with the account."""
+        info = run.get("_refund") or {}
+        account_id, day = info.get("account_id"), info.get("day")
+        if info.get("refunded") or not account_id or not day:
+            return None
+        if info.get("answered"):
+            # A model round already answered, so the model call was paid
+            # for: the turn counts, as any answered turn does.
+            return None
+        try:
+            self.hc.append_agent_run_event(
+                str(run["id"]), self.worker_id, REFUNDED_EVENT, {"day": day})
+            info["refunded"] = True
+            return account_id, day
+        except Exception:  # noqa: BLE001 - a refund never fails a failure
+            logger.warning("could not mark run %s for a refund", run.get("id"))
+            return None
+
+    def _refund(self, refund: tuple[str, str] | None) -> None:
+        """Give back the turn `_mark_refund` marked. Never raises."""
+        if refund is None:
+            return
+        try:
+            self.accounts.refund_daily_turn(*refund)
+        except Exception:  # noqa: BLE001 - a refund never fails a failure
+            logger.warning("could not give back a failed turn")
 
     def _mark(self, account_id: str, milestone: str) -> None:
         """A funnel milestone (careagents/funnel.py). Never fails a turn."""
@@ -430,6 +481,17 @@ class RunWorker:
                 final_checkpoint = payload
 
         charged = any(event.get("type") == CHARGED_EVENT for event in events)
+        # What a failure needs to give the turn back, kept on the run, so
+        # the failure branch reads nothing more from the engine
+        # (`_mark_refund`): the account, the day it was charged, whether it
+        # was already given back, and whether a model round has answered.
+        charge = next((e for e in events if e.get("type") == CHARGED_EVENT),
+                      None)
+        run["_refund"] = {
+            "account_id": context["account_id"],
+            "day": str(((charge or {}).get("payload") or {}).get("day") or ""),
+            "refunded": any(e.get("type") == REFUNDED_EVENT for e in events),
+            "answered": bool(checkpoints)}
         if not checkpoints and not charged:
             # The day's allowance is charged here, where the model is called
             # and after turn_block passed (#856 sign-off F4): a turn admitted
@@ -440,15 +502,19 @@ class RunWorker:
             # marker was charged before markers existed. A worker that dies
             # between the charge and the marker still charges twice: the
             # error is toward the cap, never past it.
+            # The day goes on the marker, so a refund gives back this day's
+            # turn even when the run fails after midnight.
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             allowed, _used = self.accounts.claim_daily_turn(
-                context["account_id"], self.cfg.chat_turns_per_day)
+                context["account_id"], self.cfg.chat_turns_per_day, day=day)
             if not allowed:
                 self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return
             self.hc.append_agent_run_event(
-                run_id, self.worker_id, CHARGED_EVENT, {})
+                run_id, self.worker_id, CHARGED_EVENT, {"day": day})
+            run["_refund"]["day"] = day
 
         lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
@@ -494,6 +560,9 @@ class RunWorker:
                     pending_checkpoint)
                 checkpoints.append({"type": "agent.checkpoint",
                                     "payload": pending_checkpoint})
+                # A model round answered: the turn's cost is spent, and a
+                # later failure no longer gives the turn back.
+                run["_refund"]["answered"] = True
                 history.append({
                     "role": "assistant", "content": turn.text,
                     "tool_calls": pending_checkpoint["tool_calls"],
