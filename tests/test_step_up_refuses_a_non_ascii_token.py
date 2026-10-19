@@ -183,6 +183,10 @@ ROWS = [
         body={'resourceType': 'Bundle', 'type': 'collection', 'entry': []},
         env={'READ_AUTH_ENABLED': 'true'},
         denied_message='Bundle ingestion requires a tenant-bound write token'),
+    # #912. The grant is checked before the job lookup, so the task need not
+    # exist.
+    Row('fasten-retry-job', 'r6/fasten/routes.py:retry_job',
+        'POST', '/fasten/jobs/no-such-task/retry', 401),
 ]
 
 
