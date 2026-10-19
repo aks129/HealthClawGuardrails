@@ -342,7 +342,12 @@ def daily(session_scope, days: int = 7,
     rows = {d: {"day": d, **{m: 0 for m in MILESTONES}, "via_invite": 0,
                 **{k: 0 for k in ISSUE_KINDS}} for d in labels}
     reached = {m: 0 for m in MILESTONES}
-    both = {(a, b): 0 for a, b in zip(MILESTONES, MILESTONES[1:])}
+    # `confirmed` is how an account joined (a beta request confirmed at or
+    # before the join), never a step after it: an email-code account has
+    # none, so joined -> confirmed read 0% for every one of them (patient
+    # walk 2026-10-18). It keeps its row in the daily table only.
+    chain = [m for m in MILESTONES if m != "confirmed"]
+    both = {(a, b): 0 for a, b in zip(chain, chain[1:])}
     with session_scope() as s:
         for f in s.query(FunnelAccount).all():
             for m in MILESTONES:

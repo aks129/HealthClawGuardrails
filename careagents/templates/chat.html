@@ -21,6 +21,8 @@
       <nav class="chat-menu-list">
         <a href="/home">Home</a>
         <a href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for your OK</a>
+        {# Answers say "the full brief is on the Visit brief page". #}
+        <a href="/brief?agent={{ agent_id }}">Visit brief</a>
         {# The page the landing links too (#884 G7), named for what it
            tells a patient, not as a grade. Ours, so the same tab. #}
         <a id="trust-pill" href="/safety">How we keep you safe</a>
@@ -43,6 +45,7 @@
      until chat.js has drawn the chart and scrolled to it, so the page does
      not paint at the top of the history first. #}
   <div class="chat-log" id="log" data-pending-reviews='{{ pending_reviews | tojson }}'
+       {%- if done_form %} data-done-form="{{ done_form }}"{% endif %}
        {%- if request.args.get('chart') is not none %} data-chart-pending style="visibility:hidden"{% endif %}>
     {# An outstanding import is news on every visit, not only the first. The
        greeting is where a patient looks for "did my records land?", and it

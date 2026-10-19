@@ -21,7 +21,8 @@
         {% for d in report.days[1:] %}<th>{{ d.day[5:] }}</th>{% endfor %}</tr></thead>
       <tbody>
       {% for m in milestones %}
-      <tr><th>{{ m | replace("_", " ") }}</th>
+      {# "confirmed" alone read as an unverified email (patient walk). #}
+      <tr><th>{% if m == "confirmed" %}confirmed a beta request{% else %}{{ m | replace("_", " ") }}{% endif %}</th>
         <td class="num">{{ today[m] }}</td>
         <td class="num">{{ report.window[m] }}</td>
         {% for d in report.days[1:] %}<td class="num">{{ d[m] }}</td>{% endfor %}</tr>

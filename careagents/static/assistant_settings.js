@@ -9,6 +9,8 @@
       msg.textContent = text;
       msg.classList.toggle("is-ok", ok);
       msg.hidden = false;
+      // Below the fold at 375px, a "Saved" nobody sees (patient walk).
+      msg.scrollIntoView({ block: "nearest" });
     }
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
