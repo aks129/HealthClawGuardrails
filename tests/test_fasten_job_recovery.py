@@ -11,7 +11,14 @@ import json
 from unittest.mock import patch
 
 from r6.fasten.models import FastenJob
+from r6.stepup import generate_step_up_token
 from models import db
+
+
+def _write_headers(tenant):
+    """A retry is a write (#912): the tenant plus a step-up token for it."""
+    return {"X-Tenant-Id": tenant,
+            "X-Step-Up-Token": generate_step_up_token(tenant)}
 
 
 def _register(client, tenant, org_id):
@@ -75,7 +82,7 @@ class TestRetryEndpoint:
         db.session.commit()
         with patch("r6.fasten.routes.threading.Thread") as t:
             r = client.post("/fasten/jobs/task-rc-4/retry",
-                            headers={"X-Tenant-Id": "rc-t4"})
+                            headers=_write_headers("rc-t4"))
         assert r.status_code == 202
         assert t.called
 
@@ -84,7 +91,7 @@ class TestRetryEndpoint:
         _export_webhook(client, "oc-rc-5", "task-rc-5")
         with patch("r6.fasten.routes.threading.Thread") as t:
             r = client.post("/fasten/jobs/task-rc-5/retry",
-                            headers={"X-Tenant-Id": "someone-else"})
+                            headers=_write_headers("someone-else"))
         assert r.status_code == 404
         assert not t.called
 
@@ -95,11 +102,11 @@ class TestRetryEndpoint:
         db.session.commit()
         with patch("r6.fasten.routes.threading.Thread") as t:
             r = client.post("/fasten/jobs/task-rc-6/retry",
-                            headers={"X-Tenant-Id": "rc-t6"})
+                            headers=_write_headers("rc-t6"))
         assert r.status_code == 409
         assert not t.called
 
     def test_retry_unknown_task_404(self, client):
         r = client.post("/fasten/jobs/no-such-task/retry",
-                        headers={"X-Tenant-Id": "rc-t7"})
+                        headers=_write_headers("rc-t7"))
         assert r.status_code == 404
