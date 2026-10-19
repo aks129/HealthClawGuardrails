@@ -252,8 +252,10 @@ def test_an_absence_code_is_never_a_name_whatever_sits_beside_it(
                     "text": "No known allergy"}}
     [item] = _summarize_bundle(_bundle(res))
     assert "no known" not in json.dumps(_quoted(item)).lower()
-    assert item.get("name", "").startswith("unlabeled record") or (
-        "name" not in item)
+    # None of these has a terminology label beside the absence code, so the
+    # allergy is said plainly, never named by the absence (FHI-48).
+    assert item.get("name") == "an allergy, name not recognised"
+    assert item["unreadable"] is True
 
 
 @pytest.mark.parametrize("vs", [

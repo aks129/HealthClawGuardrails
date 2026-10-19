@@ -24,6 +24,7 @@ from models import db
 from r6.fasten.models import (FastenConnection, FastenJob,
                               TenantClosure, tenant_closed)
 from r6.models import AuditEventRecord, R6Resource
+from r6.stepup import generate_step_up_token
 
 SECRET = "revoke-test-internal-secret"
 TENANT = "revoke-tenant"            # not in PUBLIC_TENANTS
@@ -221,7 +222,9 @@ def test_retry_after_revoke_is_refused(client, secret, monkeypatch):
     _job(status="ingesting")
     assert _revoke(client).status_code == 200
     resp = client.post("/fasten/jobs/task-rv-1/retry",
-                       headers={"X-Tenant-Id": TENANT})
+                       headers={"X-Tenant-Id": TENANT,
+                                "X-Step-Up-Token":
+                                    generate_step_up_token(TENANT)})
     assert resp.status_code == 409
     assert not launched.called
     assert FastenJob.query.filter_by(task_id="task-rv-1").one().status \
@@ -241,7 +244,9 @@ def test_retry_checks_the_tenant_not_only_the_row(client, monkeypatch):
     _job(status="failed")
     _tombstone()
     resp = client.post("/fasten/jobs/task-rv-1/retry",
-                       headers={"X-Tenant-Id": TENANT})
+                       headers={"X-Tenant-Id": TENANT,
+                                "X-Step-Up-Token":
+                                    generate_step_up_token(TENANT)})
     assert resp.status_code == 409
     assert not launched.called
     assert len(_audits("fasten_import_refused")) == 1

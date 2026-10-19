@@ -228,8 +228,12 @@ def test_an_audience_or_narrow_token_reads_nothing(app, client, monkeypatch,
     bh = {'X-Tenant-Id': TENANT,
           'Authorization': 'Bearer ' + AUD_TOKENS[name]()}
     assert client.get(f'/r6/fhir/Patient/{pid}', headers=bh).status_code == 401
+    # Operator-only since SEC941-PRE1: no tenant token, audience-bound or
+    # not, opens it (with a secret configured; unset is open outside
+    # production, like every internal-secret surface).
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'sec962-operator-secret')
     assert client.get('/command-center/api/system',
-                      headers=h).status_code == 401
+                      headers=h).status_code == 403
 
 
 @pytest.mark.parametrize('name', list(AUD_TOKENS))

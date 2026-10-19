@@ -12,6 +12,11 @@
  *
  * Tests assert the secure behaviour. A red test is a finding.
  *
+ * The wallet's records relay (POST /checkin/wallet/records) is answered by
+ * route with the engine's checkin export of the synthetic fixture
+ * (e2e/fixtures/checkin-export-test-patient.json): the CareAgents under
+ * test has no engine behind it. Each body the wallet sends it is kept in RELAY_ASKED.
+ *
  * Run against a flag-on CareAgents server:
  *   CARE_E2E_PORT=<port> SEC_CARE_LOG=<that server's stderr log> \
  *     npx playwright test sec-960 --config <a config with no webServer>
@@ -37,6 +42,11 @@ const CHECKIN_JS_SHA256 =
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..',
   'careagents', 'checkin', 'us_core_test_patient.json'), 'utf8'));
+// What the relay answers with: the engine's own checkin export of the test
+// patient, upstream words dropped and our labels written (pinned to the
+// engine by tests/test_checkin_relay.py).
+const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+  'fixtures', 'checkin-export-test-patient.json'), 'utf8'));
 
 const CANARY = 'SEC960CANARY';
 const US_CORE = 'http://hl7.org/fhir/us/core/StructureDefinition/';
@@ -93,7 +103,10 @@ window.addEventListener('message', (e) => window.__msgs.push({
   origin: e.origin, type: e.data && e.data.type, outcome: e.data && e.data.outcome }));
 </script>`;
 
+const RELAY_ASKED: unknown[] = [];
+
 async function serveAttacker(context: BrowserContext) {
+  RELAY_ASKED.length = 0;
   expect(crypto.createHash('sha256').update(CHECKIN_JS).digest('hex'))
     .toBe(CHECKIN_JS_SHA256);
   await context.route('**/*', (route) => {
@@ -109,6 +122,11 @@ async function serveAttacker(context: BrowserContext) {
     }
     if (url.origin === ELSEWHERE) return html(ELSEWHERE_HTML);
     if (url.origin === THIRD_PARTY) return html(FRAME_HTML);
+    if (url.hostname === 'localhost' && url.pathname === '/checkin/wallet/records') {
+      RELAY_ASKED.push(route.request().postDataJSON());
+      return route.fulfill({ status: 200, contentType: 'application/fhir+json',
+        headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(EXPORT) });
+    }
     if (url.hostname === 'localhost') return route.continue();
     return route.abort();
   });
@@ -217,12 +235,23 @@ test.describe('sec #960: hostile opener', () => {
       expect(after).not.toContain('Testpatient');
       expect(after).not.toContain('FAKE-');
       expect(after).not.toMatch(/"POST \/checkin/);
+      // The relay was asked for the requested kinds of record only: none of
+      // the website's words and not its origin.
+      expect(RELAY_ASKED).toEqual([{ resource_types:
+        ['AllergyIntolerance', 'Coverage', 'Patient'] }]);
+      expect(JSON.stringify(RELAY_ASKED)).not.toContain(CANARY);
+      expect(JSON.stringify(RELAY_ASKED)).not.toContain(EVIL);
     });
 
-  // Finding (#959/#960): HTEST lives only on the fixture's outer Bundle, and
-  // buildResponse makes new Bundles, so what the Verifier receives carries
-  // no machine-readable test marker at all.
-  test('what a website receives is still tagged HTEST', async ({ page }) => {
+  // Finding (#959/#960) was: HTEST lived only on the fixture's outer Bundle,
+  // so the wallet tagged each Bundle it sent while it answered from the
+  // fixture alone. It answers from the account's own records now (#960's
+  // note: the real-record export drops the wallet's tag), so it adds none.
+  // Open, engine lane: the engine's export rebuilds `meta` and drops a
+  // record's own HTEST tag too, so uploaded synthetic records reach a
+  // website unmarked. This stub serves the raw fixture, whose records keep
+  // theirs, so it cannot speak to that and does not assert it.
+  test('the wallet adds no test tag of its own', async ({ page }) => {
     const wallet = await openAndSignIn(page);
     await expect(wallet.locator('#wallet-review')).toBeVisible();
     for (const r of await wallet.locator('#wallet-items input[value=share]').all()) {
@@ -235,9 +264,7 @@ test.describe('sec #960: hostile opener', () => {
     const isTest = (meta: any) => ((meta && meta.tag) || []).some(
       (t: any) => t.code === 'HTEST');
     for (const a of r.json.artifacts) {
-      const tagged = isTest(a.value.meta) ||
-        a.value.entry.every((e: any) => isTest(e.resource.meta));
-      expect(tagged, `artifact ${a.id} carries HTEST`).toBe(true);
+      expect(isTest(a.value.meta), `artifact ${a.id} adds no tag`).toBe(false);
     }
   });
 });
@@ -269,8 +296,8 @@ test.describe('sec #960: "no known allergy" is never sent', () => {
       .toBe('unavailable');
   });
 
-  // Finding (low, forward-looking): only *coded* SNOMED NKA is filtered. A
-  // feed that says it in text, or with a local code, is shared as an allergy.
+  // Was a finding (low): only *coded* SNOMED NKA was filtered. The rule is
+  // an allow-list now, so text or a local code is never shared.
   test('an uncoded "No known allergies" is not sent', async ({ page }) => {
     expect(await allergyStatus(page, { text: 'No known allergies' }))
       .toBe('unavailable');
