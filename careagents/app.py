@@ -42,7 +42,7 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, errors, feedback, funnel, invites
+from careagents import beta_signup, causes, errors, feedback, funnel, invites
 from careagents import checkin_wallet
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -118,6 +118,11 @@ def chat_links(text) -> Markup:
 # chosen to end the 25s hold while leaving room for a loaded engine; it is not
 # a measured optimum, and a p99 from production should replace it.
 _ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
+
+#: Consecutive failed run-event reads before the browser stream says the
+#: turn failed (#926). A read that met a closing keep-alive connection
+#: succeeds on the next try; an engine that is really gone does not.
+_REPLAY_MAX_MISSES = 3
 
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
@@ -2375,6 +2380,7 @@ def create_app(config: Config | None = None,
         # at 90 seconds is no likelier to finish in the next 250ms than one
         # at 5, and a token that just arrived is likely followed by another.
         empty_streak = 0
+        misses = 0
         yield "data: " + json.dumps({
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
@@ -2383,7 +2389,22 @@ def create_app(config: Config | None = None,
                 with acting_for(account_id):
                     page = hc.agent_run_events(tenant, run_id, after=cursor,
                                                limit=100)
-            except HealthClawError:
+            except HealthClawError as exc:
+                # The class and status only: the message is engine text.
+                misses += 1
+                logger.warning(
+                    "run event read %d/%d failed for tenant %s: %s status=%s",
+                    misses, _REPLAY_MAX_MISSES, tenant, type(exc).__name__,
+                    exc.status)
+                # #926: one failed read is not a failed run. A poll that
+                # lands as the engine closes an idle keep-alive connection
+                # (gunicorn's 2s, the same as the poll's backoff cap) never
+                # reaches the engine, and ending here showed "Something went
+                # wrong" on a run that went on to complete. The read has no
+                # side effect and resumes at `cursor`, so it is tried again.
+                if misses < _REPLAY_MAX_MISSES:
+                    time.sleep(cfg.run_sse_poll_seconds)
+                    continue
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
                 # reason (#219). Only this projection ends: the run is durable
@@ -2391,12 +2412,12 @@ def create_app(config: Config | None = None,
                 # text is the same generic sentence every other failure uses —
                 # an exception message here would be the first place engine
                 # internals reached a patient's screen.
-                logger.warning("run event stream failed for tenant %s", tenant)
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
                     "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
                 return
+            misses = 0
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -2445,7 +2466,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "message must be 1-2000 characters"}), 400
         workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
@@ -2484,13 +2506,15 @@ def create_app(config: Config | None = None,
         created, user_message_id = hc.claim_inbound_message(
             tenant, text, agent["id"], conversation_id, "web", request_id)
         if created is None or not user_message_id:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return jsonify({"error": "message store unavailable"}), 503
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
-        except HealthClawError:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+        except HealthClawError as exc:
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.cause_of(exc))
             return jsonify({"error": "run queue unavailable"}), 503
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))

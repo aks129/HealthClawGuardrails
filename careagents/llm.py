@@ -63,7 +63,12 @@ class LLMTurn:
 
 
 class LLMError(RuntimeError):
-    pass
+    """A model call failed. `status` is the provider's HTTP status, 0 when
+    there was none; with the class, it is all careagents/causes.py reads."""
+
+    def __init__(self, message: str = "", status: int | None = 0):
+        super().__init__(message)
+        self.status = status or 0
 
 
 class LLMTransient(LLMError):
@@ -385,7 +390,8 @@ def _anthropic_call(anthropic, endpoint, **kw) -> LLMTurn:
                 or (conn_cls is not None and isinstance(exc, conn_cls))):
             raise LLMTransient(
                 f"model call failed ({type(exc).__name__})") from exc
-        raise LLMError(f"model call failed ({type(exc).__name__})") from exc
+        raise LLMError(f"model call failed ({type(exc).__name__})",
+                       getattr(exc, "status_code", 0)) from exc
 
     turn = LLMTurn(model=kw["model"])
     for block in resp.content:
@@ -542,7 +548,8 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
         if _openai_out_of_credit(r):
             raise LLMOutOfCredit("model call refused on billing")
         if r.status_code not in RETRYABLE_STATUSES:
-            raise LLMError(f"model call failed (HTTP {r.status_code})")
+            raise LLMError(f"model call failed (HTTP {r.status_code})",
+                           r.status_code)
         delay = _retry_delay(attempt, r.headers.get("Retry-After"))
         if delay < 0 or attempt + 1 >= MAX_ATTEMPTS:
             break
@@ -552,7 +559,7 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
         status = r.status_code if r is not None else None
         if status == 429:
             raise LLMRateLimited("model call rate limited (HTTP 429)")
-        raise LLMError(f"model call failed (HTTP {status})")
+        raise LLMError(f"model call failed (HTTP {status})", status)
     msg = r.json()["choices"][0]["message"]
 
     turn = LLMTurn(text=msg.get("content") or "",

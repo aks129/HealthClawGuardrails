@@ -48,6 +48,7 @@ _ALLOWED = {
     "ca_issue_detail_days": {"id": String, "day": String, "kind": String,
                              "detail": String, "count": Integer},
     "ca_digest_days": {"day": String, "sent_at": Float},
+    "ca_owner_alerts": {"hour": String, "sent_at": Float},
     "ca_sign_in_days": {"id": String, "account_id": String, "day": String,
                         "method": String, "count": Integer},
     "ca_invite_links": {"id": String, "account_id": String, "code": String,
