@@ -58,7 +58,7 @@ test.describe('CareAgents auth', () => {
   }) => {
     await page.goto('/auth');
     await expect(page.locator('#auth-card h1')).toHaveText(
-      'Your health, your keys');
+      'Sign in or sign up');
     await expect(page.locator('#passkey-btn')).toBeVisible();
     await expect(page.locator('#email')).toBeVisible();
     await expect(page.locator('#email-btn')).toBeVisible();
