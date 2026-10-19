@@ -43,6 +43,9 @@ class Account(Base):
     email_verified_at = Column(Float, nullable=True)
     created_at = Column(Float, default=now)
     last_login_at = Column(Float, nullable=True)
+    # How that latest sign-in was made: one of careagents/signins.py's
+    # METHODS, a name we write. The per-day counts are ca_sign_in_days.
+    last_login_method = Column(String(16), nullable=True)
     # Sample-connect lease (calm hub spec section 4). Set while this
     # account's sample tenant is minted and seeded, cleared after. A double
     # tap races on this row, not on the tenant mint. A timestamp, not PHI.
@@ -498,6 +501,9 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+        if "last_login_method" not in cols:
+            _add_column(engine, "ca_accounts", "last_login_method",
+                        "VARCHAR(16)")
     if "ca_surfaces" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
         if "code_exp" not in cols:

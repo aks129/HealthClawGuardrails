@@ -438,6 +438,10 @@ def send_digest_if_due(session_scope, cfg,
     report["window"] = {k: sum(r[k] for r in report["days"])
                         for k in report["window"]}
     text = digest_text(report, day)
+    # Sign-ins for the day, counts only: never an address (signins.py).
+    from careagents import signins
+    text += "\n" + "\n".join(signins.digest_lines(
+        signins.day_counts(session_scope, day)))
     html = "<pre style='font-family:monospace'>" + text.replace(
         "&", "&amp;").replace("<", "&lt;") + "</pre>"
     try:
@@ -474,6 +478,8 @@ def register(app, svc, cfg, full_session=lambda: True) -> None:
     """The owner page /admin/funnel and the `funnel` command group.
     `full_session()` says the session came from a code or passkey sign-in,
     not a beta confirm link (careagents/app.py, full_sign_in_required)."""
+    # Imported here: signins builds on this module.
+    from careagents import signins
 
     def owner_only(fn):
         @wraps(fn)
@@ -494,9 +500,26 @@ def register(app, svc, cfg, full_session=lambda: True) -> None:
         report = daily(svc.session, days=7)
         resp = app.make_response(render_template(
             "admin_funnel.html", report=report, milestones=MILESTONES,
-            issue_kinds=ISSUE_KINDS, today=report["days"][0]))
+            issue_kinds=ISSUE_KINDS, today=report["days"][0],
+            testers=signins.testers(svc.session),
+            testers_cap=signins.TESTERS_CAP))
         resp.headers["Cache-Control"] = "no-store"
         return resp
+
+    @app.get("/admin/funnel/testers.csv")
+    @owner_only
+    def admin_testers_csv():
+        """The testers table as a file. It holds addresses: owner only,
+        never cached."""
+        resp = app.make_response(signins.testers_csv(
+            signins.testers(svc.session)))
+        resp.mimetype = "text/csv"
+        resp.headers["Content-Disposition"] = (
+            "attachment; filename=careagents-testers.csv")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    signins.register_cli(app, svc)
 
     @app.cli.group("funnel")
     def funnel_group():
