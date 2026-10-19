@@ -136,11 +136,6 @@ def test_stop_racing_a_link_issue_for_the_same_number_does_not_deadlock(
 # --- F3: first-ever text, the state-row insert collides ---------------------
 
 @pg_only
-@pytest.mark.xfail(strict=True, reason=(
-    "sec #1007 F3: _locked_handle_state inserts the state row and flushes; "
-    "a STOP racing a first-ever pairing bind blocks on the uncommitted "
-    "primary key, then raises UniqueViolation. The bind wins: bound and "
-    "not opted out. Pre-existing (base 6/40 under jitter), wider now."))
 def test_stop_racing_a_first_ever_pairing_bind_still_wins(monkeypatch):
     svc = _pg_svc()  # noqa: F811
     aid = _acct(svc)
@@ -161,11 +156,6 @@ def test_stop_racing_a_first_ever_pairing_bind_still_wins(monkeypatch):
 # --- F5: disconnect acts on rows read before it took the lock ---------------
 
 @pg_only
-@pytest.mark.xfail(strict=True, reason=(
-    "sec #1007 F5: disconnect_imessage reads the surfaces, then waits on "
-    "the state lock a pairing rebind holds, then deletes the row the "
-    "rebind already replaced. It answers removed=1; the number stays "
-    "bound on the new surface."))
 def test_disconnect_racing_a_rebind_never_reports_a_bound_number_removed(
         monkeypatch):
     svc = _pg_svc()  # noqa: F811
@@ -189,10 +179,6 @@ def test_disconnect_racing_a_rebind_never_reports_a_bound_number_removed(
 
 # --- F2: pairing-code path, a STOP after the code text still loses ----------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sec #1007 F2 (builder flagged): bind_by_code passes no issue time, so "
-    "a STOP that arrives after the `care <code>` text but is processed "
-    "before its bind is undone by the bind (opted_out_at cleared)."))
 def test_stop_processed_before_a_code_bind_it_followed_still_wins(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
@@ -206,24 +192,27 @@ def test_stop_processed_before_a_code_bind_it_followed_still_wins(
         svc.imessage_stop(PHONE, also=PHONE)
         return real(*a, **kw)
     monkeypatch.setattr(svc, "bind_imessage_handle", stop_lands_first)
-    c.post("/api/surfaces/imessage/inbound",
-           headers={"X-Internal-Secret": "mint-secret"},
-           json={"handle": PHONE, "text": f"care {code}"})
+    r = c.post("/api/surfaces/imessage/inbound",
+               headers={"X-Internal-Secret": "mint-secret"},
+               json={"handle": PHONE, "text": f"care {code}"})
     assert svc.find_surface_by_handle(PHONE) is None
     assert svc.imessage_opted_out(PHONE)
+    # Nothing more is texted to a number that just opted out.
+    assert r.status_code == 200 and not r.get_json().get("reply")
 
 
-# --- F4: SQLite, the lock is a no-op and the read is not serialized ---------
+# --- F4: SQLite, the bind's read must take the write lock -----------------
 
 @pytest.mark.skipif(PG.startswith("postgres"),
-                    reason="SQLite behaviour; on Postgres this self-waits")
-@pytest.mark.xfail(strict=True, reason=(
-    "sec #1007 F4: on SQLite FOR UPDATE is dropped and the bind's SELECT "
-    "takes no write lock, so a STOP commits between the bind's check and "
-    "its insert. The number ends bound while opted out, and a bound "
-    "number is answered. The docstring's 'SQLite serializes writers "
-    "anyway' does not hold for read-then-write."))
-def test_sqlite_stop_inside_a_link_bind_still_unbinds(tmp_path, monkeypatch):
+                    reason="SQLite behaviour; Postgres is F1-F3, F5")
+def test_sqlite_stop_racing_a_link_bind_still_unbinds(tmp_path, monkeypatch):
+    """sec #1007 F4. SQLite drops FOR UPDATE, so without a write first the
+    bind's check takes no lock and a STOP commits between the check and
+    the insert: bound while opted out. With the write lock, the STOP waits
+    for the bind and then unbinds what it bound.
+
+    Two threads, the bind held right after its lock: a STOP from the same
+    thread would only wait out SQLite's busy timeout."""
     url = f"sqlite:///{tmp_path / 'sec1007.db'}"
     s2 = AccountService(Config(env={
         "CARE_DATABASE_URL": url, "CARE_RP_ID": "localhost",
@@ -231,19 +220,12 @@ def test_sqlite_stop_inside_a_link_bind_still_unbinds(tmp_path, monkeypatch):
         "HEALTHCLAW_MINT_SECRET": "m"}))
     aid = _acct(s2)
     link_id = s2.peek_imessage_link(s2.issue_imessage_link(PHONE))
-    real = AccountService._locked_handle_state
-    fired = []
-
-    def stop_after_check(self, s, handle, create=True):
-        st = real(self, s, handle, create)
-        if not fired and self is s2:
-            fired.append(1)
-            s2.imessage_stop(PHONE)   # another request, committed now
-        return st
-    monkeypatch.setattr(AccountService, "_locked_handle_state",
-                        stop_after_check)
+    _hold_after_state_lock(monkeypatch, 0.5)
     try:
-        s2.claim_imessage_link(link_id, aid)
+        out, errs = _both(_held(lambda: s2.claim_imessage_link(link_id, aid)),
+                          lambda: s2.imessage_stop(PHONE))
+        assert errs == [], errs
+        assert set(out) == {"first", "second"}, out
         assert s2.find_surface_by_handle(PHONE) is None
         assert s2.imessage_opted_out(PHONE)
     finally:

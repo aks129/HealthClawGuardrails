@@ -1437,6 +1437,9 @@ class AccountService:
             # agent or connection going) removed a row this bind was
             # changing (#1004): nothing was bound. Text again for a fresh
             # link. STOP and disconnect wait on the lock instead (#1005).
+            # Those deletes can still deadlock against a bind on Postgres;
+            # that OperationalError is not caught here and the request
+            # fails with nothing bound.
             return "expired"
 
     def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
@@ -1545,12 +1548,23 @@ class AccountService:
                                            kind="imessage")
             if surface_id is not None:
                 q = q.filter_by(id=surface_id, status="active")
-            rows = q.all()
             # State rows locked before the surfaces are deleted, in the
             # order a bind takes them, so the two cannot deadlock (#1005).
-            for h in sorted({x.handle for x in rows
-                             if x.status == "active" and x.handle}):
-                st = self._locked_handle_state(s, h, create=False)
+            # The rows are read again once the locks are held: a bind that
+            # held one may have replaced the row first read.
+            locked: dict = {}
+            rows = q.all()
+            while True:
+                handles = sorted({x.handle for x in rows
+                                  if x.status == "active" and x.handle}
+                                 - locked.keys())
+                if not handles:
+                    break
+                for h in handles:
+                    locked[h] = self._locked_handle_state(s, h, create=False)
+                rows = q.populate_existing().all()
+            for x in rows:
+                st = locked.get(x.handle) if x.status == "active" else None
                 if st is not None:
                     st.link_count, st.link_window_start = 0, None
             _drop_surfaces(s, rows)
@@ -1567,17 +1581,34 @@ class AccountService:
 
     def _locked_handle_state(self, s, handle: str,
                              create: bool = True) -> ImessageHandleState | None:
-        """The handle's state row, locked for this transaction (FOR UPDATE;
-        a no-op on SQLite, which serializes writers anyway). Read fresh, so
-        an opt-out committed while the lock was awaited is seen (#1005)."""
+        """The handle's state row, locked for this transaction, and read
+        fresh, so an opt-out committed while the lock was awaited is seen
+        (#1005). Postgres locks the row (FOR UPDATE). SQLite drops FOR
+        UPDATE, so a write that changes nothing takes its database write
+        lock first, and a racing writer waits for the commit before it
+        reads (as _lock_codes does).
+
+        The first-ever row is inserted in a savepoint: a racing insert of
+        the same handle waits on it, fails on the primary key, and then
+        reads and locks the row the other one committed."""
         key = _handle_key(handle)
-        st = (s.query(ImessageHandleState).filter_by(handle_key=key)
-              .with_for_update().populate_existing().first())
+        if self.engine.dialect.name == "sqlite":
+            s.execute(update(ImessageHandleState)
+                      .where(ImessageHandleState.handle_key == key)
+                      .values(handle_key=ImessageHandleState.handle_key))
+
+        def read():
+            return (s.query(ImessageHandleState).filter_by(handle_key=key)
+                    .with_for_update().populate_existing().first())
+        st = read()
         if st is None and create:
-            st = ImessageHandleState(handle_key=key, fail_count=0,
-                                     link_count=0)
-            s.add(st)
-            s.flush()
+            try:
+                with s.begin_nested():
+                    st = ImessageHandleState(handle_key=key, fail_count=0,
+                                             link_count=0)
+                    s.add(st)
+            except IntegrityError:
+                st = read()
         return st
 
     def imessage_stop(self, handle: str, also: str | None = None) -> bool:
@@ -1634,8 +1665,10 @@ class AccountService:
                                          WINDOW_SECONDS, hash_token,
                                          new_link_token)
         with self.session() as s:
+            # The state row first, as STOP takes it, then the links: in the
+            # other order the two deadlock (#1005).
+            st = self._locked_handle_state(s, handle)
             _prune_links(s)
-            st = self._handle_state(s, handle)
             if (not st.link_window_start
                     or now() - st.link_window_start >= WINDOW_SECONDS):
                 st.link_window_start, st.link_count = now(), 0
