@@ -17,7 +17,7 @@ Two routes on the actions blueprint:
        the questionnaire from the tenant's FHIR (never trusting the client
        about how many rows exist), then requires: every med row acted on, every
        allergy row acted on, AND (the NKA box affirmed OR >=1 allergy
-       confirmed). A crafted POST that skips the allergy attestation is
+       confirmed; a recorded "no known allergy" entry is not one, FHI-58). A crafted POST that skips the allergy attestation is
        rejected 422 — silence about allergies is never consent, and NKA is
        never inferred from the absence of allergy data. On success it builds
        the reviewed QuestionnaireResponse (status completed, author = reviewing
@@ -53,7 +53,8 @@ from r6.brief.engine import MEDICINE_UNNAMED
 from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
-from r6.sdc.populate import populate_questionnaire
+from r6.sdc.populate import POPULATED_ROW_SOURCE_URL, populate_questionnaire
+from r6.terminology import ABSENCE_CONCEPTS, absence_text, is_absence_coding
 from r6 import voice as voices
 from r6.access import Scope, require_grant, require_open_tenant
 
@@ -390,7 +391,45 @@ def _demographics(draft_qr):
     return out
 
 
-def _view_rows(draft_qr):
+#: The allergen text r6/terminology.py writes for a record coded only with
+#: an absence concept ("Recorded entry: 'no known allergy'. ..."). Built from
+#: the same table, so it cannot drift from what the page shows.
+_ABSENCE_ENTRY_TEXTS = frozenset(
+    absence_text(system, code) for system, code in ABSENCE_CONCEPTS)
+
+
+def _absence_only_refs(resources):
+    """`AllergyIntolerance/<id>` for each record coded ONLY with absence or
+    status concepts (r6.terminology.ABSENCE_CONCEPTS), and at least one. Any
+    other coding, a substance beside "no known allergy" included, makes it a
+    real allergy (FHI-48)."""
+    refs = set()
+    for resource in resources:
+        if resource.get('resourceType') != 'AllergyIntolerance':
+            continue
+        code = resource.get('code')
+        codings = code.get('coding') if isinstance(code, dict) else None
+        if (isinstance(codings, list) and codings
+                and all(is_absence_coding(c) for c in codings)
+                and isinstance(resource.get('id'), str)):
+            refs.add('AllergyIntolerance/%s' % resource['id'])
+    return refs
+
+
+def _is_absence_entry(row, absence_refs):
+    """True for an allergy row that is a recorded "no known allergy" or
+    "not asked" entry, not an allergy (FHI-58). Confirming one says the
+    entry is in the records; it is never an allergy and never stands in for
+    the attestation. Keyed by the row's source record's codes; a row with no
+    source falls back to the text terminology wrote for it."""
+    for ext in row.get('extension') or []:
+        if ext.get('url') == POPULATED_ROW_SOURCE_URL:
+            ref = (ext.get('valueReference') or {}).get('reference')
+            return ref in absence_refs
+    return _leaf_value(row, 'allergies.item.allergen') in _ABSENCE_ENTRY_TEXTS
+
+
+def _view_rows(draft_qr, absence_refs=frozenset()):
     """Build the template's per-item view model from the draft QR."""
     meds = []
     for row in _section_repeats(draft_qr, 'medications', 'medications.item'):
@@ -408,6 +447,8 @@ def _view_rows(draft_qr):
             'allergen': _leaf_value(row, 'allergies.item.allergen')
             or 'Allergy (name not recognised)',
             'reaction': _leaf_value(row, 'allergies.item.reaction'),
+            # Drives the page's copy of the gate; the POST re-derives it.
+            'absence_entry': _is_absence_entry(row, absence_refs),
         })
     conditions = []
     for row in _section_repeats(draft_qr, 'conditions', 'conditions.item'):
@@ -442,7 +483,8 @@ def review_form(action_id):
             voice = voices.PATIENT
         _questionnaire, _patient, draft_qr, content = _draft_qr(action, tenant_id)
         demographics = _demographics(draft_qr)
-        meds, allergies, conditions = _view_rows(draft_qr)
+        meds, allergies, conditions = _view_rows(
+            draft_qr, _absence_only_refs(content.resources))
         # The reasons are fixed strings from this module, never record text,
         # so the detail stays PHI-free. Without this, the state that renders
         # the unreadable notice is invisible in production.
@@ -516,7 +558,7 @@ def review_submit(action_id):
 
     # RE-POPULATE from FHIR: the server, not the client, decides which rows
     # exist and must be acted on. This is what makes the gate un-craftable.
-    _questionnaire, patient, draft_qr, _content = _draft_qr(action, tenant_id)
+    _questionnaire, patient, draft_qr, content = _draft_qr(action, tenant_id)
     med_rows = _section_repeats(draft_qr, 'medications', 'medications.item')
     allergy_rows = _section_repeats(draft_qr, 'allergies', 'allergies.item')
     condition_rows = _section_repeats(draft_qr, 'conditions',
@@ -547,8 +589,14 @@ def review_submit(action_id):
     # at least one allergy OR explicitly affirm "no known allergies". Removing
     # every allergy row without checking NKA does NOT satisfy this — an absence
     # of allergies is never inferred, it must be affirmatively attested.
+    # A confirmed "Recorded entry: 'no known allergy'" row is not an allergy
+    # either: confirming it says the entry is on file, and counting it here
+    # let the form state no known allergies without the box (FHI-58).
     nka_affirmed = _truthy(submitted.get('nka', ''))
-    confirmed_allergy = any(d == 'confirm' for d in allergy_decisions)
+    absence_refs = _absence_only_refs(content.resources)
+    confirmed_allergy = any(
+        d == 'confirm' and not _is_absence_entry(row, absence_refs)
+        for row, d in zip(allergy_rows, allergy_decisions))
     if not (nka_affirmed or confirmed_allergy):
         return _error(422, 'You must confirm at least one allergy OR check '
                            '"I have no known allergies". No known allergies '
@@ -560,7 +608,8 @@ def review_submit(action_id):
     # extraction engine ignores the attestation structurally and writes the
     # confirmed rows, so the record would hold an allergy while the response
     # attests there are none. The message names both halves and neither the
-    # substance nor the reaction: the person is looking at the row.
+    # substance nor the reaction: the person is looking at the row. A
+    # confirmed absence entry beside the box is no contradiction (FHI-58).
     if nka_affirmed and confirmed_allergy:
         return _error(422, 'You confirmed an allergy and also checked "I '
                            'have no known allergies". Both cannot be true: '

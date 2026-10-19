@@ -173,7 +173,7 @@ You can stop at any time and you don't owe us an explanation.
 - **Delete the account** — your account is a separate record (email, passkey,
   and which sources you connected; no health data). **Delete my account** at
   the bottom of the hub deletes the records behind every connection first,
-  then the account, and signs you out. You type DELETE to confirm, the same
+  then the account, and signs you out. You type the word delete to confirm, the same
   as for records. If any purge can't be confirmed, nothing is deleted and it
   says so, so you can try again.
 - **Just stop using it** — nothing will contact you.

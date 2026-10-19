@@ -1,7 +1,7 @@
 """A calm chat page for a first-timer (2026-10 patient-tester walk, 375px).
 
 The header carried the assistant's name, its persona label ("Calm Guide"),
-"← hub", "Waiting for you" and "Safety grade: A": five things to read
+"← hub", "Waiting for your OK" and "Safety grade: A": five things to read
 before the first question. The hub link, the waiting list and the grade
 now sit in one ⋯ menu, and the persona label is gone.
 
@@ -58,7 +58,7 @@ def test_hub_waiting_and_grade_live_in_one_menu(cfg, svc, monkeypatch):  # noqa:
     assert re.search(r'<summary[^>]*aria-label="Menu"[^>]*>⋯</summary>', menu)
     assert 'href="/home"' in menu
     assert f'href="/agents/{agent_id}/approvals"' in menu
-    assert "Waiting for you" in menu
+    assert "Waiting for your OK" in menu
     # The grade keeps its id, link and the words chat.js writes into it.
     assert re.search(r'<a [^>]*id="trust-pill"[^>]*href="/safety"', menu)
     # Nothing to tap in the header outside the menu.

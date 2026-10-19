@@ -76,8 +76,9 @@ def test_plus_aliases_of_one_inbox_take_one_real_record_invite(
         _join_via(app, sent, code, f"robin+{i}@example.org",
                   ip=f"203.0.113.{40 + i}", first_run=False)
         _age_caps(svc)
-    granted = [e for e in (f"robin+{i}@example.org" for i in range(3))
-               if _invite_row(svc, e) is not None]
+    # Invites are keyed by inbox, so count rows, not aliases that match.
+    with svc.session() as s:
+        granted = [r.display_email for r in s.query(RealRecordInvite)]
     assert len(granted) <= 1, granted
 
 

@@ -45,6 +45,8 @@ _ALLOWED = {
         **{m: Float for m in funnel.MILESTONES}},
     "ca_issue_days": {"id": String, "day": String, "kind": String,
                       "count": Integer},
+    "ca_issue_detail_days": {"id": String, "day": String, "kind": String,
+                             "detail": String, "count": Integer},
     "ca_digest_days": {"day": String, "sent_at": Float},
     "ca_sign_in_days": {"id": String, "account_id": String, "day": String,
                         "method": String, "count": Integer},
