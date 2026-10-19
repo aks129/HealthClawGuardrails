@@ -12,7 +12,8 @@
        "code": "active",
        "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
       }
-     ]
+     ],
+     "text": "Active"
     },
     "code": {
      "coding": [
@@ -20,7 +21,8 @@
        "code": "7980",
        "system": "http://www.nlm.nih.gov/research/umls/rxnorm"
       }
-     ]
+     ],
+     "text": "Penicillin"
     },
     "criticality": "high",
     "id": "checkin-test-allergy-penicillin",
@@ -48,7 +50,8 @@
           "code": "271807003",
           "system": "http://snomed.info/sct"
          }
-        ]
+        ],
+        "text": "Eruption"
        }
       ],
       "severity": "moderate"
@@ -62,7 +65,8 @@
        "code": "confirmed",
        "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification"
       }
-     ]
+     ],
+     "text": "Confirmed"
     }
    }
   },
@@ -76,7 +80,8 @@
         "code": "problem-list-item",
         "system": "http://terminology.hl7.org/CodeSystem/condition-category"
        }
-      ]
+      ],
+      "text": "Problem List Item"
      }
     ],
     "clinicalStatus": {
@@ -85,7 +90,8 @@
        "code": "active",
        "system": "http://terminology.hl7.org/CodeSystem/condition-clinical"
       }
-     ]
+     ],
+     "text": "Active"
     },
     "code": {
      "coding": [
@@ -121,7 +127,8 @@
        "code": "confirmed",
        "system": "http://terminology.hl7.org/CodeSystem/condition-ver-status"
       }
-     ]
+     ],
+     "text": "Confirmed"
     }
    }
   },
@@ -139,7 +146,8 @@
          "code": "group",
          "system": "http://terminology.hl7.org/CodeSystem/coverage-class"
         }
-       ]
+       ],
+       "text": "Group"
       },
       "value": "FAKE-GROUP-0001"
      },
@@ -150,7 +158,8 @@
          "code": "plan",
          "system": "http://terminology.hl7.org/CodeSystem/coverage-class"
         }
-       ]
+       ],
+       "text": "Plan"
       },
       "value": "FAKE-PLAN-01"
      }
@@ -165,7 +174,8 @@
          "code": "MB",
          "system": "http://terminology.hl7.org/CodeSystem/v2-0203"
         }
-       ]
+       ],
+       "text": "Member Number"
       },
       "value": "FAKE-MEMBER-0000001"
      }
@@ -197,7 +207,8 @@
        "code": "self",
        "system": "http://terminology.hl7.org/CodeSystem/subscriber-relationship"
       }
-     ]
+     ],
+     "text": "Self"
     },
     "resourceType": "Coverage",
     "status": "active",
@@ -208,7 +219,8 @@
        "code": "5",
        "system": "https://nahdo.org/sopt"
       }
-     ]
+     ],
+     "text": "PRIVATE HEALTH INSURANCE"
     }
    }
   },
@@ -257,7 +269,8 @@
         "code": "community",
         "system": "http://terminology.hl7.org/CodeSystem/medicationrequest-category"
        }
-      ]
+      ],
+      "text": "Community"
      }
     ],
     "dosageInstruction": [
@@ -339,7 +352,8 @@
          "code": "en",
          "system": "urn:ietf:bcp:47"
         }
-       ]
+       ],
+       "text": "English"
       }
      }
     ],
