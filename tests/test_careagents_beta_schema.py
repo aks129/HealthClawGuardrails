@@ -60,7 +60,7 @@ def test_the_stage1_tables_carry_only_their_listed_columns(url):
     engine = models.make_engine(url)
     insp = inspect(engine)
     assert {c["name"] for c in insp.get_columns("ca_real_record_invites")} == {
-        "email", "invited_at", "invited_by", "revoked_at"}
+        "email", "invited_at", "invited_by", "revoked_at", "display_email"}
     assert {c["name"] for c in insp.get_columns("ca_activity_days")} == {
         "id", "account_id", "day", "asked", "approved"}
     engine.dispose()
