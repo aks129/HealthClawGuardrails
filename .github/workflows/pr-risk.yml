@@ -1,0 +1,134 @@
+name: pr-risk
+
+# Risk-rate every PR R0-R3 and say whether the owner should look.
+#
+# SHADOW MODE. This workflow maintains one comment (edited in place) and the
+# labels `risk:R0`..`risk:R3` and `owner-look:yes|no`. It arms nothing, blocks
+# nothing, approves nothing and merges nothing; no check here is required.
+#
+# Security notes (deliberate):
+# - pull_request_target, so the job can label and comment on fork PRs. The
+#   checkout is the DEFAULT branch: the rubric (.github/pr-risk.yml) and the
+#   scorer (scripts/pr_risk.py) that run are the merged ones, never the PR's,
+#   so a PR cannot change the rules it is scored by. The PR's diff is read as
+#   text through the API (`gh pr diff`); PR code is never checked out or run.
+# - owner-look is YES for R2/R3, when the standards reviewer is not configured
+#   (ANTHROPIC_API_KEY unset, #608), and when the scorer fails.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-risk-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  score:
+    name: pr-risk
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Score the diff
+        id: score
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          set +e
+          flags=()
+          if [ "$HAS_KEY" != "true" ]; then flags+=(--review-unavailable); fi
+          gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/pr.diff" 2> "$RUNNER_TEMP/err.txt" \
+            && uv run --no-project --with pyyaml==6.0.2 python scripts/pr_risk.py \
+                 --diff-file "$RUNNER_TEMP/pr.diff" "${flags[@]}" > "$RUNNER_TEMP/result.json" 2>> "$RUNNER_TEMP/err.txt" \
+            && uv run --no-project --with pyyaml==6.0.2 python scripts/pr_risk.py \
+                 --diff-file "$RUNNER_TEMP/pr.diff" "${flags[@]}" --comment --head-sha "$HEAD_SHA" \
+                 > "$RUNNER_TEMP/comment.md" 2>> "$RUNNER_TEMP/err.txt"
+          rc=$?
+          if [ "$rc" -eq 0 ]; then ok=true; else ok=false; cat "$RUNNER_TEMP/err.txt"; fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/result.json" 2>/dev/null || true
+          exit 0
+
+      - name: Comment and label
+        uses: actions/github-script@v9
+        env:
+          SCORE_OK: ${{ steps.score.outputs.ok }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const tmp = process.env.RUNNER_TEMP;
+            const marker = '<!-- pr-risk -->';
+            const issue_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+
+            let level = null, look = true, body;
+            try {
+              if (process.env.SCORE_OK !== 'true') throw new Error('scorer did not finish');
+              const result = JSON.parse(fs.readFileSync(`${tmp}/result.json`, 'utf8'));
+              if (![0, 1, 2, 3].includes(result.level)) throw new Error('bad level');
+              level = result.level;
+              look = result.owner_look !== false;
+              body = fs.readFileSync(`${tmp}/comment.md`, 'utf8');
+            } catch (e) {
+              // Fail toward a human: an error is owner-look YES, never a quiet R0.
+              level = null; look = true;
+              core.warning(`pr-risk scorer failed: ${e.message}`);
+              body = [marker,
+                '> **Shadow mode.** This label and comment change nothing: no merge is armed, blocked or approved because of them.',
+                '',
+                '**Risk: unknown (scorer error)** · owner look needed: **YES**',
+                `Head \`${(process.env.HEAD_SHA || '').slice(0, 12)}\``,
+                '',
+                'See the workflow run log for the error.'].join('\n') + '\n';
+            }
+
+            // One comment, edited in place.
+            const comments = await github.paginate(github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 });
+            const mine = comments.find(c => c.user && c.user.type === 'Bot' && (c.body || '').startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+            // Labels: drop stale risk:/owner-look: labels, add the current ones.
+            const want = [`owner-look:${look ? 'yes' : 'no'}`];
+            if (level !== null) want.push(`risk:R${level}`);
+            const colors = { 'risk:R0': '0e8a16', 'risk:R1': 'c2e0c6', 'risk:R2': 'fbca04',
+                             'risk:R3': 'b60205', 'owner-look:yes': 'd93f0b', 'owner-look:no': 'ededed' };
+            for (const name of want) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name, color: colors[name],
+                  description: 'pr-risk (shadow mode): label only, gates nothing' });
+              } catch (e) {
+                if (e.status !== 422) throw e;  // 422: it already exists
+              }
+            }
+            const current = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number, per_page: 100 })).data.map(l => l.name);
+            for (const name of current) {
+              if ((name.startsWith('risk:R') || name.startsWith('owner-look:')) && !want.includes(name)) {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+              }
+            }
+            const missing = want.filter(n => !current.includes(n));
+            if (missing.length) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels: missing });
+            }
+            core.summary.addRaw(body).write();
