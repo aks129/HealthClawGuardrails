@@ -271,3 +271,70 @@ def test_the_comment_never_carries_diff_lines_or_markdown_from_the_pr():
         if "@aks129" in line or "http://e" in line:
             # still inside one inert code span
             assert line.count("`") % 2 == 0 and "<" not in line.split("`", 1)[1]
+
+
+# ------------------------------------------------- round 2: against the fixes
+
+@pytest.mark.parametrize("path", [
+    "templates/_review_handlers.html",     # the submit handler both approve pages include
+    "templates/review_base.html",          # what action_approve/action_review extend
+    "careagents/templates/base.html",      # what approvals.html and consent.html extend
+])
+def test_exploit_what_the_approval_pages_include_is_as_guarded_as_the_pages(path):
+    """EXPLOIT (round 2). The approve and consent pages are R3 now, but the
+    templates they extend or include are R1. One `<script>` in
+    _review_handlers.html, e.g. `document.getElementById('review-form')
+    .requestSubmit()`, approves with no human and scores R1 / owner-look:no."""
+    level, why = pr_risk.path_level(path, RUBRIC)
+    assert level >= 2, (path, level, why)
+
+
+@pytest.mark.parametrize("path", ["tests/pytest.ini", "pytest.ini", "setup.cfg", "tox.ini"])
+def test_exploit_a_pytest_config_file_is_not_r0_or_r1(path):
+    """EXPLOIT (round 2). The repo has no pytest config, so a new one wins.
+    CI runs `pytest tests/`, and pytest looks for its ini file from `tests/`
+    upwards, so `tests/pytest.ini` with `addopts = -k "not conformance"`
+    deselects the Grade A suite and CI goes green (shown: exit 1 -> exit 0).
+    tests/pytest.ini scores R0, a root pytest.ini R1."""
+    level, why = pr_risk.path_level(path, RUBRIC)
+    assert level >= 2, (path, level, why)
+
+
+def test_exploit_pytest_exit_zero_is_a_skip_signal():
+    """EXPLOIT (round 2). `pytest.exit("...", returncode=0)` in a setup hook
+    ends the whole session green with the rest of the suite unrun."""
+    path = "tests/test_tenant_isolation.py"
+    text = (f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+            "@@ -1,0 +1,2 @@\n+def setup_module():\n"
+            "+    pytest.exit('done', returncode=0)\n")
+    result, _ = _score(text)
+    rules = {r["rule"] for r in result["reasons"] if r["kind"] == "signal"}
+    assert "test_skipped" in rules, result["reasons"]
+
+
+def test_conftest_has_its_own_path_floor_not_only_a_signal():
+    """Pins the conftest rule itself: without it a conftest change that uses
+    a hook the skip regex does not name (pytest_configure, say) is R0."""
+    for path in ("conftest.py", "tests/conftest.py", "tests/actions/conftest.py"):
+        assert pr_risk.path_level(path, RUBRIC)[0] >= 2, path
+
+
+def _script():
+    return [s for s in _steps() if str(s.get("uses", "")).startswith(
+        "actions/github-script@")][0]["with"]["script"]
+
+
+def test_the_sticky_comment_is_found_by_this_bots_login_not_any_bot():
+    """Any Bot-type comment that starts with the marker would be edited (or
+    shadow ours) if the lookup keyed on `user.type === 'Bot'`."""
+    script = _script()
+    assert re.search(r"c\.user\.login\s*===\s*BOT", script)
+    assert "user.type" not in script
+    assert re.search(r"const BOT = 'github-actions\[bot\]'", script)
+
+
+def test_a_default_branch_other_than_main_forces_owner_look_on_a_scored_run():
+    """`forced` must reach `look` on the success path, not only the banner."""
+    script = _script()
+    assert re.search(r"look = result\.owner_look !== false \|\| forced;", script)
+    assert "default_branch !== 'main'" in script
