@@ -27,6 +27,8 @@ CAUSES = (MODEL_AUTH, MODEL_QUOTA, MODEL_TIMEOUT, MODEL_OTHER,
 def cause_of(exc: BaseException) -> str:
     """The cause code for `exc`. A run past its deadline is classified by
     the worker, which catches it on its own."""
+    if isinstance(exc, llm.ModelHostNotApproved):
+        return MODEL_AUTH       # the host is not authorised for real records
     if isinstance(exc, llm.LLMTimeout):
         return MODEL_TIMEOUT
     if isinstance(exc, (llm.LLMOutOfCredit, llm.LLMRateLimited)):
