@@ -89,7 +89,7 @@ _APPROVALS = re.compile(r"\A/agents/[A-Za-z0-9_-]{1,64}/approvals\Z")
 CONTEXT_FIELDS = ("screen", "error", "run_id")
 #: The error codes a page may report: the statuses our pages show.
 ERROR_CODES = ("400", "403", "404", "405", "500", "503",
-               "chat_error", "connection")
+               "chat_error", "connection", "rate_limited")
 #: An engine run id is str(uuid.uuid4()) (r6/agent_runs/models.py).
 _RUN_ID = re.compile(
     r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")

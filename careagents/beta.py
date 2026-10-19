@@ -30,11 +30,29 @@ PAUSED_HUB_TEXT = ("Your records are paused for now. Your assistant won't "
                    "didn't expect this, write to contactus@healthclaw.io.")
 
 
-#: What a turn answers when the day's allowance is spent by the time the
-#: worker charges it (#856 sign-off F4). The same words as the 429 at
-#: admission.
-DAILY_LIMIT_TEXT = ("You've reached today's message limit. It resets "
-                    "overnight.")
+#: The first sentence of what a turn answers when the day's allowance is
+#: spent: at admission (the 429, the texted reply) and when the worker
+#: charges it (#856 sign-off F4). daily_limit_text adds when it comes back.
+DAILY_LIMIT_TEXT = "You've used today's messages."
+
+
+def daily_limit_text(now: _dt.datetime | None = None) -> str:
+    """DAILY_LIMIT_TEXT and how long until more, in plain hours (#864).
+    The allowance is counted per UTC day (accounts.claim_daily_turn), so
+    it comes back at the next UTC midnight. "Overnight" was false for US
+    testers, whose reset falls in the afternoon or evening, and a UTC time
+    means nothing to them, so the sentence says only how long."""
+    moment = (now or _dt.datetime.now(_dt.timezone.utc)).astimezone(
+        _dt.timezone.utc)
+    midnight = (moment + _dt.timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    minutes = (midnight - moment).total_seconds() / 60
+    if minutes < 45:
+        when = "in under an hour"
+    else:
+        hours = int((minutes + 30) // 60)
+        when = f"in about {hours} hour{'' if hours == 1 else 's'}"
+    return f"{DAILY_LIMIT_TEXT} More {when}."
 
 
 #: The sample connection's one line: the banner on its chat page, and the

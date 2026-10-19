@@ -26,9 +26,11 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
+# Its table goes in Base.metadata before any engine is built, as below.
+from careagents import checkins
 # Also puts the beta, invite and funnel tables in Base.metadata before any
 # engine is built.
-from careagents import beta_signup, funnel, invites
+from careagents import beta_signup, funnel, invites, signins
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
@@ -49,6 +51,18 @@ RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts
                         # while a recent one is still in flight
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
 SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
+# Per-address caps on sign-in codes, as rolling windows over when each code
+# was issued. Every code counts, burned and used ones included: a burned code
+# is one whose guesses were spent, so leaving it out would hand back a fresh
+# set of guesses at once.
+CODES_PER_HOUR = 10
+CODES_PER_DAY = 20
+WRONG_GUESSES_PER_DAY = 25  # across all of an address's codes
+HOUR = 3600
+DAY = 86_400
+#: Postgres advisory-lock class for one address's codes; the second key is
+#: derived from the address (_lock_codes). Distinct from _INVITE_LOCK_KEY.
+_CODES_LOCK_KEY = 9_280_002
 #: People someone can add to care for. Each mints and seeds a sample tenant,
 #: so the number is bounded.
 MAX_OTHER_PEOPLE = 4
@@ -102,53 +116,122 @@ class AccountService:
     def _hash(code: str) -> str:
         return hashlib.sha256(code.encode()).hexdigest()
 
+    def _lock_codes(self, s, email: str) -> None:
+        """Make reading an address's codes and writing after them one step.
+
+        Racing requests otherwise all read the same count and all pass a cap.
+        Postgres takes an advisory lock on the address's inbox (mailbox) for
+        the transaction, so variants of one inbox wait for each other. SQLite
+        takes its write lock when a write statement starts, so a write that
+        changes nothing goes first and a racing request waits for the commit
+        before it reads."""
+        if self.engine.dialect.name == "postgresql":
+            key = beta_signup.mailbox(email)
+            k = int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],
+                               "big", signed=True)
+            # The two-key form takes two 32-bit integers.
+            s.execute(text("SELECT pg_advisory_xact_lock("
+                           "CAST(:c AS integer), CAST(:k AS integer))"),
+                      {"c": _CODES_LOCK_KEY, "k": k})
+        else:
+            s.execute(text("UPDATE ca_email_tokens SET used = used "
+                           "WHERE 1 = 0"))
+
+    @staticmethod
+    def _same_inbox(email: str):
+        """Every code for the inbox the address delivers to: one Gmail inbox
+        is reached by plus-tags, dots and googlemail, and they share its
+        caps. The typed address also matches codes issued before `mailbox`
+        was recorded."""
+        return or_(EmailToken.mailbox == beta_signup.mailbox(email),
+                   EmailToken.email == email)
+
+    @classmethod
+    def _issued_within(cls, s, email: str, window: int) -> list:
+        """Every code issued for the address's inbox in the last `window`
+        seconds, oldest first. exp is issue time + CODE_TTL; there is no
+        issue column."""
+        return (s.query(EmailToken)
+                .filter(cls._same_inbox(email))
+                .filter(EmailToken.exp >= now() - window + CODE_TTL)
+                .order_by(EmailToken.exp.asc()).all())
+
+    @staticmethod
+    def _code_wait(day: list) -> float:
+        """Seconds until the address may be sent another code; <= 0 is now.
+
+        `day` is _issued_within(DAY). A cap of N over a window frees up when
+        the code that brought the count to N leaves that window."""
+        t = now()
+        issued = [tok.exp - CODE_TTL for tok in day]
+        waits = [0.0]
+        if issued:
+            waits.append(issued[-1] + RESEND_COOLDOWN - t)
+        hour = [at for at in issued if at >= t - HOUR]
+        if len(hour) >= CODES_PER_HOUR:
+            waits.append(hour[len(hour) - CODES_PER_HOUR] + HOUR - t)
+        if len(issued) >= CODES_PER_DAY:
+            waits.append(issued[len(issued) - CODES_PER_DAY] + DAY - t)
+        guesses = sum(tok.attempts or 0 for tok in day)
+        for tok, at in zip(day, issued):
+            if guesses < WRONG_GUESSES_PER_DAY:
+                break
+            # This code's wrong guesses stop counting when it leaves the
+            # window.
+            guesses -= tok.attempts or 0
+            waits.append(at + DAY - t)
+        return max(waits)
+
     def start_email_code(self, email: str, purpose: str = "verify") -> int:
         """Mint and send a one-time code.
 
         Returns 0 when a code was actually sent, otherwise the whole seconds
-        until another may be requested. The cooldown branch is not a failure —
-        the person still holds a live code — but it is not a send either, and
-        the caller must not report one it never observed (#262).
+        until another may be requested: the resend wait, or a per-address cap
+        on codes or on wrong guesses. A wait is not a failure, but it is not a
+        send either, and the caller must not report one it never observed
+        (#262). Every branch reads ca_email_tokens alone, so the answer is the
+        same whether or not the address has an account.
         """
         email = email.strip().lower()
         if "@" not in email or len(email) > 255:
             raise AuthError("Enter a valid email address.")
         code = None
         with self.session() as s:
-            # If a code was minted very recently, don't send another — this
-            # both avoids code-spam and stops an attacker from resetting the
-            # per-code attempt counter by re-requesting.
-            recent = (s.query(EmailToken)
-                      .filter_by(email=email, used=False)
-                      .filter(EmailToken.exp >= now())
-                      .order_by(EmailToken.exp.desc()).first())
-            if recent is not None:
-                # exp is mint-time + CODE_TTL, so whatever the code has left
-                # beyond its post-cooldown life is the cooldown that remains.
-                remaining = ((recent.exp - now())
-                             - (CODE_TTL - RESEND_COOLDOWN))
-                if remaining > 0:
-                    # Round up: never tell someone to retry a moment early.
-                    return max(1, math.ceil(remaining))
-            # One live code at a time: retire any prior unused codes so an
-            # attacker can't accumulate many simultaneously-valid guesses.
-            s.query(EmailToken).filter_by(
-                email=email, used=False).update({"used": True})
+            self._lock_codes(s, email)
+            # Any code issued in the window holds the next one back: unused,
+            # used or burned. Counting only unused codes let a burned code be
+            # replaced at once, which reset the per-code attempt count.
+            wait = self._code_wait(self._issued_within(s, email, DAY))
+            if wait > 0:
+                # Round up: never tell someone to retry a moment early.
+                return max(1, math.ceil(wait))
+            # One live code per inbox: retire any prior unused codes, the
+            # inbox's other variants' included, so an attacker can't
+            # accumulate many simultaneously-valid guesses.
+            (s.query(EmailToken)
+             .filter(self._same_inbox(email), EmailToken.used.is_(False))
+             .update({"used": True}, synchronize_session=False))
             code = f"{secrets.randbelow(CODE_MAX):08d}"
-            s.add(EmailToken(email=email, code_hash=self._hash(code),
-                             purpose=purpose, exp=now() + CODE_TTL))
+            # Sent to the address as typed; counted against its inbox.
+            tok = EmailToken(email=email, code_hash=self._hash(code),
+                             purpose=purpose, exp=now() + CODE_TTL,
+                             mailbox=beta_signup.mailbox(email))
+            s.add(tok)
+            s.flush()
+            token_id = tok.id
         # Three outcomes, and each one leaves the just-minted code in a
         # different place. Compared by identity against the named states, never
         # truthiness-tested — every state is a truthy string precisely so that
         # a `if not send_code(...)` cannot be written here again.
         outcome = mail.send_code(self.cfg, email, code, purpose)
         if outcome == mail.NOT_SENT:
-            # Burn the code we just minted. It was never delivered, and leaving
-            # it live would make the resend cooldown above swallow the person's
-            # retry — reporting "sent" without sending anything.
+            # Remove the code we just minted. It was never delivered, and
+            # leaving it would make the resend wait above swallow the person's
+            # retry — reporting "sent" without sending anything. Deleted, not
+            # burned: a burned code counts toward the wait and the caps, and
+            # this one never left.
             with self.session() as s:
-                s.query(EmailToken).filter_by(
-                    email=email, used=False).update({"used": True})
+                s.query(EmailToken).filter_by(id=token_id).delete()
             raise MailError(
                 "We couldn't send your code just now. Please try again.")
         if outcome != mail.SENT:
@@ -160,7 +243,7 @@ class AccountService:
             raise MailUnconfirmed(
                 "We couldn't confirm your code was sent. Check your inbox — "
                 "if nothing arrives, ask for another code in 30 seconds.")
-        # SENT: no cooldown to report. The early return above is the only path
+        # SENT: no wait to report. The early return above is the only path
         # that reports one (#262).
         return 0
 
@@ -174,6 +257,8 @@ class AccountService:
         result: _Row | None = None
         made = False
         with self.session() as s:
+            # Parallel guesses must not each read the same attempt count.
+            self._lock_codes(s, email)
             # Fetch the single live code by email (not by hash) so a wrong
             # guess is counted against it and the code can be burned.
             tok = (s.query(EmailToken)
@@ -182,6 +267,14 @@ class AccountService:
                    .order_by(EmailToken.exp.desc()).first())
             if tok is None:
                 error = "That code is wrong or expired."
+            elif (sum(t.attempts or 0
+                      for t in self._issued_within(s, email, DAY))
+                  >= WRONG_GUESSES_PER_DAY):
+                # The day's wrong guesses, across every code, are spent: no
+                # code is accepted, the right one included, until the oldest
+                # of them leaves the window.
+                tok.used = True
+                error = "Too many attempts — request a new code."
             elif (tok.attempts or 0) >= MAX_CODE_ATTEMPTS:
                 tok.used = True
                 error = "Too many attempts — request a new code."
@@ -203,12 +296,14 @@ class AccountService:
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
+                acct.last_login_method = "email_code"
                 s.flush()
                 result = _detach(acct)
         if error:
             raise AuthError(error)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
+        funnel.safely(signins.count, self.session, result.id, "email_code")
         return result
 
     def has_connections(self, account_id: str) -> bool:
@@ -224,14 +319,19 @@ class AccountService:
                 Connection.account_id == account_id,
                 Connection.kind != "sample").first() is not None
 
-    def first_run_account(self, email: str) -> Account | None:
+    def first_run_account(self, email: str,
+                          sign_in: bool = True) -> Account | None:
         """The account a confirmed beta request signs in to, or None.
 
         The confirm link proves the mailbox, as an email code does, so the
         address gets the account a code would give it: made now if there
         is none, verified, its sign-in stamped. None when the account
         already has a connection: a forwarded link must never open records
-        that are already there, so that account signs in the usual way."""
+        that are already there, so that account signs in the usual way.
+
+        `sign_in=False` when this browser is already signed in as the
+        address (app.py `_first_run` keeps that session): no sign-in
+        happened, so none is stamped or counted."""
         email = email.strip().lower()
         with self.session() as s:
             acct = s.query(Account).filter_by(email=email).first()
@@ -246,11 +346,16 @@ class AccountService:
                 s.add(Person(account_id=acct.id, kind="self"))
             elif acct.email_verified_at is None:
                 acct.email_verified_at = now()
-            acct.last_login_at = now()
+            if sign_in or made:
+                acct.last_login_at = now()
+                acct.last_login_method = "signup_confirm"
             s.flush()
             result = _detach(acct)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
+        if sign_in or made:
+            funnel.safely(signins.count, self.session, result.id,
+                          "signup_confirm")
         return result
 
     def ping(self) -> bool:
@@ -312,7 +417,12 @@ class AccountService:
 
     def finish_authentication(self, credential: dict,
                               expected_challenge: str,
-                              require_uv: bool = False) -> Account:
+                              require_uv: bool = False,
+                              method: str | None = None) -> Account:
+        """Verify a passkey assertion. `method` is the sign-in it is
+        counted as (careagents/signins.py), passed by the sign-in route.
+        None, the default, counts nothing: the consent screen's check makes
+        no session."""
         raw_id = base64url_to_bytes(credential["rawId"])
         with self.session() as s:
             pk = s.query(Passkey).filter_by(credential_id=raw_id).first()
@@ -329,9 +439,14 @@ class AccountService:
             )
             pk.sign_count = verification.new_sign_count
             acct = s.get(Account, pk.account_id)
-            acct.last_login_at = now()
+            if method:
+                acct.last_login_at = now()
+                acct.last_login_method = method
             s.flush()
-            return _detach(acct)
+            result = _detach(acct)
+        if method:
+            funnel.safely(signins.count, self.session, result.id, method)
+        return result
 
     def has_passkey(self, account_id: str) -> bool:
         with self.session() as s:
@@ -348,23 +463,30 @@ class AccountService:
     # --- real-record invites (beta pathway spec section 4.2) ---------------
 
     @staticmethod
-    def _invite_email(email: str) -> str:
+    def _invite_email(email: str) -> tuple[str, str]:
+        """(the inbox an invite is keyed by, the address as typed). See
+        `invites.invite_key`."""
         email = (email or "").strip().lower()
         if "@" not in email or len(email) > 255:
             raise AuthError("Enter a valid email address.")
-        return email
+        key = invites.invite_key(email)
+        if key.startswith("@") or len(key) > 255:
+            raise AuthError("Enter a valid email address.")
+        return key, email
 
     #: Postgres advisory-lock key that serialises stage 1 invite writes, so
     #: the count of live invites and the write that depends on it are one
     #: step. Distinct from the migration keys in models.py.
     _INVITE_LOCK_KEY = 9_280_001
 
-    def _write_invite(self, email: str, invited_by: str,
+    def _write_invite(self, email: str, display: str, invited_by: str,
                       reopen: bool) -> str:
         """Create (or, with `reopen`, reopen) an invite only while fewer than
         STAGE1_INVITE_CAP are live, as one atomic step (#928 F1). Returns
         "created", "reopened", "live" (already live, unchanged), "revoked"
-        (revoked and left so) or "full".
+        (revoked and left so), "full", or "alias-live" / "alias-revoked":
+        the inbox (`invites.inbox_key`) already holds an invite under
+        another address, and nothing is written (#993 F1).
 
         The cap sits inside the writing statement. SQLite takes its write
         lock when that statement starts, so the count it reads cannot move
@@ -374,22 +496,31 @@ class AccountService:
         from careagents.beta import STAGE1_INVITE_CAP
         live = ("(SELECT COUNT(*) FROM ca_real_record_invites "
                 "WHERE revoked_at IS NULL)")
-        args = {"e": email, "t": now(), "b": invited_by,
+        args = {"e": email, "d": display, "t": now(), "b": invited_by,
                 "cap": STAGE1_INVITE_CAP}
         with self.engine.begin() as conn:
             if self.engine.dialect.name == "postgresql":
                 conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
                              {"k": self._INVITE_LOCK_KEY})
+            else:
+                # SQLite: take the write lock before reading the rows.
+                conn.execute(text("UPDATE ca_real_record_invites "
+                                  "SET email = email WHERE 1 = 0"))
+            alias = invites.alias_invite(conn.execute(text(
+                "SELECT email, revoked_at FROM ca_real_record_invites")),
+                display)
+            if alias is not None:
+                return f"alias-{alias}"
             if conn.execute(text(
                     "INSERT INTO ca_real_record_invites "
-                    "(email, invited_at, invited_by) "
-                    "SELECT :e, :t, :b WHERE NOT EXISTS ("
+                    "(email, display_email, invited_at, invited_by) "
+                    "SELECT :e, :d, :t, :b WHERE NOT EXISTS ("
                     "SELECT 1 FROM ca_real_record_invites WHERE email = :e) "
                     f"AND {live} < :cap"), args).rowcount:
                 return "created"
             if reopen and conn.execute(text(
                     "UPDATE ca_real_record_invites SET revoked_at = NULL, "
-                    "invited_at = :t, invited_by = :b "
+                    "invited_at = :t, invited_by = :b, display_email = :d "
                     "WHERE email = :e AND revoked_at IS NOT NULL "
                     f"AND {live} < :cap"), args).rowcount:
                 return "reopened"
@@ -412,11 +543,16 @@ class AccountService:
         cannot pass the cap (#928 F1).
         """
         from careagents.beta import STAGE1_INVITE_CAP
-        email = self._invite_email(email)
+        key, display = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
-        outcome = self._write_invite(email, invited_by, reopen=True)
+        outcome = self._write_invite(key, display, invited_by, reopen=True)
+        if outcome.startswith("alias-"):
+            raise ValueError(
+                "Another address for the same inbox already holds an invite "
+                f"({outcome[6:]}). Use that address, or revoke it with "
+                "`flask invites revoke`.")
         if outcome == "full":
             raise ValueError(
                 f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
@@ -427,31 +563,46 @@ class AccountService:
         """A fresh invite for someone who joined through a link, or nothing
         (#928 F2): an invite that exists in any state, live or revoked by
         the operator, is left exactly as it is, `invited_by` included.
-        Returns "created", "live", "revoked" or "full"."""
-        email = self._invite_email(email)
-        return self._write_invite(email, (invited_by or "")[:255],
-                                  reopen=False)
+        Returns "created", "live", "revoked" or "full"; an invite on the
+        same inbox under another address counts as "live" or "revoked"."""
+        key, display = self._invite_email(email)
+        outcome = self._write_invite(key, display, (invited_by or "")[:255],
+                                     reopen=False)
+        return outcome[6:] if outcome.startswith("alias-") else outcome
 
     def revoke_real_records_invite(self, email: str) -> bool:
         """Revoke an invite. New real connections are refused from now on;
         existing ones are left alone. Returns False when there was no live
-        invite to revoke."""
-        email = self._invite_email(email)
+        invite to revoke. Any alias revokes every live invite on the inbox,
+        counted wide (`invites.inbox_key`, #993 F1)."""
+        self._invite_email(email)
+        inbox = invites.inbox_key(email)
+        revoked = False
         with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            if row is None or row.revoked_at is not None:
-                return False
-            row.revoked_at = now()
-            return True
+            for row in s.query(RealRecordInvite).filter(
+                    RealRecordInvite.revoked_at.is_(None)):
+                if invites.inbox_key(row.email) == inbox:
+                    row.revoked_at = now()
+                    revoked = True
+        return revoked
 
     def real_records_invited(self, email) -> bool:
-        """Does this email hold a live (not revoked) invite?"""
-        email = (email or "").strip().lower()
-        if not email:
+        """Does this email hold a live invite? Granted on the narrow key
+        (`invites.invite_key`), and refused when any invite on the wider
+        inbox (`invites.inbox_key`) is revoked (#993 F1). No address, no
+        invite."""
+        key = invites.invite_key(email)
+        if not key or (email or "").strip().endswith("."):
+            # A trailing-dot domain is folded for storing and revoking an
+            # invite, never to grant one: the gate fails closed (#993 F2).
             return False
         with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            return row is not None and row.revoked_at is None
+            row = s.get(RealRecordInvite, key)
+            if row is None or row.revoked_at is not None:
+                return False
+            rows = s.query(RealRecordInvite.email,
+                           RealRecordInvite.revoked_at).all()
+        return invites.alias_invite(rows, email) != "revoked"
 
     # --- pause (beta spec section 4.6) --------------------------------------
 
@@ -889,15 +1040,17 @@ class AccountService:
                 return False
             # People last: connections and agents point at them.
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, RefundDay, ActivityDay, Person):
+                          UsageDay, RefundDay, ActivityDay, signins.SignInDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)
             funnel.delete_for_account(s, account_id)
+            checkins.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
-            # The invite is keyed by the same address (beta spec 4.2). The
+            # The invite is keyed by the same inbox (beta spec 4.2). The
             # operator can invite again if the person comes back.
-            s.query(RealRecordInvite).filter_by(email=acct.email).delete()
+            s.query(RealRecordInvite).filter_by(
+                email=invites.invite_key(acct.email)).delete()
             # So is a beta request (beta onboarding brief section 5),
             # matched by mailbox since a request keeps its domain in ASCII;
             # its iMessage spot goes to the oldest waitlisted request.

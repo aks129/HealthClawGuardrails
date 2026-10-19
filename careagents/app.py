@@ -14,13 +14,15 @@ guardrail layer; careagents holds identity + pointers only.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import quote
@@ -40,8 +42,9 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, errors, feedback, funnel, invites
+from careagents import beta_signup, causes, errors, feedback, funnel, invites
 from careagents import checkin_wallet
+from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -75,6 +78,15 @@ _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
 #: The one address patient-facing copy sends people to.
 CONTACT_EMAIL = "contactus@healthclaw.io"
 
+#: Sign-in code requests one client address may make per window. Sized for
+#: a family on one home Wi-Fi, each asking for codes and asking again; the
+#: per-address caps in accounts.py protect each inbox.
+CODE_REQUESTS_PER_IP = 30
+CODE_REQUEST_WINDOW = 600
+#: Client addresses the code-request limiter remembers before it forgets
+#: the oldest.
+CODE_REQUEST_KEYS = 4096
+
 
 def contact_links(text) -> Markup:
     """Jinja filter: escape `text`, then make the contact address a mailto
@@ -107,6 +119,11 @@ def chat_links(text) -> Markup:
 # chosen to end the 25s hold while leaving room for a loaded engine; it is not
 # a measured optimum, and a p99 from production should replace it.
 _ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
+
+#: Consecutive failed run-event reads before the browser stream says the
+#: turn failed (#926). A read that met a closing keep-alive connection
+#: succeeds on the next try; an engine that is really gone does not.
+_REPLAY_MAX_MISSES = 3
 
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
@@ -760,10 +777,59 @@ def create_app(config: Config | None = None,
 
     # --- email code auth -----------------------------------------------------
 
+    code_requests: OrderedDict[str, deque] = OrderedDict()
+    # gunicorn runs several threads per worker: reading, counting and
+    # re-inserting a window is one step, or a racing burst beats the limit.
+    code_requests_lock = threading.Lock()
+
+    def _code_request_client() -> str:
+        # As /feedback and /beta do: X-Real-IP, never X-Forwarded-For, whose
+        # entries can be the client's own words. The edge must overwrite
+        # X-Real-IP with the connecting address (Railway's does); passed
+        # through from the client, it would pick its own bucket.
+        raw = (request.headers.get("X-Real-IP") or "").strip()
+        try:
+            return str(ipaddress.ip_address(raw))
+        except ValueError:
+            return request.remote_addr or ""
+
+    def _code_request_wait(key: str) -> int:
+        """0 and counted, or the whole seconds until this client may ask."""
+        moment = time.time()
+        with code_requests_lock:
+            window = code_requests.pop(key, None) or deque()
+            while window and moment - window[0] > CODE_REQUEST_WINDOW:
+                window.popleft()
+            wait = 0
+            if len(window) >= CODE_REQUESTS_PER_IP:
+                oldest = window[len(window) - CODE_REQUESTS_PER_IP]
+                wait = max(1, math.ceil(oldest + CODE_REQUEST_WINDOW
+                                        - moment))
+            else:
+                window.append(moment)
+            code_requests[key] = window             # newest last
+            while len(code_requests) > CODE_REQUEST_KEYS:
+                code_requests.popitem(last=False)   # forget the oldest key
+            return wait
+
     @app.post("/api/auth/email")
     def auth_email():
         email = (request.get_json(silent=True) or {}).get("email", "")
         purpose = "verify"
+        # Per client address, before any address is looked at: one network
+        # asking for codes to many inboxes. Keyed on the network alone, so
+        # the answer says nothing about the address asked for. A 429 with a
+        # sentence, not the resend wait: that answer tells the person a code
+        # went out moments ago, and from here none did.
+        wait = _code_request_wait(_code_request_client())
+        if wait:
+            funnel.safely(funnel.count_issue, svc.session, "rate_limited")
+            minutes = math.ceil(wait / 60)
+            return jsonify({
+                "error": ("Too many code requests from this network. Try "
+                          f"again in {minutes} minute"
+                          f"{'' if minutes == 1 else 's'}."),
+                "retry_after": wait}), 429
         try:
             retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
@@ -782,19 +848,19 @@ def create_app(config: Config | None = None,
             # inbox with no idea whether to wait or retry.
             return jsonify({"error": str(exc), "sent": False}), 502
         if retry_after:
-            # The cooldown suppressed the send (#262). 200, not 4xx: the
-            # request was handled correctly and the person still holds a live
-            # code, so the UI still advances to code entry. But claiming
-            # "sent" here is the lie — it strands whoever's first email never
-            # arrived, telling them to wait for something nobody sent.
+            # The resend wait, or a per-address cap, suppressed the send
+            # (#262). 200, not 4xx: the request was handled correctly and the
+            # address was sent a code recently, so the UI still advances to
+            # code entry and shows the wait. But claiming "sent" here is the
+            # lie — it strands whoever's first email never arrived, telling
+            # them to wait for something nobody sent.
             #
-            # Not an enumeration oracle: this branch turns only on whether a
-            # code was requested for this address moments ago — a state the
-            # requester just created themselves — never on whether an account
-            # exists. start_email_code touches ca_email_tokens alone; accounts
-            # are created at verify. The genuine-send and cooldown responses
-            # are byte-identical for an address with an account and one
-            # without.
+            # Not an enumeration oracle: this branch turns only on the codes
+            # already requested for this address, and their wrong guesses —
+            # states requesters created — never on whether an account exists.
+            # start_email_code touches ca_email_tokens alone; accounts are
+            # created at verify. The genuine-send and wait responses are
+            # byte-identical for an address with an account and one without.
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
@@ -854,7 +920,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             acct = svc.finish_authentication(request.get_json(force=True),
-                                             challenge)
+                                             challenge, method="passkey")
         except AuthError as exc:
             funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
@@ -1213,7 +1279,7 @@ def create_app(config: Config | None = None,
         me = current_account()
         if me is not None and me.email != email.strip().lower():
             return None
-        acct = svc.first_run_account(email)
+        acct = svc.first_run_account(email, sign_in=me is None)
         if acct is None:
             return None
         if me is None:
@@ -2338,6 +2404,7 @@ def create_app(config: Config | None = None,
         # at 90 seconds is no likelier to finish in the next 250ms than one
         # at 5, and a token that just arrived is likely followed by another.
         empty_streak = 0
+        misses = 0
         yield "data: " + json.dumps({
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
@@ -2346,7 +2413,22 @@ def create_app(config: Config | None = None,
                 with acting_for(account_id):
                     page = hc.agent_run_events(tenant, run_id, after=cursor,
                                                limit=100)
-            except HealthClawError:
+            except HealthClawError as exc:
+                # The class and status only: the message is engine text.
+                misses += 1
+                logger.warning(
+                    "run event read %d/%d failed for tenant %s: %s status=%s",
+                    misses, _REPLAY_MAX_MISSES, tenant, type(exc).__name__,
+                    exc.status)
+                # #926: one failed read is not a failed run. A poll that
+                # lands as the engine closes an idle keep-alive connection
+                # (gunicorn's 2s, the same as the poll's backoff cap) never
+                # reaches the engine, and ending here showed "Something went
+                # wrong" on a run that went on to complete. The read has no
+                # side effect and resumes at `cursor`, so it is tried again.
+                if misses < _REPLAY_MAX_MISSES:
+                    time.sleep(cfg.run_sse_poll_seconds)
+                    continue
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
                 # reason (#219). Only this projection ends: the run is durable
@@ -2354,12 +2436,12 @@ def create_app(config: Config | None = None,
                 # text is the same generic sentence every other failure uses —
                 # an exception message here would be the first place engine
                 # internals reached a patient's screen.
-                logger.warning("run event stream failed for tenant %s", tenant)
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
                     "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
                 return
+            misses = 0
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -2408,7 +2490,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "message must be 1-2000 characters"}), 400
         workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
@@ -2432,7 +2515,7 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.DAILY_LIMIT_TEXT,
+                    "message": beta.daily_limit_text(),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -2447,13 +2530,15 @@ def create_app(config: Config | None = None,
         created, user_message_id = hc.claim_inbound_message(
             tenant, text, agent["id"], conversation_id, "web", request_id)
         if created is None or not user_message_id:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return jsonify({"error": "message store unavailable"}), 503
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
-        except HealthClawError:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+        except HealthClawError as exc:
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.cause_of(exc))
             return jsonify({"error": "run queue unavailable"}), 503
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
@@ -3184,7 +3269,7 @@ def create_app(config: Config | None = None,
                            tester_terms.CONSENT_VERSION):
             return None
         if svc.daily_turns_used(account_id) >= cfg.chat_turns_per_day:
-            return beta.DAILY_LIMIT_TEXT
+            return beta.daily_limit_text()
         return None
 
     def _imessage_queue_turn(ctx, text, request_id, conversation_id):
@@ -3653,8 +3738,11 @@ def create_app(config: Config | None = None,
             created = svc.invite_real_records(email, invited_by)
         except (AuthError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"invited {email.strip().lower()}" if created
-                   else f"{email.strip().lower()} was already invited")
+        typed, key = email.strip().lower(), invites.invite_key(email)
+        click.echo(f"invited {typed}" if created
+                   else f"{typed} was already invited")
+        if key != typed:
+            click.echo(f"matches the inbox {key} (any alias of it)")
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
@@ -3676,7 +3764,9 @@ def create_app(config: Config | None = None,
 
     @_invites.command("list")
     def _invites_list():
-        rows = svc.real_record_invites()
+        """Each invite: as typed, the inbox it matches, when and by whom,
+        live or revoked, and whether that inbox has signed up yet."""
+        rows = invites.real_record_rows(svc.session)
         if not rows:
             click.echo("no invites")
         for r in rows:
@@ -3684,8 +3774,10 @@ def create_app(config: Config | None = None,
             state = ("revoked " + datetime.fromtimestamp(
                 r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
                      if r["revoked_at"] else "live")
-            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
-                       f"by {r['invited_by']:<20} {state}")
+            joined = "signed up" if r["signed_up"] else "not signed up"
+            click.echo(f"{r['display']:<40} matches {r['key']:<32} "
+                       f"{when:%Y-%m-%d} by {r['invited_by']:<20} "
+                       f"{state:<18} {joined}")
 
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
@@ -3698,5 +3790,6 @@ def create_app(config: Config | None = None,
         _VIA_LINK))
     checkin_wallet.register(app, svc, cfg, hc,
                             full_session=lambda: not session.get(_VIA_LINK))
+    checkins.register(app, svc, cfg)
 
     return app

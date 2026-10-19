@@ -191,9 +191,10 @@ def test_a_malformed_snomed_code_never_reaches_the_resolver(monkeypatch,
 def test_a_well_formed_snomed_code_still_reaches_the_resolver(monkeypatch):
     asked = []
     monkeypatch.setattr("r6.terminology_resolver.resolve",
-                        lambda s, c: asked.append(c) or "Asthma")
-    assert terminology.lookup(SNOMED, " 195967001\n") == "Asthma"
-    assert asked == ["195967001"]
+                        lambda s, c: asked.append(c) or "Myocardial infarction")
+    # A code with no static row (195967001 has one since #959's labels).
+    assert terminology.lookup(SNOMED, " 22298006\n") == "Myocardial infarction"
+    assert asked == ["22298006"]
 
 
 # --- layer 3: a resolver answer that reads as an absence is never a label ----

@@ -518,7 +518,8 @@ def test_out_of_credit_is_an_llm_error_so_existing_handlers_still_catch_it():
 
 def test_the_patient_is_told_it_is_unavailable_and_nothing_about_billing():
     """MUTATION: drop the LLMOutOfCredit branch in failure_text -> red."""
-    text = worker._failure_text(llm.LLMOutOfCredit("billing"))
+    text = worker._failure_text(llm.LLMOutOfCredit("billing"),
+                                owner_told=True)
     assert text == agent.UNAVAILABLE_TEXT
     assert "more requests" not in text
     for word in ("quota", "billing", "credit", "openai", "anthropic",
@@ -527,8 +528,10 @@ def test_the_patient_is_told_it_is_unavailable_and_nothing_about_billing():
 
 
 def test_the_sync_path_says_unavailable_when_out_of_credit(monkeypatch):
+    # The sync path emails nobody, so it never says "we've been told".
     events = _turn_events(monkeypatch, llm.LLMOutOfCredit("billing"))
-    assert events == [{"type": "error", "text": agent.UNAVAILABLE_TEXT}]
+    assert events == [{"type": "error",
+                       "text": agent.UNAVAILABLE_UNTOLD_TEXT}]
 
 
 # --- the answer is not cut off by the thinking it spends ------------------
