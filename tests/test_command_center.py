@@ -11,6 +11,7 @@ Coverage:
 
 import json
 
+import pytest
 
 from models import db
 from r6.models import R6Resource, AuditEventRecord
@@ -18,6 +19,7 @@ from r6.command_center import agents, projector, gateway
 from r6.command_center.models import Conversation, ConversationMessage
 
 TENANT = "test-tenant"
+OPERATOR_SECRET = "cc-test-operator-secret"
 
 
 def _login_client(client, tenant: str = TENANT):
@@ -290,15 +292,27 @@ class TestRestEndpoints:
         assert "pcp-advisor" in template_ids
         assert len(body["bundles"]) >= 3
 
-    def test_api_openclaw_sessions_requires_auth(self, client, monkeypatch):
-        monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
-        resp = client.get("/command-center/api/openclaw/sessions")
-        assert resp.status_code == 401
+    # SEC941-PRE1: the sessions list and system status are gateway-wide,
+    # so they are operator-only. A tenant session no longer opens them; only
+    # X-Internal-Secret does (tests/test_sec941_operator_gate.py has the
+    # full caller matrix).
 
-    def test_api_openclaw_sessions_with_session(self, client, monkeypatch):
+    def test_api_openclaw_sessions_requires_the_internal_secret(
+            self, client, monkeypatch):
         monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", OPERATOR_SECRET)
+        resp = client.get("/command-center/api/openclaw/sessions")
+        assert resp.status_code == 403
         _login_client(client)
         resp = client.get("/command-center/api/openclaw/sessions")
+        assert resp.status_code == 403
+
+    def test_api_openclaw_sessions_with_the_internal_secret(
+            self, client, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", OPERATOR_SECRET)
+        resp = client.get("/command-center/api/openclaw/sessions",
+                          headers={"X-Internal-Secret": OPERATOR_SECRET})
         assert resp.status_code == 200
         body = resp.get_json()
         assert "gateway" in body
@@ -314,68 +328,50 @@ class TestRestEndpoints:
         resp = client.get("/command-center/api/skills", query_string={"tenant": TENANT})
         assert resp.status_code == 200
 
-    def test_api_system_requires_auth(self, client):
+    def test_api_system_requires_the_internal_secret(self, client,
+                                                      monkeypatch):
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", OPERATOR_SECRET)
         resp = client.get("/command-center/api/system")
-        assert resp.status_code == 401
+        assert resp.status_code == 403
+        assert resp.get_json() == {
+            "error": "operator endpoint: X-Internal-Secret required"}
 
-    def test_api_system_with_session(self, client):
+    def test_api_system_refuses_a_tenant_session(self, client, monkeypatch):
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", OPERATOR_SECRET)
         _login_client(client)
         resp = client.get("/command-center/api/system")
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["flask"]["up"] is True
+        assert resp.status_code == 403
 
-    # The token branch of _require_session_or_stepup, pinned before kernel
-    # slice 18 moves it. The pair above covers header-absent and session; a
-    # predicate that stopped validating and merely checked for the header's
-    # presence stayed green against them. Four facts: a token for the named
-    # tenant is enough, a garbage token is not, another tenant's well-formed
-    # token is not, and with no tenant named the token binds to the
-    # blueprint's default tenant, not to whatever the token says.
-    #
-    # MUTATION (pre-kernel shape): `if valid: return None` -> `return None`
-    # (presence check) -> the malformed, other-tenant and default-binding
-    # tests go red while the valid-token test stays green. Executed
-    # 2026-09-06. Kernel shape: `has_grant(...) is not None` -> `True`
-    # -> the same three red. Executed 2026-09-06.
-
-    def test_api_system_with_a_step_up_token_for_the_named_tenant(self, client):
-        from r6.stepup import generate_step_up_token
-        resp = client.get("/command-center/api/system", headers={
-            "X-Step-Up-Token": generate_step_up_token(TENANT),
-            "X-Tenant-Id": TENANT,
-        })
+    def test_api_system_with_the_internal_secret(self, client, monkeypatch):
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", OPERATOR_SECRET)
+        resp = client.get("/command-center/api/system",
+                          headers={"X-Internal-Secret": OPERATOR_SECRET})
         assert resp.status_code == 200
         assert resp.get_json()["flask"]["up"] is True
 
-    def test_api_system_refuses_a_malformed_step_up_token(self, client):
-        resp = client.get("/command-center/api/system", headers={
-            "X-Step-Up-Token": "not-a-real-token",
-            "X-Tenant-Id": TENANT,
-        })
-        assert resp.status_code == 401
-        assert resp.get_json() == {"error": "authentication required"}
+    # The token branch these four once pinned (kernel slice 18) is gone. A
+    # step-up token for the named tenant, for another tenant, for the
+    # default tenant, or a malformed one: all are refused the same way now.
+    # MUTATION: `_require_operator` -> accept has_grant(TENANT_BOUND) ->
+    # the named-tenant and default-tenant cases go red. Executed 2026-10-17.
 
-    def test_api_system_refuses_another_tenants_step_up_token(self, client):
+    @pytest.mark.parametrize("token_tenant,header_tenant", [
+        (TENANT, TENANT),
+        ("someone-else", TENANT),
+        ("desktop-demo", None),
+        (None, TENANT),
+    ])
+    def test_api_system_refuses_every_step_up_token(
+            self, client, monkeypatch, token_tenant, header_tenant):
         from r6.stepup import generate_step_up_token
-        resp = client.get("/command-center/api/system", headers={
-            "X-Step-Up-Token": generate_step_up_token("someone-else"),
-            "X-Tenant-Id": TENANT,
-        })
-        assert resp.status_code == 401
-
-    def test_api_system_step_up_binds_to_the_default_tenant_when_none_is_named(
-            self, client):
-        from r6.command_center.routes import DEFAULT_TENANT
-        from r6.stepup import generate_step_up_token
-        # No ?tenant= and no X-Tenant-Id: the token must be the default
-        # tenant's. One for TENANT is refused, one for the default is enough.
-        refused = client.get("/command-center/api/system", headers={
-            "X-Step-Up-Token": generate_step_up_token(TENANT)})
-        assert refused.status_code == 401
-        accepted = client.get("/command-center/api/system", headers={
-            "X-Step-Up-Token": generate_step_up_token(DEFAULT_TENANT)})
-        assert accepted.status_code == 200
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", OPERATOR_SECRET)
+        headers = {"X-Step-Up-Token": (generate_step_up_token(token_tenant)
+                                       if token_tenant else
+                                       "not-a-real-token")}
+        if header_tenant:
+            headers["X-Tenant-Id"] = header_tenant
+        resp = client.get("/command-center/api/system", headers=headers)
+        assert resp.status_code == 403
 
     def test_api_conversations_post_and_get(self, client, step_up_token):
         payload = {

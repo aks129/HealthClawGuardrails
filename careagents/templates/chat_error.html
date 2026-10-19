@@ -6,6 +6,8 @@
     <h1>Hmm.</h1>
     <p class="setup-sub">{{ message }}</p>
     <a class="btn-primary btn-block" href="/chat">Back to your agent</a>
+    {# The screen only: an endpoint name, never the URL (feedback.py). #}
+    <p class="beta-fine"><a id="report-problem" href="{{ url_for('feedback_page', screen=request.endpoint) }}">Report a problem</a></p>
   </div>
 </main>
 {% endblock %}

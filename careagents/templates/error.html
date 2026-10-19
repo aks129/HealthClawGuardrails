@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ "Page not found" if status in (404, 405) else "Something broke" }} — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# The 404 and 500 pages (careagents/errors.py). Plain words, a way home,
+   and "Report a problem" with the screen and the code filled in. The link
+   carries no URL: `screen` is a fixed name, never the path. #}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card error-page">
+    {% if status in (404, 405) %}
+    <h1>That page isn't here.</h1>
+    <p class="setup-sub">The link may be old, or the address may have a typo.</p>
+    {% else %}
+    <h1>Something broke on our side.</h1>
+    <p class="setup-sub">It's not something you did. Please try again in a minute.</p>
+    {% endif %}
+    <a class="btn-primary btn-block" href="{{ home }}">{{ "Back to your assistant" if home == "/home" else "Back to CareAgents" }}</a>
+    <p class="beta-fine"><a id="report-problem" href="{{ url_for('feedback_page', screen=screen, error=status) }}">Report a problem</a></p>
+  </div>
+</main>
+{% endblock %}

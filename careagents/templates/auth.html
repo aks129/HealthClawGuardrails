@@ -8,7 +8,9 @@
 <main class="setup-wrap">
   <div class="setup-card" id="auth-card"
        {%- if back %} data-back="{{ back }}"{% endif %}>
-    <h1>Your health, your keys</h1>
+    {# Plain words for what this page does. Someone already signed in
+       is here to confirm it's them, not to sign in. #}
+    <h1>{% if code_for_passkey or code_for_invite or code_for_connect %}Confirm it's you{% else %}Sign in or sign up{% endif %}</h1>
     {% if imessage_pending %}
     <p class="setup-sub" id="imessage-pending">
       Sign in to connect your phone to CareAgents.</p>
@@ -27,6 +29,9 @@
     {% endif %}
 
     <div id="err" class="form-error" hidden></div>
+    {# Next to "That code is wrong or expired.": the way on, in one tap. #}
+    <button class="linkish" id="resend-code" type="button" hidden>
+      Send a new code</button>
 
     <!-- Step: passkey-first (skipped when an existing account is enrolling) -->
     <div id="step-start" {% if enroll %}hidden{% endif %}>

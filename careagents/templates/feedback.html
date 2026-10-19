@@ -9,6 +9,11 @@
     {% if done %}
     <h1>Thank you</h1>
     <p>Thank you for helping us make CareAgents better.</p>
+    {% if will_reply %}
+    <p id="feedback-when">We read every note and usually reply within a day.</p>
+    {% else %}
+    <p id="feedback-when">We read every note.</p>
+    {% endif %}
     {% else %}
     <h1>Tell us what you think</h1>
     <p>Answer any of these. One is enough, and short answers are fine.</p>
@@ -16,17 +21,36 @@
     {% if signed_in %}
     <p id="feedback-reply">We'll reply to the email you signed in with.</p>
     {% endif %}
-    <form id="feedback-form" novalidate>
+    {# Context a "Report a problem" link carried, already checked against
+       fixed lists by feedback.context_from_args. Shown, so nothing rides
+       along that the tester cannot see. #}
+    {% if context %}
+    <p class="feedback-context" id="feedback-context">We'll also send which
+      screen you were on{% if context.error %} and the error code ({{ context.error }}){% endif %},
+      so we can find the problem. Nothing from your records.</p>
+    {% endif %}
+    {# `back` is feedback.safe_back's rebuild of where the tester came from. #}
+    <form id="feedback-form" novalidate
+          {%- if back %} data-back="{{ back }}"{% endif %}
+          {%- for name, value in context.items() %} data-ctx-{{ name | replace('_', '-') }}="{{ value }}"{% endfor %}>
       {% for name, question in questions %}
       <label class="field-label" for="fb-{{ name }}">{{ question }}</label>
       <textarea class="field" id="fb-{{ name }}" name="{{ name }}" rows="4" maxlength="{{ answer_max }}"></textarea>
       {% endfor %}
+      {% if not signed_in %}
+      {# Signed out there is no address to answer. Optional, used only as
+         the email's reply-to, and kept nowhere. #}
+      <label class="field-label" for="fb-reply-email">Your email, if you'd like a reply <span class="field-optional">(optional)</span></label>
+      <input class="field" id="fb-reply-email" name="reply_email" type="email" autocomplete="email" inputmode="email" maxlength="254">
+      {% endif %}
       {# Next to Send, so a phone shows the problem where the thumb is. #}
       <div id="feedback-err" class="form-error beta-err" role="alert" hidden></div>
       <button class="btn-primary btn-block" type="submit">Send</button>
     </form>
     {% endif %}
-    {% if signed_in %}
+    {% if done %}
+    <p class="beta-fine"><a id="feedback-back" href="{{ back }}">{{ back_label }}</a></p>
+    {% elif signed_in %}
     <p class="beta-fine"><a href="/home">Back to your hub</a></p>
     {% else %}
     <p class="beta-fine"><a href="/">Back to CareAgents</a></p>
