@@ -127,32 +127,37 @@ class TestPrivacyReconciliation:
 
     def test_careagents_beta_tester_tenant_and_deletion_stated(self, client):
         # Council ruling 2026-09-02 (D3), derived from what the code does, not
-        # from what we would like it to do. The synthetic tenant is
-        # r6/seed.py's built-in set (Patient + 1 Condition + 3 Observations +
-        # 1 MedicationRequest + intake_questionnaire()); deletion is
-        # careagents' DELETE /api/connections/<id> -> /internal/purge-tenant,
-        # which purges and commits in the same request (r6/routes.py) and
-        # keeps the PHI-free audit rows (r6/purge.py).
-        body = client.get('/privacy').get_data(as_text=True)
-        assert 'CareAgents beta testers' in body
-        assert 'one fictional sample patient' in body
-        assert 'purges that tenant' in body
-        assert 'audit trail' in body
+        # from what we would like it to do; rewritten for #565 (2026-10-19).
+        # Every tester starts on careagents' "sample" connector (synthetic,
+        # no consent gate); a Fasten connection is refused without consent at
+        # tester_terms.CONSENT_VERSION before its connect URL exists
+        # (careagents/app.py _start_connection). Deletion is DELETE
+        # /api/connections/<id> -> /internal/purge-tenant, which purges and
+        # commits in the same request (r6/routes.py) and keeps the PHI-free
+        # audit rows (r6/purge.py).
+        body = _privacy_prose(client)
+        assert 'careagents beta testers' in body
+        assert 'made up sample patient' in body
+        assert 'accepts the tester terms before any records come in' in body
+        assert 'delete removes that connection\'s records' in body
+        assert 'right away' in body
+        assert 'log of when your records were looked at' in body
 
     def test_careagents_retention_names_everything_that_survives(self, client):
         # A retention statement that lists only the audit trail reads as the
-        # exhaustive list. It is not: the CareAgents account row (email,
-        # passkey credential, which sources were connected) outlives a records
-        # deletion and has no self-serve removal (#554). The first draft of
-        # this paragraph also said the tenant held "nothing else about you",
-        # which contradicts docs/beta-tester-guide.md's own data table. This
-        # is a privacy-policy promise, so the page has to name both survivors.
-        body = client.get('/privacy').get_data(as_text=True)
+        # exhaustive list. The first draft of this paragraph also said the
+        # tenant held "nothing else about you", which contradicts
+        # docs/beta-tester-guide.md's own data table. Self-serve account
+        # deletion shipped in #554 (POST /api/account/delete, Settings), so
+        # the old "no self-serve button, email support" line is false and
+        # must not come back; what outlives it is the PHI-free audit log.
+        body = _privacy_prose(client)
         assert 'nothing else about you' not in body
-        assert 'no other health data about you' in body
-        assert 'passkey credential' in body
-        assert 'deleting your' in body and 'does not delete it' in body
-        assert 'support@healthclaw.io' in body
+        assert 'no self serve' not in body
+        assert "careagents' own database holds no health data" in body
+        assert 'your passkey' in body
+        assert 'delete your whole account yourself in settings' in body
+        assert 'one thing outlives deletion' in body
 
 
 class TestCareAgentsSurfaceCopy:

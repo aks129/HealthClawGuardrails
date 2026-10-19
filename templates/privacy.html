@@ -12,7 +12,11 @@
       <h1 class="legal__title">Privacy Policy</h1>
       <p class="legal__meta">
         <strong>HealthClaw Guardrails</strong> &middot; healthclaw.io &middot;
-        Effective: March 29, 2026 &middot; Last updated: July 4, 2026
+        Effective: March 29, 2026 &middot; Last updated: October 19, 2026
+      </p>
+      <p class="legal__meta">
+        Changes on October 19, 2026: rewrote the CareAgents beta testers section to cover testers who connect
+        their own records, what the AI model receives, and self-serve account deletion.
       </p>
     </div>
 
@@ -128,18 +132,26 @@
       </p>
       <h3>CareAgents beta testers</h3>
       <p>
-        A beta tester's tenant holds one fictional sample patient &mdash; one condition, three observations, one
-        medication and an intake questionnaire &mdash; plus your chat with the agent and anything you approve there,
-        and no other health data about you.
-        Deleting a connection from the CareAgents hub purges that tenant's records immediately, in the same
-        request, and reports the row count back.
+        Every tester starts with a made-up sample patient. No real health data is involved.
       </p>
       <p>
-        Two things outlive that deletion, and neither holds health data. The PHI-free audit trail is retained,
-        including the deletion itself. Your CareAgents account &mdash; your email address, your passkey credential
-        and which sources you connected &mdash; is a separate record in CareAgents' own database, and deleting your
-        records does not delete it. There is no self-serve button for the account yet: email support@healthclaw.io
-        and we will remove it and confirm when it is done.
+        Some testers are invited to connect their own records from their patient portal, through Fasten Health.
+        Each tester reads and accepts the tester terms before any records come in. Your records, and your chats
+        with your assistant, are stored in a private space for your account in HealthClaw.
+        CareAgents' own database holds no health data: just your account, your email address, your passkey,
+        which sources you connected, and counts that hold no health details.
+      </p>
+      <p>
+        To answer you, your assistant sends your records to an AI model from Anthropic, OpenAI, Google or Groq,
+        with your name and other details taken out. The model gets what you type exactly as you type it.
+      </p>
+      <p>
+        You can stop at any time. Disconnect stops new records and keeps the ones already here.
+        Delete removes that connection's records, your chats and anything waiting for your OK, right away.
+        You can also delete your whole account yourself in Settings. That deletes the records from every
+        connection first, then your email address, your passkey and the rest of your account.
+        One thing outlives deletion: our log of when your records were looked at, including the deletion itself.
+        It has no health details in it.
       </p>
 
       <h2 id="third-party">5. Third-Party Services</h2>
