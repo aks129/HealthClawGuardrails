@@ -32,11 +32,16 @@ from careagents import beta_signup, funnel, invites
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
-                               Passkey, Person, RealRecordInvite,
+                               Passkey, Person, RealRecordInvite, RefundDay,
                                SendblueMessage, Surface, UsageDay, make_engine,
                                make_session_factory, now)
+from careagents.models import REFUNDS_PER_DAY
 
 logger = logging.getLogger(__name__)
+
+
+class _NothingToRefund(Exception):
+    """No charged turn to give back: rolls the refund's transaction back."""
 
 CODE_TTL = 600  # 10 minutes
 MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
@@ -677,7 +682,8 @@ class AccountService:
             (s.query(Account).filter(Account.id == account_id)
              .update({"sample_claim_at": None}, synchronize_session=False))
 
-    def claim_daily_turn(self, account_id: str, cap: int) -> tuple[bool, int]:
+    def claim_daily_turn(self, account_id: str, cap: int,
+                         day: str | None = None) -> tuple[bool, int]:
         """Count one chat turn against today's cap. Returns (allowed, used).
 
         Durable and shared, unlike the in-process burst limiter — a restart or
@@ -690,9 +696,13 @@ class AccountService:
         under the cap or changes nothing. With no row yet, insert one; the
         unique (account_id, day) turns a racing insert into a retry of the
         UPDATE, the same shape as count_activity.
+
+        `day` is today's UTC day by default. The worker passes the day it
+        records on the run, so a refund gives back that day's turn and
+        never a later day's (refund_daily_turn).
         """
         from datetime import datetime, timezone
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         turns = func.coalesce(UsageDay.turns, 0)
         charge = (update(UsageDay)
                   .where(UsageDay.account_id == account_id,
@@ -722,6 +732,53 @@ class AccountService:
             except IntegrityError:
                 continue        # a peer made today's row: charge it instead
         raise RuntimeError("could not charge today's turn")
+
+    def refund_daily_turn(self, account_id: str, day: str) -> bool:
+        """Give back one turn charged on `day`, for a turn that failed on
+        our side. Returns whether a turn was given back.
+
+        At most REFUNDS_PER_DAY a day: a failure still cost a model call.
+        One transaction takes one of the day's refunds (a conditional
+        UPDATE under the limit, or the day's first row) and takes one turn
+        off (a conditional UPDATE above zero). If either finds nothing, the
+        whole of it rolls back, so a refund never makes a negative count,
+        never passes the limit, and never spends a refund it did not give.
+        A racing first row is retried, as claim_daily_turn does.
+        Exactly-once per run is the caller's (worker.py marks the run
+        before it refunds)."""
+        refunds = func.coalesce(RefundDay.count, 0)
+        take = (update(RefundDay)
+                .where(RefundDay.account_id == account_id,
+                       RefundDay.day == day, refunds < REFUNDS_PER_DAY)
+                .values(count=refunds + 1)
+                .execution_options(synchronize_session=False))
+        for _ in range(3):
+            try:
+                with self.session() as s:
+                    if not s.execute(take).rowcount:
+                        if s.query(RefundDay.id).filter_by(
+                                account_id=account_id, day=day).first():
+                            return False            # the day's refunds spent
+                        s.add(RefundDay(account_id=account_id, day=day,
+                                        count=1))
+                        s.flush()
+                    row = (s.query(UsageDay.id)
+                           .filter(UsageDay.account_id == account_id,
+                                   UsageDay.day == day, UsageDay.turns > 0)
+                           .first())
+                    if row is None or not s.execute(
+                            update(UsageDay)
+                            .where(UsageDay.id == row.id, UsageDay.turns > 0)
+                            .values(turns=UsageDay.turns - 1)
+                            .execution_options(
+                                synchronize_session=False)).rowcount:
+                        raise _NothingToRefund
+                    return True
+            except _NothingToRefund:
+                return False
+            except IntegrityError:
+                continue        # a peer made the day's refund row first
+        return False
 
     @staticmethod
     def _turns_today(s, account_id: str, day: str) -> int:
@@ -832,7 +889,7 @@ class AccountService:
                 return False
             # People last: connections and agents point at them.
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, ActivityDay, Person):
+                          UsageDay, RefundDay, ActivityDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)

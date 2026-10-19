@@ -328,6 +328,26 @@ class UsageDay(Base):
     turns = Column(Integer, default=0)
 
 
+#: How many failed turns one account may be given back per UTC day. A
+#: failure still costs the operator its model call, so the refund is
+#: bounded: past it, a failed turn counts like any other.
+REFUNDS_PER_DAY = 3
+
+
+class RefundDay(Base):
+    """How many failed turns one account was given back on one UTC day
+    (AccountService.refund_daily_turn). Counts only, like UsageDay. Its own
+    table so `ca_usage_days`, whose shape older databases are migrated
+    from, keeps its columns."""
+    __tablename__ = "ca_refund_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_refund_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("rfd"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False)               # UTC "YYYY-MM-DD"
+    count = Column(Integer, nullable=False, default=0)
+
+
 class VoiceUsageDay(Base):
     """Per-account daily speech spend: seconds transcribed, characters
     spoken (careagents/voice.py). ElevenLabs bills both to the operator, so
