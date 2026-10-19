@@ -1,0 +1,106 @@
+name: careagents-deploy
+
+# Deploys CareAgents (web + worker) on every merge to main that can change what
+# it runs. Before this, CareAgents shipped only by a manual `railway up` and
+# production drifted 22 commits behind main. Procedure and traps:
+# docs/runbooks/careagents-auto-deploy.md, which follows "Stage the build" and
+# "Deploy and confirm it worked" in docs/runbooks/careagents-durable-worker.md.
+#
+# Pause: disable this workflow in the Actions tab. Without the RAILWAY_TOKEN
+# secret it skips with a notice instead of failing.
+
+on:
+  push:
+    branches: [main]
+    # The image's whole build context (deploy/careagents/Dockerfile).
+    paths:
+      - "careagents/**"
+      - "deploy/careagents/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Queue, never cancel: a cancelled run can leave web and worker on different
+# uploads. The next run in the queue deploys the newer main anyway.
+concurrency:
+  group: careagents-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # workflow_dispatch can be run from any branch; only main ships.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_CLI_VERSION: "5.63.1"
+      RAILWAY_PROJECT: awake-serenity
+      RAILWAY_ENVIRONMENT: production
+    steps:
+      - name: Check for the deploy token
+        id: gate
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::notice::RAILWAY_TOKEN is not set; skipping the CareAgents deploy. See docs/runbooks/careagents-auto-deploy.md."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.skip == 'false'
+
+      - name: Install the Railway CLI
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          npm install -g "@railway/cli@${RAILWAY_CLI_VERSION}"
+          railway --version
+
+      # The runbook's stage, verbatim: these four, then the stamp LAST so a
+      # stale BUILD_SHA copied in with careagents/ is overwritten. Staged under
+      # RUNNER_TEMP, outside the checkout, so no .gitignore can drop the marker.
+      - name: Stage the build
+        id: stage
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          STAGE="$(mktemp -d "$RUNNER_TEMP/careagents-stage.XXXXXX")"
+          cp pyproject.toml uv.lock "$STAGE/"
+          cp -R careagents "$STAGE/"
+          cp deploy/careagents/Dockerfile "$STAGE/Dockerfile"
+          ./deploy/careagents/stamp_build.sh "$STAGE"
+          BUILD="$(head -n 1 "$STAGE/careagents/BUILD_SHA")"
+          case "$BUILD" in
+            *-dirty|"") echo "::error::stamp is '$BUILD'; refusing to ship it"; exit 1;;
+          esac
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      # `cd` into the stage, never `railway up <path>`. Fail closed if the
+      # token does not resolve to the real project: an unlinked `railway up`
+      # creates a brand-new project and deploys there (runbook, first run).
+      - name: Upload web and worker from the same stage
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          STAGE: ${{ steps.stage.outputs.stage }}
+        run: |
+          cd "$STAGE"
+          STATUS="$(railway status)"
+          echo "$STATUS"
+          if ! printf '%s' "$STATUS" | grep -q "$RAILWAY_PROJECT"; then
+            echo "::error::the token does not resolve to project $RAILWAY_PROJECT; not uploading"
+            exit 1
+          fi
+          railway up --service careagents        --environment "$RAILWAY_ENVIRONMENT" --detach --no-gitignore
+          railway up --service careagents-worker --environment "$RAILWAY_ENVIRONMENT" --detach --no-gitignore
+
+      # The finish line: the web service reports this exact build and a worker
+      # is draining. A successful upload proves neither.
+      - name: Wait for production to report this build
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          BUILD: ${{ steps.stage.outputs.build }}
+        run: python3 scripts/careagents_release.py wait --sha "$BUILD" --timeout 900

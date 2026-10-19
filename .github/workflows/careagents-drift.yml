@@ -1,0 +1,97 @@
+name: careagents-drift
+
+# Hourly: is careagents.cloud running the newest CareAgents commit on main?
+# Opens one issue when production has been behind for more than two hours,
+# edits it in place while it stays behind, and closes it on an observed pass.
+# Same issue discipline as prod-watch.yml. Logic: scripts/careagents_release.py.
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: careagents-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The ancestry check needs history: a deploy from a later main tip
+          # is current even though it is not the newest CareAgents commit.
+          fetch-depth: 0
+
+      - name: Compare production with main
+        id: drift
+        run: |
+          set +e
+          python3 scripts/careagents_release.py drift --grace 7200 > result.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          cat result.txt
+
+      - name: Sync the drift issue
+        uses: actions/github-script@v9
+        env:
+          EXIT: ${{ steps.drift.outputs.exit }}
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('result.txt', 'utf8').trim();
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const exit = process.env.EXIT;
+            // 1 = behind past the grace; 0 = observed current. 2 (in grace)
+            // and 3 (could not check) neither raise nor close.
+            const firing = exit === '1';
+            const resolved = exit === '0';
+            const title = 'careagents-drift: production is behind main';
+            // Comment only when the deployed build changes; edit otherwise,
+            // so an hourly check does not train anyone to mute the thread.
+            const fingerprint = body.match(/^deployed=(.*)$/m)?.[1] ?? `run-${context.runId}`;
+            const MARK = `<!-- careagents-drift-fingerprint: ${fingerprint} -->`;
+            const FP_RE = /<!-- careagents-drift-fingerprint: (.*?) -->/;
+
+            const { data: found } = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
+            });
+            const open = found.items.filter(i => i.title === title);
+            if (firing) {
+              const text = ['CareAgents production has been behind main for more than two hours.',
+                '', '```', body, '```', '',
+                'Check the latest careagents-deploy run; the manual path is docs/runbooks/careagents-durable-worker.md.',
+                '', `Run: ${run}`, `Last checked: ${new Date().toISOString()}`, '',
+                'This issue closes automatically once production includes the newest CareAgents commit.',
+                '', MARK].join('\n');
+              if (!open.length) {
+                await github.rest.issues.create({ ...context.repo, title, body: text });
+                return;
+              }
+              const issue = open[0];
+              const previous = (issue.body || '').match(FP_RE)?.[1] ?? null;
+              await github.rest.issues.update({
+                ...context.repo, issue_number: issue.number, body: text });
+              if (previous !== fingerprint) {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: issue.number,
+                  body: ['The deployed build changed and production is still behind.',
+                         '', '```', body, '```', '', `Run: ${run}`].join('\n') });
+              }
+            } else if (resolved) {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: issue.number,
+                  body: `Production includes the newest CareAgents commit again. Closing.\n\nRun: ${run}` });
+                await github.rest.issues.update({
+                  ...context.repo, issue_number: issue.number, state: 'closed' });
+              }
+            }
+
+      - name: Fail the run so the badge reflects reality
+        if: steps.drift.outputs.exit == '1' || steps.drift.outputs.exit == '3'
+        run: exit 1
