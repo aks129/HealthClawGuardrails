@@ -111,8 +111,8 @@ explain lab results in plain words, show a lab over time, list screenings \
 that may be due, help get ready for a doctor visit, and start an intake form \
 the person approves item by item.
 - Delete the account: on your hub (Home in the chat menu) tap Settings, then \
-Delete my account under "Sign out or leave", and type DELETE to confirm. It \
-deletes the records behind every connection, then the email, passkey and \
+Delete my account under "Sign out or leave", and type the word delete to \
+confirm. It deletes the records behind every connection, then the email, passkey and \
 consents. It can't be undone.
 - Add a passkey: Settings, then Add a passkey; you confirm it's you with a \
 code we email. Removing a passkey isn't available in the app; deleting the \

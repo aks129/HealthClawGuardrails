@@ -46,7 +46,8 @@ test.describe('calm hub, real records closed', () => {
     // branch stops there, under the button. A closed source is refused
     // before HealthClaw is called, with different words.
     const msg = page.locator('#explore-sample + #connect-msg');
-    await expect(msg).toHaveText('records service unavailable');
+    await expect(msg).toHaveText(
+      "We couldn't reach the records service just now. Please try again in a minute.");
   });
 
   test('a new account is told honestly that nothing waits', async ({ page }) => {

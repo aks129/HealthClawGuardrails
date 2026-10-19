@@ -185,7 +185,7 @@ def _setup_fasten_connection(app):
 # POST /r6/smbp/reading                    |  x  | x |    | x  |    |      |  x   |  x
 # GET  /r6/smbp/report/<id>?format=pdf     |  x  | x | x  |    |    |      |  x   |  x
 # POST /shc/ingest                         |  x  | x |    |    |    |  x   |  x   |  x
-# POST /r6/ops/reap                        |  x  | x |    | x  |    |      |      |  x  <- #304
+# POST /r6/ops/reap                        |     |   |    |    |    |  x   |      |  x  <- #304 fixed (#308)
 # POST /wearables/sync-now                 |  x  | x |    | x  |    |      |      |  x  <- #304
 #
 # x* = the guard exempts public/synthetic tenants by design.
@@ -973,12 +973,12 @@ def test_step_up_row_refuses_a_token_bound_to_another_audience(
 
 
 #: Read gates that take a step-up token without asking for an audience:
-#: r6/read_auth.py (instance read and search) and the command center's
-#: session-or-step-up predicate.
+#: r6/read_auth.py (instance read and search). The command center's
+#: /api/system left this list in SEC941-PRE1: it is operator-only now, so no
+#: tenant token reads it (tests/test_sec941_operator_gate.py).
 _AUDIENCE_FREE_READS = (
     "/r6/fhir/Patient/guard-matrix-pt",
     "/r6/fhir/Condition",
-    f"/command-center/api/system?tenant={PRIVATE_TENANT}",
 )
 
 
@@ -1414,17 +1414,16 @@ def test_a_write_lands_only_in_the_tenant_that_authorized_it(client, tenant_id,
         "another tenant can read a resource written under this tenant")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#304: /r6/ops/reap validates a step-up token bound to ONE tenant "
-           "and then sweeps ProposedAction.query.filter_by(status=...) across "
-           "EVERY tenant, driving state transitions and Telegram pushes on "
-           "records the caller has no claim to.")
 def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
-    """A reap authenticated for tenant A must not transition tenant B's actions.
+    """#304, fixed by #308: a tenant credential cannot drive the global reap.
 
-    MUTATION (once fixed): delete the tenant predicate from the three sweep
-    queries in r6/ops/routes.py reap().
+    Was a strict xfail ("validates a step-up token bound to ONE tenant and
+    then sweeps every tenant"). /r6/ops/* is now operator-only: a tenant's
+    step-up token gets 403 and transitions nothing; the internal secret
+    reaps, globally and by design (see the ops-reap row).
+
+    MUTATION: make r6/ops/routes.py _auth_error_or_none return None -> the
+    tenant-token half goes red (200, and the foreign action expires).
     """
     from datetime import timedelta
 
@@ -1441,16 +1440,22 @@ def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
         db.session.commit()
         victim_id = victim.id
 
-    resp = client.post("/r6/ops/reap",
-                       headers={"X-Tenant-Id": PRIVATE_TENANT,
-                                "X-Step-Up-Token": token_for(PRIVATE_TENANT)})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-
+    refused = client.post("/r6/ops/reap",
+                          headers={"X-Tenant-Id": PRIVATE_TENANT,
+                                   "X-Step-Up-Token": token_for(
+                                       PRIVATE_TENANT)})
+    assert refused.status_code == 403, refused.get_data(as_text=True)
     with app.app_context():
         after = db.session.get(ProposedAction, victim_id)
         assert after.status == "awaiting_confirmation", (
-            f"a reap authenticated for {PRIVATE_TENANT} moved "
+            f"a reap with only a {PRIVATE_TENANT} token moved "
             f"{FOREIGN_TENANT}'s action to {after.status}")
+
+    reaped = client.post("/r6/ops/reap",
+                         headers={"X-Internal-Secret": MINT_SECRET})
+    assert reaped.status_code == 200, reaped.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(ProposedAction, victim_id).status == "expired"
 
 
 def test_wearables_sync_only_touches_the_authenticated_tenant(client, app,

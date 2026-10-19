@@ -612,7 +612,8 @@ def test_the_settings_page_shows_tone_and_focuses_on(cfg, svc,
     assert "Focuses on" in html
     assert "Watching" not in html          # owner decision D3
     assert "Habits and vitals" in html and "Refills" in html
-    assert "Straight Shooter" in html
+    # The hub card's tone words, so Settings and the hub match.
+    assert ">Direct</span>" in html and "Straight Shooter" not in html
     assert f'data-agent="{agent_id}"' in html
 
 

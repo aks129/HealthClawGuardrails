@@ -62,6 +62,8 @@ ICD9 = "http://hl7.org/fhir/sid/icd-9-cm"
 ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"
 SNOMED = "http://snomed.info/sct"
 CVX = "http://hl7.org/fhir/sid/cvx"
+#: The prefix of HL7's own code systems (terminology.hl7.org).
+_HL7 = "http://terminology.hl7.org/CodeSystem/"
 
 # Aliases seen in the wild for the same system.
 _SYSTEM_ALIASES = {
@@ -200,6 +202,10 @@ _LABELS: dict[tuple[str, str], str] = {
     (RXNORM, "6387"): "Losartan",
     (RXNORM, "3616"): "Gabapentin",
     (RXNORM, "8640"): "Prednisone",
+    # The check-in test patient's allergen (#959), the ingredient
+    # penicillin G. Unlabelled, a clinic saw the bare code 7980. "Penicillin",
+    # the name the wallet's review shows (tests/test_checkin_wallet.py).
+    (RXNORM, "7980"): "Penicillin",
 
     # --- SNOMED CT: codes the product carries (#577) -------------------------
     # Only codes found in our seed/demo data, fixtures or rule sets
@@ -235,6 +241,28 @@ _LABELS: dict[tuple[str, str], str] = {
     (SNOMED, "428041000124106"): "Occasional tobacco smoker",
     (SNOMED, "266919005"): "Never smoked tobacco",
     (SNOMED, "221000119102"): "Never smoked any substance",
+    # The check-in test patient (#959). tx.fhir.org $lookup, 2026-10-16.
+    (SNOMED, "195967001"): "Asthma",
+    (SNOMED, "271807003"): "Eruption",
+
+    # --- HL7 terminology: the check-in test patient's coded fields (#959) --
+    # Each label is the code system's own display, so a validator that
+    # compares coding.display against it agrees. Not v3-NullFlavor: a
+    # null flavour gets no label (#957 round 3).
+    (_HL7 + "allergyintolerance-clinical", "active"): "Active",
+    (_HL7 + "allergyintolerance-verification", "confirmed"): "Confirmed",
+    (_HL7 + "condition-clinical", "active"): "Active",
+    (_HL7 + "condition-ver-status", "confirmed"): "Confirmed",
+    (_HL7 + "condition-category", "problem-list-item"): "Problem List Item",
+    (_HL7 + "coverage-class", "group"): "Group",
+    (_HL7 + "coverage-class", "plan"): "Plan",
+    (_HL7 + "medicationrequest-category", "community"): "Community",
+    (_HL7 + "organization-type", "pay"): "Payer",
+    (_HL7 + "subscriber-relationship", "self"): "Self",
+    (_HL7 + "v2-0203", "MB"): "Member Number",
+    (_HL7 + "v3-orderableDrugForm", "TAB"): "Tablet",
+    ("https://nahdo.org/sopt", "5"): "PRIVATE HEALTH INSURANCE",
+    ("urn:ietf:bcp:47", "en"): "English",
 
     # --- CVX: vaccines ------------------------------------------------------
     (CVX, "140"): "Influenza vaccine",
@@ -255,6 +283,11 @@ _LABELS: dict[tuple[str, str], str] = {
     # --- v3-ActReason: the reason r6/curatr.py writes on a fix's Provenance -
     ("http://terminology.hl7.org/CodeSystem/v3-ActReason", "PATADMIN"):
         "Patient administration",
+    # The synthetic-data marker the check-in export carries across
+    # (r6/access.py _test_markers). The code system's own display, so a
+    # validator that checks coding.display agrees with it.
+    ("http://terminology.hl7.org/CodeSystem/v3-ActReason", "HTEST"):
+        "test health data",
 }
 
 #: SNOMED "no known allergy": 716186003 and every descendant (tx.fhir.org,

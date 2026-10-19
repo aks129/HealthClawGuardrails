@@ -28,8 +28,25 @@
 
     async function fetchJSON(url) {
         const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
-        if (!resp.ok) throw new Error(`${resp.status} ${url}`);
+        if (!resp.ok) {
+            const err = new Error(`${resp.status} ${url}`);
+            err.status = resp.status;
+            throw err;
+        }
         return resp.json();
+    }
+
+    // System status and the gateway session list are operator-only
+    // (SEC941-PRE1): a tenant dashboard gets 403 for them, which is expected,
+    // not an error. Show a calm empty state instead.
+    const OPERATOR_ONLY = {
+        'system': 'cc-system',
+        'openclaw/sessions': 'cc-sessions',
+    };
+
+    function renderOperatorOnly(elementId) {
+        setHTML(elementId,
+            '<div class="cc-empty">Operator only — gateway status is visible to the HealthClaw operator, not to tenant dashboards</div>');
     }
 
     function relativeTime(iso) {
@@ -350,6 +367,8 @@
             if (r.status === 'fulfilled') {
                 try { render(r.value); }
                 catch (e) { console.error('render failed', path, e); }
+            } else if (r.reason?.status === 403 && OPERATOR_ONLY[path]) {
+                renderOperatorOnly(OPERATOR_ONLY[path]);
             } else {
                 console.error('fetch failed', path, r.reason);
             }

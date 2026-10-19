@@ -1,0 +1,13 @@
+{# Shown only inside an app's built-in browser (beta_signup.in_app_browser):
+   a sign-in there stays in that app. The address is the public one, the
+   same for everybody; inapp.js copies it. #}
+{% if in_app %}
+<div class="in-app-hint" id="in-app-hint" role="note">
+  <p>You're in an app's built-in browser. To keep using CareAgents in
+    Safari or Chrome, open <b id="in-app-url">{{ web_address }}</b> there
+    and sign in with your email.</p>
+  <button type="button" class="pill" id="in-app-copy">Copy link</button>
+  <p class="inline-msg is-ok" id="in-app-msg" role="status" hidden></p>
+</div>
+<script src="{{ url_for('static', filename='inapp.js') }}"></script>
+{% endif %}
