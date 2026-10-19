@@ -45,7 +45,12 @@ _ALLOWED = {
         **{m: Float for m in funnel.MILESTONES}},
     "ca_issue_days": {"id": String, "day": String, "kind": String,
                       "count": Integer},
+    "ca_issue_detail_days": {"id": String, "day": String, "kind": String,
+                             "detail": String, "count": Integer},
     "ca_digest_days": {"day": String, "sent_at": Float},
+    "ca_owner_alerts": {"hour": String, "sent_at": Float},
+    "ca_sign_in_days": {"id": String, "account_id": String, "day": String,
+                        "method": String, "count": Integer},
     "ca_invite_links": {"id": String, "account_id": String, "code": String,
                         "cap": Integer, "used": Integer, "created_at": Float,
                         "revoked_at": Float},
@@ -217,21 +222,16 @@ def test_daily_report_counts_days_conversion_and_inviters(svc, monkeypatch):  # 
     assert len(report["days"]) == 3
     assert report["days"][0]["joined"] == 2
     assert report["days"][0]["via_invite"] == 1
-    joined_to_confirmed = report["conversion"][0]
-    assert joined_to_confirmed["from_n"] == 2
-    # Conversion counts accounts that reached both steps: `a` answered
-    # without a confirmed beta request, so confirmed -> first_answer is
-    # 0 of 0, not 1 of 0.
-    answered = next(c for c in report["conversion"]
-                    if c["to"] == "first_answer")
-    assert (answered["from_n"], answered["to_n"]) == (0, 0)
-    assert answered["percent"] is None
+    # `confirmed` is not in the chain (how an account joined, not a step
+    # after joining): joined -> first_answer counts both accounts.
+    answered = report["conversion"][0]
+    assert (answered["from"], answered["to"]) == ("joined", "first_answer")
+    assert (answered["from_n"], answered["to_n"],
+            answered["percent"]) == (2, 1, 50)
     funnel.mark(svc.session, a.id, "confirmed")
     report = funnel.daily(svc.session, days=1)
-    answered = next(c for c in report["conversion"]
-                    if c["to"] == "first_answer")
-    assert (answered["from_n"], answered["to_n"],
-            answered["percent"]) == (1, 1, 100)
+    assert report["reached"]["confirmed"] == 1
+    assert report["conversion"][0]["from_n"] == 2
     assert report["per_inviter"] == [{"inviter_id": a.id, "joined": 1}]
 
 
@@ -285,7 +285,8 @@ def test_admin_page_refuses_signed_in_non_owners(svc, monkeypatch):  # noqa: F81
     assert c.get("/admin/funnel").status_code == 404
 
 
-def test_admin_page_shows_the_owner_counts_and_no_emails(svc, monkeypatch):  # noqa: F811
+def test_admin_page_shows_the_owner_counts_and_emails_only_in_testers(
+        svc, monkeypatch):  # noqa: F811
     app = _app(svc, CARE_OWNER_EMAILS=" Owner@Example.com ,x@example.com")
     other = app.test_client()
     _login(other, svc, monkeypatch, email="someone@example.com")
@@ -300,7 +301,11 @@ def test_admin_page_shows_the_owner_counts_and_no_emails(svc, monkeypatch):  # n
                     "Issues", "Invites per inviter"):
         assert heading in html
     assert "fasten failed" in html
-    assert "someone@example.com" not in html
+    # Owner decision 2026-10-16: a tester's email is on this page in the
+    # Testers table, and nowhere else on it.
+    testers, rest = html.split('id="funnel-days"', 1)
+    assert "someone@example.com" in testers
+    assert "someone@example.com" not in rest
 
 
 # --- the digest -------------------------------------------------------------

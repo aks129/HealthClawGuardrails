@@ -3,8 +3,11 @@
 (docs/briefs/2026-10-06-beta-onboarding.md).
 
 Double opt-in. A submit only creates (or refreshes) a `pending` request and
-sends one confirmation email, at most one per mailbox per CONFIRM_CAP
-seconds. The cap is recorded in the database, keyed on the normalized
+sends one confirmation email: at most one per mailbox per CONFIRM_RESEND
+seconds, and CONFIRM_DAILY a day. Only a send that did not fail counts
+against either, so a lost email can be asked for again within a minute,
+and the form says truthfully what happened. The cap is recorded in the
+database, keyed on the normalized
 mailbox (`mailbox`), so it survives restarts, holds across workers, and
 counts `name+tag@` and Gmail dot variants as the one inbox they are.
 Nothing else happens until the mailbox's owner confirms: no spot, no owner
@@ -29,11 +32,13 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import logging
+import math
 import re
 import secrets
 import time
 import unicodedata
 from collections import OrderedDict, deque
+from urllib.parse import urlsplit
 
 import click
 # A dependency of `requests`, so always installed; the stdlib codec is
@@ -68,7 +73,11 @@ MOBILE_DAYS = 30
 REQUEST_DAYS = 60
 PENDING_DAYS = 7
 
-#: One confirmation email per mailbox per day, and its link lasts as long.
+#: A confirmation email per mailbox at most every CONFIRM_RESEND seconds
+#: (the sign-in code waits 30), and CONFIRM_DAILY of them in CONFIRM_CAP
+#: seconds. A link lasts CONFIRM_SECONDS.
+CONFIRM_RESEND = 60
+CONFIRM_DAILY = 5
 CONFIRM_CAP = 86400
 CONFIRM_SECONDS = 86400
 
@@ -124,12 +133,24 @@ class BetaRequest(Base):
 
 
 class BetaMailCap(Base):
-    """When a confirmation was last emailed to a mailbox, keyed by the
+    """When a confirmation was last emailed to a mailbox, and when each
+    email of the last CONFIRM_CAP seconds went (`sends`), keyed by the
     sha256 of the normalized mailbox. Outlives a removed request, so
-    removing yourself does not reopen your inbox to a stranger's submits."""
+    removing yourself does not reopen your inbox to a stranger's submits.
+    A row from before `sends` reads as one email, at `sent_at`."""
     __tablename__ = "ca_beta_mail_caps"
     email_hash = Column(String(64), primary_key=True)
     sent_at = Column(Float, nullable=False)
+    # Space-separated send times, oldest first, at most CONFIRM_DAILY.
+    sends = Column(String(128), nullable=True)
+    # When the last "how to sign in" email went to a confirmed tester's
+    # mailbox: at most one a day (`claim_already`).
+    already_at = Column(Float, nullable=True)
+
+    @property
+    def day_count(self) -> int:
+        """How many sends are recorded (the rolling day's count)."""
+        return len(send_times(self))
 
 
 # --- pure rules ---------------------------------------------------------------
@@ -251,6 +272,30 @@ def _safe(value) -> str:
                    for c in str(value))
 
 
+#: User-agent marks that only an app's own built-in browser sends. A
+#: sign-in there stays there, not in Safari or Chrome. Conservative: only
+#: marks these apps put in on purpose, so a home-screen app or a plain
+#: browser never sees the hint. Gmail on iPhone sends no mark of its own
+#: and is missed; Gmail on Android opens Chrome, which needs no hint.
+_IN_APP_MARKS = ("LinkedInApp", "FBAN/", "FBAV/", "FB_IAB", "Instagram",
+                 " GSA/", "Line/", "; wv)")
+
+
+def in_app_browser(user_agent: str | None) -> bool:
+    """Is this an app's built-in browser (Gmail through Google's app,
+    LinkedIn, Facebook, Instagram, an Android WebView)?"""
+    ua = user_agent or ""
+    return any(mark in ua for mark in _IN_APP_MARKS)
+
+
+def mobile_browser(user_agent: str | None) -> bool:
+    """A phone or tablet. Gmail on iPhone sends no mark of its own, so the
+    confirm page says one quiet line to every mobile visitor instead."""
+    ua = user_agent or ""
+    return any(mark in ua for mark in ("Mobile", "Android", "iPhone",
+                                       "iPad"))
+
+
 def text_number(cfg) -> str:
     """The number testers text: the Sendblue line when it is on."""
     return cfg.sendblue_from_number if cfg.sendblue_enabled else ""
@@ -274,27 +319,95 @@ def _expire_lapsed(s, moment: float) -> None:
                       confirm_hash=None, confirm_expires_at=None))
 
 
-def claim_mail(session_scope, email: str, at: float | None = None) -> bool:
-    """Take the mailbox's one confirmation email for the day, or say it
-    is taken. A conditional update and a keyed insert, so two workers
-    racing on the same mailbox cannot both win."""
+def send_times(row) -> list[float]:
+    """When the emails a cap row records went, oldest first. A row from
+    before `sends` has one, at `sent_at`."""
+    raw = getattr(row, "sends", None)
+    if raw is None:
+        return [row.sent_at]
+    return [float(x) for x in raw.split()]
+
+
+def _sends(times: list[float]) -> str:
+    # repr keeps every float exactly, so release_mail can match one.
+    return " ".join(repr(x) for x in times[-CONFIRM_DAILY:])
+
+
+def claim_mail(session_scope, email: str, at: float | None = None) -> int:
+    """Take one of the mailbox's confirmation emails: 0 when taken, else
+    the whole seconds until one may be (the resend wait, or until the
+    oldest of CONFIRM_DAILY emails sent in the last CONFIRM_CAP seconds
+    is a day old: a rolling day, so no window edge lets more through). A
+    keyed insert, and an update conditional on the `sent_at` it read, so
+    two workers racing on one mailbox cannot both win. Taken before the
+    send so a race cannot send twice; `release_mail` gives it back when
+    the send failed."""
     moment = at if at is not None else time.time()
     key = hash_token(mailbox(email))
     try:
         with session_scope() as s:
-            done = s.execute(
+            row = s.get(BetaMailCap, key)
+            if row is None:
+                s.add(BetaMailCap(email_hash=key, sent_at=moment,
+                                  sends=_sends([moment])))
+                return 0
+            last = row.sent_at
+            if moment - last < CONFIRM_RESEND:
+                # Round up: never tell someone to retry a moment early.
+                return max(1, math.ceil(last + CONFIRM_RESEND - moment))
+            day = [x for x in send_times(row) if moment - x < CONFIRM_CAP]
+            if len(day) >= CONFIRM_DAILY:
+                oldest = day[-CONFIRM_DAILY]
+                return max(1, math.ceil(oldest + CONFIRM_CAP - moment))
+            won = s.execute(
                 update(BetaMailCap)
                 .where(BetaMailCap.email_hash == key,
-                       BetaMailCap.sent_at <= moment - CONFIRM_CAP)
-                .values(sent_at=moment)).rowcount
-            if done:
-                return True
-            if s.get(BetaMailCap, key) is not None:
-                return False
-            s.add(BetaMailCap(email_hash=key, sent_at=moment))
-        return True
+                       BetaMailCap.sent_at == last)
+                .values(sent_at=moment,
+                        sends=_sends(day + [moment]))).rowcount
+            return 0 if won else CONFIRM_RESEND
     except IntegrityError:
-        return False
+        return CONFIRM_RESEND
+
+
+def release_mail(session_scope, email: str, at: float) -> None:
+    """Give back the email `claim_mail` took at `at`: the send failed, so
+    nothing reached the inbox, and the person may ask again at once. Only
+    that claim's row, so a later claim is never undone."""
+    key = hash_token(mailbox(email))
+    with session_scope() as s:
+        row = s.get(BetaMailCap, key)
+        if row is None or row.sent_at != at:
+            return
+        rest = [x for x in send_times(row) if x != at]
+        s.execute(update(BetaMailCap)
+                  .where(BetaMailCap.email_hash == key,
+                         BetaMailCap.sent_at == at)
+                  .values(sent_at=at - CONFIRM_RESEND, sends=_sends(rest)))
+
+
+def claim_already(session_scope, email: str, at: float) -> bool:
+    """Take the mailbox's one "how to sign in" email of the day. The form
+    is anonymous, so a confirmed tester's inbox gets at most this one a
+    day from it, not CONFIRM_DAILY."""
+    key = hash_token(mailbox(email))
+    with session_scope() as s:
+        return bool(s.execute(
+            update(BetaMailCap)
+            .where(BetaMailCap.email_hash == key,
+                   BetaMailCap.already_at.is_(None)
+                   | (BetaMailCap.already_at <= at - CONFIRM_CAP))
+            .values(already_at=at)).rowcount)
+
+
+def release_already(session_scope, email: str, at: float) -> None:
+    """Give back `claim_already`'s email when the send failed."""
+    key = hash_token(mailbox(email))
+    with session_scope() as s:
+        s.execute(update(BetaMailCap)
+                  .where(BetaMailCap.email_hash == key,
+                         BetaMailCap.already_at == at)
+                  .values(already_at=None))
 
 
 def _spot_holders(s, but: str):
@@ -338,17 +451,26 @@ def _wants_mail(session_scope, email: str, first_name: str,
 
 
 def submit(session_scope, first_name: str, email: str, mobile: str | None,
-           ref: str | None) -> dict | None:
-    """Record a request and return the tokens for its confirmation email,
-    or None when nothing is sent (no change, or the day's email to that
-    mailbox is spent). The caller answers the same either way."""
-    if not _wants_mail(session_scope, email, first_name, mobile):
-        return None
-    if not claim_mail(session_scope, email):
-        return None
+           ref: str | None) -> dict:
+    """Record a request and return what its email needs: `kind` (join,
+    change, or `already`, a confirmed request asked for again with nothing
+    new, which is emailed how to sign in), the tokens, and `at`, the claim
+    to give back if the send fails. `{"wait": seconds}` when the mailbox's
+    email is spent for now; nothing is written then."""
+    wanted = _wants_mail(session_scope, email, first_name, mobile)
+    moment = time.time()
+    wait = claim_mail(session_scope, email, moment)
+    if wait:
+        return {"wait": wait}
     confirm, removal = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     with session_scope() as s:
         row = s.get(BetaRequest, email)
+        if not wanted and row is not None and row.status in _CONFIRMED:
+            # Nothing to confirm. Emailed how to sign in, so the answer is
+            # the one a new address gets: whether an address is in the
+            # beta is not learned from the form. No removal link, so the
+            # one the tester holds keeps working.
+            return {"kind": "already", "removal": None, "at": moment}
         if row is None:
             row = BetaRequest(email=email, created_at=now())
             s.add(row)
@@ -372,7 +494,8 @@ def submit(session_scope, first_name: str, email: str, mobile: str | None,
         row.confirm_expires_at = now() + CONFIRM_SECONDS
         row.removal_hash = hash_token(removal)
         row.updated_at = now()
-        return {"kind": kind, "confirm": confirm, "removal": removal}
+        return {"kind": kind, "confirm": confirm, "removal": removal,
+                "at": moment}
 
 
 def _by_confirm(s, token: str):
@@ -624,19 +747,22 @@ def _line(x, feedback_url: str = FEEDBACK_URL) -> tuple[str, str]:
 
 
 def _tester_email(cfg, email: str, subject: str, lines: list,
-                  token: str, link: tuple[str, str] | None = None) -> str:
+                  token: str | None,
+                  link: tuple[str, str] | None = None) -> str:
     """One email to a tester: plain sentences, an optional action link,
-    the feedback link and the single-use removal link. A name in a line is
-    the visitor's own, read back to them, escaped."""
-    remove_url = f"{cfg.origin}/beta/remove?t={token}"
+    the feedback link and the single-use removal link (none when `token`
+    is None, so the link the tester already holds stays the live one). A
+    name in a line is the visitor's own, read back to them, escaped."""
+    remove_url = f"{cfg.origin}/beta/remove?t={token}" if token else None
     feedback_url = f"{cfg.origin}{FEEDBACK_URL}"
     pairs = [_line(x, feedback_url) for x in lines]
     parts = [t for t, _ in pairs]
     if link:
         parts.append(f"{link[0]}: {link[1]}")
-    text = "\n\n".join(
-        parts + [f"Something broke, or a question? Tell us: {feedback_url}",
-                 f"Remove my request: {remove_url}"])
+    parts.append(f"Something broke, or a question? Tell us: {feedback_url}")
+    if remove_url:
+        parts.append(f"Remove my request: {remove_url}")
+    text = "\n\n".join(parts)
     body = "".join(h if h.startswith("<ol") else f"<p>{h}</p>"
                    for _, h in pairs)
     if link:
@@ -645,9 +771,11 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
     html = (f"<div style='font-family:system-ui,sans-serif;max-width:420px'>"
             f"<h2 style='color:#22190E'>CareAgents</h2>{body}"
             f"<p>Something broke, or a question? "
-            f"<a href='{escape(feedback_url)}'>Tell us</a>.</p>"
-            f"<p style='color:#5E5240;font-size:13px'>"
-            f"<a href='{escape(remove_url)}'>Remove my request</a></p></div>")
+            f"<a href='{escape(feedback_url)}'>Tell us</a>.</p>")
+    if remove_url:
+        html += (f"<p style='color:#5E5240;font-size:13px'>"
+                 f"<a href='{escape(remove_url)}'>Remove my request</a></p>")
+    html += "</div>"
     return mail.send_message(cfg, email, subject, html, text)
 
 
@@ -661,10 +789,8 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
 #: screen (tests/test_careagents_feedback.py checks each one).
 NEXT_STEPS = (
     'Open careagents.cloud and tap "Get started".',
-    # The big button on that screen is the passkey one; say where the
-    # email box is.
-    'Under "or use your email", type the same email you used to join the '
-    'beta and tap "Email me a code".',
+    'Type the same email you used to join the beta and tap '
+    '"Email me a code".',
     'We email you an 8-digit code. Type it in and tap "Continue".',
     'If it offers a passkey, you can set one up or tap "Skip for now".',
     'On your hub, tap "Chat" to open the made-up records. Ask a question, '
@@ -760,6 +886,49 @@ def page_context() -> dict:
             "mobile_days": MOBILE_DAYS, "request_days": REQUEST_DAYS}
 
 
+#: What may stand in a subject line as the inviter's name besides letters.
+_NAME_MARKS = frozenset(" -'’")
+
+
+def subject_name(name: str | None) -> bool:
+    """May this first name stand in a subject line? The inviter typed it,
+    so only a name's characters: letters, spaces, hyphens and apostrophes,
+    up to 40. That refuses a link (`://`, `www.`, a dotted domain: no
+    `:`, `/` or `.` pass) and any line or paragraph separator. Otherwise
+    the email keeps its generic subject."""
+    if not name or len(name) > 40 or not name.strip():
+        return False
+    return all(c.isalpha() or c in _NAME_MARKS for c in name)
+
+
+def _submit_email(cfg, result: dict, inviter: str | None):
+    """(subject, lines, link) for the email a submit sends. `inviter` is
+    the first name the inviter confirmed on their own request, never their
+    email (careagents/invites.py), and names only a join."""
+    if result["kind"] == "already":
+        return ("How to sign in to CareAgents",
+                ["You're already in the CareAgents beta, so there is "
+                 "nothing to confirm. Here is how to sign in.",
+                 _STEPS, CODE_IS_COMING],
+                ("Open careagents.cloud", _WEB))
+    url = f"{cfg.origin}/beta/confirm?t={result['confirm']}"
+    if result["kind"] == "join":
+        subject = "Confirm you asked to test CareAgents"
+        lines = ["Confirm you asked to test CareAgents. The link works for "
+                 "24 hours.",
+                 "If you didn't ask, ignore this email and nothing more "
+                 "happens."]
+        if subject_name(inviter):
+            subject = f"{inviter} invited you to try CareAgents"
+            lines.insert(0, subject + ".")
+        return subject, lines, ("Confirm", url)
+    return ("Confirm the change to your beta request",
+            ["Someone asked to change your CareAgents beta request. Confirm "
+             "it if it was you. The link works for 24 hours.",
+             "If it wasn't you, ignore this email and nothing changes."],
+            ("Confirm", url))
+
+
 #: Requests after which someone may have been promoted from the waitlist.
 _FREES_A_SPOT = frozenset({"beta_remove", "delete_account"})
 
@@ -822,6 +991,14 @@ def register(app, svc, cfg, first_run=None) -> None:
         return (isinstance(held, str) and bool(given)
                 and secret_matches(given, held))
 
+    @app.context_processor
+    def _in_app():
+        # For _in_app_hint.html: the address to open in Safari or Chrome.
+        ua = request.headers.get("User-Agent")
+        return {"in_app": in_app_browser(ua), "mobile": mobile_browser(ua),
+                "web_address": cfg.origin,
+                "web_host": urlsplit(cfg.origin).netloc or cfg.origin}
+
     @app.after_request
     def _tell_the_promoted(response):
         if (request.endpoint in _FREES_A_SPOT
@@ -853,7 +1030,7 @@ def register(app, svc, cfg, first_run=None) -> None:
             return jsonify({"error": "rate_limited"}), 429
         # A bot fills every field. Same answer, nothing kept or sent.
         if body.get("website"):
-            return jsonify({"ok": True})
+            return jsonify({"ok": True, "sent": True})
         if body.get("consent") is not True:
             return jsonify({"error": "consent_required"}), 400
         first_name = str(body.get("first_name") or "").strip()
@@ -869,38 +1046,65 @@ def register(app, svc, cfg, first_run=None) -> None:
             if mobile is None:
                 return jsonify({"error": "mobile"}), 400
         ref = clean_ref(body.get("ref"))
-        tokens = submit(svc.session, first_name, email, mobile, ref)
+        result = submit(svc.session, first_name, email, mobile, ref)
+        inviter = None
         if body.get("invite"):
             # Through a personal invite link (careagents/invites.py). Spent
             # only when the address confirms; a dead code is ignored, and
             # the answer below is the same either way.
             funnel.safely(invites.note_pending, svc.session, email,
                           body.get("invite"), cfg.invite_link_cap)
-        if tokens:
-            url = f"{cfg.origin}/beta/confirm?t={tokens['confirm']}"
-            if tokens["kind"] == "join":
-                subject = "Confirm you asked to test CareAgents"
-                lines = ["Confirm you asked to test CareAgents. The link "
-                         "works for 24 hours.",
-                         "If you didn't ask, ignore this email and nothing "
-                         "more happens."]
-            else:
-                subject = "Confirm the change to your beta request"
-                lines = ["Someone asked to change your CareAgents beta "
-                         "request. Confirm it if it was you. The link works "
-                         "for 24 hours.",
-                         "If it wasn't you, ignore this email and nothing "
-                         "changes."]
             try:
-                outcome = _tester_email(cfg, email, subject, lines,
-                                        tokens["removal"],
-                                        link=("Confirm", url))
-                funnel.note_mail(svc.session, cfg, outcome)
+                inviter = invites.inviter_name_for_code(
+                    svc.session, body.get("invite"), cfg.invite_link_cap)
             except Exception:               # pragma: no cover - defensive
-                logger.warning("beta confirmation email failed to send")
-        # The same answer whatever happened, so nothing can be learned
-        # about an address from it.
-        return jsonify({"ok": True})
+                logger.warning("inviter name not read")
+        if "wait" in result:
+            # Sent moments ago, or the day's emails to this mailbox went:
+            # nothing was sent now, and the form says so (as /api/auth/email
+            # does, #262). This turns on what was asked for this mailbox
+            # lately, never on whether it has a request or an account.
+            return jsonify({"sent": False, "retry_after": result["wait"]})
+        already = result["kind"] == "already"
+        if already and not claim_already(svc.session, email, result["at"]):
+            # Today's "how to sign in" email to this tester went already,
+            # and an anonymous form must not fill a tester's inbox: not
+            # sent again. Answered as a send, as a new address would be,
+            # so the form does not tell who is in the beta. The claim
+            # above stands, so the next ask waits as anyone's does, and
+            # the email that did go today says the same thing.
+            return jsonify({"ok": True, "sent": True})
+        subject, lines, link = _submit_email(cfg, result, inviter)
+        try:
+            outcome = _tester_email(cfg, email, subject, lines,
+                                    result["removal"], link=link)
+        except Exception:                   # pragma: no cover - defensive
+            logger.warning("beta confirmation email failed to send")
+            outcome = mail.NOT_SENT
+        funnel.note_mail(svc.session, cfg, outcome)
+        if outcome == mail.NOT_SENT:
+            # Nothing left, so nothing is spent: asking again works now.
+            release_mail(svc.session, email, result["at"])
+            if already:
+                release_already(svc.session, email, result["at"])
+            return jsonify({"error": "not_sent", "sent": False}), 502
+        if outcome != mail.SENT:
+            # Unconfirmed, and anything unrecognised: it may be in the
+            # inbox already, so the claim stands and the wait applies.
+            return jsonify({"sent": None,
+                            "retry_after": CONFIRM_RESEND}), 202
+        # The same answer for a join, a change and an address already in,
+        # so nothing can be learned about an address from it.
+        return jsonify({"ok": True, "sent": True})
+
+    def _confirm_gone():
+        """A confirm link that is spent, lapsed or unknown. Signed in on
+        this browser (Back after confirming, or a second tap): on into the
+        app, since nothing broke. Otherwise say what still works. Decided
+        by this browser's session only, never by the token."""
+        if session.get("account_id"):
+            return _no_referrer(redirect("/home", 303))
+        return _page("confirm_gone", 410)
 
     @app.get("/beta/confirm")
     def beta_confirm_ask():
@@ -909,7 +1113,7 @@ def register(app, svc, cfg, first_run=None) -> None:
         token = str(request.args.get("t") or "")
         preview = confirm_preview(svc.session, token)
         if preview is None:
-            return _page("gone", 410)
+            return _confirm_gone()
         nonce = None
         if preview["kind"] == "join":
             # Only a new request signs in (see beta_confirm).
@@ -923,7 +1127,7 @@ def register(app, svc, cfg, first_run=None) -> None:
         from_our_page = _nonce_matches(str(request.form.get("n") or ""))
         done = confirm(svc.session, str(request.form.get("t") or ""))
         if done is None:
-            return _page("gone", 410)
+            return _confirm_gone()
         if done["kind"] == "join":
             # Before first_run: the account it makes then reads the join.
             try:

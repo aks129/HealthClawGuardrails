@@ -20,7 +20,9 @@
       <summary class="chat-menu-btn" aria-label="Menu">⋯</summary>
       <nav class="chat-menu-list">
         <a href="/home">Home</a>
-        <a href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
+        <a href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for your OK</a>
+        {# Answers say "the full brief is on the Visit brief page". #}
+        <a href="/brief?agent={{ agent_id }}">Visit brief</a>
         {# The page the landing links too (#884 G7), named for what it
            tells a patient, not as a grade. Ours, so the same tab. #}
         <a id="trust-pill" href="/safety">How we keep you safe</a>
@@ -43,6 +45,7 @@
      until chat.js has drawn the chart and scrolled to it, so the page does
      not paint at the top of the history first. #}
   <div class="chat-log" id="log" data-pending-reviews='{{ pending_reviews | tojson }}'
+       {%- if done_form %} data-done-form="{{ done_form }}"{% endif %}
        {%- if request.args.get('chart') is not none %} data-chart-pending style="visibility:hidden"{% endif %}>
     {# An outstanding import is news on every visit, not only the first. The
        greeting is where a patient looks for "did my records land?", and it
@@ -88,6 +91,11 @@
     <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
       {#- -#}<p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
       {#- -#}</div>
+    {# A failed turn, once (errors.collapse_failed_turns): a way to tell us,
+       with the screen and the code. History keeps no run id. #}
+    {% if m.failed %}
+    <a class="report-link" href="{{ url_for('feedback_page', screen='chat', error='chat_error') }}">Report a problem</a>
+    {% endif %}
     {% endfor %}
     {% elif summary_counts %}
     {# First visit with connected records: show real counts so the user sees
@@ -118,8 +126,9 @@
      relationship (FHI-44). Just above the message box, outside the
      scrolling log, so all of them show on a short phone screen (patient
      tester recheck on #944). A returning visit has it hidden: chat.js
-     shows it after an error, so the next try is one tap. #}
-  <div class="starters" id="starters"{% if past %} hidden{% endif %}>
+     shows it after an error, so the next try is one tap. A visit whose
+     last turn failed keeps it shown, the same way. #}
+  <div class="starters" id="starters"{% if past and not past[-1].failed %} hidden{% endif %}>
     {% for s in starters %}
     <button type="button" class="starter">{{ s }}</button>
     {% endfor %}

@@ -6,7 +6,7 @@
   const show = (id) => ["step-start", "step-code", "step-passkey"]
     .forEach((s) => ($(s).hidden = s !== id));
   function fail(msg) { err.textContent = msg; err.hidden = false; }
-  function clear() { err.hidden = true; }
+  function clear() { err.hidden = true; $("resend-code").hidden = true; }
 
   const b64uToBuf = (s) => {
     s = s.replace(/-/g, "+").replace(/_/g, "/");
@@ -130,7 +130,12 @@
   $("verify-btn").addEventListener("click", async () => {
     clear();
     const res = await post("/api/auth/verify", { email: pendingEmail, code: $("code").value.trim() });
-    if (!res.ok) return fail(res.d.error || "Wrong code.");
+    if (!res.ok) {
+      fail(res.d.error || "Wrong code.");
+      // A wrong, expired or used-up code: offer a new one right there.
+      $("resend-code").hidden = false;
+      return;
+    }
     // `first_run`: nothing connected yet. The records come first; the
     // passkey waits in the chat's menu rather than standing in the way.
     if (res.d.has_passkey || res.d.first_run === true ||

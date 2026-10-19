@@ -38,11 +38,23 @@
       <li id="beta-step-3"><b>Try an approval.</b> Ask it to fill in an
         intake form, then check it and approve it.</li>
     </ol>
+    {# The videos are files on GitHub, our code site: said before the tap,
+       so the page that opens is not a surprise. #}
     <p><a href="{{ demo_url }}" target="_blank" rel="noopener">Watch the
-      short demo videos</a> to see each step first.</p>
+      short demo videos on GitHub</a> to see each step first. It opens our
+      code site in a new tab. Tap a video there to play it.</p>
 
     <h2 class="beta-form-title">Join the beta</h2>
-    <p id="beta-done" class="form-ok" role="status" hidden></p>
+    {# beta.js says what really happened to the email, and offers the
+       other way in: "Get started" and a code, which needs no email from
+       this form. #}
+    <div id="beta-done" class="form-ok beta-done" hidden>
+      <p id="beta-done-text" role="status"></p>
+      <button class="btn-secondary btn-block" id="beta-again" type="button"
+              hidden>Send the email again</button>
+      <a class="btn-secondary btn-block" id="beta-get-started"
+         href="/auth">Get started</a>
+    </div>
     <form id="beta-form" novalidate>
       <label class="field-label" for="beta-first">First name</label>
       <input class="field" id="beta-first" name="first_name" maxlength="40"

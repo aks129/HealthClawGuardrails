@@ -426,7 +426,10 @@ def test_settings_in_a_link_session_says_how_to_get_the_invite_link(
     section = html[html.index('id="invite-section"'):]
     section = section[:section.index("</section>")]
     assert 'href="/auth?invite=1"' in section
-    assert "Sign in to get your invite link" in section
+    # Signed in already: one more check, not "Sign in" (patient tester,
+    # 2026-10-16). The link itself still waits for it (#928 F6).
+    assert "Email me a code for my invite link" in section
+    assert "Sign in" not in section
     assert "/i?c=" not in html          # the link itself still waits
     page = c.get("/auth?invite=1").get_data(as_text=True)
     assert 'data-back="/settings#invite-section"' in page

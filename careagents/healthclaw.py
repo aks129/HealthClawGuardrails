@@ -377,6 +377,65 @@ class HealthClawClient:
                 r.status_code)
         return self._json_object(r, f"read {resource_type}")
 
+    # --- SMART Health Check-in export (FHI-53, r6/checkin.py) ---------------
+
+    def mint_checkin_token(self, tenant: str, resource_types: list) -> str:
+        """A token for one check-in export of exactly these types.
+
+        The engine fixes the rest: read scope, audience `checkin-export`,
+        `op` from the type set, 120 seconds, single use. Never cached, and
+        kept apart from `mint_token`'s cache: each export spends its own,
+        and the cached general token is refused by the checkin profile.
+        It goes from here to the engine and nowhere else."""
+        r = self._send(
+            "POST", f"{self.fhir}/internal/step-up-token",
+            json={"tenant_id": tenant, "purpose": "checkin",
+                  "resource_types": list(resource_types)},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            what="checkin token mint")
+        token = (self._json_object(r, "checkin token mint").get("token")
+                 if r.ok else None)
+        if not isinstance(token, str) or not token:
+            raise HealthClawError(
+                f"checkin token mint failed ({r.status_code})", r.status_code)
+        return token
+
+    def checkin_export(self, tenant: str, resource_types: list) -> bytes:
+        """$share-bundle profile=checkin for the tenant's one Patient.
+
+        The patient id is resolved here, from the tenant, never taken from
+        the browser; a tenant without exactly one Patient raises with code
+        `no_patient`. Looked up fresh rather than from `_patient_subject`'s
+        cache, which also turns a failed lookup into "no subject". A token is
+        minted for this call alone. Returns the engine's Bundle bytes as
+        sent, for the relay to pass through; an error never carries the
+        engine's body, only its status and a fixed code."""
+        subject = self._find_patient_subject(tenant)
+        if not subject:
+            raise HealthClawError("checkin export has no single patient",
+                                  0, code="no_patient")
+        token = self.mint_checkin_token(tenant, resource_types)
+        r = self._send(
+            "POST", f"{self.fhir}/$share-bundle",
+            json={"profile": "checkin",
+                  "resource_types": list(resource_types),
+                  "patient_id": subject.split("/", 1)[1]},
+            headers={"X-Tenant-Id": tenant, "X-Step-Up-Token": token,
+                     "X-Agent-Id": agent_header()},
+            what="checkin export")
+        if r.status_code == 413:
+            raise HealthClawError("checkin export too large", 413,
+                                  code="checkin_too_large")
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"checkin export failed ({r.status_code})", r.status_code)
+        if self._json_object(r, "checkin export").get(
+                "resourceType") != "Bundle":
+            raise HealthClawError("checkin export returned invalid data",
+                                  r.status_code)
+        return r.content
+
     def _patient_subject(self, tenant: str) -> str | None:
         """`Patient/<id>` for the tenant's one Patient, else None.
 
