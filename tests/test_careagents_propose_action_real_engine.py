@@ -206,6 +206,14 @@ def test_a_texted_yes_approves_nothing(world, monkeypatch):
     _model_says(monkeypatch, "Approve it on the review page.")
     _turn(c, chain.agent, "yes", request_id="yes")
     _turn(c, chain.agent, "YES approve", request_id="yes-2")
+    # And as an actual text: the iMessage inbound from the bound number.
+    from tests.test_careagents import _enqueue_and_run_imessage
+    cfg = chain.app.extensions["careagents_runtime"]["config"]
+    texted = _enqueue_and_run_imessage(
+        chain.app, chain.app.test_client(),
+        headers={"X-Internal-Secret": cfg.mint_secret},
+        json={"handle": PHONE, "text": "YES", "request_id": "sms-yes"})
+    assert texted.status_code == 200, texted.get_data(as_text=True)
     assert _action(chain, pending["id"])["status"] == "awaiting_confirmation"
     assert _confirmations(chain, pending["id"]) == 0
     assert twilio.sent == []
