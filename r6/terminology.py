@@ -283,6 +283,11 @@ _LABELS: dict[tuple[str, str], str] = {
     # --- v3-ActReason: the reason r6/curatr.py writes on a fix's Provenance -
     ("http://terminology.hl7.org/CodeSystem/v3-ActReason", "PATADMIN"):
         "Patient administration",
+    # The synthetic-data marker the check-in export carries across
+    # (r6/access.py _test_markers). The code system's own display, so a
+    # validator that checks coding.display agrees with it.
+    ("http://terminology.hl7.org/CodeSystem/v3-ActReason", "HTEST"):
+        "test health data",
 }
 
 #: SNOMED "no known allergy": 716186003 and every descendant (tx.fhir.org,
