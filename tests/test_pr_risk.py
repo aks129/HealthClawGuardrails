@@ -324,7 +324,7 @@ def test_workflow_never_checks_out_or_runs_pr_code():
     checkouts = [s for job in WORKFLOW["jobs"].values() for s in job["steps"]
                  if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert len(checkouts) == 1
-    assert checkouts[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert checkouts[0]["with"]["ref"] == "main"
     assert checkouts[0]["with"].get("persist-credentials") is False
     for forbidden in ("pull_request.head.ref", "refs/pull/", "head.repo", "git fetch",
                       "git checkout"):
@@ -351,3 +351,49 @@ def test_workflow_fails_toward_owner_look_yes():
               if s.get("uses", "").startswith("actions/github-script@")][0]["with"]["script"]
     catch = script[script.index("catch (e)"):]
     assert "look = true" in catch and "scorer error" in catch
+
+
+def test_workflow_rescores_on_a_base_change_and_pins_third_party_actions():
+    triggers = WORKFLOW.get(True) or WORKFLOW["on"]
+    assert "edited" in triggers["pull_request_target"]["types"]
+    for step in WORKFLOW["jobs"]["score"]["steps"]:
+        uses = str(step.get("uses", ""))
+        if uses and not uses.startswith(("actions/checkout@", "actions/github-script@")):
+            assert re.search(r"@[0-9a-f]{40}$", uses), uses
+
+
+def test_workflow_forces_owner_look_when_the_default_branch_is_not_main():
+    steps = WORKFLOW["jobs"]["score"]["steps"]
+    first = steps[0]
+    assert first["if"].replace(" ", "") == "${{github.event.repository.default_branch!='main'}}"
+    assert "FORCE_OWNER_LOOK=true" in first["run"]
+    script = steps[-1]["with"]["script"]
+    assert "FORCE_OWNER_LOOK" in script and "default_branch !== 'main'" in script
+
+
+def test_the_label_step_runs_even_when_scoring_fails():
+    last = WORKFLOW["jobs"]["score"]["steps"][-1]
+    assert last["uses"].startswith("actions/github-script@")
+    assert "always()" in last["if"]
+
+
+def test_a_quoted_path_git_would_not_quote_is_unparsed():
+    result = pr_risk.score('diff --git "a/docs/x.md" "b/docs/x.md"\n', RUBRIC)
+    assert result["level"] == 3
+    assert any(r["kind"] == "unparsed" for r in result["reasons"])
+
+
+def test_quoted_and_spaced_paths_decode():
+    files = pr_risk.parse_diff(
+        'diff --git "a/r6/\\303\\251 x.py" "b/r6/\\303\\251 x.py"\n'
+        "diff --git a/docs/a b.md b/docs/a b.md\n")
+    assert [(f["old"], f["new"]) for f in files] == [
+        ("r6/é x.py", "r6/é x.py"), ("docs/a b.md", "docs/a b.md")]
+    assert not any(f.get("unparsed") for f in files)
+
+
+def test_a_comment_over_the_cap_is_truncated_with_the_marker_first():
+    text = "".join(diff(f"docs/{i:04d}{'d' * 150}.md", added=["x"]) for i in range(600))
+    body = pr_risk.render_comment(pr_risk.score(text + diff("r6/access.py", added=["x"]), RUBRIC))
+    assert len(body) <= pr_risk.COMMENT_MAX
+    assert body.startswith(pr_risk.COMMENT_MARKER)

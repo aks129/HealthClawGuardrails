@@ -32,6 +32,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUBRIC = ROOT / ".github" / "pr-risk.yml"
 OWNER_LOOK_LEVEL = 2
 COMMENT_MARKER = "<!-- pr-risk -->"
+# GitHub rejects a comment over 65,536 characters; a rejected comment must
+# never be the reason a stale label survives, so stay well under it.
+COMMENT_MAX = 50_000
+CODE_SPAN_MAX = 160
 
 SIGNALS = (
     "step_up_truthiness",
@@ -119,19 +123,29 @@ def parse_diff(diff_text: str) -> list[dict]:
 
     Each line is (line_number, text). Both paths are kept, so a deleted or
     renamed-away guarded file still scores on its old path.
+
+    Lines split on "\\n" only, as git and GitHub do. str.splitlines() also
+    breaks on U+2028, \\x0b, a lone \\r and others, which would let one added
+    line carry a forged `diff --git` header. Paths git C-quotes are decoded;
+    a header that does not parse, or quotes a path git would not have
+    quoted, marks the file `unparsed` so it fails toward the owner.
     """
     files: list[dict] = []
     cur = None
     old_no = new_no = 0
     in_hunk = False
-    for raw in diff_text.splitlines():
+    for raw in diff_text.split("\n"):
+        if raw.endswith("\r"):
+            raw = raw[:-1]
         if raw.startswith("diff --git "):
             cur = {"old": None, "new": None, "added": [], "removed": []}
             files.append(cur)
             in_hunk = False
-            m = re.match(r"diff --git a/(.*) b/(.*)$", raw)
-            if m:
-                cur["old"], cur["new"] = m.group(1), m.group(2)
+            pair = _split_pair(raw[len("diff --git "):], "a/", "b/")
+            if pair is None:
+                cur["unparsed"] = True
+            else:
+                cur["old"], cur["new"] = pair
             continue
         if cur is None:
             continue
@@ -142,18 +156,29 @@ def parse_diff(diff_text: str) -> list[dict]:
                 in_hunk = True
             continue
         if not in_hunk:
-            if raw.startswith("--- "):
-                cur["old"] = _strip_prefix(raw[4:], "a/")
-            elif raw.startswith("+++ "):
-                cur["new"] = _strip_prefix(raw[4:], "b/")
-            elif raw.startswith("rename from "):
-                cur["old"] = raw[len("rename from "):]
-            elif raw.startswith("rename to "):
-                cur["new"] = raw[len("rename to "):]
-            elif raw.startswith("deleted file mode"):
-                cur["deleted"] = True
-            elif raw.startswith("new file mode"):
-                cur["created"] = True
+            for prefix, key, strip in (("--- ", "old", "a/"), ("+++ ", "new", "b/"),
+                                       ("rename from ", "old", ""),
+                                       ("rename to ", "new", ""),
+                                       ("copy from ", "old", ""),
+                                       ("copy to ", "new", "")):
+                if raw.startswith(prefix):
+                    path = _header_path(raw[len(prefix):].rstrip("\t"), strip, cur)
+                    if path is not None:
+                        cur[key] = path
+                    break
+            else:
+                if raw.startswith("Binary files ") and raw.endswith(" differ"):
+                    pair = _split_pair(raw[len("Binary files "):-len(" differ")],
+                                       "a/", "b/", sep=" and ")
+                    if pair is None:
+                        cur["unparsed"] = True
+                    else:
+                        cur["old"] = pair[0] or cur["old"]
+                        cur["new"] = pair[1] or cur["new"]
+                elif raw.startswith("deleted file mode"):
+                    cur["deleted"] = True
+                elif raw.startswith("new file mode"):
+                    cur["created"] = True
             continue
         if raw.startswith("+"):
             cur["added"].append((new_no, raw[1:]))
@@ -169,14 +194,103 @@ def parse_diff(diff_text: str) -> list[dict]:
             f["old"], f["created"] = None, True
         if f["new"] == "/dev/null":
             f["new"], f["deleted"] = None, True
+        if not f["old"] and not f["new"]:
+            f["unparsed"] = True
     return files
 
 
-def _strip_prefix(path: str, prefix: str) -> str:
-    path = path.rstrip("\t")
-    if path.startswith('"') and path.endswith('"'):
-        path = path[1:-1]
-    return path[len(prefix):] if path.startswith(prefix) else path
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13,
+              '"': 34, "\\": 92}
+
+
+def _needs_quoting(path: str) -> bool:
+    """Would git (default core.quotePath) C-quote this path?"""
+    return any(c in '"\\' or ord(c) < 0x20 or ord(c) >= 0x7f for c in path)
+
+
+def _read_token(text: str) -> tuple[str, str, bool] | None:
+    """One path token from the front of `text`: (path, rest, was_quoted).
+
+    A quoted token is git's C-quoting: backslash escapes and \\ooo octal
+    bytes, decoded as UTF-8. An unquoted token is the whole text.
+    """
+    if not text.startswith('"'):
+        return text, "", False
+    out = bytearray()
+    i = 1
+    while i < len(text):
+        c = text[i]
+        if c == '"':
+            return out.decode("utf-8", "replace"), text[i + 1:], True
+        if c == "\\":
+            if re.match(r"[0-7]{3}", text[i + 1:i + 4]):
+                out.append(int(text[i + 1:i + 4], 8) & 0xFF)
+                i += 4
+                continue
+            nxt = text[i + 1:i + 2]
+            if nxt in _C_ESCAPES:
+                out.append(_C_ESCAPES[nxt])
+                i += 2
+                continue
+            return None
+        out.extend(c.encode("utf-8"))
+        i += 1
+    return None
+
+
+def _split_pair(text: str, a: str, b: str, sep: str = " ") -> tuple | None:
+    """Two paths from `a/X b/Y` (or `A and B` on a Binary line), either side
+    C-quoted or /dev/null. None when the pair cannot be read unambiguously."""
+    if text.startswith('"'):
+        first = _read_token(text)
+        if first is None or not first[1].startswith(sep):
+            return None
+        left, rest, lq = first[0], first[1][len(sep):], True
+    else:
+        # Unquoted left side: the right side starts at a separator followed
+        # by the b/ prefix, a quote, or /dev/null. A name with spaces is only
+        # unambiguous when old == new, so prefer the split that gives that.
+        cands = [i for i in range(len(text)) if text.startswith(sep, i)
+                 and (text.startswith(b, i + len(sep))
+                      or text.startswith('"', i + len(sep))
+                      or text.startswith("/dev/null", i + len(sep)))]
+        if not cands:
+            return None
+        even = [i for i in cands if text[len(a):i] == text[i + len(sep) + len(b):]]
+        i = (even or cands)[0]
+        left, rest, lq = text[:i], text[i + len(sep):], False
+    second = _read_token(rest)
+    if second is None or second[1]:
+        return None
+    right, rq = second[0], second[2]
+    out = []
+    for path, quoted, prefix in ((left, lq, a), (right, rq, b)):
+        if path == "/dev/null" and not quoted:
+            out.append(None)
+            continue
+        if not path.startswith(prefix) or (quoted and not _needs_quoting(path)):
+            return None
+        out.append(path[len(prefix):])
+    return tuple(out)
+
+
+def _header_path(text: str, prefix: str, cur: dict) -> str | None:
+    """A path from a ---/+++/rename/copy header. Marks `cur` unparsed on a
+    malformed or non-canonical quote, or a missing a/ b/ prefix."""
+    if text == "/dev/null":
+        return text
+    if text.startswith('"'):
+        tok = _read_token(text)
+        if tok is None or tok[1] or not _needs_quoting(tok[0]):
+            cur["unparsed"] = True
+            return None
+        text = tok[0]
+    if prefix:
+        if not text.startswith(prefix):
+            cur["unparsed"] = True
+            return None
+        text = text[len(prefix):]
+    return text
 
 
 def _paths(f: dict) -> list[str]:
@@ -229,7 +343,8 @@ _DISPLAY_TEXT = re.compile(r"""["'](?:display|text)["']""")
 
 _TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)\s*\(")
 _SKIP = re.compile(
-    r"pytest\.mark\.(?:skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|#\s*noqa\b"
+    r"\bmark\.(?:skip|skipif|xfail)\b|\bpytest\.(?:skip|xfail|importorskip)\("
+    r"|#\s*noqa\b|\bunittest\.skip|\bpytest_(?:collection_modifyitems|ignore_collect)\b"
     r"|\b(?:it|test|describe)\.skip\(|\bxit\(")
 
 
@@ -343,6 +458,13 @@ def score(diff_text: str, rubric: dict) -> dict:
             lvl, why = path_level(p, rubric)
             reasons.append({"level": lvl, "kind": "path", "rule": why, "where": p})
             level = max(level, lvl)
+    for f in files:
+        if f.get("unparsed"):
+            # The parser lost track of a file: fail toward the owner.
+            reasons.append({"level": 3, "kind": "unparsed",
+                            "rule": "a diff header the scorer could not read",
+                            "where": _where(f)})
+            level = 3
     for h in detect_signals(files):
         lvl = rubric["signals"][h["signal"]]
         reasons.append({"level": lvl, "kind": "signal", "rule": h["signal"],
@@ -368,7 +490,10 @@ def owner_look(level: int | None, review_unavailable: bool = False,
 
 def _code(text: str) -> str:
     # Paths come from the PR, so keep them inert inside a code span.
-    return "`" + re.sub(r"[`\r\n<>]", "?", text) + "`"
+    text = re.sub(r"[`\r\n<>\u2028\u2029]", "?", text)
+    if len(text) > CODE_SPAN_MAX:
+        text = text[:CODE_SPAN_MAX - 1] + "…"
+    return "`" + text + "`"
 
 
 def render_comment(result: dict | None, head_sha: str = "",
@@ -416,7 +541,11 @@ def render_comment(result: dict | None, head_sha: str = "",
     lines.append("")
     lines.append("Rubric: `.github/pr-risk.yml` on the default branch. "
                  "Scorer: `scripts/pr_risk.py`.")
-    return "\n".join(lines) + "\n"
+    body = "\n".join(lines) + "\n"
+    if len(body) > COMMENT_MAX:
+        cut = "\n\n… comment truncated; the full reason list is in the workflow run.\n"
+        body = body[:COMMENT_MAX - len(cut)] + cut
+    return body
 
 
 # ---------------------------------------------------------------- CLI

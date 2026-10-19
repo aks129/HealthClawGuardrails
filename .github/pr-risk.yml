@@ -34,6 +34,11 @@ paths:
 
   # R2: application logic, CI, dependencies, schema, container config.
   - {level: 2, glob: "r6/**"}
+  - {level: 2, glob: "app.py"}
+  - {level: 2, glob: "models.py"}
+  - {level: 2, glob: "deployment.py"}
+  - {level: 2, glob: "api/**"}
+  - {level: 2, glob: "**/conftest.py"}  # a collection hook can deselect the suite
   - {level: 2, glob: "careagents/**/*.py"}
   - {level: 2, glob: "services/agent-orchestrator/**"}
   - {level: 2, glob: "migrations/**"}
@@ -58,6 +63,7 @@ paths:
   # auth, tenancy, writes and the action rail, terminology labels, secrets
   # and env handling, deploy workflows, the review standards, and this
   # rubric and its scorer.
+  - {level: 3, glob: "main.py"}  # app factory: registers every blueprint
   - {level: 3, glob: "r6/access.py"}
   - {level: 3, glob: "r6/redaction.py"}
   - {level: 3, glob: "**/*redact*"}
@@ -84,6 +90,12 @@ paths:
   - {level: 3, glob: "careagents/consent.py"}
   - {level: 3, glob: "careagents/config.py"}
   - {level: 3, glob: "careagents/security_headers.py"}
+  # The approve and consent pages ARE the human gate.
+  - {level: 3, glob: "templates/action_approve.html"}
+  - {level: 3, glob: "templates/action_review.html"}
+  - {level: 3, glob: "careagents/templates/approvals.html"}
+  - {level: 3, glob: "careagents/templates/consent.html"}
+  - {level: 3, glob: "careagents/static/consent.js"}
   - {level: 3, glob: "services/agent-orchestrator/src/**/*auth*"}
   - {level: 3, glob: ".env*"}
   - {level: 3, glob: "**/.env*"}
@@ -99,6 +111,7 @@ paths:
   - {level: 3, glob: "scripts/pr_risk.py"}
   - {level: 3, glob: "tests/test_pr_risk.py"}
   - {level: 3, glob: "tests/test_guardrail_conformance.py"}
+  - {level: 3, glob: "scripts/guardrail_conformance.py"}
 
 # Diff signals. The detectors are code in scripts/pr_risk.py; this table sets
 # the level each one raises a PR to. A signal missing here is an error, not a
@@ -111,4 +124,4 @@ signals:
   new_env_secret: 3       # a newly read env var or Actions secret named like a secret
   display_text_touched: 2  # application code reads "display" or "text"
   test_deleted: 2         # a test file deleted, or a test function removed
-  test_skipped: 2         # skip/xfail/noqa added
+  test_skipped: 2         # skip/xfail/noqa or a collection hook added
