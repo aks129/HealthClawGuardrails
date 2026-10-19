@@ -82,8 +82,10 @@ CONFIRM_CAP = 86400
 CONFIRM_SECONDS = 86400
 
 #: Form submits per client address per window, and how many addresses the
-#: limiter remembers before it forgets the oldest.
-SUBMITS_PER_WINDOW = 5
+#: limiter remembers before it forgets the oldest. Generous on purpose: a
+#: family joining from one home Wi-Fi shares one address (patient re-walk,
+#: #979). What protects a victim's inbox is the per-mailbox cap, not this.
+SUBMITS_PER_WINDOW = 20
 WINDOW_SECONDS = 600
 LIMITER_KEYS = 512
 
