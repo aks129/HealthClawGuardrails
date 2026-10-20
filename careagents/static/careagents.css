@@ -1121,6 +1121,9 @@ textarea:focus-visible {
 .morning-loop .num { font-family: var(--mono); font-weight: 700;
   font-variant-numeric: tabular-nums; }
 .morning-arrow { color: var(--ink-soft); }
+.morning-side { margin: 0 0 4px; font-size: 15px; color: var(--ink-soft); }
+.morning-side .num { font-family: var(--mono); font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--ink); }
 .morning-h { margin: 16px 0 8px; font-size: 17px; }
 .morning-needs { list-style: none; margin: 0; padding: 0; }
 .morning-need { background: var(--surface); border: 1px solid var(--hairline);

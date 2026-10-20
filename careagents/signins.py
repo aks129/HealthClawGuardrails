@@ -254,10 +254,18 @@ def testers(session_scope, moment: _dt.datetime | None = None,
 
 # --- reading: the Morning block (owner only) ---------------------------------
 
-#: The loop the Morning line counts, in order: (key, words).
-LOOP = (("joined", "signed in"), ("records_connected", "data connected"),
-        ("first_answer", "first answer"), ("action_approved", "first action"),
-        ("returned", "returned"))
+#: The Morning line's chain, in order: (milestone, words). A tester counts
+#: at a step only after reaching every step before it, so the numbers never
+#: go up along the arrows. Connecting their own records is not in the chain:
+#: every account starts on the made-up sample records and can ask and act
+#: there, so "connected" would read as a gate it is not (owner review of
+#: the first screenshot: 3 connected, then 4 answered).
+CHAIN = (("joined", "signed in"), ("first_answer", "first answer"),
+         ("action_approved", "first action"))
+
+#: Shown beside the chain, not after it: (key, words).
+SIDE = (("records_connected", "connected their own records"),
+        ("returned", "came back another day"))
 
 #: The nudges, fixed words chosen by fixed rules (`needs_you`). No model
 #: writes them, and none says anything about a record.
@@ -278,22 +286,24 @@ STUCK_AT = {"never_asked": "joined, never asked",
             "quiet": "quiet", "not_confirmed": "beta request not confirmed"}
 
 
-def loop_counts(rows: list[dict]) -> list[dict]:
-    """How many testers reached each step of LOOP. The owner's own
-    account is not a tester and is not counted."""
+def loop_counts(rows: list[dict]) -> dict:
+    """`chain`: how many testers reached each CHAIN step and every step
+    before it. `side`: how many connected their own records, and how many
+    came back on a later day. The owner's own account is not a tester and
+    is not counted. Signing in is every account row, funnel row or not, so
+    it matches the table below."""
     people = [r for r in rows if not r["is_owner"]]
-    out = []
-    for key, words in LOOP:
-        if key == "joined":
-            # Every account row is a sign-in, funnel row or not: the
-            # count matches the table below.
-            n = len(people)
-        elif key == "returned":
-            n = sum(1 for r in people if r["returned"])
-        else:
-            n = sum(1 for r in people if key in r["milestones"])
-        out.append({"key": key, "label": words, "count": n})
-    return out
+    chain, still = [], people
+    for key, words in CHAIN:
+        if key != "joined":
+            still = [r for r in still if key in r["milestones"]]
+        chain.append({"key": key, "label": words, "count": len(still)})
+    side = [{"key": "records_connected", "label": SIDE[0][1],
+             "count": sum(1 for r in people
+                          if "records_connected" in r["milestones"])},
+            {"key": "returned", "label": SIDE[1][1],
+             "count": sum(1 for r in people if r["returned"])}]
+    return {"chain": chain, "side": side}
 
 
 def _rule(r: dict, can_connect: bool) -> str | None:

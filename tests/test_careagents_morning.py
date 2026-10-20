@@ -56,17 +56,43 @@ def test_the_loop_counts_each_step_in_order_and_leaves_the_owner_out(svc):
     _asked(svc, a, 2)        # active after the join day: returned
     _asked(svc, me, 2)
     loop = signins.loop_counts(_rows(svc, owner_emails=frozenset({OWNER})))
-    assert [s["label"] for s in loop] == [
-        "signed in", "data connected", "first answer", "first action",
-        "returned"]
-    assert [s["count"] for s in loop] == [2, 1, 1, 1, 1]
+    assert [s["label"] for s in loop["chain"]] == [
+        "signed in", "first answer", "first action"]
+    assert [s["count"] for s in loop["chain"]] == [2, 1, 1]
+    assert [(s["label"], s["count"]) for s in loop["side"]] == [
+        ("connected their own records", 1), ("came back another day", 1)]
+
+
+def test_the_arrow_chain_never_goes_up_on_a_realistic_beta(svc):
+    # Most testers stay on the made-up records: they ask, some act, few
+    # connect their own. One acted with no first_answer stamp (a lost
+    # count): it must not lift "first action" above "first answer".
+    _make(svc, "new@example.com", 0)
+    for i in range(4):
+        aid = _make(svc, f"sample{i}@example.com", 6)
+        _asked(svc, aid, 3)
+    for i in range(2):
+        aid = _make(svc, f"acted{i}@example.com", 8)
+        _asked(svc, aid, 1)
+        funnel.mark(svc.session, aid, "action_approved", at=_ts(1))
+    aid = _make(svc, "real@example.com", 9)
+    funnel.mark(svc.session, aid, "records_connected", at=_ts(8))
+    _asked(svc, aid, 2)
+    odd = _make(svc, "odd@example.com", 7)
+    funnel.mark(svc.session, odd, "action_approved", at=_ts(2))
+    loop = signins.loop_counts(_rows(svc))
+    counts = [s["count"] for s in loop["chain"]]
+    assert counts == [9, 7, 2]
+    assert all(a >= b for a, b in zip(counts, counts[1:]))
+    side = {s["key"]: s["count"] for s in loop["side"]}
+    assert side == {"records_connected": 1, "returned": 7}
 
 
 def test_signed_in_counts_an_account_without_a_funnel_row(svc):
     aid = _make(svc, "old@example.com", 9)
     with svc.session() as s:
         s.query(funnel.FunnelAccount).filter_by(account_id=aid).delete()
-    assert signins.loop_counts(_rows(svc))[0]["count"] == 1
+    assert signins.loop_counts(_rows(svc))["chain"][0]["count"] == 1
 
 
 def test_active_only_on_the_join_day_is_not_returned(svc):
@@ -184,6 +210,10 @@ def test_the_owner_page_shows_morning_ref_you_and_the_legend(svc,
         'id="funnel-testers"')
     # tess, not the owner
     assert '<span class="num">1</span> signed in' in html
+    # Came back is beside the arrow chain, never on it.
+    chain = html.split('class="morning-loop">', 1)[1].split("</p>", 1)[0]
+    assert "came back" not in chain and "connected" not in chain
+    assert 'class="morning-side"' in html and "came back another day" in html
     assert "Needs you today" in html
     assert "Try asking: what&#39;s due for me this year?" in html
     assert "Wren · wren@example.com" in html
