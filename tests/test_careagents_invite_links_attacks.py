@@ -76,8 +76,9 @@ def test_plus_aliases_of_one_inbox_take_one_real_record_invite(
         _join_via(app, sent, code, f"robin+{i}@example.org",
                   ip=f"203.0.113.{40 + i}", first_run=False)
         _age_caps(svc)
-    granted = [e for e in (f"robin+{i}@example.org" for i in range(3))
-               if _invite_row(svc, e) is not None]
+    # Invites are keyed by inbox, so count rows, not aliases that match.
+    with svc.session() as s:
+        granted = [r.display_email for r in s.query(RealRecordInvite)]
     assert len(granted) <= 1, granted
 
 
@@ -107,7 +108,10 @@ def test_admin_funnel_is_404_for_a_case_or_alias_variant_of_the_owner(
     r = c.get("/admin/funnel")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    assert "@" not in html.split("<main", 1)[1]   # no email on the page
+    # Emails only in the Testers table (owner decision 2026-10-16), nowhere
+    # else on the page.
+    assert "@" not in html.split("<main", 1)[1].split(
+        'id="funnel-days"', 1)[1]
     assert _account_id(svc, "OWNER@example.com".lower())
 
 

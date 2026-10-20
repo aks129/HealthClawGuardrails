@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Funnel — CareAgents{% endblock %}
 {% block bodyclass %}page-home{% endblock %}
-{# The owner's page (careagents/funnel.py, CARE_OWNER_EMAILS). Counts and
-   account ids only: no email, no message, nothing about a record. #}
+{# The owner's page (careagents/funnel.py, CARE_OWNER_EMAILS). Counts,
+   account ids, and the Testers table, which shows each tester's email (owner
+   decision 2026-10-16: this page and its CSV only, never the digest or a
+   log). No message, nothing about a record. #}
 {% block content %}
-<main class="hub">
+<main class="hub hub-wide">
   <div class="hub-head">
     <div>
       <h1>Funnel</h1>
@@ -12,6 +14,39 @@
     </div>
     <a class="pill" href="/home">Back to your hub</a>
   </div>
+
+  <section class="hub-section" id="funnel-testers">
+    <div class="section-head"><h2>Testers</h2>
+      <a class="pill" href="/admin/funnel/testers.csv" download>Download CSV</a></div>
+    {% if testers %}
+    <p class="card-note">Newest first{% if testers|length >= testers_cap %}, the latest {{ testers_cap }}{% endif %}.
+      Highlighted: joined but never asked a question, or no chat turn or approval for 3 days or more. Joined is the first sign-in. Times are UTC.</p>
+    <div class="funnel-scroll">
+    <table class="funnel-table testers-table">
+      <thead><tr><th>Email</th><th>Stuck at</th><th>Last active</th>
+        <th>Joined</th><th>Last sign-in</th><th class="num">Sign-ins, 7 days</th>
+        <th>Milestones</th></tr></thead>
+      <tbody>
+      {% for t in testers %}
+      <tr{% if t.stuck %} class="is-stuck"{% endif %}>
+        <td class="testers-email">{{ t.email }}</td>
+        <td>{{ (t.furthest or "-") | replace("_", " ") }}{% if t.idle_days is not none %}<br><span class="testers-method">{{ t.idle_days }}d since {% if t.last_active %}active{% else %}joined{% endif %}</span>{% endif %}
+          {% if t.stuck %}<br><span class="testers-stuck">{{ t.stuck_reason }}</span>{% endif %}</td>
+        <td class="num">{{ t.last_active or "never" }}</td>
+        {# Joined is the first sign-in: an account is made only at one. #}
+        <td><span class="num-text">{{ t.joined }}</span><br><span class="testers-method">{{ t.joined_label }}</span></td>
+        <td><span class="num-text">{{ t.last_sign_in or "-" }}</span>{% if t.last_method_label %}<br><span class="testers-method">{{ t.last_method_label }}</span>{% endif %}</td>
+        <td class="num">{{ t.sign_ins_7d }}</td>
+        <td>{% if t.milestones %}<details class="testers-milestones"><summary>{{ t.milestones | length }} of {{ milestones | length }}</summary>{{ t.milestones | map("replace", "_", " ") | join(", ") }}</details>{% else %}0 of {{ milestones | length }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="empty">No accounts yet.</p>
+    {% endif %}
+  </section>
 
   <section class="hub-section" id="funnel-days">
     <div class="section-head"><h2>Accounts reaching each step</h2></div>
@@ -21,7 +56,8 @@
         {% for d in report.days[1:] %}<th>{{ d.day[5:] }}</th>{% endfor %}</tr></thead>
       <tbody>
       {% for m in milestones %}
-      <tr><th>{{ m | replace("_", " ") }}</th>
+      {# "confirmed" alone read as an unverified email (patient walk). #}
+      <tr><th>{% if m == "confirmed" %}confirmed a beta request{% else %}{{ m | replace("_", " ") }}{% endif %}</th>
         <td class="num">{{ today[m] }}</td>
         <td class="num">{{ report.window[m] }}</td>
         {% for d in report.days[1:] %}<td class="num">{{ d[m] }}</td>{% endfor %}</tr>
@@ -61,6 +97,18 @@
       <thead><tr><th>Kind</th><th>Today</th><th>7 days</th></tr></thead>
       <tbody>
       {% for k in issue_kinds %}
+      <tr><th>{{ k | replace("_", " ") }}</th>
+        <td class="num">{{ today[k] }}</td>
+        <td class="num">{{ report.window[k] }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div class="funnel-scroll" id="funnel-chat-causes">
+    <table class="funnel-table">
+      <thead><tr><th>Chat error cause</th><th>Today</th><th>7 days</th></tr></thead>
+      <tbody>
+      {% for k in chat_error_causes %}
       <tr><th>{{ k | replace("_", " ") }}</th>
         <td class="num">{{ today[k] }}</td>
         <td class="num">{{ report.window[k] }}</td></tr>

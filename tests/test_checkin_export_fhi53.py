@@ -162,9 +162,11 @@ def test_coverage_restores_member_group_and_payor_name(app, client):
     assert cov['subscriberId'] == f.MEMBER_ID
     assert cov['identifier'] == [{
         'system': 'https://payer.example/member', 'value': f.MEMBER_ID,
-        'type': {'coding': [{'system': f.V2_0203, 'code': 'MB'}]}}]
+        'type': {'coding': [{'system': f.V2_0203, 'code': 'MB'}],
+                 'text': 'Member Number'}}]
     assert cov['class'] == [{
-        'type': {'coding': [{'system': f.COVERAGE_CLASS, 'code': 'group'}]},
+        'type': {'coding': [{'system': f.COVERAGE_CLASS, 'code': 'group'}],
+                 'text': 'Group'},
         'value': f.GROUP_ID}]
     assert cov['payor'] == [{'reference': 'Organization/ci-org-1'}]
     assert cov['beneficiary'] == {'reference': f'Patient/{f.PT}'}

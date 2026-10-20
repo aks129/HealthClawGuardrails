@@ -6,9 +6,10 @@ What these pin:
 - The page is not behind a redirect to /auth (a redirect would lose the
   check-in page's request); it signs in where it stands, and a session a
   confirm link opened does not count as signed in.
-- No PHI reaches CareAgents: the routes are GET-only, a visit writes no
-  row and logs no record content, and the browser code's only network calls
-  are the sign-in endpoints and a GET of the synthetic test patient.
+- No PHI is kept by CareAgents: the page is a GET that writes no row and
+  logs no record content, and the browser code's only network calls are the
+  sign-in endpoints and the records relay (POST /checkin/wallet/records,
+  pinned in tests/test_checkin_relay.py).
 - The hand-off survives: no Cross-Origin-Opener-Policy, the standard CSP,
   the library is the vendored 0.4.4 release byte for byte with its license.
 - "No known allergies" is not sent as an allergy: the browser's code list is
@@ -40,11 +41,13 @@ FIXTURE = ROOT / "careagents" / "checkin" / "us_core_test_patient.json"
 WALLET_JS_SHA256 = (
     "891064eda255cb593a538e6bceff96fc66bbf91a6b8bda4b6af6d97e39c6e732")
 
-ROUTES = ("/checkin/wallet", "/checkin/wallet/test-patient.json")
+ROUTES = ("/checkin/wallet",)
+RELAY = "/checkin/wallet/records"
 
 
 class _NoClient:
-    """The wallet never calls HealthClaw; anything that tries fails loudly."""
+    """The page never calls HealthClaw (only the relay does, and these tests
+    never reach it); anything that tries fails loudly."""
 
     def __getattr__(self, name):
         raise AssertionError(f"checkin wallet called HealthClaw: {name}")
@@ -109,6 +112,8 @@ def test_flag_off_every_wallet_route_is_a_404():
         client = app.test_client()
         for path in ROUTES:
             assert client.get(path).status_code == 404, path
+        assert client.post(RELAY, json={"resource_types": ["Patient"]}
+                           ).status_code == 404
     finally:
         svc.engine.dispose()
 
@@ -122,20 +127,20 @@ def test_signed_out_the_page_renders_inline_sign_in_not_a_redirect(wallet):
     html = r.get_data(as_text=True)
     assert 'data-signed-in="0"' in html
     assert 'id="wallet-signin"' in html
-    assert app.test_client().get(ROUTES[1]).status_code == 401
+    assert app.test_client().post(
+        RELAY, json={"resource_types": ["Patient"]}).status_code == 401
 
 
-def test_signed_in_the_page_starts_and_the_test_patient_is_served(wallet,
-                                                                monkeypatch):
+def test_signed_in_the_page_starts_and_reads_from_the_relay(wallet,
+                                                           monkeypatch):
     app, svc = wallet
     client = app.test_client()
     _sign_in(client, _account(svc, monkeypatch))
     html = client.get("/checkin/wallet").get_data(as_text=True)
     assert 'data-signed-in="1"' in html
-    r = client.get(ROUTES[1])
-    assert r.status_code == 200
-    assert r.mimetype == "application/fhir+json"
-    assert r.get_data() == FIXTURE.read_bytes()
+    assert f'data-records="{RELAY}"' in html
+    # The skeleton's synthetic answer is gone: the records are the account's.
+    assert client.get("/checkin/wallet/test-patient.json").status_code == 404
 
 
 def test_a_confirm_link_session_is_not_signed_in_here(wallet, monkeypatch):
@@ -144,7 +149,8 @@ def test_a_confirm_link_session_is_not_signed_in_here(wallet, monkeypatch):
     _sign_in(client, _account(svc, monkeypatch), via_link=True)
     assert 'data-signed-in="0"' in client.get(
         "/checkin/wallet").get_data(as_text=True)
-    assert client.get(ROUTES[1]).status_code == 401
+    assert client.post(RELAY, json={"resource_types": ["Patient"]}
+                       ).status_code == 401
 
 
 # --- the hand-off's headers ------------------------------------------------------
@@ -184,13 +190,15 @@ def test_the_answer_module_carries_the_page_build_stamp(wallet):
 
 # --- no PHI in CareAgents ---------------------------------------------------------
 
-def test_every_wallet_route_is_read_only(wallet):
+def test_the_page_is_read_only_and_the_relay_is_the_one_post(wallet):
     app, _ = wallet
     rules = [r for r in app.url_map.iter_rules()
              if r.rule.startswith("/checkin")]
-    assert sorted(r.rule for r in rules) == sorted(ROUTES)
+    assert sorted(r.rule for r in rules) == sorted(ROUTES + (RELAY,))
     for r in rules:
-        assert r.methods <= {"GET", "HEAD", "OPTIONS"}, (r.rule, r.methods)
+        allowed = {"POST", "OPTIONS"} if r.rule == RELAY else {
+            "GET", "HEAD", "OPTIONS"}
+        assert r.methods <= allowed, (r.rule, r.methods)
 
 
 def test_a_visit_writes_no_row_and_logs_no_record(wallet, monkeypatch, caplog):
@@ -231,11 +239,16 @@ def test_the_browser_code_sends_nothing_but_sign_in(wallet):
                        "WebSocket", "EventSource"):
             assert banned not in src, banned
     assert "fetch(" not in answer
-    # Two fetches: the sign-in POST helper, and the GET of the test patient.
-    assert page.count("fetch(") == 2
+    # One fetch, inside the POST helper; its only callers are the sign-in
+    # endpoints and the records relay, which the page's data-records names.
+    assert page.count("fetch(") == 1
     assert set(re.findall(r'post\("([^"]+)"', page)) == {
         "/webauthn/login/options", "/webauthn/login/verify",
         "/api/auth/email", "/api/auth/verify"}
+    assert re.findall(r"(?<!function )post\((?!\")([^,)]+)", page) == [
+        "card.dataset.records"]
+    # The relay is asked for type names and nothing else.
+    assert "post(card.dataset.records, { resource_types: types })" in page
 
 
 # --- the library, vendored -----------------------------------------------------------
@@ -271,9 +284,26 @@ def test_no_known_allergy_codes_match_the_chat():
     assert js == set(_NKA_CODES)
 
 
+def test_every_engine_absence_concept_is_held_back_by_the_wallet():
+    """The wallet holds back every absence concept the engine knows, not
+    only the chat's NKA codes: "Patient not asked" is no allergy either."""
+    from r6.terminology import ABSENCE_CONCEPTS, LOINC, SNOMED
+    src = (STATIC / "checkin_answer.js").read_text()
+
+    def listed(name):
+        block = re.search(name + r" = \[(.*?)\]", src, re.S).group(1)
+        return set(re.findall(r'"([^"]+)"', block))
+    js = ({(SNOMED, c) for c in listed("NKA_CODES")
+           | listed("ALLERGY_STATUS_CODES")}
+          | {(LOINC, c) for c in listed("NKA_LOINC")})
+    assert js == set(ABSENCE_CONCEPTS)
+
+
 def test_review_names_follow_the_engine_terminology_table():
-    """The review names a record by its code, never by the record's own
-    text. Where r6/terminology.py labels a code, the wallet says the same."""
+    """The review names a record by the engine-written `code.text` (our
+    r6/terminology.py label; the engine drops upstream words), then by the
+    LABELS fallback for a code the engine does not label yet. Where
+    r6/terminology.py labels a code, LABELS says the same."""
     from r6 import terminology
     src = (STATIC / "checkin_answer.js").read_text()
     block = re.search(r"export const LABELS = \{(.*?)\};", src, re.S).group(1)
@@ -285,6 +315,9 @@ def test_review_names_follow_the_engine_terminology_table():
         engine = terminology.lookup(systems[system], code)
         if engine is not None:
             assert label == engine, (code, label, engine)
-    # And the code never reads a record's own words.
+    # A coding's display is never read; `text` is read in one place only,
+    # labelOf, which the engine's checkin export is the only source for.
     names = src.split("What the person is shown", 1)[1]
-    assert ".display" not in names and ".text" not in names
+    assert "display" not in names.split("*/", 1)[1]
+    assert ".text" not in names
+    assert names.count('own(concept, "text")') == 1

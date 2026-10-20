@@ -124,9 +124,22 @@
   // A 429 is two different limits (#862). The burst limiter sends only an
   // error code, and the pace sentence is true for it. The daily limit sends
   // its own sentence, and "a few minutes" would be false there.
-  const PACE_TEXT = "You’ve hit the pace limit for now — give it a few minutes.";
+  const PACE_TEXT = "You've hit the pace limit for now — give it a few minutes.";
   function limitText(d) {
     return (d && typeof d.message === "string" && d.message) || PACE_TEXT;
+  }
+
+  // Under the daily limit's sentence, a way to say the limit got in the
+  // way (#864, FHI-68 item 7): /feedback with the screen and the error
+  // code. Pointers only, never the message that was refused.
+  function addLimitFeedback() {
+    const q = new URLSearchParams({ screen: "chat", error: "rate_limited" });
+    const p = el("p", "chat-feedback limit-feedback", "Need more? ");
+    const a = el("a", null, "Tell us");
+    a.href = "/feedback?" + q.toString();
+    p.appendChild(a);
+    p.appendChild(document.createTextNode("."));
+    log.appendChild(p);
   }
 
   // The sample's made-up-records line is the sticky banner above the log,
@@ -142,13 +155,130 @@
     return rest.trim() ? rest : text;
   }
 
-  function addAgentText(text) {
+  // `runId` alone marks a model's answer, which then gets "This wasn't
+  // right" under it once it has finished typing. With `failed` (an error
+  // code) the bubble is a failure, and gets "Report a problem" instead.
+  function addAgentText(text, runId, failed) {
     text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
       renderMarkdown(m, text);
+      if (failed) addReport(m, runId, failed);
+      else if (runId) addFlag(m, runId);
       scroll();
+    });
+  }
+
+  // "Report a problem" beside a failed turn: /feedback with the screen,
+  // the error code and the run id. Pointers only; the server checks each
+  // against its fixed lists (careagents/feedback.py read_context).
+  function addReport(bubble, runId, code) {
+    const q = new URLSearchParams({ screen: "chat", error: code });
+    if (runId) q.set("run_id", runId);
+    const a = el("a", "report-link", "Report a problem");
+    a.href = "/feedback?" + q.toString();
+    bubble.insertAdjacentElement("afterend", a);
+  }
+
+  // --- "This wasn't right" (careagents/feedback.py feedback_flag) --------
+  // What a flag sends is built from three values and nothing else: the
+  // answer's run id (a pointer), a reason code and the person's own short
+  // note. Never the answer or the question: flagBody is never handed the
+  // bubble, and the server refuses any other field.
+  // The same codes and words as careagents/funnel.py FLAG_LABELS.
+  const FLAG_REASONS = [["wrong", "Wrong"], ["confusing", "Confusing"],
+                        ["not_what_asked", "Didn't do what I asked"],
+                        ["unsafe", "Felt unsafe or worrying"],
+                        ["other", "Something else"]];
+  const NOTE_MAX = 280;
+  function flagBody(runId, reason, note) {
+    return JSON.stringify({ run_id: runId, reason: reason,
+                            note: String(note || "").slice(0, NOTE_MAX) });
+  }
+  const FLAG_ERRORS = {
+    rate_limited: "You've flagged a lot this hour. Please try again later.",
+    not_sent: "We couldn't send that just now. Please try again.",
+    too_long: "That note is too long. Please make it shorter.",
+  };
+
+  // A quiet link under the bubble, beside it rather than inside it, so the
+  // answer's own text is untouched. One tap opens a small sheet in place.
+  function addFlag(bubble, runId) {
+    const wrap = el("div", "flag");
+    const open = el("button", "flag-open", "This wasn't right");
+    open.type = "button";
+    wrap.appendChild(open);
+    bubble.insertAdjacentElement("afterend", wrap);
+    open.addEventListener("click", function () {
+      open.hidden = true;
+      const sheet = el("div", "flag-sheet");
+      sheet.appendChild(el("p", "flag-ask", "What was wrong with this answer?"));
+      const reasons = el("div", "flag-reasons");
+      reasons.setAttribute("role", "group");
+      reasons.setAttribute("aria-label", "Reason");
+      const send = el("button", "btn-primary flag-send", "Send");
+      send.type = "button"; send.disabled = true;
+      let reason = null;
+      FLAG_REASONS.forEach(function (pair) {
+        const b = el("button", "flag-reason", pair[1]);
+        b.type = "button";
+        b.setAttribute("aria-pressed", "false");
+        b.addEventListener("click", function () {
+          reason = pair[0];
+          reasons.querySelectorAll(".flag-reason").forEach(function (x) {
+            x.setAttribute("aria-pressed", String(x === b));
+          });
+          send.disabled = false;
+        });
+        reasons.appendChild(b);
+      });
+      sheet.appendChild(reasons);
+      const note = el("textarea", "field flag-note");
+      note.rows = 2; note.maxLength = NOTE_MAX;
+      note.setAttribute("aria-label", "Optional note");
+      note.placeholder = "Optional. Please don't include health details.";
+      sheet.appendChild(note);
+      const row = el("div", "flag-actions");
+      const cancel = el("button", "btn-secondary flag-cancel", "Cancel");
+      cancel.type = "button";
+      row.appendChild(send); row.appendChild(cancel);
+      sheet.appendChild(row);
+      const status = el("p", "flag-status");
+      status.setAttribute("role", "status");
+      sheet.appendChild(status);
+      wrap.appendChild(sheet);
+      // Send in view at 375px (QA on #980): the row is sticky to the
+      // bottom of the log (careagents.css), and is brought into view on
+      // open and again when the keyboard comes up for the note.
+      const showSend = () => row.scrollIntoView({ block: "nearest" });
+      showSend();
+      note.addEventListener("focus", () => setTimeout(showSend, 300));
+      cancel.addEventListener("click", function () {
+        sheet.remove(); open.hidden = false;
+      });
+      send.addEventListener("click", async function () {
+        if (!reason) return;
+        send.disabled = true; status.textContent = "";
+        try {
+          const r = await fetch("/feedback/flag", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: flagBody(runId, reason, note.value),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok) {
+            wrap.textContent = "";
+            wrap.appendChild(el("p", "flag-done",
+              "Thanks. We'll look at this answer."));
+            return;
+          }
+          status.textContent = FLAG_ERRORS[d.error] ||
+            "Something went wrong. Please try again.";
+        } catch (e) {
+          status.textContent = "Couldn't reach us. Please try again.";
+        }
+        send.disabled = false;
+      });
     });
   }
 
@@ -220,6 +350,31 @@
       "You checked it, and the PDF says so. The link works for one day."));
     const a = el("a", "btn-primary", "Open the PDF");
     a.href = url; a.target = "_blank"; a.rel = "noopener";
+    c.appendChild(a);
+    log.appendChild(c); scroll();
+  }
+
+  // A form approved before this page loaded (data-done-form). Its review
+  // page shows it finished with the PDF, so no bearer link is put here.
+  function addFormDoneCard(actionId) {
+    const c = el("div", "card pdf");
+    c.appendChild(el("h4", null, WHOSE ? "The intake form is ready"
+                                       : "Your intake form is ready"));
+    c.appendChild(el("p", null, "You checked and approved it."));
+    const a = el("a", "btn-primary", "Open the form");
+    a.href = "/review/" + AGENT + "/" + encodeURIComponent(actionId);
+    c.appendChild(a);
+    log.appendChild(c); scroll();
+  }
+
+  // The answer summarizes the brief and points at the page; this is the
+  // way there (patient walk 2026-10-18).
+  function addBriefCard() {
+    const c = el("div", "card");
+    c.appendChild(el("h4", null, "Visit brief"));
+    c.appendChild(el("p", null, "The full brief, to read or show your doctor."));
+    const a = el("a", "btn-primary", "Open the visit brief");
+    a.href = "/brief?agent=" + AGENT;
     c.appendChild(a);
     log.appendChild(c); scroll();
   }
@@ -419,10 +574,14 @@
           addReviewCard(ev.action_id, ev.review_url);
         else if (ev.type === "card" && ev.kind === "pdf")
           addPdfCard(ev.url);
+        // Drawn once the answer is in (on done), beside its "the full
+        // brief is on the Visit brief page", not above the answer.
+        else if (ev.type === "card" && ev.kind === "brief")
+          state.brief = true;
         else if (ev.type === "card" && ev.kind === "lab-timeline")
           addLabTimelineCard(ev.topic || "");
         else if (ev.type === "text") {
-          typing.remove(); addAgentText(ev.text);
+          typing.remove(); addAgentText(ev.text, state.runId);
         } else if (ev.type === "error") {
           // Terminal, exactly like `done`. Every producer of an error frame
           // ends the run on it: agent.py returns after each one, and the SSE
@@ -432,7 +591,8 @@
           // persistent event-poll failure becomes an unbounded ~2.5 req/s
           // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
-          typing.remove(); addAgentText(ev.text); state.done = true;
+          typing.remove(); addAgentText(ev.text, state.runId, "chat_error");
+          state.done = true;
           state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
@@ -441,6 +601,7 @@
             const next = document.getElementById("connect-next");
             if (next) next.hidden = false;
           }
+          if (state.brief) addBriefCard();
         }
       }
     }
@@ -501,7 +662,10 @@
           initial = false;
           if (resp.status === 429) {
             typing.remove();
-            addAgentText(limitText(await resp.json().catch(() => ({}))));
+            const limit = await resp.json().catch(() => ({}));
+            addAgentText(limitText(limit));
+            if (limit && limit.error === "daily_limit_reached")
+              addLimitFeedback();
             return;
           }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
@@ -524,7 +688,7 @@
       if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
-      addAgentText("Connection hiccup — try that again.");
+      addAgentText("Connection hiccup — try that again.", null, "connection");
       showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();
@@ -541,6 +705,7 @@
   try { pendingReviews = JSON.parse(log.dataset.pendingReviews || "[]"); }
   catch (e) { pendingReviews = []; }
   pendingReviews.forEach((r) => addReviewCard(r.id, null, r.form ? null : r.label));
+  if (log.dataset.doneForm) addFormDoneCard(log.dataset.doneForm);
 
   // A texted answer cannot carry a chart, so it links here with ?chart=
   // (careagents/imessage.py run_reply). The topic only narrows the series;

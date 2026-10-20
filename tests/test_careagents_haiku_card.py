@@ -25,7 +25,8 @@ PATHS = [
     ("Settings", "home.html", 'href="/settings">Settings</a>'),
     ("Delete my account", "settings.html", "Delete my account</button>"),
     ("Sign out or leave", "settings.html", "<h2>Sign out or leave</h2>"),
-    ("type DELETE", "_delete_modal.html", "Type DELETE to confirm"),
+    ("type the word delete", "_delete_modal.html",
+     "Type the word delete to confirm"),
     # Passkeys: add from Settings, confirmed by an emailed code.
     ("Add a passkey", "settings.html", 'href="/auth?enroll=1">Add a passkey'),
     ("code we email", "auth.html",
