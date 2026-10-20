@@ -886,6 +886,9 @@
   // so the delete is never a dead end. The server still decides: this only
   // gets the person to the sign-in it asks for. Text only, never markup.
   let codeDone = false;
+  // The resend countdown: one for the page, so reopening the dialog never
+  // leaves an earlier one running against the same button.
+  let tick = null;
   function codeGate(onDone) {
     const step = $("delete-code-step");
     if (!step) return null;
@@ -912,24 +915,53 @@
         return oops(refusal(res.d, "We couldn't send a code. Please try again."));
       }
       // Only `true` is a send we saw (#262, #220), as on the sign-in page.
+      let lede;
       if (res.d.sent === true) {
-        note.textContent = "We sent an 8-digit code to " + email + ".";
+        lede = "We sent an 8-digit code to " + email + ".";
       } else if (res.d.sent === false) {
-        note.textContent = "We sent a code moments ago to " + email +
-          ". You can ask for a new one in " + res.d.retry_after + " seconds.";
+        lede = "We sent a code moments ago to " + email + ".";
       } else {
-        note.textContent = res.d.notice ||
+        lede = res.d.notice ||
           "We couldn't confirm the code reached " + email + ".";
       }
       entry.hidden = false;
+      // The resend wait first, counted down as on /auth, then the way to a
+      // new code: not "Send a new code" the moment one went out (10-20
+      // patient walk). The server's wait, or its resend cooldown.
+      send.hidden = true;
       send.textContent = "Send a new code";
+      countdown(res.d.sent === false ? res.d.retry_after
+        : step.dataset.resendWait, lede);
       $("delete-code").focus();
     };
+    function countdown(seconds, lede) {
+      clearInterval(tick);
+      let left = Math.max(0, Math.ceil(Number(seconds) || 0));
+      const say = () => {
+        note.textContent = lede + " " + (left > 0
+          ? `Check your inbox and spam folder. You can request a new one in ${left} seconds.`
+          : "Check your inbox and spam folder. You can ask for a new code now.");
+        send.hidden = left > 0;
+      };
+      say();
+      if (left <= 0) return;
+      tick = setInterval(() => {
+        left -= 1;
+        say();
+        if (left <= 0) clearInterval(tick);
+      }, 1000);
+    }
     $("delete-code-check").onclick = async () => {
       err.hidden = true;
       const res = await post("/api/auth/verify",
         { email, code: $("delete-code").value.trim() });
-      if (!res.ok) return oops(refusal(res.d, "That code is wrong or expired."));
+      if (!res.ok) {
+        // A wrong or used-up code: the way to a new one, as on /auth.
+        clearInterval(tick);
+        send.hidden = false;
+        return oops(refusal(res.d, "That code is wrong or expired."));
+      }
+      clearInterval(tick);
       codeDone = true;
       finished();
       onDone();

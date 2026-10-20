@@ -58,7 +58,7 @@ def test_hub_waiting_and_grade_live_in_one_menu(cfg, svc, monkeypatch):  # noqa:
     assert re.search(r'<summary[^>]*aria-label="Menu"[^>]*>⋯</summary>', menu)
     assert 'href="/home"' in menu
     assert f'href="/agents/{agent_id}/approvals"' in menu
-    assert "Waiting for your OK" in menu
+    assert ">Approvals</a>" in menu
     # The grade keeps its id, link and the words chat.js writes into it.
     assert re.search(r'<a [^>]*id="trust-pill"[^>]*href="/safety"', menu)
     # Nothing to tap in the header outside the menu.
@@ -79,11 +79,11 @@ def test_the_menu_offers_a_passkey_until_there_is_one(cfg, svc, monkeypatch):  #
     """A first run skips the passkey prompt; this is where it waits."""
     _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
-    assert f'href="/auth?enroll=1&amp;agent={agent_id}">Add a passkey</a>' \
+    assert f'href="/auth?enroll=1&amp;agent={agent_id}">Faster sign-in (passkey)</a>' \
         in menu
     monkeypatch.setattr(svc, "has_passkey", lambda account_id: True)
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
-    assert "Add a passkey" not in menu
+    assert "Faster sign-in (passkey)" not in menu
 
 
 def test_the_menu_fits_a_phone():
