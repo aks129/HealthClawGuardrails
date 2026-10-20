@@ -181,12 +181,20 @@ def testers(session_scope, moment: _dt.datetime | None = None,
                              (ActivityDay.asked > 0)
                              | (ActivityDay.approved > 0))
                      .group_by(ActivityDay.account_id).all())
+        # The owner's mailbox in every spelling (a +tag, dots on gmail),
+        # so the "you" mark and the Morning counts agree. The page gate
+        # (`funnel.is_owner`) stays an exact match.
+        owner_keys = {beta_signup.account_key(e) for e in owner_emails}
         confirmed, refs = set(), {}
         for r in s.query(beta_signup.BetaRequest):
             key = beta_signup.account_key(r.email)
             if r.confirmed_at is not None:
                 confirmed.add(key)
-            if r.ref:
+            # Only a confirmed request names a tester's ref: anyone can
+            # POST /beta with any address, so an unconfirmed one (a tag
+            # variant of someone's mailbox included) never sets or
+            # replaces it (security review of #1009).
+            if r.ref and r.confirmed_at is not None:
                 refs[key] = r.ref
         names = {}
         for f in frows.values():
@@ -247,8 +255,8 @@ def testers(session_scope, moment: _dt.datetime | None = None,
                 "ref": refs.get(beta_signup.account_key(a.email))
                 or inviter or "",
                 "returned": returned,
-                "is_owner": (a.email or "").strip().lower()
-                in owner_emails})
+                "is_owner": beta_signup.account_key(a.email)
+                in owner_keys})
     return out
 
 

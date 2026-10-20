@@ -32,11 +32,12 @@ def _asked(svc, aid, days_ago):
 
 
 def _request(svc, email, first_name="Pat", ref=None, days_ago=1,
-             status="pending"):
+             status="pending", confirmed_at=None):
     with svc.session() as s:
         s.add(beta_signup.BetaRequest(
             email=email, first_name=first_name, ref=ref, status=status,
-            created_at=_ts(days_ago), updated_at=_ts(days_ago)))
+            created_at=_ts(days_ago), updated_at=_ts(days_ago),
+            confirmed_at=confirmed_at))
 
 
 def _need(rows, pending=(), can_connect=lambda e: False):
@@ -159,9 +160,19 @@ def test_the_owner_is_never_a_row_to_nudge(svc):
     assert _need(_rows(svc, owner_emails=frozenset({OWNER}))) == {}
 
 
+def test_an_owner_mailbox_variant_is_marked_and_not_counted(svc):
+    _make(svc, "Owner+test@Example.com", 5)
+    _make(svc, "t@example.com", 5)
+    rows = _rows(svc, owner_emails=frozenset({OWNER}))
+    marks = {r["email"]: r["is_owner"] for r in rows}
+    assert marks == {"owner+test@example.com": True, "t@example.com": False}
+    assert signins.loop_counts(rows)["chain"][0]["count"] == 1
+    assert set(_need(rows)) == {"t@example.com"}
+
+
 def test_an_unconfirmed_beta_request_is_named(svc):
     _request(svc, "wait@example.com", first_name="Wren", days_ago=2)
-    _request(svc, "yes@example.com", status="confirmed")
+    _request(svc, "yes@example.com", status="new", confirmed_at=_ts(1))
     pending = signins.pending_requests(svc.session, moment=NOW)
     assert [p["email"] for p in pending] == ["wait@example.com"]
     n = _need([], pending)["wait@example.com"]
@@ -186,7 +197,8 @@ def test_ref_is_the_beta_ref_else_the_inviter(svc, monkeypatch):
     old = _make(svc, "old@example.com", 9)
     new = _make(svc, "new@example.com", 1)
     _make(svc, "plain@example.com", 1)
-    _request(svc, "old@example.com", ref="clinic-flyer", status="confirmed")
+    _request(svc, "old@example.com", ref="clinic-flyer", status="new",
+             confirmed_at=_ts(9))
     funnel.set_inviter(svc.session, new, old)
     monkeypatch.setattr(invites, "inviter_first_name",
                         lambda s, a: "Olive" if a == old else None)
