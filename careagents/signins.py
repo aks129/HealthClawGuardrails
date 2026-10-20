@@ -284,7 +284,11 @@ def loop_counts(rows: list[dict]) -> list[dict]:
     people = [r for r in rows if not r["is_owner"]]
     out = []
     for key, words in LOOP:
-        if key == "returned":
+        if key == "joined":
+            # Every account row is a sign-in, funnel row or not: the
+            # count matches the table below.
+            n = len(people)
+        elif key == "returned":
             n = sum(1 for r in people if r["returned"])
         else:
             n = sum(1 for r in people if key in r["milestones"])

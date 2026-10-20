@@ -62,6 +62,13 @@ def test_the_loop_counts_each_step_in_order_and_leaves_the_owner_out(svc):
     assert [s["count"] for s in loop] == [2, 1, 1, 1, 1]
 
 
+def test_signed_in_counts_an_account_without_a_funnel_row(svc):
+    aid = _make(svc, "old@example.com", 9)
+    with svc.session() as s:
+        s.query(funnel.FunnelAccount).filter_by(account_id=aid).delete()
+    assert signins.loop_counts(_rows(svc))[0]["count"] == 1
+
+
 def test_active_only_on_the_join_day_is_not_returned(svc):
     aid = _make(svc, "same@example.com", 2)
     _asked(svc, aid, 2)
@@ -213,5 +220,6 @@ def test_moment_default_is_now(svc):
     with svc.session() as s:
         s.add(beta_signup.BetaRequest(email="now@example.com",
                                       first_name="N", status="pending"))
-    assert signins.pending_requests(svc.session)[0]["days"] == 0
+    # 0, or 1 across a UTC midnight between the write and the read.
+    assert signins.pending_requests(svc.session)[0]["days"] in (0, 1)
     assert dt.datetime.now(dt.timezone.utc) > NOW
