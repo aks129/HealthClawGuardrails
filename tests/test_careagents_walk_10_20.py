@@ -5,8 +5,8 @@
    said sign in. The email now names the action, and the person is told
    plainly, after the code, that a new account was made. Not before: the
    answer to "email me a code" stays the same with or without an account.
-2. The chat menu: Settings is there, "Approvals" and "Faster sign-in
-   (passkey)" in plain words.
+2. The chat menu: Settings is there, and "Faster sign-in (passkey)" in
+   plain words. Approvals keep the hub's "Waiting for your OK".
 3. The delete dialog's code step counts down the resend wait, as /auth does,
    rather than offering "Send a new code" at once.
 4. A long email in the Settings header no longer breaks mid-word.
@@ -145,8 +145,8 @@ def test_the_chat_menu_in_plain_words(cfg, svc, monkeypatch):
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
     assert '<a href="/settings">Settings</a>' in menu
     assert f'href="/agents/{agent_id}/approvals"' in menu
-    assert ">Approvals</a>" in menu
-    assert "Waiting for your OK" not in menu
+    # The same words as the hub card and the approvals page.
+    assert ">Waiting for your OK</a>" in menu
     assert (f'href="/auth?enroll=1&amp;agent={agent_id}">'
             "Faster sign-in (passkey)</a>") in menu
     assert "Add a passkey" not in menu

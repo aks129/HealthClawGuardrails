@@ -58,7 +58,7 @@ def test_hub_waiting_and_grade_live_in_one_menu(cfg, svc, monkeypatch):  # noqa:
     assert re.search(r'<summary[^>]*aria-label="Menu"[^>]*>⋯</summary>', menu)
     assert 'href="/home"' in menu
     assert f'href="/agents/{agent_id}/approvals"' in menu
-    assert ">Approvals</a>" in menu
+    assert ">Waiting for your OK</a>" in menu
     # The grade keeps its id, link and the words chat.js writes into it.
     assert re.search(r'<a [^>]*id="trust-pill"[^>]*href="/safety"', menu)
     # Nothing to tap in the header outside the menu.
