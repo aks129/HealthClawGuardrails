@@ -863,9 +863,11 @@ def create_app(config: Config | None = None,
             # Not an enumeration oracle: this branch turns only on the codes
             # already requested for this address, and their wrong guesses —
             # states requesters created — never on whether an account exists.
-            # start_email_code touches ca_email_tokens alone; accounts are
-            # created at verify. The genuine-send and wait responses are
-            # byte-identical for an address with an account and one without.
+            # start_email_code reads ca_accounts only to choose the email's
+            # wording; the account's existence never reaches this answer, and
+            # accounts are created at verify. The genuine-send and wait
+            # responses are byte-identical for an address with an account and
+            # one without (tests/test_careagents_walk_10_20_security.py).
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
