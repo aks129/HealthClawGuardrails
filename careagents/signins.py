@@ -137,9 +137,16 @@ def _fmt(ts: float | None) -> str:
 
 
 def testers(session_scope, moment: _dt.datetime | None = None,
-            limit: int = TESTERS_CAP) -> list[dict]:
+            limit: int = TESTERS_CAP,
+            owner_emails: frozenset = frozenset()) -> list[dict]:
     """One row per account, newest first, at most `limit`. Owner only: the
-    rows carry the email.
+    rows carry the email. A row whose email is in `owner_emails`
+    (CARE_OWNER_EMAILS) is marked `is_owner`: the owner's own account is
+    not a tester, and the Morning block leaves it out of every count.
+
+    `ref` is the `?ref=` the /beta request came with, else the inviter's
+    first name, else empty. `returned`: active on a later UTC day than the
+    one the account joined on.
 
     `joined` is also the first sign-in: an account is made only at a
     proven sign-in (a code or a confirm link), so there is no separate
@@ -174,9 +181,13 @@ def testers(session_scope, moment: _dt.datetime | None = None,
                              (ActivityDay.asked > 0)
                              | (ActivityDay.approved > 0))
                      .group_by(ActivityDay.account_id).all())
-        confirmed = {beta_signup.account_key(r.email) for r in s.query(
-            beta_signup.BetaRequest).filter(
-                beta_signup.BetaRequest.confirmed_at.isnot(None))}
+        confirmed, refs = set(), {}
+        for r in s.query(beta_signup.BetaRequest):
+            key = beta_signup.account_key(r.email)
+            if r.confirmed_at is not None:
+                confirmed.add(key)
+            if r.ref:
+                refs[key] = r.ref
         names = {}
         for f in frows.values():
             if f.invited_by and f.invited_by not in names:
@@ -203,13 +214,18 @@ def testers(session_scope, moment: _dt.datetime | None = None,
                               default=None)
             asked = last_turn is not None or (
                 f is not None and f.first_answer is not None)
+            joined_day = (_dt.datetime.fromtimestamp(
+                a.created_at, _dt.timezone.utc).date()
+                if a.created_at else None)
             if last_active:
                 idle = (today - _dt.date.fromisoformat(last_active)).days
-            elif a.created_at:
-                idle = (today - _dt.datetime.fromtimestamp(
-                    a.created_at, _dt.timezone.utc).date()).days
+            elif joined_day:
+                idle = (today - joined_day).days
             else:
                 idle = None
+            returned = bool(last_active and joined_day
+                            and _dt.date.fromisoformat(last_active)
+                            > joined_day)
             if not asked:
                 reason = "never asked"
             elif idle is not None and idle >= AWAY_DAYS:
@@ -227,8 +243,119 @@ def testers(session_scope, moment: _dt.datetime | None = None,
                 "sign_ins_7d": int(week.get(a.id) or 0),
                 "last_active": last_active, "milestones": reached,
                 "furthest": furthest, "idle_days": idle,
-                "stuck": bool(reason), "stuck_reason": reason})
+                "stuck": bool(reason), "stuck_reason": reason,
+                "ref": refs.get(beta_signup.account_key(a.email))
+                or inviter or "",
+                "returned": returned,
+                "is_owner": (a.email or "").strip().lower()
+                in owner_emails})
     return out
+
+
+# --- reading: the Morning block (owner only) ---------------------------------
+
+#: The loop the Morning line counts, in order: (key, words).
+LOOP = (("joined", "signed in"), ("records_connected", "data connected"),
+        ("first_answer", "first answer"), ("action_approved", "first action"),
+        ("returned", "returned"))
+
+#: The nudges, fixed words chosen by fixed rules (`needs_you`). No model
+#: writes them, and none says anything about a record.
+NUDGES = {
+    "never_asked": "Try asking: what's due for me this year?",
+    "not_connected": "Want me to walk you through connecting? 2 minutes.",
+    "never_acted": "Ask it to write your next-visit prep list.",
+    "quiet": ("Did something get in the way? 1 confusing, 2 no time, "
+              "3 not useful, 4 other."),
+    "not_confirmed": ("Your CareAgents sign-up link is in your email. "
+                      "Check spam, or reply and I'll send a new one."),
+}
+
+#: Where each rule says the person is stuck, for the owner.
+STUCK_AT = {"never_asked": "joined, never asked",
+            "not_connected": "asked, never connected their records",
+            "never_acted": "answered, no action yet",
+            "quiet": "quiet", "not_confirmed": "beta request not confirmed"}
+
+
+def loop_counts(rows: list[dict]) -> list[dict]:
+    """How many testers reached each step of LOOP. The owner's own
+    account is not a tester and is not counted."""
+    people = [r for r in rows if not r["is_owner"]]
+    out = []
+    for key, words in LOOP:
+        if key == "returned":
+            n = sum(1 for r in people if r["returned"])
+        else:
+            n = sum(1 for r in people if key in r["milestones"])
+        out.append({"key": key, "label": words, "count": n})
+    return out
+
+
+def _rule(r: dict, can_connect: bool) -> str | None:
+    """The first rule a tester matches, in loop order, or None."""
+    m, idle = r["milestones"], r["idle_days"] or 0
+    asked = "first_answer" in m or r["last_active"] is not None
+    if not asked:
+        return "never_asked" if idle >= 1 else None
+    if "records_connected" not in m and can_connect and idle >= 2:
+        return "not_connected"
+    if "action_approved" not in m and idle >= 2:
+        return "never_acted"
+    if idle >= AWAY_DAYS:
+        return "quiet"
+    return None
+
+
+def needs_you(rows: list[dict], pending: list[dict],
+              can_connect=lambda email: False) -> list[dict]:
+    """One row per stuck tester: email, where stuck, days since last
+    active, and the nudge its rule picks. `can_connect(email)` says the
+    tester may connect real records (an invite or the allowlist); the
+    connect nudge goes only to them. Then the /beta requests nobody
+    confirmed (`pending_requests`)."""
+    out = []
+    for r in rows:
+        if r["is_owner"]:
+            continue
+        rule = _rule(r, bool(can_connect(r["email"])))
+        if rule:
+            out.append({"name": "", "email": r["email"], "rule": rule,
+                        "stuck_at": STUCK_AT[rule], "days": r["idle_days"],
+                        "since": ("last active" if r["last_active"]
+                                  else "joined"),
+                        "nudge": NUDGES[rule]})
+    from careagents import beta_signup
+    have = {beta_signup.account_key(r["email"]) for r in rows}
+    for p in pending:
+        # Asked on /beta, then came in another way: not waiting on a link.
+        if beta_signup.account_key(p["email"]) in have:
+            continue
+        out.append({"name": p["first_name"], "email": p["email"],
+                    "rule": "not_confirmed",
+                    "stuck_at": STUCK_AT["not_confirmed"],
+                    "days": p["days"], "since": "asked",
+                    "nudge": NUDGES["not_confirmed"]})
+    return out
+
+
+def pending_requests(session_scope, moment: _dt.datetime | None = None,
+                     limit: int = TESTERS_CAP) -> list[dict]:
+    """/beta requests still waiting for the confirm link, newest first:
+    the first name and email typed on /beta, and days since asked. Owner
+    only, like the testers list."""
+    from careagents import beta_signup
+    moment = moment or _dt.datetime.now(_dt.timezone.utc)
+    today = moment.date()
+    with session_scope() as s:
+        rows = (s.query(beta_signup.BetaRequest)
+                .filter_by(status="pending")
+                .order_by(beta_signup.BetaRequest.created_at.desc())
+                .limit(max(1, int(limit))).all())
+        return [{"first_name": r.first_name, "email": r.email,
+                 "days": (today - _dt.datetime.fromtimestamp(
+                     r.created_at, _dt.timezone.utc).date()).days
+                 if r.created_at else None} for r in rows]
 
 
 #: The CSV's columns, in order.
