@@ -35,6 +35,10 @@ const CARE_ALLOW_DB =
 // and can never be a real mailbox; nothing is ever sent anyway (the dev mail
 // stub logs to stderr).
 export const CARE_ALLOW_EMAIL = 'e2e-allowlisted@example.test';
+// A second allowlisted address, for the upload spec. One fixed address signed
+// in twice within the 30-second resend wait gets no new code, so the second
+// sign-in read back the first, already-used one.
+export const CARE_ALLOW_UPLOAD_EMAIL = 'e2e-allowlisted-upload@example.test';
 // The owner of the first CareAgents server (CARE_OWNER_EMAILS), for
 // careagents-admin-testers.spec.ts. Fixed for the same reason: owner
 // addresses are server env.
@@ -158,7 +162,8 @@ export default defineConfig({
         CARE_RP_ID: 'localhost',
         RESEND_API_KEY: '',
         CARE_REAL_RECORDS: 'allowlist',
-        CARE_REAL_RECORDS_ALLOWLIST: CARE_ALLOW_EMAIL,
+        CARE_REAL_RECORDS_ALLOWLIST:
+          `${CARE_ALLOW_EMAIL},${CARE_ALLOW_UPLOAD_EMAIL}`,
         // Fasten key present and the wearables sidecar declared wired, so the
         // ONLY thing between an account and a live real-record tile here is
         // the allowlist. Without these two, `catalog()` would answer "soon"
