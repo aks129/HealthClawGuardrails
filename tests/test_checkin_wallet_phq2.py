@@ -235,6 +235,43 @@ def test_anything_but_a_small_flat_choice_form_is_unsupported(req):
     assert out["response"]["artifacts"] == []
 
 
+# --- whose heading ----------------------------------------------------------------
+
+_HEADINGS = """
+const m = await import(process.argv[1]);
+const request = JSON.parse(process.argv[2]);
+const matches = m.matchItems(request, [], m.prepareRecords({ entry: [] }));
+console.log(JSON.stringify(matches.map((x) => ({
+  heading: m.itemHeading(x), website: m.websiteHeading(x) }))));
+"""
+
+
+def test_a_heading_from_the_website_is_known_as_the_websites():
+    """A records item is named by our heading; one with no kind of record
+    to name it by (a form) carries the website's title, which the page
+    shows attributed (#1030 security F3 follow-up)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    req = copy.deepcopy(REQUEST)
+    req["items"][1]["title"] = "CareAgents verified clinic"
+    req["items"].append({"id": "odd", "title": {"not": "text"},
+                         "accept": ["application/fhir+json"],
+                         "content": {"kind": "form.fhir"}})
+    out = json.loads(subprocess.run(
+        [node, "--input-type=module", "-e", _HEADINGS,
+         str(STATIC / "checkin_answer.js"), json.dumps(req)],
+        capture_output=True, text=True, check=True, timeout=30).stdout)
+    assert out == [
+        {"heading": "Your name, birth date and contact details",
+         "website": None},
+        {"heading": "CareAgents verified clinic",
+         "website": "CareAgents verified clinic"},
+        # Never a non-string from the request: its id instead.
+        {"heading": "odd", "website": "odd"},
+    ]
+
+
 # --- the page ---------------------------------------------------------------------
 
 def _code(path):

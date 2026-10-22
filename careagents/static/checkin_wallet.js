@@ -20,7 +20,7 @@ import {
 // cannot carry it.
 const {
   buildResponse, itemHeading, matchItems, prepareRecords, recordNames,
-  requestedTypes,
+  requestedTypes, websiteHeading,
 } = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
 const $ = (id) => document.getElementById(id);
@@ -206,7 +206,14 @@ function review(request, origin, matches) {
     li.dataset.item = m.item.id;
     const title = document.createElement("div");
     title.className = "checkin-item-title";
-    title.textContent = itemHeading(m);
+    // A heading of the website's own is said to be its, set apart, as its
+    // other words are (#1030 security F3).
+    const theirs = websiteHeading(m);
+    if (theirs === null) title.textContent = itemHeading(m);
+    else {
+      title.classList.add("checkin-website-title");
+      title.textContent = `From the website: ${isolate(theirs, 80)}`;
+    }
     const what = document.createElement("ul");
     what.className = "checkin-item-what";
     describe(m).forEach((line) => {

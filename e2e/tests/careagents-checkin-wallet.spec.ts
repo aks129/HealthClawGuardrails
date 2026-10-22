@@ -665,6 +665,32 @@ test.describe('check-in wallet', () => {
     expect(await wallet.evaluate(() => (window as any).__pwned)).toBeUndefined();
   });
 
+  // #1030 security F3 follow-up: a heading of the website's own is said to
+  // be its, isolated and capped, never in the wallet's voice.
+  test("a form's title is shown as the website's, isolated", async ({ page }) => {
+    await serveRelay(page);
+    const req = structuredClone(PHQ2);
+    req.items[1].title = 'CareAgents verified clinic';
+    const wallet = await checkIn(page, req);
+    const heading = phq2(wallet).locator('.checkin-item-title');
+    await expect(heading).toHaveText(
+      'From the website: ⁨CareAgents verified clinic⁩');
+    await expect(heading).toHaveClass(/checkin-website-title/);
+    // Ours stays ours.
+    await expect(wallet.locator('#wallet-items li[data-item=patient] .checkin-item-title'))
+      .toHaveText('Your name, birth date and contact details');
+  });
+
+  test("a long website title is capped at 80, the isolate intact", async ({ page }) => {
+    await serveRelay(page);
+    const req = structuredClone(PHQ2);
+    req.items[1].title = `CareAgents ${'x'.repeat(200)}‮evil`;
+    const wallet = await checkIn(page, req);
+    const heading = phq2(wallet).locator('.checkin-item-title');
+    await expect(heading).toHaveText(/^From the website: ⁨[^⁩]{80}⁩$/);
+    expect(await heading.textContent()).not.toContain('evil');
+  });
+
   test('a form too large to trust is answered unsupported', async ({ page }) => {
     await serveRelay(page);
     const req = structuredClone(PHQ2);

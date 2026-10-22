@@ -411,15 +411,31 @@ const HEADINGS = {
 /* Our heading for an item, from what it matched, or, with nothing on
    file, from the one kind of record it asks for: the same heading either
    way. The website's own title only when there is no one kind to name it
-   by (a form, say). */
+   by (a form, say), which the page shows as the website's (websiteHeading). */
 export function itemHeading(match) {
+  return ourHeading(match) || websiteHeading(match);
+}
+
+function ourHeading(match) {
   let types = new Set((match.primary || []).map((e) => e.resource.resourceType));
   if (!types.size) types = new Set(requestedTypes({ items: [match.item] }, []));
   if (types.size === 1) {
     const h = own(HEADINGS, [...types][0]);
     if (typeof h === "string") return h;
   }
-  return own(match.item, "title") || own(match.item, "id");
+  return null;
+}
+
+/* The website's own words for an item we have no heading of ours for: its
+   title, else its id, and only ever a string. Null when the heading is
+   ours. */
+export function websiteHeading(match) {
+  if (ourHeading(match)) return null;
+  for (const key of ["title", "id"]) {
+    const v = own(match.item, key);
+    if (typeof v === "string" && v) return v;
+  }
+  return "";
 }
 
 function labelOf(concept) {
