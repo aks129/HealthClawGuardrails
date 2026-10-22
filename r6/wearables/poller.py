@@ -29,6 +29,7 @@ from typing import Optional
 import httpx
 
 from r6.stepup import generate_step_up_token
+from r6.log_safety import loggable_id
 from r6.wearables.client import WearablesClient
 from r6.wearables.mapper import samples_to_bundle
 from r6.wearables.models import WearableConnection
@@ -115,7 +116,8 @@ def run_once(
                 conn.last_sync_detail = str(exc)[:500]
                 logger.warning(
                     'wearable sync failed tenant=%s provider=%s: %s',
-                    conn.tenant_id, conn.provider, exc,
+                    loggable_id(conn.tenant_id), conn.provider,
+                    type(exc).__name__,
                 )
             try:
                 db.session.commit()
@@ -202,7 +204,7 @@ def _loop(app) -> None:
             summary = run_once(app)
             logger.info('wearables sync pass: %s', summary)
         except Exception as exc:  # noqa: BLE001
-            logger.error('wearables poller crashed: %s', exc)
+            logger.error('wearables poller crashed: %s', type(exc).__name__)
 
 
 def start_poller(app) -> bool:

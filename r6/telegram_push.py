@@ -19,6 +19,7 @@ import os
 import requests
 
 from models import db
+from r6.log_safety import loggable_id
 from r6.models import TelegramBinding
 
 logger = logging.getLogger(__name__)
@@ -58,11 +59,14 @@ def send_to_chat(chat_id: int, message: str, parse_mode: str = 'Markdown') -> bo
             return True
         logger.warning(
             'telegram send failed chat=%s status=%s body=%s',
-            chat_id, resp.status_code, resp.text[:200],
+            loggable_id(str(chat_id)), resp.status_code, resp.text[:200],
         )
         return False
     except requests.RequestException as exc:
-        logger.warning('telegram send error chat=%s: %s', chat_id, exc)
+        # The class only: a requests error names the URL, which carries the
+        # bot token (FHI-60).
+        logger.warning('telegram send error chat=%s: %s',
+                       loggable_id(str(chat_id)), type(exc).__name__)
         return False
 
 
@@ -76,10 +80,13 @@ def notify_tenant(tenant_id: str, message: str, parse_mode: str = 'Markdown') ->
     try:
         chat_ids = TelegramBinding.chat_ids_for_tenant(tenant_id)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning('telegram tenant lookup failed tenant=%s: %s', tenant_id, exc)
+        # The class only: a DB error's text carries its bound parameters.
+        logger.warning('telegram tenant lookup failed tenant=%s: %s',
+                       loggable_id(tenant_id), type(exc).__name__)
         return 0
     if not chat_ids:
-        logger.info('telegram notify skipped — no bindings for tenant=%s', tenant_id)
+        logger.info('telegram notify skipped — no bindings for tenant=%s',
+                    loggable_id(tenant_id))
         return 0
     sent = 0
     for chat_id in chat_ids:

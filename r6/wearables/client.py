@@ -64,6 +64,16 @@ _STATIC_PROVIDERS = (
 )
 
 
+def _failure(exc: Exception) -> str:
+    """An upstream failure as a log may write it: the class and, for an HTTP
+    error, the status. Never str(exc): an httpx error names the full request
+    URL, and its query string carries caller-chosen values (FHI-60)."""
+    response = getattr(exc, 'response', None)
+    status = getattr(response, 'status_code', None)
+    name = type(exc).__name__
+    return f'{name} status={status}' if status is not None else name
+
+
 class WearablesClient:
     """Thin typed wrapper over the Open Wearables REST API."""
 
@@ -125,7 +135,7 @@ class WearablesClient:
         except Exception as exc:
             logger.info(
                 'Open Wearables /api/v1/oauth/providers unavailable (%s); '
-                'returning static list', exc,
+                'returning static list', _failure(exc),
             )
         return [{'name': n} for n in _STATIC_PROVIDERS]
 
@@ -160,7 +170,8 @@ class WearablesClient:
         except Exception as exc:
             logger.warning(
                 'Open Wearables authorize for %s failed (%s) — likely the '
-                'developer-auth requirement; see client docstring', provider, exc,
+                'developer-auth requirement; see client docstring',
+                provider, _failure(exc),
             )
             return None
         if isinstance(data, dict):
