@@ -251,6 +251,9 @@ const NO_RECORDS = {
   too_large: "Your records are too large to send this way.",
   paused: "Sharing records is paused on your account.",
   busy: "Records are already being added to your account. Start check-in again in a moment.",
+  // A real-record connection the relay cannot answer from yet (#1027 QA F1).
+  records_not_ready: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
+  has_records: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
 };
 
 // --- the connectathon test patient ----------------------------------------
@@ -258,11 +261,13 @@ const NO_RECORDS = {
 // The reasons that mean "nothing real to share", where the page may offer
 // the test patient instead (card.dataset.testPatient, set by the server
 // only when CARE_CHECKIN_TEST_PATIENT is on).
-// Each says only what is missing: the longer NO_RECORDS text tells the
-// person to go and connect records, which this screen offers instead.
+// Only where the server will make one: no real-record connection at all
+// (`no_records`) or only the sample. Each says only what is missing: the
+// longer NO_RECORDS text tells the person to go and connect records,
+// which this screen offers instead.
 const OFFER_TEST = {
   no_records: "There are no records on your account yet.",
-  sample_only: "Your account has only the sample records, which are made up and can't be shared.",
+  sample_only: "The sample records can't be used for check-in. You can use a made-up connectathon test patient instead.",
 };
 
 /* Resolves to true when the person chose the test patient. */

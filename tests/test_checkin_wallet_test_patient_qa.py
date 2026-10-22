@@ -16,8 +16,8 @@ person reads "We couldn't read your records just now. Try check-in again
 in a few minutes." Retrying never helps. Shown live at 375px on
 2026-10-22.
 
-Strict xfail: these go red when the offer and the refusal are brought into
-agreement (either side may move), and the marker then comes off.
+Fixed: the relay now answers `records_not_ready` for such an account,
+which the page does not offer the test patient on.
 
 Synthetic data only.
 """
@@ -40,8 +40,6 @@ def _offer_then_refusal(browser):
     return why, refused
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1027 QA finding: offered the test patient, then refused has_records"))
 @pytest.mark.parametrize("kind,status", [
     ("direct", "empty"),     # "Upload a file" tapped, no file yet
     ("direct", "revoked"),   # disconnected upload
@@ -56,8 +54,6 @@ def test_a_waiting_real_connection_is_not_offered_what_it_is_refused(
     assert not (why in OFFER_REASONS and refused), (why, refused)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1027 QA finding: offered the test patient, then refused has_records"))
 def test_a_cared_for_persons_records_do_not_offer_what_is_refused(
         tester):  # noqa: F811
     browser, hc, svc, acct = tester

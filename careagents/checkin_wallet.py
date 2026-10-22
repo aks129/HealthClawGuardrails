@@ -136,9 +136,15 @@ def records_tenant(svc, account_id: str,
     or more there is no telling which the person means, so none is
     guessed.
 
-    With `test_patient` (the flag), an account with no real-record
-    connection answers from its connectathon test patient, if it chose
-    one. A real connection always wins."""
+    With `test_patient` (the flag), an account with no active real-record
+    connection of its own answers from its connectathon test patient, if
+    it chose one. A real connection always wins.
+
+    An account with a real-record connection the relay cannot answer from
+    (still waiting for its records, disconnected, or someone else's) is
+    `records_not_ready`: it is not offered the test patient, since the
+    route refuses any account with a real-record connection
+    (`has_real_connection`), and the two must agree (#1027 QA F1)."""
     home = svc.list_home(account_id)
     me = {p["id"] for p in home["people"] if p["kind"] == "self"}
     mine = [c for c in home["connections"]
@@ -148,6 +154,8 @@ def records_tenant(svc, account_id: str,
         test = [c for c in mine if _is_test_patient(c)]
         if test_patient and test:
             return test[0]["tenant_id"], ""
+        if any(c["kind"] != "sample" for c in home["connections"]):
+            return None, "records_not_ready"
         return None, ("sample_only" if mine else "no_records")
     if len(tenants) > 1:
         return None, "several_records"
