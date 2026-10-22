@@ -128,6 +128,11 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed
 
 
+def _said(run: dict) -> str:
+    """The person's message on a claimed run, for beta.emergency_first."""
+    return str((run.get("message") or {}).get("text") or "")
+
+
 def _error_class(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name and name[0].isalpha() else "WorkerError"
@@ -275,8 +280,8 @@ class RunWorker:
                 self._refund(refund)
                 # This worker failed it, so this worker answers. When the
                 # engine got there first it wrote the answer itself.
-                self._answer_failed_turn(run, _failure_text(
-                    RunDeadlineExceeded()))
+                self._answer_failed_turn(run, beta.emergency_first(
+                    _failure_text(RunDeadlineExceeded()), _said(run)))
             except HealthClawError:
                 # The authoritative heartbeat may already have committed the
                 # same terminal deadline transition and revoked this lease.
@@ -305,8 +310,9 @@ class RunWorker:
             if causes.needs_owner(exc):
                 funnel.safely(funnel.alert_owner, self.accounts.session,
                               self.cfg, cause)
-            text = _failure_text(exc,
-                                 owner_told=bool(self.cfg.owner_emails))
+            text = beta.emergency_first(
+                _failure_text(exc, owner_told=bool(self.cfg.owner_emails)),
+                _said(run))
             refund = self._mark_refund(run)
             try:
                 self.hc.append_agent_run_event(
@@ -419,7 +425,8 @@ class RunWorker:
         if blocked:
             # Before any record read and before any model call (beta spec
             # 4.3 and 4.6). The run still ends normally, with this sentence.
-            self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
+            self._finish(run, {"text": beta.emergency_first(blocked, user_text),
+                               "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
         if (context["connection"].get("kind") != "sample"
@@ -539,7 +546,13 @@ class RunWorker:
             allowed, _used = self.accounts.claim_daily_turn(
                 context["account_id"], self.cfg.chat_turns_per_day, day=day)
             if not allowed:
-                self._finish(run, {"text": beta.daily_limit_text(),
+                # Crisis wording anywhere in the loaded conversation, as
+                # routing.crisis_in_window reads it, leads with 911.
+                said = [m["content"] for m in history
+                        if m.get("role") in ("user", "assistant")
+                        and isinstance(m.get("content"), str)]
+                self._finish(run, {"text": beta.emergency_first(
+                                       beta.daily_limit_text(), *said),
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import datetime as _dt
 
+from careagents import routing
+
 #: Stage 1 is "up to 25" invited testers (spec section 2). Counted over
 #: active invites. The environment allowlist is not counted: it is the
 #: operator's own short list and predates the table.
@@ -53,6 +55,35 @@ def daily_limit_text(now: _dt.datetime | None = None) -> str:
         hours = int((minutes + 30) // 60)
         when = f"in about {hours} hour{'' if hours == 1 else 's'}"
     return f"{DAILY_LIMIT_TEXT} More {when}."
+
+
+#: Ahead of a fixed sentence that answers instead of the model (the day's
+#: limit, paused, terms, a failed turn) when what the person said reads as
+#: a crisis. Without it "chest pain" at the limit got only "You've used
+#: today's messages" (QA on #1017). English and Spanish: no model writes it.
+EMERGENCY_LINE = ("If this is an emergency, call 911 now. "
+                  "Si es una emergencia, llame al 911 ahora.")
+#: Added for self-harm or wanting to die (routing.is_self_harm).
+SELF_HARM_LINE = ("If you are thinking about hurting yourself, call or text "
+                  "988. Si está pensando en hacerse daño, llame o envíe un "
+                  "mensaje de texto al 988.")
+
+
+def emergency_first(reply: str, *said: str) -> str:
+    """`reply` led by EMERGENCY_LINE (and SELF_HARM_LINE) when anything in
+    `said` is crisis wording; otherwise `reply` exactly. Never instead of
+    the reply: the limit, pause or failure still stands."""
+    if not any(routing.is_crisis(s) for s in said if s):
+        return reply
+    lead = EMERGENCY_LINE
+    if any(routing.is_self_harm(s) for s in said if s):
+        lead += "\n" + SELF_HARM_LINE
+    if reply.startswith(lead):
+        return reply
+    # A failed turn led by this is no longer one of errors.FAILURE_TEXTS,
+    # so collapse_failed_turns keeps it on the page: a wall of failures is
+    # shown once, but never by hiding the emergency line.
+    return f"{lead}\n\n{reply}"
 
 
 #: The sample connection's one line: the banner on its chat page, and the

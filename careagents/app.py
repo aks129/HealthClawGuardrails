@@ -2517,7 +2517,9 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.daily_limit_text(),
+                    # Crisis wording still gets the emergency line first.
+                    "message": beta.emergency_first(
+                        beta.daily_limit_text(), text),
                 }), 429
 
         tenant = ctx["tenant"]

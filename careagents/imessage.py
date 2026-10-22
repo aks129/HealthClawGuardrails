@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import quote, unquote
 
+from careagents import beta
 from careagents.agent import GENERIC_FAILURE_TEXT
 
 #: A texted sign-in link works once, for this long.
@@ -628,7 +629,8 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
         return {"reply": busy_text(deps.burst_window_seconds)}, 200
     blocked = deps.admission_block(surface["account_id"], ctx)
     if blocked:
-        return {"reply": blocked}, 200
+        # The day's limit, led by the emergency line for crisis wording.
+        return {"reply": beta.emergency_first(blocked, text)}, 200
     try:
         run = deps.queue_turn(ctx, text, request_id, conversation_id)
     except deps.queue_error:

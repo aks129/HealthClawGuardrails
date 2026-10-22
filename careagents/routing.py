@@ -150,32 +150,39 @@ CLINICAL_TOOLS = frozenset({
 #: Longer than this is not small talk.
 _MAX_HAIKU_CHARS = 120
 
-#: Crisis and emergency language. Never Haiku, whatever else the message
-#: says. The allowlist already refuses these; this is the rule stated out
-#: loud, so a later template cannot quietly admit one.
-_CRISIS = re.compile(r"|".join([
+#: Self-harm and wanting to die: crisis wording that also earns the 988
+#: line where a fixed sentence answers instead of the model
+#: (beta.emergency_first). Part of _CRISIS below, never a separate list.
+#: Spanish (and Spanglish) is written without accents: is_crisis matches the
+#: text with its accents taken off, so "convulsión" and "convulsion" both
+#: count. Broad stems (morir, urgen) are deliberate: a false positive costs
+#: one Sonnet call, a miss puts the next "ok" after a crisis on Haiku.
+#: Security review of #1017 checked the Spanish against ordinary Spanish.
+_SELF_HARM_PATTERNS = [
     r"suicid", r"kill(?:ing)? my ?self", r"end(?:ing)? (?:it|my life|it all)",
     r"(?:want to|wanna|going to|gonna) die", r"don'?t want to (?:live|be here)",
     r"self.?harm", r"hurt(?:ing)? my ?self", r"cut(?:ting)? my ?self",
-    r"overdos", r"\bod\b", r"can'?t breathe", r"cannot breathe",
+    r"overdos", r"\bod\b", r"988",
+    r"sobredosis", r"tome demasiad",
+    r"morir", r"muriendo", r"me muero", r"no quiero vivir",
+    r"quitarme la vida", r"acabar con (?:mi vida|todo)", r"terminar con todo",
+    r"hacerme dano", r"me (?:quiero |voy a )?hacer dano", r"lastimarme",
+    r"cortarme", r"me corto", r"me estoy cortando", r"cortandome",
+    r"matar(?:me|se)", r"(?:quiero|kiero|voy a) matar",
+    r"(?:todas|muchas|un frasco de) (?:las |mis )?pastillas",
+]
+
+#: Medical emergencies, abuse and being unsafe.
+_URGENT_PATTERNS = [
+    r"can'?t breathe", r"cannot breathe",
     r"can not breathe", r"chest pain", r"heart attack", r"stroke",
     r"seizure", r"unconscious", r"passed out", r"pass(?:es|ing)? out",
     r"faint", r"bleeding", r"anaphyla", r"throat (?:is )?(?:closing|swelling)",
     r"can'?t swallow", r"cannot swallow", r"can not swallow",
-    r"911", r"988", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
+    r"911", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
     r"abuse", r"\bunsafe\b",
-    # Spanish (and Spanglish), written without accents: is_crisis matches
-    # the text with its accents taken off, so "convulsión" and "convulsion"
-    # both count. "suicid" above already covers suicidio and suicida. Broad
-    # stems (morir, urgen) are deliberate: a false positive costs one
-    # Sonnet call, a miss puts the next "ok" after a crisis on Haiku.
-    # Security review of #1017 checked these against ordinary Spanish.
     r"dolor (?:en el|de|del) pecho", r"ambulancia", r"desmay", r"sangrado",
-    r"sobredosis", r"tome demasiad", r"convulsi", r"derrame", r"infarto",
-    r"morir", r"muriendo", r"me muero", r"no quiero vivir",
-    r"quitarme la vida", r"acabar con (?:mi vida|todo)", r"terminar con todo",
-    r"hacerme dano", r"lastimarme", r"cortarme", r"me corto",
-    r"matar(?:me|se)", r"(?:quiero|kiero|voy a) matar",
+    r"convulsi", r"derrame", r"infarto",
     r"(?:no puedo|can.?t|cannot|cuesta|dificultad para|trabajo para) respirar",
     r"no puedo breath", r"falta (?:el |de )?aire", r"me ahog",
     r"perd\w* el conocimiento", r"inconscien",
@@ -188,11 +195,16 @@ _CRISIS = re.compile(r"|".join([
     r"(?:dolor|duele|presion|opresion|aprieta)\w*.{0,20}pecho",
     r"pecho.{0,10}(?:hurts|duele|aprieta)", r"chest duele",
     r"ataque (?:al corazon|cardiac)", r"paro cardiac", r"epilep",
-    r"(?:todas|muchas|un frasco de) (?:las |mis )?pastillas",
     r"urgen", r"abus", r"me pega", r"violencia", r"maltrat",
     r"no (?:estoy|me siento) segur[oa] (?:en|aqui|con)",
     r"segur[oa] en (?:mi )?casa", r"anafila", r"cierra la garganta",
-]))
+]
+
+#: Crisis and emergency language. Never Haiku, whatever else the message
+#: says. The allowlist already refuses these; this is the rule stated out
+#: loud, so a later template cannot quietly admit one.
+_CRISIS = re.compile(r"|".join(_SELF_HARM_PATTERNS + _URGENT_PATTERNS))
+_SELF_HARM = re.compile(r"|".join(_SELF_HARM_PATTERNS))
 
 #: Whole messages made only of these words are small talk.
 _SMALL_TALK = frozenset("""
@@ -281,6 +293,11 @@ def _unaccented(text: str) -> str:
 
 def is_crisis(text: str) -> bool:
     return bool(_CRISIS.search(_unaccented(normalize(text))))
+
+
+def is_self_harm(text: str) -> bool:
+    """Crisis wording about self-harm or wanting to die (988, not only 911)."""
+    return bool(_SELF_HARM.search(_unaccented(normalize(text))))
 
 
 def classify(text: str) -> int:
