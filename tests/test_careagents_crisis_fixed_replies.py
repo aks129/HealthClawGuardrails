@@ -530,18 +530,58 @@ def test_the_pace_sentence_matches_the_page():
     assert m and m.group(1) == PACE_TEXT
 
 
-def test_the_page_shows_every_admission_503_sentence():
-    """Every 503 refusing a turn carries the 911 line, so the page shows any
-    one with a message, not only a crisis. Only for the POST that asked: a
-    reconnect to a running run (state.runId set) keeps retrying. The branch
-    sits inside the streaming loop, past the reach of a node harness, so
-    its source is pinned, as the 429 branch's is."""
+def test_the_page_says_a_503s_sentence_after_its_retries():
+    """A crisis 503 (`emergency`) is said at once. Any other is retried
+    silently, as a blip usually passes, and its sentence, which ends with
+    the 911 line, replaces "Connection hiccup" once the retries run out.
+    Only for the POST that asked (`!state.runId`). The branch sits inside
+    the streaming loop, past the reach of a node harness, so its source is
+    pinned, as the 429 branch's is."""
     src = _chat_js()
+    send = src[src.index("async function send("):]
+    send = send[:send.index("\n  }\n")]
     head = "if (resp.status === 503 && !state.runId) {"
-    branch = src.split(head, 1)[1].split("if (!resp.ok", 1)[0]
-    assert "emergency" not in branch
-    assert 'typeof refusal.message === "string"' in branch
-    assert "addAgentText(refusal.message);" in branch
-    assert "return;" in branch
-    assert src.index(head) < src.index(
+    branch = send.split(head, 1)[1].split("if (!resp.ok", 1)[0]
+    now, later = branch.split("refusalText = refusal.message;", 1)
+    # Said at once only inside the emergency check, which then returns.
+    flagged = now.split("if (refusal.emergency === true) {", 1)[1]
+    assert "addAgentText(refusal.message);" in flagged
+    assert "return;" in flagged
+    assert "return;" not in now.split("if (refusal.emergency", 1)[0]
+    # Anything else falls through to the throw that retries it.
+    assert "return" not in later
+    assert send.index(head) < send.index(
         'throw new Error("event stream unavailable")')
+    assert "if (reconnectFailures > 5) throw streamError;" in send
+    # Once the retries are spent: the sentence, else the hiccup line.
+    spent = send.split("} catch (e) {", 1)[1]
+    said = 'if (refusalText) addAgentText(refusalText, null, "connection");'
+    assert spent.index(said) < spent.index('"Connection hiccup')
+
+
+def test_the_history_drops_a_crisis_answers_inline_frame():
+    """A sample crisis answer carries the frame after its first paragraph
+    or at its end; under the banner it is not said twice."""
+    f = beta.SAMPLE_FRAME
+    assert beta.under_banner(f"Call 911.\n\n{f}\n\nThe A1c was 7.2.") == (
+        "Call 911.\n\nThe A1c was 7.2.")
+    assert beta.under_banner(f"Call 911.\n\n{f}") == "Call 911."
+    assert beta.under_banner(f"{f}\n\nThe A1c was 7.2.") == (
+        "The A1c was 7.2.")
+    assert beta.under_banner(f"The {f} rest") == f"The {f} rest"
+    assert beta.under_banner(f) == f                 # never down to nothing
+    who = beta.sample_frame("your parent")
+    assert beta.under_banner(f"Call 911.\n\n{who}\n\nx", who) == (
+        "Call 911.\n\nx")
+
+
+def test_a_replayed_sample_crisis_answer_shows_the_frame_once(
+        cfg, svc, monkeypatch):  # noqa: F811
+    answer = "Call 911 now.\n\nIn these made-up records, nothing urgent."
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply=answer)
+    _queue(c, agent_id, "me duele el pecho", "fr-4")
+    _work(cfg, svc, fake)
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert page.count(beta.SAMPLE_FRAME) == 1      # the banner alone
+    assert "Call 911 now." in page

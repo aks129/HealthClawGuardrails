@@ -147,11 +147,23 @@
   // and texted answer with it; only that exact leading copy is dropped,
   // only while the banner is on this page, and never down to nothing
   // (careagents/beta.py under_banner does the same for the history).
+  // A crisis answer carries it after its first paragraph, or at its end,
+  // so it never comes before the 911 guidance (worker._finish); that copy,
+  // a paragraph of its own, is dropped the same way.
   function withoutFrame(text) {
     const banner = document.querySelector(".sample-banner");
     const frame = banner ? banner.textContent.trim() : "";
-    if (!frame || text.indexOf(frame + "\n\n") !== 0) return text;
-    const rest = text.slice(frame.length + 2);
+    if (!frame) return text;
+    let rest = "";
+    const inline = "\n\n" + frame + "\n\n";
+    if (text.indexOf(frame + "\n\n") === 0) {
+      rest = text.slice(frame.length + 2);
+    } else if (text.indexOf(inline) > 0) {
+      rest = text.replace(inline, "\n\n");
+    } else if (text.length > frame.length + 2
+               && text.slice(-(frame.length + 2)) === "\n\n" + frame) {
+      rest = text.slice(0, -(frame.length + 2));
+    }
     return rest.trim() ? rest : text;
   }
 
@@ -635,6 +647,9 @@
     const requestId = (window.crypto && window.crypto.randomUUID)
       ? window.crypto.randomUUID()
       : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    // The last sentence a 503 refusing this turn carried (it ends with the
+    // 911 line): shown instead of "Connection hiccup" once retries run out.
+    let refusalText = "";
 
     try {
       const state = { runId: null, cursor: 0, done: false };
@@ -669,17 +684,21 @@
             return;
           }
           // A chat turn the server could not take carries its sentence and
-          // the 911 line (app.py, _with_emergency): say it now rather than
-          // retrying into "Connection hiccup", which would never show it.
+          // a 911 line (app.py, _with_emergency). Crisis wording is said at
+          // once. Any other is retried silently, as a blip usually passes,
+          // and said instead of "Connection hiccup" if the retries run out.
           // Only for the POST that asked: a reconnect to a run in progress
-          // keeps retrying.
+          // keeps its own retries.
           if (resp.status === 503 && !state.runId) {
             const refusal = await resp.clone().json().catch(() => ({}));
             if (refusal && typeof refusal.message === "string"
                 && refusal.message) {
-              typing.remove();
-              addAgentText(refusal.message);
-              return;
+              if (refusal.emergency === true) {
+                typing.remove();
+                addAgentText(refusal.message);
+                return;
+              }
+              refusalText = refusal.message;
             }
           }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
@@ -702,7 +721,8 @@
       if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
-      addAgentText("Connection hiccup — try that again.", null, "connection");
+      if (refusalText) addAgentText(refusalText, null, "connection");
+      else addAgentText("Connection hiccup — try that again.", null, "connection");
       showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();

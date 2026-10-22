@@ -142,13 +142,25 @@ def under_banner(text: str, frame: str = SAMPLE_FRAME) -> str:
 
     The holder's SAMPLE_FRAME goes by the same rule in every chat: answers
     stored before sample_frame named the person open with it, and it would
-    show under Mom's banner (QA and security review of #952, L1)."""
+    show under Mom's banner (QA and security review of #952, L1).
+
+    A crisis answer carries the line after its first paragraph, or at its
+    end, never before the 911 guidance (worker._finish). That copy of this
+    chat's own `frame`, a paragraph of its own, is dropped the same way
+    (chat.js withoutFrame); the holder's older line only ever led."""
     for line in dict.fromkeys((frame, SAMPLE_FRAME)):
         lead = line + "\n\n"
         rest = text[len(lead):] if text.startswith(lead) else ""
         if rest.strip():
             return rest
-    return text
+    inline, tail = "\n\n" + frame + "\n\n", "\n\n" + frame
+    if text.find(inline) > 0:
+        rest = text.replace(inline, "\n\n", 1)
+    elif text.endswith(tail):
+        rest = text[:-len(tail)]
+    else:
+        rest = ""
+    return rest if rest.strip() else text
 
 
 #: What a real-record assistant answers while its connection's consent is
