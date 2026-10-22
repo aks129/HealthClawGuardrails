@@ -32,6 +32,12 @@ import { CARE_BASE_URL, CARE_LOG } from '../playwright.config';
 import { blockThirdParty, codeFromLog, uniqueEmail } from './careagents-fixtures';
 
 test.use({ baseURL: CARE_BASE_URL });
+// Its own sign-in code budget, as #1012 gives sec-960. The server allows 30
+// code requests per client address per 10 minutes (app.py
+// CODE_REQUESTS_PER_IP), and the wallet specs together sign in more often
+// than that from 127.0.0.1. With no edge in front, the limiter keys on
+// X-Real-IP (TEST-NET-3, RFC 5737).
+test.use({ extraHTTPHeaders: { 'X-Real-IP': '203.0.113.21' } });
 
 const FIXTURE = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', '..', 'careagents', 'checkin',
