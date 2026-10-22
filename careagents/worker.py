@@ -729,6 +729,12 @@ class RunWorker:
         self._check_deadline(run)
         run_id = str(run["id"])
         text = str(checkpoint.get("text") or "").strip() or "…"
+        if text == llm.REFUSAL_TEXT:
+            # The model declined (stop_reason "refusal", which llm.complete
+            # answers with this sentence): a refusal like any other, and
+            # likeliest after self-harm wording. 911 and 988 first for a
+            # crisis, else the 911 line after it.
+            text = beta.with_911(text, _said(run))
         if lead:
             # The line is in the stored history, so a model may already
             # open with it on a later turn. Say it once. A real answer

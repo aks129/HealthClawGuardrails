@@ -18,6 +18,13 @@ from careagents.config import Config
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, sample_framed, svc)
 
+
+def _pointer(origin: str) -> str:
+    """The real-records pointer as sent: a refusal, so it carries the 911
+    line (beta.with_911, #1017)."""
+    from careagents import beta
+    return beta.with_911(sendblue_surface.real_records_text(origin))
+
 SECRET = "sb-test-signing-secret"
 LINE = "+15550100000"           # our Sendblue number
 PHONE = "+15550100123"          # the texter
@@ -499,7 +506,7 @@ def test_a_real_records_agent_is_told_to_open_the_app_and_no_run_starts(
                         lambda *a, **k: pytest.fail("model was called"))
     runs_before = len(hc.runs)
     assert _hook(c, "how is my a1c?", handle="real-1").status_code == 200
-    assert fake.sent == [(PHONE, sendblue_surface.real_records_text(
+    assert fake.sent == [(PHONE, _pointer(
         sb_cfg.origin))]
     assert fake.typing == []
     assert len(hc.runs) == runs_before
@@ -524,7 +531,7 @@ def test_an_answer_owed_from_before_a_switch_to_real_records_is_withheld(
     _make_real(sb_svc, agent_id)
     fake.sent.clear()
     _deliverer(app, fake).once()
-    assert fake.sent == [(PHONE, sendblue_surface.real_records_text(
+    assert fake.sent == [(PHONE, _pointer(
         sb_cfg.origin))]
     assert "6.1" not in fake.sent[0][1]
 
@@ -556,7 +563,7 @@ def test_the_flag_lets_real_records_through(cfg, monkeypatch):  # noqa: F811
         _run(app)
         _deliverer(app, fake).once()
         assert len(fake.sent) == 1
-        assert fake.sent[0][1] != sendblue_surface.real_records_text(
+        assert fake.sent[0][1] != _pointer(
             on.origin)
     finally:
         svc_on.engine.dispose()

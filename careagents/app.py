@@ -2417,6 +2417,19 @@ def create_app(config: Config | None = None,
             return {**body, "message": said, "emergency": True}
         return {**body, "message": said}
 
+    def _run_said_anything(tenant: str, run_id: str,
+                           account_id: str | None) -> bool:
+        """Whether a run left the person any text or failure sentence, read
+        from its first event, so a resumed stream does not say it twice.
+        A read that fails counts as nothing said."""
+        try:
+            with acting_for(account_id):
+                page = hc.agent_run_events(tenant, run_id, after=0, limit=500)
+        except HealthClawError:
+            return False
+        return any(e.get("type") in ("agent.text", "agent.error")
+                   for e in page.get("events") or [])
+
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
                     account_id: str | None = None):
         """Replay durable UI events. Disconnecting only stops this projection.
@@ -2483,6 +2496,14 @@ def create_app(config: Config | None = None,
             if len(events) >= 100:
                 continue
             status = page.get("status")
+            if status == "failed" and not _run_said_anything(
+                    tenant, run_id, account_id):
+                # A run the engine failed itself (swept past its deadline
+                # before a worker claimed it) has no answer at all: without
+                # this the page showed nothing. Generic, with the 911 line.
+                yield "data: " + json.dumps({
+                    "type": "error",
+                    "text": beta.with_911(GENERIC_FAILURE_TEXT)}) + "\n\n"
             if status in ("completed", "failed", "cancelled",
                           "waiting_for_human"):
                 done = {"type": "done", "status": status,
@@ -3568,9 +3589,12 @@ def create_app(config: Config | None = None,
             # assistant switched to real records mid-run, by kind or by a
             # move to a new tenant (where the run lookup would fail and the
             # relay retry forever), gets the pointer and nothing of the run.
+            # A refusal: it carries the 911 line (the message is not at
+            # hand here, so the line follows).
             return jsonify({"run_id": run_id,
-                            "reply": sendblue_surface.real_records_text(
-                                cfg.origin)})
+                            "reply": beta.with_911(
+                                sendblue_surface.real_records_text(
+                                    cfg.origin))})
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
             if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):

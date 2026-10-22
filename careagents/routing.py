@@ -186,7 +186,7 @@ _SELF_HARM_PATTERNS = [
     r"\bkms\b", r"unalive",
     r"no vale la pena vivir", r"quiero desaparecer",
     r"(?:quiero|voy a) colgarme", r"me (?:quiero |voy a )?colgar\b",
-    r"cort\w* las venas", r"me (?:hice|he hecho) dano", r"me lastime",
+    r"cort\w{0,8} las venas", r"me (?:hice|he hecho) dano", r"me lastime",
 ]
 
 #: Medical emergencies, abuse and being unsafe.
@@ -202,7 +202,7 @@ _URGENT_PATTERNS = [
     r"convulsi", r"derrame", r"infarto",
     r"(?:no puedo|can.?t|cannot|cuesta|dificultad para|trabajo para) respirar",
     r"no puedo breath", r"falta (?:el |de )?aire", r"me ahog",
-    r"perd\w* el conocimiento", r"inconscien",
+    r"perd\w{0,8} el conocimiento", r"inconscien",
     r"no (?:responde|despierta|reacciona) (?:y|ni|cuando|aunque|al)\b",
     r"(?:no|ni) (?:se )?despierta",
     r"sangrando", r"sangro", r"mucha sangre", r"perdiendo sangre",
@@ -233,6 +233,9 @@ _URGENT_PATTERNS = [
     r"no respira", r"no respiro", r"ahogando", r"falta (?:la |de )?respiracion",
     r"(?:vomito|vomitando|toso|tosiendo) sangre", r"peor dolor de cabeza",
     r"traba la lengua", r"cara dormida", r"me (?:golpea|amenaza)",
+    r"not waking up", r"won'?t wake up", r"unresponsive", r"collaps",
+    r"i'?m dying", r"i am dying", r"(?:can'?t|can not|cannot) breath\b",
+    r"sangra mucho", r"no puedo hablar", r"desplom",
 ]
 
 #: Crisis and emergency language. Never Haiku, whatever else the message

@@ -585,3 +585,57 @@ def test_a_replayed_sample_crisis_answer_shows_the_frame_once(
     page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
     assert page.count(beta.SAMPLE_FRAME) == 1      # the banner alone
     assert "Call 911 now." in page
+
+
+# --- round 5: the model's refusal, a silent failed run, the page's own line ---
+
+def test_an_ordinary_model_refusal_ends_with_911(cfg, svc, monkeypatch):  # noqa: F811
+    from careagents import llm
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply=llm.REFUSAL_TEXT)
+    _queue(c, agent_id, "how are my labs?", "rf-1")
+    _work(cfg, svc, fake)
+    assert _answers(fake) == [beta.SAMPLE_FRAME + "\n\n" + llm.REFUSAL_TEXT
+                              + "\n\n" + beta.EMERGENCY_TRAILER]
+
+
+def test_a_model_answer_is_never_given_a_trailer(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply="The A1c was 7.2.")
+    _queue(c, agent_id, "how is my a1c?", "rf-2")
+    _work(cfg, svc, fake)
+    assert beta.EMERGENCY_TRAILER not in _answers(fake)[-1]
+
+
+def _frames(r):
+    import json
+    return [json.loads(line[len("data: "):])
+            for line in r.get_data(as_text=True).splitlines()
+            if line.startswith("data: ")]
+
+
+def test_a_failed_run_that_said_its_failure_is_not_said_twice(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """The worker's agent.error is the run's sentence; a stream read later
+    from any cursor adds no second one."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("synthetic provider outage")
+    monkeypatch.setattr("careagents.worker.llm.complete", _boom)
+    _queue(c, agent_id, "how are my labs?", "tw-1")
+    _work(cfg, svc, fake)
+    run_id = next(iter(fake.runs))
+    last = max(e["id"] for e in fake.events[run_id])
+    for after in (0, last):
+        r = c.get(f"/api/chat/runs/{run_id}/events",
+                  query_string={"agent_id": agent_id, "after": after})
+        errors_seen = [f for f in _frames(r) if f.get("type") == "error"]
+        assert len(errors_seen) == (1 if after == 0 else 0), errors_seen
+
+
+def test_the_pages_own_failure_line_is_the_trailer():
+    import re
+    m = re.search(r'addAgentText\("Connection hiccup — try that again\.'
+                  r'\\n\\n([^"]+)", null, "connection"\);', _chat_js())
+    assert m and m.group(1) == beta.EMERGENCY_TRAILER

@@ -551,7 +551,7 @@ def ask_to_reverify(deps: Deps, surface: dict, word: str | None
 #: How much of a text is read for crisis wording when a fixed sentence
 #: answers it. A crisis said only past this point is missed; a too-long
 #: text is still read up to here.
-_CRISIS_SCAN_CHARS = 4000
+CRISIS_SCAN_CHARS = 4000
 
 
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
@@ -573,7 +573,7 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
                             conversation_id, transport_block)
     if isinstance(body.get("reply"), str):
         body["reply"] = beta.emergency_first(
-            body["reply"], (text or "")[:_CRISIS_SCAN_CHARS])
+            body["reply"], (text or "")[:CRISIS_SCAN_CHARS])
     return body, status
 
 
@@ -644,7 +644,9 @@ def _inbound(deps: Deps, raw_handle: str, text: str,
                                         ctx["agent"]["id"])}, 200
     refused = transport_block(ctx) if transport_block else None
     if refused:
-        return {"reply": refused}, 200
+        # A transport's own refusal carries the 911 line too.
+        return {"reply": beta.with_911(
+            refused, (text or "")[:CRISIS_SCAN_CHARS])}, 200
     # A bare 1-6 answers the menu in HELP and the welcome. Mapped here,
     # before admission, so it is admitted and charged as the question.
     text = menu_question(text) or text
@@ -653,7 +655,7 @@ def _inbound(deps: Deps, raw_handle: str, text: str,
 
     def refusal(sentence: str) -> str:
         # Every refusal carries the 911 line (beta.with_911).
-        return beta.with_911(sentence, text[:_CRISIS_SCAN_CHARS])
+        return beta.with_911(sentence, text[:CRISIS_SCAN_CHARS])
 
     if len(text) > 2000:
         return {"error": "message must be 1-2000 characters",

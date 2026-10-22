@@ -722,7 +722,9 @@
     } catch (e) {
       if (typing.parentNode) typing.remove();
       if (refusalText) addAgentText(refusalText, null, "connection");
-      else addAgentText("Connection hiccup — try that again.", null, "connection");
+      // No server sentence reached the page, so it adds the 911 line itself
+      // (beta.EMERGENCY_TRAILER): this is all a hard outage shows.
+      else addAgentText("Connection hiccup — try that again.\n\nIf this is an emergency, call 911. Si es una emergencia, llame al 911.", null, "connection");
       showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();

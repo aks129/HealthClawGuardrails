@@ -24,6 +24,13 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, sample_framed, svc)
 from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
 
+
+def _pointer(origin: str) -> str:
+    """The real-records pointer as sent: a refusal, so it carries the 911
+    line (beta.with_911, #1017)."""
+    from careagents import beta
+    return beta.with_911(sendblue_surface.real_records_text(origin))
+
 CANARY = "QA906-OWED-ANSWER"
 
 
@@ -70,7 +77,7 @@ def test_a_move_to_real_records_mid_run_gets_the_app_pointer(
     for polled in polls:                              # every poll, at once
         assert polled.status_code == 200, polled.get_json()
         assert polled.get_json()["reply"] == (
-            sendblue_surface.real_records_text(cfg.origin))
+            _pointer(cfg.origin))
     assert asked == []
 
 
