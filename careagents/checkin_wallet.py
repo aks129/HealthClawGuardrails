@@ -141,10 +141,12 @@ def records_tenant(svc, account_id: str,
     it chose one. A real connection always wins.
 
     An account with a real-record connection the relay cannot answer from
-    (still waiting for its records, disconnected, or someone else's) is
-    `records_not_ready`: it is not offered the test patient, since the
-    route refuses any account with a real-record connection
-    (`has_real_connection`), and the two must agree (#1027 QA F1)."""
+    is told which kind, first match wins: one of its own still coming
+    (`records_not_ready`), its own disconnected (`records_disconnected`),
+    or only someone else's (`not_your_records`). None is offered the test
+    patient, since the route refuses any account with a real-record
+    connection (`has_real_connection`), and the two must agree (#1027 QA
+    F1)."""
     home = svc.list_home(account_id)
     me = {p["id"] for p in home["people"] if p["kind"] == "self"}
     mine = [c for c in home["connections"]
@@ -154,8 +156,14 @@ def records_tenant(svc, account_id: str,
         test = [c for c in mine if _is_test_patient(c)]
         if test_patient and test:
             return test[0]["tenant_id"], ""
-        if any(c["kind"] != "sample" for c in home["connections"]):
+        real = [c for c in home["connections"] if c["kind"] != "sample"]
+        own = [c for c in real if c["person_id"] in me]
+        if any(c["status"] != "revoked" for c in own):
             return None, "records_not_ready"
+        if own:
+            return None, "records_disconnected"
+        if real:
+            return None, "not_your_records"
         return None, ("sample_only" if mine else "no_records")
     if len(tenants) > 1:
         return None, "several_records"

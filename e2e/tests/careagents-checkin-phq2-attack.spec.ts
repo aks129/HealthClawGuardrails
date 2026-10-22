@@ -146,7 +146,8 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
       const item = wallet.locator('#wallet-items li[data-item=f]');
       await item.locator('.checkin-choice input[value=share]').check();
       await wallet.locator('#wallet-send').click();
-      const err = wallet.locator('#wallet-err');
+      // The review's own message, beside Send (#1030 QA).
+      const err = wallet.locator('#wallet-review-err');
       await expect(err).toBeVisible();
       await shot(wallet, 'finding2-bidi-error-sentence');
       const text = await err.textContent();
@@ -175,7 +176,9 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
       // purpose field is prefixed "The website says why:". Fixed behaviour:
       // the form's words carry a website attribution as purpose does.
       const attributed = await wallet.locator('#wallet-items li[data-item=f]')
-        .evaluate((li) => /website (says|asks)/i.test(li.textContent || ''));
+        // Or a "From the website" heading, which then stands for the lines
+        // under it (#1030 QA copy).
+        .evaluate((li) => /website (says|asks)|from the website/i.test(li.textContent || ''));
       expect(attributed, 'display text is shown unattributed').toBe(true);
     });
 
@@ -270,7 +273,7 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
     await item.locator('.checkin-choice input[value=share]').check();
     await wallet.locator('#wallet-send').click();
     // Nothing is sent in part: the person is told, and can choose Don't share.
-    await expect(wallet.locator('#wallet-err')).toContainText('Answer every question');
+    await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
     expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
     // No prototype was polluted in the wallet tab.
     expect(await wallet.evaluate(() => Object.getOwnPropertyNames(Object.prototype).filter(

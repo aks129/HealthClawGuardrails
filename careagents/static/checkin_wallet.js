@@ -34,7 +34,18 @@ const err = $("wallet-err");
 // A test can shorten it with ?wait=<ms>; nothing else reads the query.
 const WAIT_MS = Number(new URLSearchParams(location.search).get("wait")) || 20000;
 const fail = (msg) => { err.textContent = msg; err.hidden = false; };
-const clear = () => { err.hidden = true; };
+const clear = () => { err.hidden = true; $("wallet-review-err").hidden = true; };
+
+/* A problem with the review, said beside the Send button the person just
+   tapped, scrolled into view and focused (#1030 QA: at phone width the
+   top of the card is far off screen). */
+function reviewFail(msg) {
+  const box = $("wallet-review-err");
+  box.textContent = msg;
+  box.hidden = false;
+  box.scrollIntoView({ block: "center" });
+  box.focus({ preventScroll: true });
+}
 
 // --- sign-in, in place ----------------------------------------------------
 
@@ -212,7 +223,13 @@ function review(request, origin, matches) {
     if (theirs === null) title.textContent = itemHeading(m);
     else {
       title.classList.add("checkin-website-title");
-      title.textContent = `From the website: ${isolate(theirs, 80)}`;
+      const eyebrow = document.createElement("span");
+      eyebrow.className = "checkin-eyebrow";
+      eyebrow.textContent = "From the website";
+      const name = document.createElement("span");
+      name.className = "checkin-website-name";
+      name.textContent = isolate(theirs, 80);
+      title.append(eyebrow, name);
     }
     const what = document.createElement("ul");
     what.className = "checkin-item-what";
@@ -224,19 +241,32 @@ function review(request, origin, matches) {
     if (m.form) {
       // The form's display lines are the website's words, not ours: said
       // so, and set apart, as the purpose is (#1030 security F3).
+      // A heading of the website's own already says whose they are.
       if (m.form.displays.length) {
-        const says = document.createElement("p");
-        says.className = "checkin-website-says";
-        says.textContent = "The website asks:";
         what.classList.add("checkin-from-website");
-        li.append(title, says, what);
+        if (theirs === null) {
+          const says = document.createElement("p");
+          says.className = "checkin-website-says";
+          says.textContent = "The website asks:";
+          li.append(title, says, what);
+        } else li.append(title, what);
       } else li.append(title);
       li.append(formQuestions(m.form, i));
     } else li.append(title, what);
     if (!m.unsupported && (m.entries.length || m.form)) {
+      // The share choice, set apart from any answers above it so it does
+      // not read as one more question. `data-picked` says the person
+      // tapped it: "Don't share" is where it starts, not a choice made.
       const group = document.createElement("div");
       group.className = "checkin-choice";
       group.setAttribute("role", "radiogroup");
+      const ask = document.createElement("span");
+      ask.className = "checkin-choice-label";
+      ask.id = `choice-label-${i}`;
+      ask.textContent = m.form ? "Send your answers to the website?" : "Send this to the website?";
+      group.setAttribute("aria-labelledby", ask.id);
+      const seg = document.createElement("div");
+      seg.className = "checkin-seg";
       [["share", "Share"], ["decline", "Don't share"]].forEach(([value, label]) => {
         const lab = document.createElement("label");
         const input = document.createElement("input");
@@ -244,9 +274,11 @@ function review(request, origin, matches) {
         input.name = `choice-${i}`;
         input.value = value;
         input.checked = value === "decline";
+        input.addEventListener("click", () => { group.dataset.picked = "1"; });
         lab.append(input, ` ${label}`);
-        group.append(lab);
+        seg.append(lab);
       });
+      group.append(ask, seg);
       li.append(group);
     }
     list.append(li);
@@ -257,18 +289,29 @@ function review(request, origin, matches) {
       clear();
       const share = {};
       const answers = {};
-      let missing = null;
+      let problem = null;
       matches.forEach((m, i) => {
         const picked = list.querySelector(`input[name="choice-${i}"]:checked`);
-        if (!picked || picked.value !== "share") return;
+        const sharing = Boolean(picked) && picked.value === "share";
+        const given = m.form ? formAnswers(m.form, i) : {};
+        if (!sharing) {
+          // Answered, but never chose: ask, rather than drop the answers
+          // without a word (#1030 product decision).
+          const chose = picked && picked.closest(".checkin-choice").dataset.picked === "1";
+          if (m.form && Object.keys(given).length && !chose) {
+            problem = problem || `You answered the questions in "${isolate(itemHeading(m), 80)}" but chose Don't share. Choose Share to send your answers, or Don't share to leave them out.`;
+          }
+          return;
+        }
         share[m.item.id] = true;
         if (!m.form) return;
-        answers[m.item.id] = formAnswers(m.form, i);
-        if (Object.keys(answers[m.item.id]).length !== m.form.questions.length)
-          missing = missing || itemHeading(m);
+        answers[m.item.id] = given;
+        // A form is sent whole or not at all: say so rather than decline it.
+        if (Object.keys(given).length !== m.form.questions.length) {
+          problem = problem || `Answer every question in "${isolate(itemHeading(m), 80)}", or choose Don't share for it.`;
+        }
       });
-      // A form is sent whole or not at all: say so rather than decline it.
-      if (missing) return fail(`Answer every question in "${isolate(missing, 80)}", or choose Don't share for it.`);
+      if (problem) return reviewFail(problem);
       resolve({ kind: "send", share, answers });
     };
     $("wallet-decline-all").onclick = () => resolve({ kind: "declined-all" });
@@ -327,6 +370,8 @@ const NO_RECORDS = {
   busy: "Records are already being added to your account. Start check-in again in a moment.",
   // A real-record connection the relay cannot answer from yet (#1027 QA F1).
   records_not_ready: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
+  records_disconnected: "Your records are disconnected. Connect them again in CareAgents, then start check-in again.",
+  not_your_records: "Check-in shares your own records. Upload or connect your own records first.",
   has_records: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
 };
 

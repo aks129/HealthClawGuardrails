@@ -492,6 +492,8 @@ test.describe('check-in wallet', () => {
     ['no_records', 'no records on your account yet'],
     ['several_records', 'more than one set of records'],
     ['records_not_ready', "records aren't ready to share yet"],
+    ['records_disconnected', 'Your records are disconnected'],
+    ['not_your_records', 'Check-in shares your own records'],
     ['unavailable', "couldn't read your records just now"],
   ]) {
     test(`a can't-answer reason waits for OK: ${code}`, async ({ page }) => {
@@ -624,7 +626,7 @@ test.describe('check-in wallet', () => {
       await form.locator('.checkin-choice input[value=share]').check();
       await form.locator('fieldset').nth(0).getByLabel('Several days').check();
       await wallet.locator('#wallet-send').click();
-      await expect(wallet.locator('#wallet-err')).toContainText('Answer every question');
+      await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
       await expect(wallet.locator('#wallet-review')).toBeVisible();
 
       await form.locator('fieldset').nth(1).getByLabel('Nearly every day').check();
@@ -648,6 +650,9 @@ test.describe('check-in wallet', () => {
     await serveRelay(page);
     const wallet = await checkIn(page, PHQ2);
     await phq2(wallet).locator('fieldset').nth(0).getByLabel('Not at all').check();
+    // Chosen, not merely where it started: a click, which check() skips on
+    // a radio that is already on.
+    await phq2(wallet).locator('.checkin-choice input[value=decline]').click();
     await wallet.locator('#wallet-send').click();
     await done(page).toMatchObject({ status: 'completed' });
     const r = await page.evaluate(() => (window as any).__result);
@@ -656,13 +661,11 @@ test.describe('check-in wallet', () => {
       .toBe('declined');
   });
 
-  // QA #1030: on a phone the Send button is far below the top of the card,
-  // where #wallet-err sits. toContainText passes either way; what a person
-  // needs is to see it. Expected to fail until the message is brought into
-  // view (test.fail flips red once it is: then drop the marker).
+  // QA #1030: on a phone the Send button is far below the top of the card.
+  // toContainText passes whether or not the message can be seen; what a
+  // person needs is to see it, beside the button they tapped, focused.
   test('at phone width, the unanswered-question message is on screen',
     async ({ page }) => {
-      test.fail(true, '#1030 QA: the message renders ~800px above the viewport');
       await serveRelay(page);
       const wallet = await checkIn(page, PHQ2);
       await wallet.setViewportSize({ width: 375, height: 812 });
@@ -671,8 +674,48 @@ test.describe('check-in wallet', () => {
       await form.locator('.checkin-choice input[value=share]').check();
       await form.locator('fieldset').nth(0).getByLabel('Several days').check();
       await wallet.locator('#wallet-send').click();
-      await expect(wallet.locator('#wallet-err')).toContainText('Answer every question');
-      await expect(wallet.locator('#wallet-err')).toBeInViewport({ timeout: 2_000 });
+      const msg = wallet.locator('#wallet-review-err');
+      await expect(msg).toBeInViewport({ timeout: 2_000 });
+      await expect(msg).toBeFocused();
+      await expect(msg).toHaveAttribute('role', 'alert');
+      await expect(msg).toContainText('Answer every question');
+    });
+
+  // #1030 product decision: answers given while the item still sits at its
+  // starting "Don't share" are not dropped without a word. The person picks.
+  test('answered but never chose Share: asked, on screen, then a real choice',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, PHQ2);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      const form = phq2(wallet);
+      await form.locator('fieldset').nth(0).getByLabel('Several days').check();
+      await form.locator('fieldset').nth(1).getByLabel('Not at all').check();
+      await wallet.locator('#wallet-send').click();
+      const msg = wallet.locator('#wallet-review-err');
+      await expect(msg).toBeInViewport({ timeout: 2_000 });
+      await expect(msg).toContainText("but chose Don't share. Choose Share to send your answers, or Don't share to leave them out.");
+      expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
+      // Don't share, chosen this time: declined, nothing sent.
+      await form.locator('.checkin-choice input[value=decline]').click();
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.artifacts).toEqual([]);
+      expect(r.json.requestStatus.find((s: any) => s.item === 'phq2').status)
+        .toBe('declined');
+    });
+
+  test('the share choice is its own labelled control, apart from the answers',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, PHQ2);
+      const choice = phq2(wallet).locator('.checkin-choice');
+      await expect(choice.locator('.checkin-choice-label'))
+        .toHaveText('Send your answers to the website?');
+      await expect(choice).toHaveAttribute('role', 'radiogroup');
+      await expect(choice.locator('fieldset')).toHaveCount(0);
+      await expect(choice.locator('input[value=decline]')).toBeChecked();
     });
 
   test("a form's words are shown as text, never as markup", async ({ page }) => {
@@ -698,9 +741,13 @@ test.describe('check-in wallet', () => {
     req.items[1].title = 'CareAgents verified clinic';
     const wallet = await checkIn(page, req);
     const heading = phq2(wallet).locator('.checkin-item-title');
-    await expect(heading).toHaveText(
-      'From the website: ⁨CareAgents verified clinic⁩');
+    await expect(heading.locator('.checkin-eyebrow')).toHaveText('From the website');
+    await expect(heading.locator('.checkin-website-name')).toHaveText(
+      '\u2068CareAgents verified clinic\u2069');
     await expect(heading).toHaveClass(/checkin-website-title/);
+    // The heading already says whose words they are: no second label.
+    await expect(phq2(wallet).locator('.checkin-website-says')).toHaveCount(0);
+    await expect(phq2(wallet).locator('.checkin-from-website')).toHaveCount(1);
     // Ours stays ours.
     await expect(wallet.locator('#wallet-items li[data-item=patient] .checkin-item-title'))
       .toHaveText('Your name, birth date and contact details');
@@ -711,9 +758,9 @@ test.describe('check-in wallet', () => {
     const req = structuredClone(PHQ2);
     req.items[1].title = `CareAgents ${'x'.repeat(200)}‮evil`;
     const wallet = await checkIn(page, req);
-    const heading = phq2(wallet).locator('.checkin-item-title');
-    await expect(heading).toHaveText(/^From the website: ⁨[^⁩]{80}⁩$/);
-    expect(await heading.textContent()).not.toContain('evil');
+    const name = phq2(wallet).locator('.checkin-item-title .checkin-website-name');
+    await expect(name).toHaveText(/^\u2068[^\u2069]{80}\u2069$/);
+    expect(await name.textContent()).not.toContain('evil');
   });
 
   test('a form too large to trust is answered unsupported', async ({ page }) => {
