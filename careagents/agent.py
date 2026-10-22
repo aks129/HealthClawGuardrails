@@ -900,9 +900,10 @@ def _obs_loinc(resource: dict) -> str | None:
 
 
 def _obs_flag(resource: dict) -> str | None:
-    for i in resource.get("interpretation") or []:
-        for c in (i or {}).get("coding") or []:
-            if isinstance(c, dict) and c.get("system") == _INTERPRETATION:
+    # An unscored reading's interpretation is the feed's own, any JSON.
+    for i in labs_timeline._dicts(resource.get("interpretation")):
+        for c in labs_timeline._dicts(i.get("coding")):
+            if c.get("system") == _INTERPRETATION:
                 return c.get("code")
     return None
 

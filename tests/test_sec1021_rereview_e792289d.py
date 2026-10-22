@@ -2,7 +2,7 @@
 
 The malformed-component and canary sets in
 tests/test_sec1021_bp_component_exploits.py pass at e792289d. Two things
-remain, both pinned as strict xfail so a fix turns them green:
+remained, pinned as strict xfail at first and now fixed on the PR:
 
 1. `careagents/agent.py::_obs_flag` iterates `interpretation` unguarded.
    It runs on EVERY Observation in the `$interpret` bundle
@@ -52,9 +52,6 @@ def _obs(rid, code, interpretation):
     return res
 
 
-@pytest.mark.xfail(strict=True, raises=(TypeError, AttributeError), reason=(
-    "pre-existing: careagents/agent.py _obs_flag iterates a feed's "
-    "unscored `interpretation` without type guards"))
 @pytest.mark.parametrize("code", ["85354-9", "99999-9"])
 @pytest.mark.parametrize("shape", list(_SHAPES))
 def test_get_labs_survives_a_malformed_unscored_interpretation(
@@ -85,9 +82,6 @@ def test_a_scored_reading_with_a_malformed_interpretation_is_safe(
     json.loads(agent._execute_tool(chain.hc, TENANT, "get_labs", {}, []))
 
 
-@pytest.mark.xfail(strict=True, raises=OverflowError, reason=(
-    "#1021 r6/seed.py _stored_bp_date: a year-1 anchor underflows "
-    "datetime when the history is dated back from it"))
 def test_a_year_one_stored_bp_date_does_not_abort_the_seed(app):
     from models import db
     from r6.models import R6Resource

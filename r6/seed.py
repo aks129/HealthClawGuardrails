@@ -212,7 +212,12 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
         # over as the latest reading, so it is dated from that reading.
         anchor = _stored_bp_date(tenant_id)
         if anchor is not None:
-            history = {r['id']: r for r in _bp_series(anchor)}
+            try:
+                history = {r['id']: r for r in _bp_series(anchor)}
+            except OverflowError:
+                # A stored date too near year 1 to date back from: keep
+                # the history dated from now, as on a fresh tenant.
+                history = {}
             resources = [history.get(r.get('id'), r) for r in resources]
 
     patient_id = None
