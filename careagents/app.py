@@ -64,6 +64,9 @@ _AFTER_SIGN_IN = "after_sign_in"
 #: page parked for one sign-in never takes over a hub visit later (#1016).
 _AFTER_SIGN_IN_AT = "after_sign_in_at"
 _AFTER_SIGN_IN_TTL = 15 * 60
+#: One-shot: a parked page was dropped for its age, so the hub says why it
+#: opened instead (patient walk of #1016).
+_AFTER_SIGN_IN_STALE = "after_sign_in_stale"
 #: Longer than any page here; the cookie that carries it is small.
 _AFTER_SIGN_IN_MAX = 512
 
@@ -93,13 +96,24 @@ def _tapped_target(req) -> str | None:
     return _local_target(req.full_path.rstrip("?"))
 
 
+def _parked_state(sess) -> tuple[str | None, bool]:
+    """(the parked page if it is on this site and still fresh, whether a
+    page on this site was there but too old). Only age makes it "too old":
+    a missing or unusable time is no page at all, said nothing about."""
+    target = _local_target(sess.get(_AFTER_SIGN_IN))
+    at = sess.get(_AFTER_SIGN_IN_AT)
+    if (target is None or not isinstance(at, (int, float))
+            or isinstance(at, bool)):
+        return None, False
+    age = time.time() - at
+    if 0 <= age <= _AFTER_SIGN_IN_TTL:
+        return target, False
+    return None, age > _AFTER_SIGN_IN_TTL
+
+
 def _parked_target(sess) -> str | None:
     """The parked page if it is on this site and still fresh, else None."""
-    at = sess.get(_AFTER_SIGN_IN_AT)
-    if (not isinstance(at, (int, float)) or isinstance(at, bool)
-            or not 0 <= time.time() - at <= _AFTER_SIGN_IN_TTL):
-        return None
-    return _local_target(sess.get(_AFTER_SIGN_IN))
+    return _parked_state(sess)[0]
 
 
 #: What the hub says when HealthClaw cannot be reached to set up or
@@ -562,7 +576,7 @@ def create_app(config: Config | None = None,
         # and without it the person lands on the hub, not the request (#846).
         consent_req = session.get("consent_req")
         imessage_link = session.get("imessage_link")
-        after_sign_in = _parked_target(session)
+        after_sign_in, after_sign_in_stale = _parked_state(session)
         after_sign_in_at = session.get(_AFTER_SIGN_IN_AT)
         session.clear()
         session.permanent = True
@@ -578,6 +592,8 @@ def create_app(config: Config | None = None,
         if after_sign_in:
             session[_AFTER_SIGN_IN] = after_sign_in
             session[_AFTER_SIGN_IN_AT] = after_sign_in_at
+        elif after_sign_in_stale:
+            session[_AFTER_SIGN_IN_STALE] = True
 
     # --- pages ---------------------------------------------------------------
 
@@ -635,6 +651,10 @@ def create_app(config: Config | None = None,
                                         else ""),
                                imessage_pending=bool(
                                    session.get("imessage_link")),
+                               # A page tapped while signed out is waiting:
+                               # say so, and go straight there after the
+                               # code (patient walk of #1016).
+                               resume=_parked_target(session) is not None,
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
@@ -645,9 +665,12 @@ def create_app(config: Config | None = None,
         # below: fresh, it is followed once after the steps that come
         # first; when one of those wins it is dropped, so it never takes
         # over a later, unrelated visit to the hub.
-        after_sign_in = _parked_target(session)
+        after_sign_in, stale = _parked_state(session)
         session.pop(_AFTER_SIGN_IN, None)
         session.pop(_AFTER_SIGN_IN_AT, None)
+        # Dropped for its age, here or at sign-in: the hub says why it
+        # opened instead, once. Not when a step below wins.
+        stale = session.pop(_AFTER_SIGN_IN_STALE, None) is True or stale
         # A consent request that was waiting on sign-in resumes here, once.
         pending_req = session.pop("consent_req", None)
         if pending_req:
@@ -677,6 +700,7 @@ def create_app(config: Config | None = None,
             connectors.catalog(cfg, real_records=real_open), real_open)
         return render_template(
             "home.html", me=acct,
+            stale_link_note=stale,
             connect_next=_connect_next(acct, view, menu, real_open, paused),
             # A confirm-link session connects only after a code (#920 F1):
             # the card says so and goes to /auth (#934 QA F1).

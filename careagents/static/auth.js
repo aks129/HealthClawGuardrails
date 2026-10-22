@@ -30,6 +30,9 @@
   // Where adding (or skipping) a passkey returns to: the chat it was
   // asked from, set by the server only for this account's own chat.
   const back = $("auth-card").dataset.back || "";
+  // A page tapped while signed out is waiting (#1016): after the code, go
+  // straight there; the hub offers a passkey later.
+  const resume = $("auth-card").dataset.resume === "1";
 
   // Not drawn on the way to adding a first passkey (auth.html).
   if ($("passkey-btn")) $("passkey-btn").addEventListener("click", async () => {
@@ -142,6 +145,7 @@
         !window.PublicKeyCredential) {
       location.href = back || "/home"; return;
     }
+    if (resume) { location.href = back || "/home"; return; }
     show("step-passkey");
   });
   $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verify-btn").click(); });

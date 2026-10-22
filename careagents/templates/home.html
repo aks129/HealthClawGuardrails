@@ -20,6 +20,13 @@
 
   {% include "_in_app_hint.html" %}
 
+  {# A link tapped signed out, signed in after its 15 minutes: the page it
+     named was not opened, so say why the hub did (patient walk of #1016). #}
+  {% if stale_link_note %}
+  <p class="hub-notice" id="stale-link-note" role="status">
+    That link took a while, so we brought you here. Tap Chat to pick up where you left off.</p>
+  {% endif %}
+
   {# An operator paused this account (beta spec 4.6). One calm line; the
      record cards below say Paused and offer no Refresh or Upload. #}
   {% if paused %}

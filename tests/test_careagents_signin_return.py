@@ -222,3 +222,107 @@ def test_the_resume_keeps_the_path_percent_encoded(app, svc, monkeypatch):  # no
     _login(client, svc, monkeypatch, "pat@example.com")
     assert (client.get("/home").headers["Location"]
             == "/review/agent%3Fx/act-1?y=%2F")
+
+
+# --- what the person is told (patient walk of #1016, G7) ---------------------
+
+RESUME_LINE = ("You were signed out when the browser closed. Enter the code "
+               "we email you and we'll take you back to the page you opened.")
+STALE_NOTE = ("That link took a while, so we brought you here. Tap Chat to "
+              "pick up where you left off.")
+
+
+def _later(monkeypatch, seconds):
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + seconds)
+
+
+def test_auth_says_why_a_code_and_that_the_page_is_kept(app):  # noqa: F811
+    """Generic: never the page, its agent or its topic."""
+    client = app.test_client()
+    _tap_signed_out(client, "/chat?agent=agent_abc&chart=blood%20pressure")
+    page = client.get("/auth").get_data(as_text=True)
+    assert RESUME_LINE in page
+    assert 'data-resume="1"' in page
+    assert "blood" not in page and "agent_abc" not in page
+
+
+def test_auth_says_nothing_of_a_page_when_none_is_waiting(app):  # noqa: F811
+    page = app.test_client().get("/auth").get_data(as_text=True)
+    assert 'id="resume-why"' not in page and "data-resume" not in page
+
+
+def test_auth_says_nothing_of_a_page_gone_stale(app, monkeypatch):  # noqa: F811
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    _later(monkeypatch, 16 * 60)
+    page = client.get("/auth").get_data(as_text=True)
+    assert 'id="resume-why"' not in page and "data-resume" not in page
+
+
+def test_the_code_note_sits_above_send_a_new_code(app):  # noqa: F811
+    """"We sent a code moments ago… check your inbox" reads before the
+    button that asks for another."""
+    page = app.test_client().get("/auth").get_data(as_text=True)
+    assert page.index('id="code-note"') < page.index('id="resend-code"')
+
+
+def test_a_page_dropped_at_the_hub_as_stale_says_so_once(
+        app, svc, monkeypatch):  # noqa: F811
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    _login(client, svc, monkeypatch, "pat@example.com")
+    _later(monkeypatch, 16 * 60)
+    home = client.get("/home")
+    assert home.status_code == 200
+    assert STALE_NOTE in home.get_data(as_text=True)
+    # One-time.
+    assert STALE_NOTE not in client.get("/home").get_data(as_text=True)
+
+
+def test_a_page_gone_stale_before_the_code_says_so_at_the_hub(
+        app, svc, monkeypatch):  # noqa: F811
+    """Dropped at sign-in rather than at the hub: the note still shows."""
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    _later(monkeypatch, 16 * 60)
+    _login(client, svc, monkeypatch, "pat@example.com")
+    assert STALE_NOTE in client.get("/home").get_data(as_text=True)
+    assert STALE_NOTE not in client.get("/home").get_data(as_text=True)
+
+
+def test_a_fresh_page_or_none_shows_no_stale_note(app, svc, monkeypatch):  # noqa: F811
+    client = app.test_client()
+    _login(client, svc, monkeypatch, "pat@example.com")
+    assert STALE_NOTE not in client.get("/home").get_data(as_text=True)
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    _login(client, svc, monkeypatch, "pat2@example.com")
+    assert client.get("/home").status_code == 302
+    assert STALE_NOTE not in client.get("/home").get_data(as_text=True)
+
+
+def test_a_stale_page_dropped_when_imessage_wins_shows_no_note(
+        app, svc, monkeypatch):  # noqa: F811
+    """Dropped because another step came first, not for staleness."""
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    _later(monkeypatch, 16 * 60)
+    _login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        s["imessage_link"] = "link_123"
+    assert "/settings" not in client.get("/home").headers["Location"]
+    with client.session_transaction() as s:
+        s.pop("imessage_link", None)
+    assert STALE_NOTE not in client.get("/home").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("ts", [None, "0", True, float("nan")])
+def test_an_unusable_time_is_not_called_slow(app, svc, monkeypatch, ts):  # noqa: F811
+    client = app.test_client()
+    _login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        s[KEY] = "/settings"
+        if ts is not None:
+            s[AT] = ts
+    assert STALE_NOTE not in client.get("/home").get_data(as_text=True)
