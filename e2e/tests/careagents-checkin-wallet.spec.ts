@@ -706,6 +706,32 @@ test.describe('check-in wallet', () => {
         .toBe('declined');
     });
 
+  // QA #1030 (ab1d524a): the message above says "or Don't share to leave
+  // them out". By keyboard, Space on the Don't share that is already on
+  // fires no click, so `data-picked` never sets and Send stays blocked:
+  // the instructed action does nothing. Expected to fail until a keyboard
+  // choice counts (test.fail flips red then: drop the marker).
+  test('answered but never chose Share: Don\'t share chosen by keyboard unblocks Send',
+    async ({ page }) => {
+      test.fail(true, '#1030 QA: Space on the checked Don\'t share is not a choice');
+      await serveRelay(page);
+      const wallet = await checkIn(page, PHQ2);
+      const form = phq2(wallet);
+      await form.locator('fieldset').nth(0).getByLabel('Several days').check();
+      await form.locator('fieldset').nth(1).getByLabel('Not at all').check();
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-review-err')).toContainText("but chose Don't share");
+      await form.locator('.checkin-choice input[value=decline]').focus();
+      await wallet.keyboard.press('Space');
+      await wallet.locator('#wallet-send').focus();
+      await wallet.keyboard.press('Enter');
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.artifacts).toEqual([]);
+      expect(r.json.requestStatus.find((s: any) => s.item === 'phq2').status)
+        .toBe('declined');
+    });
+
   test('the share choice is its own labelled control, apart from the answers',
     async ({ page }) => {
       await serveRelay(page);
