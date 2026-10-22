@@ -323,9 +323,24 @@ def test_the_link_path_has_a_lower_size_ceiling(app, client, monkeypatch):
 
 def test_the_flag_still_guards_the_link(app, client, monkeypatch):
     monkeypatch.delenv('KTC_EXPORT_ENABLED')
+    monkeypatch.delenv('KTC_LINK_ENABLED', raising=False)
     f.seed(app, *_records())
     resp = link_export(client, None)
     assert resp.status_code == 404
+
+
+def test_the_link_switch_opens_links_and_not_the_bundle(
+        app, client, monkeypatch):
+    """KTC_LINK_ENABLED alone: ciphertext out, plaintext still home.
+
+    MUTATION: let link_enabled() open the bundle answer -> red."""
+    monkeypatch.delenv('KTC_EXPORT_ENABLED')
+    monkeypatch.setenv('KTC_LINK_ENABLED', 'true')
+    f.seed(app, *_records())
+    assert link_export(client, ktc_token(client)).status_code == 200
+    resp = f.export(client, ktc_token(client), ALL, profile='ktc')
+    assert resp.status_code == 404
+    assert resp.get_json() == {'error': 'ktc_export_disabled'}
 
 
 def test_audits_are_fixed_words_without_the_recipient(app, client):

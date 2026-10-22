@@ -26,8 +26,10 @@ it on, no deployment does. PR 3 replaces the body with
 
 `"deliver": "link"` is that body, added beside the bundle answer rather
 than replacing it: the bundle is encrypted and stored in r6/shl_links.py and
-the answer is `{link_id, shlink, exp}`, so the plaintext stays here. Two
-more gates apply to it, both checked before the token is spent:
+the answer is `{link_id, shlink, exp}`, so the plaintext stays here. It has
+its own switch, KTC_LINK_ENABLED, so a deployment can answer links while the
+bundle answer stays off. Two more gates apply to it, both checked before the
+token is spent:
 
 - Test data only. Every exported entry must carry the HTEST marker, unless
   KTC_LINK_REAL_RECORDS is set. CareAgents' text line (Sendblue) is not yet
@@ -86,6 +88,15 @@ def export_enabled():
     KTC_EXPORT_ENABLED says so: until PR 3 the answer is the plaintext
     bundle, which the design keeps inside the engine."""
     return os.environ.get('KTC_EXPORT_ENABLED', '').strip().lower() \
+        in TRUE_VALUES
+
+
+def link_enabled():
+    """Whether this engine answers `deliver: link` with the bundle answer
+    off. Off unless KTC_LINK_ENABLED says so. The ciphertext-only answer is
+    what the design lets out of the engine, so this is the switch a
+    deployment turns on; KTC_EXPORT_ENABLED also opens it."""
+    return os.environ.get('KTC_LINK_ENABLED', '').strip().lower() \
         in TRUE_VALUES
 
 
@@ -173,7 +184,10 @@ def export(tenant, body):
     - Over MAX_BUNDLE_BYTES: 413, no bundle, audited, token not spent.
     - One AuditEvent, from fixed words.
     """
-    if not export_enabled():
+    # The link answer has its own switch, so a deployment can offer links
+    # without the plaintext bundle answer.
+    if not (export_enabled()
+            or (body.get('deliver') == 'link' and link_enabled())):
         return _refuse(tenant, 404, 'export disabled',
                        {'error': 'ktc_export_disabled'})
 
