@@ -19,6 +19,7 @@ import json
 
 import pytest
 
+from careagents import personas
 from careagents.agent import _summarize_bundle
 
 RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
@@ -68,3 +69,24 @@ def test_hourly_reads_as_english():
     assert _timing({"timing": {"repeat": {
         "frequency": 1, "period": 1, "periodUnit": "h"}}}) == [
             "once an hour"]
+
+
+# --- QA round 2 on 805def91: fences a weakened bullet slipped past ------------
+#
+# Each clause below was deleted from SAFETY_CORE in a mutation run and the
+# dose-timing tests stayed green. "pharmacist or prescriber" is asserted
+# elsewhere, but it also occurs in "their pharmacist or prescriber can
+# answer", so the suggestion after the general sentence could go unnoticed.
+
+@pytest.mark.parametrize("clause", [
+    # The brief's requirement: the general sentence ends on a professional.
+    "and suggest confirming with their pharmacist or prescriber.",
+    # What the general sentence may cover, and nothing wider.
+    "general information about timing only: time of day, or with or "
+    "without food.",
+    # The fallback is an exception to "say only what the records show",
+    # not a new license.
+    "this is the one exception to saying only what the records show.",
+])
+def test_the_medication_rule_pins_its_remaining_fences(clause):
+    assert clause in " ".join(personas.SAFETY_CORE.split())
