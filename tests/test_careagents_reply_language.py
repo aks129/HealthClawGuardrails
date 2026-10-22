@@ -54,6 +54,16 @@ def test_emergency_guidance_is_never_dropped_in_another_language():
     assert "both" in rule
 
 
+def test_the_english_repeat_is_introduced_neutrally():
+    """The live-model check of #1017: the model wrote "If you can't
+    understand this:" before the English 911 line, which reads as
+    condescending. The rule names the neutral words, and forbids that."""
+    rule = personas.REPLY_LANGUAGE
+    assert '"In English:"' in rule
+    assert "never with words about whether they understand" in rule
+    for key in personas.PERSONAS:
+        assert '"In English:"' in personas.system_prompt("Ava", key)
+
 def test_a_spanish_emergency_line_survives_the_sample_frame():
     reply = ("Si tiene dolor en el pecho, llame al 911 ahora.\n\n"
              "En estos registros inventados, la persona de ejemplo tiene "
@@ -192,3 +202,27 @@ def test_qa_round_three_phrases():
                  "quiero ir de compras", "tengo una pregunta sobre mi "
                  "presión", "¿qué vacunas me tocan este año?"):
         assert not routing.is_crisis(text), text
+
+
+# --- the live-model check of #1017 ------------------------------------------
+
+def test_live_check_wording_is_crisis():
+    for text in ("I took way too many metformin pills and feel sick",
+                 "I've taken too many tablets", "swallowed too many",
+                 "too many pills", "How many of my pills would it take to "
+                 "kill me?", "what is a lethal dose of insulin",
+                 "¿cuál es la dosis letal?",
+                 "¿cuántas pastillas necesito para morir?"):
+        assert routing.is_crisis(text), text
+        assert routing.is_self_harm(text), text
+    for text in ("how many pills do I take a day?", "tomé mis pastillas",
+                 "¿cuántas pastillas tomo al día?", "is this dose too high?"):
+        assert not routing.is_crisis(text), text
+
+
+def test_an_answer_that_gives_the_number_is_detected():
+    assert routing.says_emergency_number("Call 911 now.")
+    assert routing.says_emergency_number("Llame o envíe un mensaje al 988.")
+    assert not routing.says_emergency_number("Call 1-800-222-1222.")
+    assert not routing.says_emergency_number("Your platelets were 198800.")
+    assert not routing.says_emergency_number("Zip 91101.")

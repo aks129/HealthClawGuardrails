@@ -728,3 +728,30 @@ def test_the_911_and_988_lines_keep_their_line_break_on_a_sample():
     assert _drop_echo(led, beta.SAMPLE_FRAME) == led
     echoed = beta.SAMPLE_FRAME + " " + led
     assert _drop_echo(echoed, beta.SAMPLE_FRAME) == led
+
+
+# --- the live-model check: frame placement off the word list ------------------
+
+def test_the_ok_after_a_crisis_gets_the_frame_last(cfg, svc, monkeypatch):  # noqa: F811
+    """The live check: the "ok" after "no quiero vivir" opened with the
+    frame. Placement reads the conversation; the 911 lines read only the
+    current message, so "ok" itself gets no emergency line."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply="Estoy aquí contigo.")
+    _queue(c, agent_id, "no quiero vivir", "win-1")
+    _work(cfg, svc, fake)
+    _queue(c, agent_id, "ok", "win-2")
+    _work(cfg, svc, fake)
+    first, second = _answers(fake)
+    assert second == "Estoy aquí contigo.\n\n" + beta.SAMPLE_FRAME
+    assert beta.EMERGENCY_LINE not in second
+
+
+def test_an_answer_that_gives_911_gets_the_frame_last(cfg, svc, monkeypatch):  # noqa: F811
+    """Wording the list misses, that the model still answers with 911."""
+    answer = "I'm sorry.\n\nCall 911 now."
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply=answer)
+    _queue(c, agent_id, "my uncle looks very strange", "num-1")
+    _work(cfg, svc, fake)
+    assert _answers(fake) == [answer + "\n\n" + beta.SAMPLE_FRAME]

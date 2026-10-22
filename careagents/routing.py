@@ -188,6 +188,11 @@ _SELF_HARM_PATTERNS = [
     r"(?:quiero|voy a) colgarme", r"me (?:quiero |voy a )?colgar\b",
     r"cort\w{0,8} las venas", r"me (?:hice|he hecho) dano", r"me lastime",
     r"no aguanto mas\b", r"(?:irme|ir) de este mundo",
+    # The live-model check of #1017: answered with 911 and 988 by the
+    # model, missed here.
+    r"(?:took|taken|swallowed) (?:way )?too many",
+    r"too many (?:pills|tablets|meds)", r"(?:would|will|to) kill me",
+    r"lethal dose", r"dosis letal", r"cuantas pastillas .{0,20}(?:matar|morir)",
 ]
 
 #: Medical emergencies, abuse and being unsafe.
@@ -338,6 +343,16 @@ def is_crisis(text: str) -> bool:
 def is_self_harm(text: str) -> bool:
     """Crisis wording about self-harm or wanting to die (988, not only 911)."""
     return bool(_SELF_HARM.search(_unaccented(normalize(text))))
+
+
+_EMERGENCY_NUMBER = re.compile(r"(?<![\d-])(?:911|988)(?![\d-])")
+
+
+def says_emergency_number(text: str) -> bool:
+    """Whether an answer gives 911 or 988 as numbers on their own. The
+    model knows a crisis the word list misses; where its answer gives the
+    number, nothing may be put ahead of it (worker._finish)."""
+    return bool(_EMERGENCY_NUMBER.search(text or ""))
 
 
 def classify(text: str) -> int:

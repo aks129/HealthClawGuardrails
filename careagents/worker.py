@@ -562,7 +562,8 @@ class RunWorker:
         lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
         if final_checkpoint is not None:
-            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
+            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead,
+                         crisis=routing.crisis_in_window(history))
             self._mark(context["account_id"], "first_answer")
             return
 
@@ -619,7 +620,8 @@ class RunWorker:
             calls = pending_checkpoint.get("tool_calls") or []
             if not calls:
                 self._finish(run, pending_checkpoint, emitted, heartbeat,
-                             lead=lead)
+                             lead=lead,
+                             crisis=routing.crisis_in_window(history))
                 self._mark(context["account_id"], "first_answer")
                 return
 
@@ -726,10 +728,12 @@ class RunWorker:
 
     def _finish(self, run: dict, checkpoint: dict,
                 emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat,
-                lead: str = "") -> None:
+                lead: str = "", crisis: bool = False) -> None:
         """`lead` opens a model's answer on its own line (the sample's
         SAMPLE_FRAME). The checkpoint keeps the model's text alone, so a
-        replayed run adds it once, here."""
+        replayed run adds it once, here. `crisis`: crisis wording in the
+        conversation loaded for this turn (routing.crisis_in_window), which
+        only decides where `lead` goes."""
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
@@ -756,11 +760,17 @@ class RunWorker:
             # open with it on a later turn. Say it once. A real answer
             # (no lead) is never touched.
             body = _drop_echo(text, lead) or "…"
-            if routing.is_crisis(_said(run)):
+            if (crisis or routing.is_crisis(said)
+                    or routing.says_emergency_number(
+                        body.replace(beta.EMERGENCY_TRAILER, ""))):
                 # Never ahead of the 911 guidance: the #1015 live run read
                 # "Nothing here is about you." before "call 911", and an
                 # answer that opens with a line of sympathy gives 911 only
                 # in its second paragraph (QA on #1017). At the end, always.
+                # Not only on the word list: on the conversation (the "ok"
+                # after a crisis), and wherever the answer itself gives 911
+                # or 988, as the model does for wording the list misses.
+                # The trailer every refusal ends with is not such a number.
                 text = f"{body}\n\n{lead}"
             else:
                 text = f"{lead}\n\n{body}"

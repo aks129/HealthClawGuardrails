@@ -35,8 +35,9 @@ REPLY_LANGUAGE = (
     "is, use English. In any language, never leave out or shorten the "
     "emergency guidance above: give it in their language, and if you are "
     "not sure they will understand it, in both their language and "
-    "English. Any wording these instructions tell you to use is said in "
-    "their language.")
+    "English. Introduce the English repeat only with \"In English:\", "
+    "never with words about whether they understand you. Any wording "
+    "these instructions tell you to use is said in their language.")
 
 SAFETY_CORE = """\
 Non-negotiable rules, regardless of your voice:
