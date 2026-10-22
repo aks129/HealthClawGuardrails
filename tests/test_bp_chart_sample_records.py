@@ -74,6 +74,25 @@ def test_the_footnote_claims_a_range_check_only_where_one_ran(
     assert "not compared with any range" in both
 
 
+def test_an_unflagged_point_on_a_ranged_series_gets_its_caption():
+    """QA #1021 R14: one grey (IND) dot on an otherwise scored series had
+    no caption, because only a wholly unscored series counted.
+
+    MUTATION: decide by series, not by point -> red."""
+    from careagents.app import (CHART_FOOTNOTE, CHART_FOOTNOTE_MIXED,
+                                CHART_FOOTNOTE_UNSCORED, _chart_footnote)
+
+    def series(*flags):
+        return {"readings": [{"flag": f} for f in flags]}
+
+    assert _chart_footnote([series("H", "N")]) == CHART_FOOTNOTE
+    assert _chart_footnote([series("H", "IND")]) == CHART_FOOTNOTE_MIXED
+    assert _chart_footnote([series("IND"), series("N")]) == \
+        CHART_FOOTNOTE_MIXED
+    assert _chart_footnote([series("IND", "IND")]) == CHART_FOOTNOTE_UNSCORED
+    assert _chart_footnote([]) == CHART_FOOTNOTE
+
+
 def test_the_brief_still_lists_every_sample_lab_beside_the_bp_history():
     """QA #1021: the brief's Recent labs is capped at ten readings, newest
     first. The BP history must not push another test off it."""

@@ -1263,12 +1263,19 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # The engine's note gives the check's reason, and for a blood
             # pressure that reason is "carried no number" beside a reading
             # of 138/88: the readings above say it better.
+            # Counted as the rows are, one per test, not per reading.
+            pair = dict(zip(consumer["unevaluated_analytes"],
+                            consumer["unevaluated_codes"]))
             out["consumer_summary"] = {
-                k: v for k, v in out["consumer_summary"].items()
-                if k != "unevaluated_note"}
+                **{k: v for k, v in out["consumer_summary"].items()
+                   if k != "unevaluated_note"},
+                "unevaluated_count": len(not_evaluated),
+                "unevaluated_analytes": [r["analyte"] for r in not_evaluated],
+                "unevaluated_codes": [pair[r["analyte"]]
+                                      for r in not_evaluated]}
             out["note"] =((out["note"] + " ") if out.get("note") else "") + (
                 "This lab answer is INCOMPLETE: "
-                f"{len(not_evaluated)} reading(s) in not_evaluated were not "
+                f"{len(not_evaluated)} test(s) in not_evaluated were not "
                 "scored against a reference range. Zero flagged results here "
                 "means nothing was SCORED as abnormal, not that nothing is "
                 "abnormal. Each not_evaluated reading is that test's latest; "

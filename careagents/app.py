@@ -153,10 +153,10 @@ CHART_FOOTNOTE_MIXED = (CHART_FOOTNOTE + " Readings shown in grey were not "
 
 
 def _chart_footnote(series: list[dict]) -> str:
-    """The footnote that is true of these series: a series is scored when
-    any reading carries the engine's flag rather than IND."""
-    scored = [any(r.get("flag") != "IND" for r in s["readings"])
-              for s in series]
+    """The footnote that is true of these points: one is scored when it
+    carries the engine's flag rather than IND. Decided per point, not per
+    series, so a lone grey dot on a ranged series is captioned too."""
+    scored = [r.get("flag") != "IND" for s in series for r in s["readings"]]
     if scored and not any(scored):
         return CHART_FOOTNOTE_UNSCORED
     return CHART_FOOTNOTE if all(scored) else CHART_FOOTNOTE_MIXED

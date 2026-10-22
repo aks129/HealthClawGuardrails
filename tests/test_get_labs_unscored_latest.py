@@ -51,3 +51,14 @@ def test_get_labs_on_the_sample_lists_blood_pressure_once(cfg, svc,  # noqa: F81
     [bp] = [r for r in rows if r["analyte"] == "Blood pressure"]
     assert bp["value"] == "138/88"
     assert bp["earlier_readings"] == 6
+
+    # QA #1021: the summary beside the rows counted readings (8, with seven
+    # "Blood pressure" names) while the note counted tests. One count now.
+    summary = out["consumer_summary"]
+    assert summary["unevaluated_count"] == len(rows) == 2
+    assert summary["unevaluated_analytes"] == [r["analyte"] for r in rows]
+    assert len(summary["unevaluated_codes"]) == len(rows)
+    assert "2 test(s) in not_evaluated" in out["note"]
+    # R9: the counted earlier readings must not become a direction.
+    assert ("earlier_readings are counted, not listed, so give no "
+            "direction from them") in out["note"]
