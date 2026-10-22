@@ -103,8 +103,48 @@ def test_ordinary_spanish_is_not_a_crisis():
                  "tengo una pregunta sobre mi presion",
                  "¿cuándo fue mi último análisis de sangre?",
                  "hola, gracias", "quiero ver mis vacunas",
-                 "tomé mi pastilla de la presión"):
+                 "tomé mi pastilla de la presión",
+                 # Security review of #1017: near misses of the broad stems.
+                 "la app no responde", "el botón no responde",
+                 "no estoy seguro de mi dosis",
+                 "no estoy segura si tomé la pastilla",
+                 "¿cómo respirar mejor?", "rayos x de pecho",
+                 "mis pastillas de la presión",
+                 "quiero ver mis análisis de sangre", "¿qué es la urea?",
+                 "¿cuándo es mi próxima cita?",
+                 "me duele la cabeza un poco"):
         assert not routing.is_crisis(text), text
+
+
+# --- normalisation and English gaps found in the same review ---------------
+
+def test_whitespace_runs_do_not_split_a_crisis_phrase():
+    for text in ("chest\tpain", "chest\n\npain", "chest   pain",
+                 "no puedo\nrespirar", "dolor  en el\tpecho"):
+        assert routing.is_crisis(text), repr(text)
+    assert routing.normalize("how do i\tconnect\n my  records") == (
+        "how do i connect my records")
+
+
+def test_every_apostrophe_reads_as_one():
+    for text in ("can’t breathe", "canʼt breathe",
+                 "donʼt want to live"):
+        assert routing.is_crisis(text), text
+
+
+def test_marks_inside_a_word_do_not_split_it():
+    for text in ("sui͏cide", "sui️cide", "sui⃝cide",
+                 "suícide", "sui\U000e0100cide"):
+        assert routing.is_crisis(text), repr(text)
+
+
+def test_english_fainting_and_anaphylaxis_are_crisis():
+    for text in ("I think I'm going to pass out", "keeps passing out",
+                 "he passes out", "anaphylaxis", "anaphylactic shock",
+                 "my throat is closing", "throat swelling", "I can't swallow",
+                 "I cannot swallow"):
+        assert routing.is_crisis(text), text
+        assert routing.classify(text) == routing.TIER_SONNET, text
 
 
 def test_a_spanish_crisis_keeps_the_next_ok_on_sonnet():

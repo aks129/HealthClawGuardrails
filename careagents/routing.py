@@ -137,6 +137,7 @@ Anything else, or if unsure, reply with exactly: {HAIKU_PASS}
 def haiku_passed(text: str) -> bool:
     """Did Haiku hand the question on (HAIKU_PASS)? Normalised both sides,
     so a curly apostrophe is still a pass."""
+    # Exact English: safe only because Spanish never reaches Haiku (classify).
     return normalize(HAIKU_PASS) in normalize(text)
 
 
@@ -158,16 +159,39 @@ _CRISIS = re.compile(r"|".join([
     r"self.?harm", r"hurt(?:ing)? my ?self", r"cut(?:ting)? my ?self",
     r"overdos", r"\bod\b", r"can'?t breathe", r"cannot breathe",
     r"can not breathe", r"chest pain", r"heart attack", r"stroke",
-    r"seizure", r"unconscious", r"passed out", r"faint", r"bleeding",
+    r"seizure", r"unconscious", r"passed out", r"pass(?:es|ing)? out",
+    r"faint", r"bleeding", r"anaphyla", r"throat (?:is )?(?:closing|swelling)",
+    r"can'?t swallow", r"cannot swallow", r"can not swallow",
     r"911", r"988", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
     r"abuse", r"\bunsafe\b",
-    # Spanish, written without accents: is_crisis matches the text with its
-    # accents taken off, so "convulsión" and "convulsion" both count.
-    # "suicid" above already covers suicidio and suicida.
-    r"no puedo respirar", r"dolor (?:en el|de|del) pecho", r"ambulancia",
-    r"desmay", r"sangrado", r"quiero morir", r"matarme",
-    r"me quiero matar", r"sobredosis", r"tome demasiad", r"convulsi",
-    r"derrame", r"ataque al corazon", r"infarto",
+    # Spanish (and Spanglish), written without accents: is_crisis matches
+    # the text with its accents taken off, so "convulsión" and "convulsion"
+    # both count. "suicid" above already covers suicidio and suicida. Broad
+    # stems (morir, urgen) are deliberate: a false positive costs one
+    # Sonnet call, a miss puts the next "ok" after a crisis on Haiku.
+    # Security review of #1017 checked these against ordinary Spanish.
+    r"dolor (?:en el|de|del) pecho", r"ambulancia", r"desmay", r"sangrado",
+    r"sobredosis", r"tome demasiad", r"convulsi", r"derrame", r"infarto",
+    r"morir", r"muriendo", r"me muero", r"no quiero vivir",
+    r"quitarme la vida", r"acabar con (?:mi vida|todo)", r"terminar con todo",
+    r"hacerme dano", r"lastimarme", r"cortarme", r"me corto",
+    r"matar(?:me|se)", r"(?:quiero|kiero|voy a) matar",
+    r"(?:no puedo|can.?t|cannot|cuesta|dificultad para|trabajo para) respirar",
+    r"no puedo breath", r"falta (?:el |de )?aire", r"me ahog",
+    r"perd\w* el conocimiento", r"inconscien",
+    r"no (?:responde|despierta|reacciona) (?:y|ni|cuando|aunque|al)\b",
+    r"(?:no|ni) (?:se )?despierta",
+    r"sangrando", r"sangro", r"mucha sangre", r"perdiendo sangre",
+    r"no (?:siento|puedo mover) (?:el|la|mi) (?:brazo|pierna|cara|mano)",
+    r"mitad del cuerpo", r"cara caida", r"cayo la cara", r"boca torcida",
+    r"no puede hablar", r"habla arrastrada", r"embolia", r"\bictus\b",
+    r"(?:dolor|duele|presion|opresion|aprieta)\w*.{0,20}pecho",
+    r"pecho.{0,10}(?:hurts|duele|aprieta)", r"chest duele",
+    r"ataque (?:al corazon|cardiac)", r"paro cardiac", r"epilep",
+    r"(?:todas|muchas|un frasco de) (?:las |mis )?pastillas",
+    r"urgen", r"abus", r"me pega", r"violencia", r"maltrat",
+    r"no (?:estoy|me siento) segur[oa] (?:en|aqui|con)",
+    r"segur[oa] en (?:mi )?casa", r"anafila", r"cierra la garganta",
 ]))
 
 #: Whole messages made only of these words are small talk.
@@ -215,24 +239,44 @@ _TEMPLATES = re.compile(r"|".join(f"(?:{t})" for t in [
 ]))
 
 
+#: Apostrophes read as ': the curly one and the modifier letter (U+02BC),
+#: so "canʼt breathe" is "can't breathe".
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u02bc": "'"})
+
+
 def normalize(text: str) -> str:
-    """NFKC, invisible format characters removed, casefolded.
+    """NFKC, invisible format characters removed, casefolded, whitespace
+    runs collapsed to one space.
 
     NFKC folds fullwidth and other compatibility letters to ASCII, and the
     format characters (zero-width space, joiners, bidi marks) are what split
-    a word so a scan misses it. Anything still not ASCII afterwards (a
+    a word so a scan misses it. A tab or a line break between two words
+    splits a phrase the same way. Anything still not ASCII afterwards (a
     Cyrillic er that looks like p, an emoji) is left for classify to
     refuse."""
     t = unicodedata.normalize("NFKC", text or "")
     t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf")
-    return t.replace("’", "'").casefold().strip()
+    t = re.sub(r"\s+", " ", t.translate(_APOSTROPHES))
+    return t.casefold().strip()
+
+
+#: Marks that sit invisibly inside a word: the combining grapheme joiner,
+#: variation selectors and zero-width characters. Most are category Mn or
+#: Cf already; listed so none can split a crisis word whatever its category.
+_INVISIBLE = frozenset(
+    ["\u034f", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"]
+    + [chr(c) for c in range(0xFE00, 0xFE10)]
+    + [chr(c) for c in range(0xE0100, 0xE01F0)])
 
 
 def _unaccented(text: str) -> str:
-    """`text` with combining accents taken off: "desmayé" reads "desmaye".
-    For crisis matching only; classify still refuses non-ASCII text."""
+    """`text` with accents and other marks taken off: "desmayé" reads
+    "desmaye", and a combining mark or enclosing circle inside "suicide"
+    no longer splits it. For crisis matching only; classify still refuses
+    non-ASCII text."""
     return "".join(ch for ch in unicodedata.normalize("NFKD", text)
-                   if not unicodedata.combining(ch))
+                   if unicodedata.category(ch) not in ("Mn", "Me")
+                   and ch not in _INVISIBLE)
 
 
 def is_crisis(text: str) -> bool:
