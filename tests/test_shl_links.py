@@ -366,3 +366,46 @@ def test_issue_clears_expired_rows(app, monkeypatch):
         shl_links.issue('t1', b'{}', 'x', now=1000 + 7200)
         db.session.commit()
         assert shl_links.ShlLink.query.count() == 1
+
+
+# --- the shipped synthetic test patient, by both ways in ----------------------
+
+def _shipped_patient():
+    from pathlib import Path
+    fixture = (Path(__file__).resolve().parents[1] / 'careagents'
+               / 'checkin' / 'us_core_test_patient.json')
+    return json.loads(fixture.read_text(encoding='utf-8'))
+
+
+def _link_for_test_patient(client):
+    resp = link_export(client, ktc_token(client),
+                       patient_id='checkin-test-patient')
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    _, key = rx_genie_parse(body['shlink'])
+    got = client.get(f'/shl/{body["link_id"]}')
+    bundle = json.loads(rx_genie_decrypt(key, got.get_data(as_text=True)))
+    return {e['resource']['resourceType'] for e in bundle['entry']}
+
+
+def test_the_shipped_test_patient_seeded_by_script_makes_a_link(app, client):
+    """scripts/seed_demo_tenant.py --bundle-file ...us_core_test_patient.json
+    stores it with r6.seed.seed_demo_data; its HTEST marker passes the gate."""
+    from r6.seed import seed_demo_data
+    with app.app_context():
+        seed_demo_data(f.TENANT, resources=[
+            e['resource'] for e in _shipped_patient()['entry']])
+    assert _link_for_test_patient(client) == set(ALL) | {'Organization'}
+
+
+def test_the_shipped_test_patient_uploaded_makes_a_link(app, client):
+    """CareAgents' file upload (careagents/healthclaw.py ingest_bundle) goes
+    through /internal/ingest-bundle; the marker survives it too."""
+    resp = client.post(
+        '/r6/fhir/internal/ingest-bundle',
+        data=json.dumps({'bundle': _shipped_patient()}),
+        headers={'X-Tenant-Id': f.TENANT, 'Content-Type': 'application/json',
+                 'X-Internal-Secret': f.MINT_SECRET})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.get_json()['failed'] == 0
+    assert 'Patient' in _link_for_test_patient(client)
