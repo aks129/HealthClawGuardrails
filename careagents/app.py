@@ -59,6 +59,11 @@ logger = logging.getLogger(__name__)
 _VIA_LINK = "via_link"
 #: What the hub says when HealthClaw cannot be reached to set up or
 #: refresh records: a sentence and what to do, never "service unavailable".
+#: The burst limit's sentence. chat.js shows its own copy (PACE_TEXT) for
+#: a 429 that carries no message; this one is sent only when crisis wording
+#: needs the emergency line ahead of it. Pinned equal by a test.
+PACE_TEXT = "You've hit the pace limit for now \u2014 give it a few minutes."
+
 RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
                      "Please try again in a minute.")
 #: What a link session is told when it reaches for more than the sample.
@@ -2380,17 +2385,29 @@ def create_app(config: Config | None = None,
         WORKERS_NOT_READY: "run_workers_unavailable",
     }
 
-    def _refuse_turn_without_workers(state: str):
+    def _refuse_turn_without_workers(state: str, text: str = ""):
         """The 503 body for a chat turn no worker can be promised to run.
 
         The patient-facing sentence is the same in every failure state,
         because it is true in all of them. Only the machine-readable code
-        differs.
+        differs. Crisis wording gets the emergency line first, flagged so
+        chat.js shows it instead of retrying (_with_emergency).
         """
-        return jsonify({
+        return jsonify(_with_emergency({
             "error": _REFUSAL_CODES.get(state, "run_workers_unavailable"),
             "message": "Chat is temporarily unavailable. Try again soon.",
-        }), 503
+        }, text)), 503
+
+    def _with_emergency(body: dict, text: str) -> dict:
+        """`body` with its sentence led by beta.emergency_first and marked
+        `emergency` when `text` reads as a crisis; `body` unchanged
+        otherwise. The sentence defaults to the pace sentence chat.js shows
+        for a 429 that carries none."""
+        sentence = body.get("message") or PACE_TEXT
+        led = beta.emergency_first(sentence, text)
+        if led == sentence:
+            return body
+        return {**body, "message": led, "emergency": True}
 
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
                     account_id: str | None = None):
@@ -2494,10 +2511,11 @@ def create_app(config: Config | None = None,
         if workers != WORKERS_READY:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.ENGINE_UNAVAILABLE)
-            return _refuse_turn_without_workers(workers)
+            return _refuse_turn_without_workers(workers, text)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
-            return jsonify({"error": "rate_limited"}), 429
+            return jsonify(_with_emergency({"error": "rate_limited"},
+                                           text)), 429
         # A turn the worker will refuse (paused, or terms not accepted; beta
         # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
         # a model, so the day's allowance does not stop it here.

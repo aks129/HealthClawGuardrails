@@ -668,6 +668,18 @@
               addLimitFeedback();
             return;
           }
+          // A refusal of crisis wording carries the 911 line (app.py,
+          // _with_emergency): say it now rather than retrying into
+          // "Connection hiccup", which would never show it.
+          if (resp.status === 503) {
+            const refusal = await resp.clone().json().catch(() => ({}));
+            if (refusal && refusal.emergency === true
+                && typeof refusal.message === "string") {
+              typing.remove();
+              addAgentText(refusal.message);
+              return;
+            }
+          }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
           const responseRunId = resp.headers.get("X-CareAgents-Run-ID");
           if (responseRunId) state.runId = responseRunId;

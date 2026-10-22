@@ -541,6 +541,12 @@ def ask_to_reverify(deps: Deps, surface: dict, word: str | None
     return sign_in_reply(deps, handle, word)
 
 
+#: How much of a text is read for crisis wording when a fixed sentence
+#: answers it. A crisis said only past this point is missed; a too-long
+#: text is still read up to here.
+_CRISIS_SCAN_CHARS = 4000
+
+
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
                    request_id: str | None = None,
                    conversation_id: str | None = None,
@@ -549,7 +555,24 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     """One inbound text, from any transport. See the module docstring.
 
     `transport_block(ctx)` lets a transport refuse a turn for its own
-    reasons: a sentence answered instead, and no run is queued."""
+    reasons: a sentence answered instead, and no run is queued.
+
+    Every fixed sentence sent back (the day's limit, busy, unavailable, too
+    long, a sign-in link, a refusal) leads with beta.emergency_first's
+    911 line when the text reads as a crisis. Silence stays silence: an
+    opted-out number gets no reply at all."""
+    body, status = _inbound(deps, raw_handle, text, request_id,
+                            conversation_id, transport_block)
+    if isinstance(body.get("reply"), str):
+        body["reply"] = beta.emergency_first(
+            body["reply"], (text or "")[:_CRISIS_SCAN_CHARS])
+    return body, status
+
+
+def _inbound(deps: Deps, raw_handle: str, text: str,
+             request_id: str | None, conversation_id: str | None,
+             transport_block: Callable[[dict], str | None] | None,
+             ) -> tuple[dict, int]:
     svc = deps.svc
     raw = str(raw_handle or "").strip()
     if not raw:
@@ -629,8 +652,7 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
         return {"reply": busy_text(deps.burst_window_seconds)}, 200
     blocked = deps.admission_block(surface["account_id"], ctx)
     if blocked:
-        # The day's limit, led by the emergency line for crisis wording.
-        return {"reply": beta.emergency_first(blocked, text)}, 200
+        return {"reply": blocked}, 200
     try:
         run = deps.queue_turn(ctx, text, request_id, conversation_id)
     except deps.queue_error:

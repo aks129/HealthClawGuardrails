@@ -218,3 +218,171 @@ def test_a_failed_turn_leads_with_911_for_a_crisis(
                    if e["type"] == "agent.error"]
     assert errors_said == [expected]
     assert _answers(fake) == [expected]
+
+
+# --- every other fixed reply: busy, unavailable, too long, workers down ------
+#
+# Round two on #1017: no fixed reply to a crisis message may lack the 911
+# line. A text surface's replies all pass through imessage.handle_inbound,
+# which leads any reply with it; the web's burst 429 and workers-down 503
+# carry it in `message`, and chat.js shows a flagged 503 instead of
+# retrying into "Connection hiccup".
+
+CRISIS = ("me duele el pecho", "quiero morir")
+
+
+def _lead(said):
+    return beta.emergency_first("", said)[:-2]
+
+
+@pytest.mark.parametrize("said", CRISIS)
+def test_text_busy_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F811
+    from careagents import imessage
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    monkeypatch.setattr(cfg, "chat_turns_per_window", 1)
+    assert _inbound(c, PHONE, "one").status_code == 202
+    r = _inbound(c, PHONE, said)
+    assert r.status_code == 200
+    assert r.get_json() == {"reply": _lead(said) + "\n\n"
+                            + imessage.busy_text(cfg.chat_window_seconds)}
+
+
+@pytest.mark.parametrize("said", CRISIS)
+def test_text_without_workers_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F811
+    from careagents import imessage
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    deps = app.extensions["careagents_imessage"]
+    monkeypatch.setattr(deps, "workers_ready", lambda: False)
+    r = _inbound(c, PHONE, said)
+    assert r.status_code == 503
+    assert r.get_json()["reply"] == (_lead(said) + "\n\n"
+                                     + imessage.UNAVAILABLE_TEXT)
+
+
+@pytest.mark.parametrize("said", CRISIS)
+def test_text_queue_down_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F811
+    from careagents import imessage
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    deps = app.extensions["careagents_imessage"]
+
+    def _down(*_a, **_k):
+        raise deps.queue_error("synthetic queue outage")
+    monkeypatch.setattr(deps, "queue_turn", _down)
+    r = _inbound(c, PHONE, said)
+    assert r.status_code == 503
+    assert r.get_json()["reply"] == (_lead(said) + "\n\n"
+                                     + imessage.UNAVAILABLE_TEXT)
+
+
+@pytest.mark.parametrize("said", CRISIS)
+def test_text_too_long_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F811
+    from careagents import imessage
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    r = _inbound(c, PHONE, said + " " + "x" * 2100)
+    assert r.status_code == 400
+    assert r.get_json()["reply"] == (_lead(said) + "\n\n"
+                                     + imessage.TOO_LONG_TEXT)
+
+
+def test_text_ordinary_replies_are_unchanged(cfg, svc, monkeypatch):  # noqa: F811
+    from careagents import imessage
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    assert _inbound(c, PHONE, "x" * 2100).get_json() == {
+        "error": "message must be 1-2000 characters",
+        "reply": imessage.TOO_LONG_TEXT}
+    deps = app.extensions["careagents_imessage"]
+    monkeypatch.setattr(deps, "workers_ready", lambda: False)
+    assert _inbound(c, PHONE, "hi").get_json() == {
+        "error": "run_workers_unavailable",
+        "reply": imessage.UNAVAILABLE_TEXT}
+
+
+def test_a_stranger_in_crisis_gets_911_with_the_sign_in_link(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+    reply = _inbound(c, "+15550100777", "no puedo respirar").get_json()[
+        "reply"]
+    assert reply.startswith(beta.EMERGENCY_LINE + "\n\n")
+    assert "/link?t=" in reply
+
+
+def test_an_opted_out_number_stays_silent_even_in_crisis(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+    stranger = "+15550100778"
+    _inbound(c, stranger, "STOP")
+    r = _inbound(c, stranger, "chest pain")
+    assert r.status_code == 200 and r.get_json() == {}
+
+
+@pytest.mark.parametrize("said", CRISIS)
+def test_web_burst_limit_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F811
+    from careagents.app import PACE_TEXT
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(cfg, "chat_turns_per_window", 1)
+    _queue(c, agent_id, "hi", "b-1")
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": said,
+                                  "request_id": "b-2"})
+    assert r.status_code == 429
+    assert r.get_json() == {"error": "rate_limited", "emergency": True,
+                            "message": _lead(said) + "\n\n" + PACE_TEXT}
+
+
+def test_web_burst_limit_without_a_crisis_is_unchanged(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(cfg, "chat_turns_per_window", 1)
+    _queue(c, agent_id, "hi", "b-3")
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": "hi",
+                                  "request_id": "b-4"})
+    assert r.status_code == 429 and r.get_json() == {"error": "rate_limited"}
+
+
+@pytest.mark.parametrize("said,lead", (
+    ("me duele el pecho", True), ("quiero morir", True), ("hi", False)))
+def test_web_without_workers(cfg, svc, monkeypatch, said, lead):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    fake.worker_available = False
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": said,
+                                  "request_id": "w-down"})
+    assert r.status_code == 503
+    plain = {"error": "run_workers_unavailable",
+             "message": "Chat is temporarily unavailable. Try again soon."}
+    if lead:
+        assert r.get_json() == {**plain, "emergency": True, "message": (
+            _lead(said) + "\n\nChat is temporarily unavailable. Try again "
+            "soon.")}
+    else:
+        assert r.get_json() == plain
+    assert fake.runs == {}
+
+
+def _chat_js():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+            / "static" / "chat.js").read_text(encoding="utf-8")
+
+
+def test_the_pace_sentence_matches_the_page():
+    import re
+    from careagents.app import PACE_TEXT
+    m = re.search(r'const PACE_TEXT = "([^"]+)";', _chat_js())
+    assert m and m.group(1) == PACE_TEXT
+
+
+def test_the_page_shows_a_flagged_503_instead_of_retrying():
+    """The 503 branch sits inside the streaming loop, past the reach of a
+    node harness, so its source is pinned, as the 429 branch's is."""
+    src = _chat_js()
+    branch = src.split("if (resp.status === 503) {", 1)[1].split(
+        "if (!resp.ok", 1)[0]
+    assert "refusal.emergency === true" in branch
+    assert "addAgentText(refusal.message);" in branch
+    assert "return;" in branch
+    assert src.index("if (resp.status === 503) {") < src.index(
+        'throw new Error("event stream unavailable")')
