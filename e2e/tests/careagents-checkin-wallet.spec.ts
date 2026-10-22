@@ -656,6 +656,25 @@ test.describe('check-in wallet', () => {
       .toBe('declined');
   });
 
+  // QA #1030: on a phone the Send button is far below the top of the card,
+  // where #wallet-err sits. toContainText passes either way; what a person
+  // needs is to see it. Expected to fail until the message is brought into
+  // view (test.fail flips red once it is: then drop the marker).
+  test('at phone width, the unanswered-question message is on screen',
+    async ({ page }) => {
+      test.fail(true, '#1030 QA: the message renders ~800px above the viewport');
+      await serveRelay(page);
+      const wallet = await checkIn(page, PHQ2);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      const form = phq2(wallet);
+      await form.locator('.checkin-choice input[value=share]').check();
+      await form.locator('fieldset').nth(0).getByLabel('Several days').check();
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-err')).toContainText('Answer every question');
+      await expect(wallet.locator('#wallet-err')).toBeInViewport({ timeout: 2_000 });
+    });
+
   test("a form's words are shown as text, never as markup", async ({ page }) => {
     await serveRelay(page);
     const req = structuredClone(PHQ2);
