@@ -155,6 +155,102 @@ def test_the_safety_core_says_how_to_answer_when_to_take_a_medication():
     assert "never stop at saying you don't have" in core.lower()
 
 
+@pytest.mark.parametrize("clause", [
+    # Unreadable is not absent: real feeds keep timing in stripped text.
+    "say the timing isn't shown in what I can see here",
+    # Timing only, labelled, and never an instruction.
+    "one sentence of general information about timing only",
+    'Begin it "In general,", say it is not advice for them',
+    'Never word it as an instruction ("take it with...")',
+    # Never dosing: amounts, frequency, missed doses, stopping, combining.
+    "Give no general information about how much to take, how often, a "
+    "missed or extra dose, stopping, splitting, or combining it with "
+    "anything else",
+    # An overdose or feeling unwell is the emergency rule's.
+    "the emergency rule above comes first",
+])
+def test_the_medication_rule_keeps_its_fences(clause):
+    assert clause in " ".join(personas.SAFETY_CORE.split())
+
+
+def test_the_old_absence_wording_is_gone():
+    core = " ".join(personas.SAFETY_CORE.split())
+    assert "the records don't list when to take it" not in core
+
+
+# --- 3b. as needed, ended orders, and many steps ------------------------------
+
+PAIN = {"coding": [{"system": "http://snomed.info/sct", "code": "22253000",
+                    "display": CANARY}], "text": CANARY}
+
+
+@pytest.mark.parametrize("prn, expected", [
+    ({"asNeededCodeableConcept": PAIN}, "as needed, up to every 6 hours"),
+    ({"asNeededFor": [PAIN]}, "as needed, up to every 6 hours"),
+    ({"asNeededBoolean": True}, "as needed, up to every 6 hours"),
+])
+def test_an_as_needed_order_says_its_schedule_is_a_limit(prn, expected):
+    item = _item(_med([{"timing": {"repeat": {
+        "frequency": 1, "period": 6, "periodUnit": "h"}}, **prn}]))
+    assert item["timing"] == [expected]
+    assert CANARY not in json.dumps(item)
+
+
+def test_an_as_needed_range_says_the_most_often():
+    item = _item(_med([{"asNeededBoolean": True, "timing": {"repeat": {
+        "frequency": 1, "frequencyMax": 2, "period": 1, "periodUnit": "d"}}}]))
+    assert item["timing"] == ["as needed, up to twice a day"]
+
+
+@pytest.mark.parametrize("repeat, expected", [
+    ({"frequency": 1, "frequencyMax": 3, "period": 1, "periodUnit": "d"},
+     "1 to 3 times a day"),
+    ({"frequency": 1, "period": 4, "periodMax": 6, "periodUnit": "h"},
+     "once every 4 to 6 hours"),
+    ({"frequency": 2, "period": 1, "periodUnit": "h"}, "twice an hour"),
+])
+def test_a_range_is_said_as_a_range(repeat, expected):
+    assert _item(_med([{"timing": {"repeat": repeat}}]))["timing"] == [
+        expected]
+
+
+@pytest.mark.parametrize("repeat", [
+    {"frequency": 3, "period": 1, "periodUnit": "d",
+     "boundsDuration": {"value": 5, "unit": "d"}},
+    {"frequency": 1, "period": 1, "periodUnit": "d", "count": 5},
+    {"frequency": 3, "frequencyMax": 1, "period": 1, "periodUnit": "d"},
+])
+def test_a_schedule_that_cannot_be_said_in_full_says_nothing(repeat):
+    assert "timing" not in _item(_med([{"timing": {"repeat": repeat}}]))
+
+
+@pytest.mark.parametrize("status", [
+    "stopped", "cancelled", "completed", "entered-in-error"])
+def test_an_ended_order_carries_no_timing(status):
+    res = _med([{"timing": {"repeat": {"when": ["CM"]}}}])
+    res["status"] = status
+    assert "timing" not in _item(res)
+
+
+def test_more_than_three_steps_says_more_exist():
+    steps = [{"timing": {"repeat": {"when": [w]}}}
+             for w in ("MORN", "AFT", "EVE", "HS")]
+    assert _item(_med(steps))["timing"] == [
+        "in the morning", "in the afternoon", "in the evening",
+        "and more steps"]
+
+
+def test_one_bad_row_never_takes_the_summary_down(monkeypatch):
+    import careagents.agent as agent
+
+    def boom(_dosage):
+        raise RuntimeError("surprise")
+    monkeypatch.setattr(agent, "_dose_timing", boom)
+    item = _item(_med([{"timing": {"repeat": {"when": ["CM"]}}}]))
+    assert item["type"] == "MedicationRequest" and item["name"]
+    assert "timing" not in item
+
+
 # --- 5. cross-layer: the real sample seed through the real engine -------------
 
 def test_the_sample_summary_tells_the_model_when_metformin_is_taken(

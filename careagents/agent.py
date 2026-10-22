@@ -499,47 +499,151 @@ _DOSE_WHEN = {
     "PCV": "after dinner",
 }
 _DOSE_PERIOD_UNIT = {"h": "hour", "d": "day", "wk": "week", "mo": "month"}
+#: Timing elements that limit how long or how many times the schedule runs.
+#: They are not rendered, so a timing that has one says nothing: "3 times a
+#: day" for a 5-day course is more than the record lists.
+_DOSE_LIMIT_KEYS = ("boundsDuration", "boundsRange", "boundsPeriod",
+                    "count", "countMax", "duration", "durationMax")
+#: Event-timing codes said per dosage: a feed can repeat one thousands of
+#: times, and every word here is a word in the model's context.
+_DOSE_WHEN_MAX = 4
+#: The longest a timing line can be. A line over it is not said at all.
+_DOSE_LINE_MAX = 160
+#: Orders and statements no longer in use: their timing is not how the
+#: medication is taken now, so it is not handed to the model.
+_DOSE_ENDED = frozenset({"stopped", "cancelled", "completed",
+                         "entered-in-error", "ended", "not-taken"})
+#: Timing lines per medication; past this, a line says more exist.
+_DOSE_LINES_MAX = 3
 
 
 def _whole(value, top: int) -> int | None:
-    """`value` as a whole number in 1..top, else None. A bool is no number."""
+    """`value` as a whole number in 1..top, else None. A bool, NaN or an
+    infinity is no number."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if value != int(value) or not 1 <= value <= top:
+    # NaN fails every comparison and an infinity the range, so neither
+    # reaches int().
+    if not 1 <= value <= top or value != int(value):
         return None
     return int(value)
 
 
+def _range(low, high, top: int):
+    """(low, high-or-None) as whole numbers, high only when it is a real
+    upper bound; None when either is malformed."""
+    lo = _whole(low, top)
+    if lo is None:
+        return None
+    if high is None:
+        return lo, None
+    hi = _whole(high, top)
+    if hi is None or hi < lo:
+        return None
+    return lo, (hi if hi > lo else None)
+
+
 def _dose_timing(dosage) -> str | None:
-    """One Dosage's timing in plain words, from structure alone.
+    """One Dosage's timing in plain words, from structure alone; None when
+    there is none or any part of it is malformed. Never raises.
 
     Dosage free text (`text`, `patientInstruction`, `timing.code.text`) is
     stripped by the engine and never read here: real feeds put names in it.
     Every part below comes from a closed map or a bounded whole number, so
-    nothing upstream wrote reaches the model (#922)."""
+    nothing upstream wrote reaches the model (#922). A range is said as a
+    range, and a schedule that cannot be said in full is not said at all: a
+    narrower one would reach the model as what the record lists."""
     if not isinstance(dosage, dict):
         return None
-    parts = []
+    # As needed, however the feed says it: a flag (R4 asNeededBoolean, R5
+    # asNeeded) or a coded reason (R4 asNeededCodeableConcept, R5
+    # asNeededFor). Only the presence of a reason is read, never its text or
+    # display. After redaction the code is often the only as-needed signal
+    # left, and without it "every 6 hours as needed" read as a fixed
+    # schedule (QA on #1015).
+    prn = (dosage.get("asNeededBoolean") is True
+           or dosage.get("asNeeded") is True
+           or isinstance(dosage.get("asNeededCodeableConcept"), dict)
+           or (isinstance(dosage.get("asNeededFor"), list)
+               and any(isinstance(c, dict) for c in dosage["asNeededFor"])))
+    parts = ["as needed"] if prn else []
     timing = dosage.get("timing")
     repeat = timing.get("repeat") if isinstance(timing, dict) else None
+    if repeat is not None and not isinstance(repeat, dict):
+        return None
     if isinstance(repeat, dict):
-        freq = _whole(repeat.get("frequency"), 24)
-        period = _whole(repeat.get("period"), 365)
-        unit = _DOSE_PERIOD_UNIT.get(repeat.get("periodUnit"))
-        if freq and period and unit:
-            times = {1: "once", 2: "twice"}.get(freq, f"{freq} times")
-            every = (f"a {unit}" if period == 1
-                     else f"every {period} {unit}s")
-            parts.append(f"{times} {every}")
+        if any(k in repeat for k in _DOSE_LIMIT_KEYS):
+            return None
+        if any(k in repeat for k in ("frequency", "frequencyMax", "period",
+                                     "periodMax", "periodUnit")):
+            freq = _range(repeat.get("frequency"),
+                          repeat.get("frequencyMax"), 24)
+            period = _range(repeat.get("period"), repeat.get("periodMax"),
+                            365)
+            code = repeat.get("periodUnit")
+            unit = (_DOSE_PERIOD_UNIT.get(code) if isinstance(code, str)
+                    else None)
+            if not (freq and period and unit):
+                return None
+            (f_lo, f_hi), (p_lo, p_hi) = freq, period
+            a_unit = f"{'an' if unit == 'hour' else 'a'} {unit}"
+            if prn:
+                # As needed, the schedule is a limit, not a plan: the most
+                # often it may be taken, from the larger frequency and the
+                # shorter period.
+                f_top = f_hi or f_lo
+                if f_top == 1 and p_lo > 1:
+                    limit = f"every {p_lo} {unit}s"
+                else:
+                    times = {1: "once", 2: "twice"}.get(f_top,
+                                                        f"{f_top} times")
+                    limit = (f"{times} {a_unit}" if p_lo == 1
+                             else f"{times} every {p_lo} {unit}s")
+                parts.append(f"up to {limit}")
+            else:
+                times = (f"{f_lo} to {f_hi} times" if f_hi else
+                         {1: "once", 2: "twice"}.get(f_lo, f"{f_lo} times"))
+                if p_hi:
+                    every = f"every {p_lo} to {p_hi} {unit}s"
+                elif p_lo == 1:
+                    every = a_unit
+                else:
+                    every = f"every {p_lo} {unit}s"
+                parts.append(f"{times} {every}")
         when = repeat.get("when")
-        if isinstance(when, list):
-            said = [_DOSE_WHEN[w] for w in when
-                    if isinstance(w, str) and w in _DOSE_WHEN]
+        if when is not None:
+            if not isinstance(when, list):
+                return None
+            said = []
+            for w in when:
+                phrase = _DOSE_WHEN.get(w) if isinstance(w, str) else None
+                if phrase and phrase not in said:
+                    said.append(phrase)
+                    if len(said) == _DOSE_WHEN_MAX:
+                        break
             if said:
                 parts.append(" and ".join(said))
-    if dosage.get("asNeededBoolean") is True or dosage.get("asNeeded") is True:
-        parts.append("as needed")
-    return ", ".join(parts) or None
+    line = ", ".join(parts)
+    return line if line and len(line) <= _DOSE_LINE_MAX else None
+
+
+def _medication_timing(res: dict, rt: str) -> list[str]:
+    """Timing lines for one medication record: at most _DOSE_LINES_MAX, then
+    a line saying more exist. Empty for a record no longer in use, and on
+    any surprise: one bad row never takes the summary down with it."""
+    if res.get("status") in _DOSE_ENDED:
+        return []
+    dosages = res.get("dosageInstruction" if rt == "MedicationRequest"
+                      else "dosage")
+    if not isinstance(dosages, list):
+        return []
+    try:
+        said = [t for t in map(_dose_timing, dosages) if t]
+    except Exception:  # noqa: BLE001 — fail closed: no timing, not no summary
+        return []
+    if len(said) > _DOSE_LINES_MAX:
+        return said[:_DOSE_LINES_MAX] + ["and more steps"]
+    return said
 
 
 #: Records per list the tools hand the model: the engine's search page (50,
@@ -721,13 +825,9 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         if rt in _MEDICATION_TYPES:
             # When it is taken, so "do I take it at a certain time?" is
             # answered from the record (beta feedback 2026-10-22).
-            dosages = res.get("dosageInstruction"
-                              if rt == "MedicationRequest" else "dosage")
-            said = [t for t in map(_dose_timing, dosages
-                                   if isinstance(dosages, list) else ())
-                    if t]
+            said = _medication_timing(res, rt)
             if said:
-                item["timing"] = said[:3]
+                item["timing"] = said
         vq = res.get("valueQuantity")
         if isinstance(vq, dict) and vq.get("value") is not None:
             # The coded, allow-listed unit, never the free-text `unit`:
