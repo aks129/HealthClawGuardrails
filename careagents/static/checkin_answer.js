@@ -142,10 +142,21 @@ const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
 const text = (v, max = FORM_TEXT_MAX) =>
   typeof v === "string" && v.trim() && v.length <= max ? v : null;
 
+// Bidi embedding, override and isolate controls (U+202A-202E, U+2066-2069).
+const BIDI = /[‪-‮⁦-⁩]/u;
+
+/* Words the person will read: `text`, with at least one letter or digit
+   (a string of format characters alone, U+200B and the like, is blank on
+   screen however it trims), and no bidi control that could reorder what
+   is around it. Otherwise null, and the form is unsupported (#1030
+   security F1). */
+const words = (v, max = FORM_TEXT_MAX) =>
+  text(v, max) && /[\p{L}\p{N}]/u.test(v) && !BIDI.test(v) ? v : null;
+
 function readOption(option) {
   const c = own(option, "valueCoding");
   const code = text(own(c, "code"), 256);
-  const display = text(own(c, "display"));
+  const display = words(own(c, "display"));
   const system = own(c, "system");
   if (!code || !display) return null;
   if (system !== undefined && !text(system, FORM_CANONICAL_MAX)) return null;
@@ -188,23 +199,23 @@ export function readForm(item) {
     if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k))) return null;
     if (own(it, "repeats") === true) return null;
     const linkId = text(own(it, "linkId"), 255);
-    const words = text(own(it, "text"));
-    if (!linkId || !words || linkIds.has(linkId)) return null;
+    const said = words(own(it, "text"));
+    if (!linkId || !said || linkIds.has(linkId)) return null;
     linkIds.add(linkId);
     const type = own(it, "type");
-    if (type === "display") { displays.push(words); continue; }
+    if (type === "display") { displays.push(said); continue; }
     if (type !== "choice") return null;
     const prefix = own(it, "prefix");
-    if (prefix !== undefined && !text(prefix, 16)) return null;
+    if (prefix !== undefined && !words(prefix, 16)) return null;
     const options = own(it, "answerOption");
     if (!Array.isArray(options) || options.length < 2 ||
         options.length > FORM_MAX_OPTIONS) return null;
     const read = options.map(readOption);
     if (read.includes(null)) return null;
-    questions.push({ linkId, prefix: prefix || "", text: words, options: read });
+    questions.push({ linkId, prefix: prefix || "", text: said, options: read });
   }
   if (!questions.length || questions.length > FORM_MAX_QUESTIONS) return null;
-  return { canonical, title: text(own(q, "title")) || "", displays, questions };
+  return { canonical, title: words(own(q, "title")) || "", displays, questions };
 }
 
 /* The QuestionnaireResponse for `picked` ({ linkId: option index }), or

@@ -178,6 +178,15 @@ function formAnswers(form, i) {
   return out;
 }
 
+/* The website's words inside a sentence of ours: at most `max` characters,
+   and set apart by FIRST STRONG ISOLATE ... POP DIRECTIONAL ISOLATE, so a
+   bidi control in them cannot reorder the wallet's words around them
+   (#1030 security F2). */
+function isolate(s, max) {
+  const cut = s.length > max ? `${s.slice(0, max - 1)}\u2026` : s;
+  return `\u2068${cut}\u2069`;
+}
+
 /* Resolves to {kind: "send", share, answers}, {kind: "declined-all"} or
    {kind: "closed"}. Every choice starts at "Don't share". */
 function review(request, origin, matches) {
@@ -186,7 +195,7 @@ function review(request, origin, matches) {
   $("wallet-origin").textContent = origin;
   const purpose = Object.hasOwn(request, "purpose") ? request.purpose : undefined;
   if (typeof purpose === "string" && purpose) {
-    $("wallet-purpose").textContent = `The website says why: ${purpose}`;
+    $("wallet-purpose").textContent = `The website says why: ${isolate(purpose, 200)}`;
     $("wallet-purpose").hidden = false;
   }
   const list = $("wallet-items");
@@ -205,8 +214,18 @@ function review(request, origin, matches) {
       row.textContent = line;
       what.append(row);
     });
-    li.append(title, what);
-    if (m.form) li.append(formQuestions(m.form, i));
+    if (m.form) {
+      // The form's display lines are the website's words, not ours: said
+      // so, and set apart, as the purpose is (#1030 security F3).
+      if (m.form.displays.length) {
+        const says = document.createElement("p");
+        says.className = "checkin-website-says";
+        says.textContent = "The website asks:";
+        what.classList.add("checkin-from-website");
+        li.append(title, says, what);
+      } else li.append(title);
+      li.append(formQuestions(m.form, i));
+    } else li.append(title, what);
     if (!m.unsupported && (m.entries.length || m.form)) {
       const group = document.createElement("div");
       group.className = "checkin-choice";
@@ -242,7 +261,7 @@ function review(request, origin, matches) {
           missing = missing || itemHeading(m);
       });
       // A form is sent whole or not at all: say so rather than decline it.
-      if (missing) return fail(`Answer every question in "${missing}", or choose Don't share for it.`);
+      if (missing) return fail(`Answer every question in "${isolate(missing, 80)}", or choose Don't share for it.`);
       resolve({ kind: "send", share, answers });
     };
     $("wallet-decline-all").onclick = () => resolve({ kind: "declined-all" });
