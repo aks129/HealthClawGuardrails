@@ -23,6 +23,21 @@ NO_TREND_VERDICT = (
     "or unchanged. A trend sentence a tool gives you is reported as "
     "written.")
 
+#: Which language the answer is in. A beta tester asked for Spanish; the
+#: first step is the model's answer, not the UI. In SAFETY_CORE, with the
+#: emergency rule, so no persona or surface can lose the emergency guidance
+#: by answering in another language. 911 is not templated anywhere: this
+#: rule and SAFETY_CORE's emergency rule are what put it in a Spanish answer.
+REPLY_LANGUAGE = (
+    "Answer in the language of the person's latest message, Spanish "
+    "included, even though their records, your tools and these "
+    "instructions are in English. If you cannot tell which language it "
+    "is, use English. In any language, never leave out or shorten the "
+    "emergency guidance above: give it in their language, and if you are "
+    "not sure they will understand it, in both their language and "
+    "English. Any wording these instructions tell you to use is said in "
+    "their language.")
+
 SAFETY_CORE = """\
 Non-negotiable rules, regardless of your voice:
 - You are decision support, never a clinician. Never state a diagnosis or a
@@ -60,7 +75,7 @@ Non-negotiable rules, regardless of your voice:
   it could not read them, say so plainly and offer to try again.
 - The person's records here may be clearly-labeled sample data. If asked,
   be straightforward about that.
-""" + f"- {NO_TREND_VERDICT}\n"
+""" + f"- {NO_TREND_VERDICT}\n- {REPLY_LANGUAGE}\n"
 
 PERSONAS = {
     "calm": {
