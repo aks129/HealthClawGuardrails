@@ -481,13 +481,13 @@ def test_a_sample_crisis_answer_puts_the_frame_at_its_end(
     assert said == answer + "\n\n" + beta.SAMPLE_FRAME
 
 
-def test_a_sample_ordinary_answer_still_opens_with_the_frame(
+def test_a_sample_ordinary_answer_ends_with_the_frame_too(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
                                            reply="The A1c was 7.2.")
     _queue(c, agent_id, "how is my a1c?", "fr-2")
     _work(cfg, svc, fake)
-    assert _answers(fake) == [beta.SAMPLE_FRAME + "\n\nThe A1c was 7.2."]
+    assert _answers(fake) == ["The A1c was 7.2.\n\n" + beta.SAMPLE_FRAME]
 
 
 def test_a_one_paragraph_crisis_answer_ends_with_the_frame(
@@ -594,8 +594,9 @@ def test_an_ordinary_model_refusal_ends_with_911(cfg, svc, monkeypatch):  # noqa
                                            reply=llm.REFUSAL_TEXT)
     _queue(c, agent_id, "how are my labs?", "rf-1")
     _work(cfg, svc, fake)
-    assert _answers(fake) == [beta.SAMPLE_FRAME + "\n\n" + llm.REFUSAL_TEXT
-                              + "\n\n" + beta.EMERGENCY_TRAILER]
+    assert _answers(fake) == [llm.REFUSAL_TEXT + "\n\n"
+                              + beta.EMERGENCY_TRAILER + "\n\n"
+                              + beta.SAMPLE_FRAME]
 
 
 def test_a_model_answer_is_never_given_a_trailer(cfg, svc, monkeypatch):  # noqa: F811
@@ -709,8 +710,8 @@ def test_a_declined_partial_answer_is_only_the_fixed_sentence(
         assert out == (f"{lead}\n\n{llm.REFUSAL_TEXT}\n\n"
                        f"{beta.SAMPLE_FRAME}")
     else:
-        assert out == (f"{beta.SAMPLE_FRAME}\n\n{llm.REFUSAL_TEXT}\n\n"
-                       f"{beta.EMERGENCY_TRAILER}")
+        assert out == (f"{llm.REFUSAL_TEXT}\n\n{beta.EMERGENCY_TRAILER}"
+                       f"\n\n{beta.SAMPLE_FRAME}")
     run_id = next(iter(fake.runs))
     assert "SYNTHETIC-PARTIAL" not in str(fake.events[run_id])
     assert "SYNTHETIC-PARTIAL" not in str(fake.logged)
@@ -723,8 +724,9 @@ def test_an_empty_answer_is_a_failure_with_911(cfg, svc, monkeypatch, reply):  #
                                            reply=reply)
     _queue(c, agent_id, "how are my labs?", "empty-1")
     _work(cfg, svc, fake)
-    assert _answers(fake) == [beta.SAMPLE_FRAME + "\n\n" + GENERIC_FAILURE_TEXT
-                              + "\n\n" + beta.EMERGENCY_TRAILER]
+    assert _answers(fake) == [GENERIC_FAILURE_TEXT + "\n\n"
+                              + beta.EMERGENCY_TRAILER + "\n\n"
+                              + beta.SAMPLE_FRAME]
 
 
 def test_the_911_and_988_lines_keep_their_line_break_on_a_sample():
@@ -764,25 +766,7 @@ def test_an_answer_that_gives_911_gets_the_frame_last(cfg, svc, monkeypatch):  #
     assert _answers(fake) == [answer + "\n\n" + beta.SAMPLE_FRAME]
 
 
-# --- security round 6: the number check, the narrowed patterns ---------------
-
-@pytest.mark.parametrize("text", (
-    "Call 911 now.", "llame al 911 ahora", "Please call or text **988**.",
-    "**988**, the Suicide & Crisis Lifeline, is open all day.",
-    "Marque el 911.", "Puede llamar a la línea 988."))
-def test_an_answer_that_says_to_call_counts(text):
-    from careagents import routing
-    assert routing.says_emergency_number(text), text
-
-
-@pytest.mark.parametrize("text", (
-    "B12 was 911 pg/mL.", "Ferritin 988 ng/mL.", "911,000 platelets",
-    "1,911 total", "the 911th day", "911mg", "Call 911-555-0100.",
-    "Glucose 98.8 and 9.11"))
-def test_a_number_in_a_value_does_not_count(text):
-    from careagents import routing
-    assert not routing.says_emergency_number(text), text
-
+# --- security round 6: the narrowed patterns ---------------------------------
 
 def test_kill_me_only_as_a_wish_or_a_dose():
     from careagents import routing

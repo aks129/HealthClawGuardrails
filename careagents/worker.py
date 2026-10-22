@@ -449,7 +449,7 @@ class RunWorker:
                 logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
         # Made-up records answer as made-up, on every surface: the prompt
-        # says whose they are, and the answer opens with beta.SAMPLE_FRAME.
+        # says whose they are, and the answer ends with beta.SAMPLE_FRAME.
         sample = context["connection"].get("kind") == "sample"
         # The engine tags each run with the surface its message arrived on;
         # a text thread gets the texting style (careagents/personas.py).
@@ -562,8 +562,7 @@ class RunWorker:
         lead = beta.sample_frame(who) if sample else ""
         labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
         if final_checkpoint is not None:
-            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead,
-                         crisis=routing.crisis_in_window(history))
+            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
             self._mark(context["account_id"], "first_answer")
             return
 
@@ -596,11 +595,12 @@ class RunWorker:
                     # "refusal" when the model declined (#1017): _finish
                     # gives a decline the 911 line.
                     "stop_reason": "refusal" if declined else "",
-                    "tool_calls": [
+                    # A decline means stop: no tool it asked for runs.
+                    "tool_calls": [] if declined else [
                         {"id": call.id, "name": call.name,
                          "arguments": call.arguments}
                         for call in turn.tool_calls],
-                    "raw_tool_calls": turn.raw_tool_calls,
+                    "raw_tool_calls": [] if declined else turn.raw_tool_calls,
                     # Caps the advisor per turn across a recovered run too
                     # (careagents/routing.py advisor_used).
                     "advisor_calls": getattr(turn, "advisor_calls", 0),
@@ -614,17 +614,19 @@ class RunWorker:
                 # later failure no longer gives the turn back.
                 run["_refund"]["answered"] = True
                 history.append({
-                    "role": "assistant", "content": turn.text,
+                    "role": "assistant",
+                    "content": pending_checkpoint["text"],
                     "tool_calls": pending_checkpoint["tool_calls"],
-                    "_openai_tool_calls": turn.raw_tool_calls,
+                    "_openai_tool_calls": pending_checkpoint["raw_tool_calls"],
                     "advisor_calls": pending_checkpoint["advisor_calls"],
                 })
 
             calls = pending_checkpoint.get("tool_calls") or []
+            if pending_checkpoint.get("stop_reason") == "refusal":
+                calls = []          # a decline means stop, a replayed one too
             if not calls:
                 self._finish(run, pending_checkpoint, emitted, heartbeat,
-                             lead=lead,
-                             crisis=routing.crisis_in_window(history))
+                             lead=lead)
                 self._mark(context["account_id"], "first_answer")
                 return
 
@@ -731,12 +733,10 @@ class RunWorker:
 
     def _finish(self, run: dict, checkpoint: dict,
                 emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat,
-                lead: str = "", crisis: bool = False) -> None:
-        """`lead` opens a model's answer on its own line (the sample's
+                lead: str = "") -> None:
+        """`lead` closes a model's answer on its own line (the sample's
         SAMPLE_FRAME). The checkpoint keeps the model's text alone, so a
-        replayed run adds it once, here. `crisis`: crisis wording in the
-        conversation loaded for this turn (routing.crisis_in_window), which
-        only decides where `lead` goes."""
+        replayed run adds it once, here."""
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
@@ -759,20 +759,12 @@ class RunWorker:
             # open with it on a later turn. Say it once. A real answer
             # (no lead) is never touched.
             body = _drop_echo(text, lead) or "…"
-            if (crisis or routing.is_crisis(said)
-                    or routing.says_emergency_number(
-                        body.replace(beta.EMERGENCY_TRAILER, ""))):
-                # Never ahead of the 911 guidance: the #1015 live run read
-                # "Nothing here is about you." before "call 911", and an
-                # answer that opens with a line of sympathy gives 911 only
-                # in its second paragraph (QA on #1017). At the end, always.
-                # Not only on the word list: on the conversation (the "ok"
-                # after a crisis), and wherever the answer itself gives 911
-                # or 988, as the model does for wording the list misses.
-                # The trailer every refusal ends with is not such a number.
-                text = f"{body}\n\n{lead}"
-            else:
-                text = f"{lead}\n\n{body}"
+            # At the end of every answer, never ahead of anything in it:
+            # the #1015 live run read "Nothing here is about you." before
+            # "call 911", and no word list can say which answers carry
+            # 911 guidance (#1017). The web shows it in the banner above
+            # instead (beta.under_banner, chat.js withoutFrame).
+            text = f"{body}\n\n{lead}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
         # HealthClaw owns the final fencing transaction. A client-side

@@ -26,7 +26,7 @@ from tests.test_careagents_brief_lab_trends import _brief_with_trend
 from tests.test_careagents_sample_framing import (
     MODEL_TEXT, _answer, _real_chat_app)
 
-FRAMED = f"{beta.SAMPLE_FRAME}\n\n{MODEL_TEXT}"
+FRAMED = f"{MODEL_TEXT}\n\n{beta.SAMPLE_FRAME}"
 SECOND_PERSON = re.compile(r"\b(you|your)\b", re.IGNORECASE)
 
 
@@ -56,7 +56,7 @@ def test_a_sample_sentence_that_is_content_is_kept(
     says = "In these made-up records, creatinine rose from 0.8 to 1.3."
     _app, c, fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
     assert _answer(c, fake, agent_id, cfg, svc, monkeypatch, [],
-                   says=says) == f"{beta.SAMPLE_FRAME}\n\n{says}"
+                   says=says) == f"{says}\n\n{beta.SAMPLE_FRAME}"
 
 
 @pytest.mark.parametrize("says", [

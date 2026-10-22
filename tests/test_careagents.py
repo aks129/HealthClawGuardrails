@@ -544,10 +544,10 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
 
 
 def sample_framed(text: str) -> str:
-    """An answer as `_chat_app`'s sample connection finishes it: opened by
+    """An answer as `_chat_app`'s sample connection finishes it: closed by
     the made-up-records line (tests/test_careagents_sample_framing.py)."""
     from careagents import beta
-    return f"{beta.SAMPLE_FRAME}\n\n{text}"
+    return f"{text}\n\n{beta.SAMPLE_FRAME}"
 
 
 def test_log_message_sends_explicit_agent_and_conversation_identity():

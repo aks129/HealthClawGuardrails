@@ -222,11 +222,3 @@ def test_live_check_wording_is_crisis():
     for text in ("how many pills do I take a day?", "tomé mis pastillas",
                  "¿cuántas pastillas tomo al día?", "is this dose too high?"):
         assert not routing.is_crisis(text), text
-
-
-def test_an_answer_that_gives_the_number_is_detected():
-    assert routing.says_emergency_number("Call 911 now.")
-    assert routing.says_emergency_number("Llame o envíe un mensaje al 988.")
-    assert not routing.says_emergency_number("Call 1-800-222-1222.")
-    assert not routing.says_emergency_number("Your platelets were 198800.")
-    assert not routing.says_emergency_number("Zip 91101.")

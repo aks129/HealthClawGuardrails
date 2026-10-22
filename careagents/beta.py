@@ -114,7 +114,7 @@ def without_trailer(text: str) -> str:
 
 
 #: The sample connection's one line: the banner on its chat page, and the
-#: opening line of every answer the worker finishes on it, web and text
+#: closing line of every answer the worker finishes on it, web and text
 #: alike. A tester read a sample creatinine rise, dated today and worded
 #: "your", as her own result and stopped (2026-10-08 patient walk).
 SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
@@ -125,7 +125,7 @@ def sample_frame(who: str = "") -> str:
     """The sample line for these records. `who` is hub.relation_of the
     person they stand in for ("your parent"), empty for the holder's own:
     Mom's chat said "not yours" to someone asking about Mom (FHI-44). The
-    line opens every answer, so the model reads it back as history: the
+    line closes every answer, so the model reads it back as history: the
     relationship only, never the nickname."""
     if not who:
         return SAMPLE_FRAME

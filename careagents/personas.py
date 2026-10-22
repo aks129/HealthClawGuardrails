@@ -138,7 +138,7 @@ SAMPLE_STYLE = (
     "or \"the sample person's\". Keep every number, date and piece of "
     "advice as written, including a trend sentence, but say it about the "
     "sample person. The app already shows a line saying these records "
-    "are made up, on the page and at the top of every answer, so do not "
+    "are made up, on the page and at the end of every answer, so do not "
     "write your own. Say \"doctor\", never \"clinician\", and do not "
     "call the results a \"partial lab list\".")
 
@@ -164,7 +164,7 @@ CARED_FOR_SAMPLE_STYLE = (
     "{who}, or anyone, about these results, and never ask them to check "
     "or compare these records with what they know about {who} or anyone "
     "real. The app already shows a line saying these records are made up, "
-    "on the page and at the top of every answer, so do not write your "
+    "on the page and at the end of every answer, so do not write your "
     "own. Say \"doctor\", never \"clinician\", and do not call the "
     "results a \"partial lab list\".")
 

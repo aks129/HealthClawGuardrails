@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from careagents import beta, llm, routing
+from careagents import beta, llm
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
@@ -73,17 +73,8 @@ def test_a_partial_decline_never_shows_the_declined_text(
     assert "SYNTHETIC-DECLINED-PREFIX" not in out, out
 
 
-# --- finding: 911 or 988 inside a lab value --------------------------------------
-
-@pytest.mark.parametrize("text", (
-    "The sample person's vitamin B12 was 911 pg/mL in March.",
-    "Ferritin 988 ng/mL, above the range.",
-    "A platelet count of 911,000.",
-    "Cholesterol readings: 1,911 total over the year.",
-))
-def test_a_lab_value_is_not_an_emergency_number(text):
-    assert not routing.says_emergency_number(text)
-
+# The lab-value and number-check tests were removed in round 8: the sample
+# frame now goes last on every answer, so says_emergency_number is gone.
 
 # --- finding: the 988 line for figures of speech and ordinary medicine talk -----
 
@@ -99,16 +90,6 @@ def test_ordinary_wording_gets_no_988_line(said):
 
 
 # --- what holds ---------------------------------------------------------------------
-
-def test_the_emergency_number_check():
-    assert routing.says_emergency_number("Call 911 now.")
-    assert routing.says_emergency_number("Llame o envíe un texto al 988.")
-    assert not routing.says_emergency_number("Call 911-555-0100.")
-    # The trailer is taken out before the check (worker._finish).
-    assert not routing.says_emergency_number(
-        ("Fixed.\n\n" + beta.EMERGENCY_TRAILER).replace(
-            beta.EMERGENCY_TRAILER, ""))
-
 
 @pytest.mark.parametrize("decline", ("", llm.REFUSAL_TEXT))
 def test_a_whole_decline_is_the_fixed_sentence_with_911_and_988(

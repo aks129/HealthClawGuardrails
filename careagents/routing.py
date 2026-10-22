@@ -194,6 +194,19 @@ _SELF_HARM_PATTERNS = [
     r"(?:want|wish|need) (?:it |them |someone |something )?to kill me",
     r"kill me now", r"(?:pills?|doses?|amount|many) (?:would|will|to) kill me",
     r"(?:would|will) it take to kill me",
+    # Security round 7: ideation the narrowed patterns missed.
+    r"wish (?:someone|somebody) would kill me",
+    r"(?:just|please) (?:just )?kill me",
+    r"(?:how much|how many) \w+(?: \w+)? (?:would|will|to) kill me",
+    r"(?:would|will|could) (?:\d+|\w+) (?:pills?|tablets?|doses?) kill me",
+    r"(?:wish|want) (?:i was|i were|to be) dead",
+    r"hope i (?:don'?t|do not|never) wake up",
+    r"want (?:it all|everything) to end",
+    r"(?:took|swallowed) a (?:whole )?bottle of",
+    r"(?:too many|overdos\w*|took|swallowed)\b.{0,40}\bon purpose",
+    r"(?:pastillas|sobredosis|demasiad\w*).{0,40}a proposito",
+    r"alguien me mate", r"ojala (?:estuviera|estar) muert",
+    r"ojala no despert",
     r"lethal dose", r"dosis letal", r"cuantas pastillas .{0,20}(?:matar|morir)",
 ]
 
@@ -348,33 +361,6 @@ def is_crisis(text: str) -> bool:
 def is_self_harm(text: str) -> bool:
     """Crisis wording about self-harm or wanting to die (988, not only 911)."""
     return bool(_SELF_HARM.search(_unaccented(normalize(text))))
-
-
-#: 911 or 988 as a number on its own: not inside a longer number, a
-#: phone number or a value ("1,911", "911,000", "911-555-0100").
-_EMERGENCY_NUMBER = re.compile(
-    r"(?<![\w-])(?<!\d[.,])(?:911|988)(?![\w-]|[.,]\d)")
-#: A number an answer tells the person to call: a call word just before it
-#: ("call 911", "llame al 911", "text 988"), or the lifeline named just
-#: after it ("988, the Suicide & Crisis Lifeline"). A lab value ("B12 was
-#: 911 pg/mL") has neither (security round 6).
-_CALL_BEFORE = re.compile(
-    r"\b(?:call|text|dial|phone|llame|llama|llamar|marque|marca|al|linea|"
-    r"line|lifeline)\b[^\d\n]{0,20}$")
-_LIFELINE_AFTER = re.compile(r"^[^\d\n]{0,30}\b(?:lifeline|crisis line|"
-                             r"linea)\b")
-
-
-def says_emergency_number(text: str) -> bool:
-    """Whether an answer tells the person to call 911 or 988. The model
-    knows a crisis the word list misses; where its answer gives the number,
-    nothing may be put ahead of it (worker._finish)."""
-    t = _unaccented(normalize(text or ""))
-    for m in _EMERGENCY_NUMBER.finditer(t):
-        if (_CALL_BEFORE.search(t[max(0, m.start() - 40):m.start()])
-                or _LIFELINE_AFTER.search(t[m.end():m.end() + 40])):
-            return True
-    return False
 
 
 def classify(text: str) -> int:

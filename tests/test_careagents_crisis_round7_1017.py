@@ -11,6 +11,9 @@ These tests fail on 3929abc0 by design:
   word used as a noun ("call count", "line graph", "subió al 988").
 - Ideation the narrowed patterns no longer catch, or catch only for 911.
 
+Round 8 removed says_emergency_number (the sample frame now goes last on
+every answer), and with it the emergency-number tests here.
+
 The rest pin what holds: an old checkpoint that still holds partial text,
 replayed by a recovered run, shows only the fixed sentence; the figures of
 speech stay quiet. Synthetic text only.
@@ -95,31 +98,8 @@ def test_a_declined_turn_never_runs_its_tool_or_sends_its_text_back(
     assert problems == []
 
 
-# --- finding: the emergency number check ---------------------------------------------
-
-@pytest.mark.parametrize("text", (
-    "Please call emergency services at 911.",
-    "Call your local emergency number (911).",
-    "Call 9-1-1 now.",
-    "Please contact 911 right away.",
-    "Reach out to 988 any time.",
-    "988 (call or text, 24/7).",
-    "Comunícate con el 988.",
-))
-def test_a_live_emergency_number_is_read(text):
-    assert routing.says_emergency_number(text)
-
-
-@pytest.mark.parametrize("text", (
-    "Your call count was 911 this year.",
-    "Text messages sent: 988.",
-    "The line graph shows 911 at its peak.",
-    "Su ferritina subió al 988.",
-    "La glucosa llegó al 911.",
-))
-def test_a_value_after_a_call_word_is_not_an_emergency_number(text):
-    assert not routing.says_emergency_number(text)
-
+# The emergency-number tests were removed in round 8: the sample frame now
+# goes last on every answer, so routing.says_emergency_number is gone.
 
 # --- finding: ideation no longer caught, or caught for 911 only -----------------------
 

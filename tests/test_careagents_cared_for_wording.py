@@ -154,8 +154,8 @@ def test_moms_turn_is_prompted_about_your_parent_never_the_nickname(
         assert "say it about the sample person" in p
         assert "say it about your parent" not in p
         assert "stands in for your parent" in p
-    # The line every answer opens with is model-visible history too.
-    assert answer.startswith(MOM_FRAME + "\n\n")
+    # The line every answer ends with is model-visible history too.
+    assert answer.endswith("\n\n" + MOM_FRAME)
     assert NICK not in answer
 
 
@@ -174,7 +174,7 @@ def test_the_holders_turn_prompt_is_unchanged(cfg, svc, monkeypatch):
     answer = _answer(c, hc, mine, cfg, svc, monkeypatch, prompts)
     assert prompts and all(
         p == system_prompt("Juniper", "calm", sample=True) for p in prompts)
-    assert answer.startswith(beta.SAMPLE_FRAME + "\n\n")
+    assert answer.endswith("\n\n" + beta.SAMPLE_FRAME)
 
 
 def test_the_prompt_says_whose_records_for_someone_you_care_for():

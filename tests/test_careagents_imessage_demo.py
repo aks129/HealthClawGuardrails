@@ -371,8 +371,10 @@ def test_the_deliverer_sends_the_parts_in_order(sb_cfg, sb_svc, monkeypatch):  #
     _model(monkeypatch, answer=answer)
     fake.sent.clear()
     _ask(app, c, fake, "tell me everything", "long-1")
-    assert fake.sent[0][1].startswith(sample_framed("Part 0"))
+    assert fake.sent[0][1].startswith("Part 0")
     assert [t[:6] for _, t in fake.sent[1:]] == ["Part 1", "Part 2"]
+    # The sample line closes the answer, so it is in the last part.
+    assert fake.sent[-1][1].endswith(sample_framed("").strip())
     _deliverer(app, fake).once()
     assert len(fake.sent) == 3
 
