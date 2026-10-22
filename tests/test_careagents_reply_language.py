@@ -175,3 +175,20 @@ def test_qa_phrases_the_live_run_saw_missed():
     for text in ("me corté el pelo", "me corte las uñas",
                  "ayer me corté el cabello"):
         assert not routing.is_crisis(text), text
+
+
+def test_qa_round_three_phrases():
+    """Poisoning is urgent (911); "I can't take it any more" and "leave
+    this world" are self-harm wording (988 too)."""
+    for text in ("creo que es un envenenamiento", "mi hijo se envenenó",
+                 "envenenado"):
+        assert routing.is_crisis(text), text
+        assert not routing.is_self_harm(text), text
+    for text in ("ya no aguanto más", "no aguanto mas", "quiero irme de "
+                 "este mundo", "me quiero ir de este mundo"):
+        assert routing.is_crisis(text), text
+        assert routing.is_self_harm(text), text
+    for text in ("no aguantamos el calor", "este mundo de la salud",
+                 "quiero ir de compras", "tengo una pregunta sobre mi "
+                 "presión", "¿qué vacunas me tocan este año?"):
+        assert not routing.is_crisis(text), text

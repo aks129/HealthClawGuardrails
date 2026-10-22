@@ -187,6 +187,7 @@ _SELF_HARM_PATTERNS = [
     r"no vale la pena vivir", r"quiero desaparecer",
     r"(?:quiero|voy a) colgarme", r"me (?:quiero |voy a )?colgar\b",
     r"cort\w{0,8} las venas", r"me (?:hice|he hecho) dano", r"me lastime",
+    r"no aguanto mas\b", r"(?:irme|ir) de este mundo",
 ]
 
 #: Medical emergencies, abuse and being unsafe.
@@ -235,7 +236,7 @@ _URGENT_PATTERNS = [
     r"traba la lengua", r"cara dormida", r"me (?:golpea|amenaza)",
     r"not waking up", r"won'?t wake up", r"unresponsive", r"collaps",
     r"i'?m dying", r"i am dying", r"(?:can'?t|can not|cannot) breath\b",
-    r"sangra mucho", r"no puedo hablar", r"desplom",
+    r"sangra mucho", r"no puedo hablar", r"desplom", r"envenen",
 ]
 
 #: Crisis and emergency language. Never Haiku, whatever else the message

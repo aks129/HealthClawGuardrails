@@ -144,8 +144,9 @@ def under_banner(text: str, frame: str = SAMPLE_FRAME) -> str:
     stored before sample_frame named the person open with it, and it would
     show under Mom's banner (QA and security review of #952, L1).
 
-    A crisis answer carries the line after its first paragraph, or at its
-    end, never before the 911 guidance (worker._finish). That copy of this
+    A crisis answer carries the line at its end, never before the 911
+    guidance (worker._finish); a copy between paragraphs is dropped too,
+    whatever the answer's shape. That copy of this
     chat's own `frame`, a paragraph of its own, is dropped the same way
     (chat.js withoutFrame); the holder's older line only ever led."""
     for line in dict.fromkeys((frame, SAMPLE_FRAME)):

@@ -219,8 +219,8 @@ def test_a_live_sample_answer_drops_only_the_banners_own_words():
         [f"\n  {f}\n", f"{f}\n\n{body}"],     # banner on the page: once
         [None, f"{f}\n\n{body}"],             # no banner: never dropped
         ["Something else.", f"{f}\n\n{body}"],  # not the banner's words
-        # A crisis answer's copy, after the first paragraph or at the end
-        # (worker._finish, #1017): a paragraph of its own, dropped too.
+        # A crisis answer's copy, at the end (worker._finish, #1017), or
+        # between paragraphs: a paragraph of its own, dropped too.
         [f, f"{body}\n\n{f}"],
         [f, f"Call 911.\n\n{f}\n\n{body}"],
         [f, f"{body} {f}"],                   # inside a paragraph: kept

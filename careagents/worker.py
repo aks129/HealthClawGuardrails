@@ -742,11 +742,10 @@ class RunWorker:
             body = _drop_echo(text, lead) or "…"
             if routing.is_crisis(_said(run)):
                 # Never ahead of the 911 guidance: the #1015 live run read
-                # "Nothing here is about you." before "call 911". After the
-                # answer's first paragraph instead.
-                first, sep, rest = body.partition("\n\n")
-                text = (f"{first}\n\n{lead}\n\n{rest}" if sep
-                        else f"{first}\n\n{lead}")
+                # "Nothing here is about you." before "call 911", and an
+                # answer that opens with a line of sympathy gives 911 only
+                # in its second paragraph (QA on #1017). At the end, always.
+                text = f"{body}\n\n{lead}"
             else:
                 text = f"{lead}\n\n{body}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")

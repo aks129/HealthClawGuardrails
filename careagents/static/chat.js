@@ -147,8 +147,8 @@
   // and texted answer with it; only that exact leading copy is dropped,
   // only while the banner is on this page, and never down to nothing
   // (careagents/beta.py under_banner does the same for the history).
-  // A crisis answer carries it after its first paragraph, or at its end,
-  // so it never comes before the 911 guidance (worker._finish); that copy,
+  // A crisis answer carries it at its end, so it never comes before the
+  // 911 guidance (worker._finish); that copy, or one between paragraphs,
   // a paragraph of its own, is dropped the same way.
   function withoutFrame(text) {
     const banner = document.querySelector(".sample-banner");

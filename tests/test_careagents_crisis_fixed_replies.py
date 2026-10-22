@@ -466,20 +466,19 @@ def test_a_stream_error_ends_with_911():
 
 # --- the sample frame never comes before the 911 guidance --------------------
 
-def test_a_sample_crisis_answer_puts_the_frame_after_its_first_paragraph(
+def test_a_sample_crisis_answer_puts_the_frame_at_its_end(
         cfg, svc, monkeypatch):  # noqa: F811
     """#1015 live run: "Nothing here is about you." read before "call
-    911". For a crisis message the frame goes after the first paragraph."""
-    answer = ("Call 911 now. Llame al 911 ahora.\n\n"
+    911". QA on #1017: after the first paragraph is not enough when the
+    answer opens with sympathy. For a crisis message it goes at the end."""
+    answer = ("I'm so sorry.\n\nCall 911 now. Llame al 911 ahora.\n\n"
               "In these made-up records, the sample person has asthma.")
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
                                            reply=answer)
     _queue(c, agent_id, "me duele el pecho", "fr-1")
     _work(cfg, svc, fake)
     [said] = _answers(fake)
-    assert said == ("Call 911 now. Llame al 911 ahora.\n\n"
-                    + beta.SAMPLE_FRAME + "\n\n"
-                    "In these made-up records, the sample person has asthma.")
+    assert said == answer + "\n\n" + beta.SAMPLE_FRAME
 
 
 def test_a_sample_ordinary_answer_still_opens_with_the_frame(
@@ -560,8 +559,8 @@ def test_the_page_says_a_503s_sentence_after_its_retries():
 
 
 def test_the_history_drops_a_crisis_answers_inline_frame():
-    """A sample crisis answer carries the frame after its first paragraph
-    or at its end; under the banner it is not said twice."""
+    """A sample crisis answer carries the frame at its end (or, defensively,
+    between paragraphs); under the banner it is not said twice."""
     f = beta.SAMPLE_FRAME
     assert beta.under_banner(f"Call 911.\n\n{f}\n\nThe A1c was 7.2.") == (
         "Call 911.\n\nThe A1c was 7.2.")
