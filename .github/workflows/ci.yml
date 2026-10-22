@@ -89,6 +89,9 @@ jobs:
   # ─────────────────────────────────────────────
   postgres-tests:
     runs-on: ubuntu-latest
+    # A row-lock wait that never ends hangs the run until GitHub's 6-hour
+    # limit (#1007). The lane takes about 20 minutes.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -129,7 +132,9 @@ jobs:
           # careagents keeps its own engine + metadata, so SQLite-only coverage
           # would miss Postgres-specific schema problems in its tables too.
           CARE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
-        run: uv run python -m pytest tests/ -v --tb=short
+        # faulthandler: a test stuck over 5 minutes prints every thread's
+        # stack to the log, so a hang names its test instead of going quiet.
+        run: uv run python -m pytest tests/ -v --tb=short -o faulthandler_timeout=300
 
   node-tests:
     runs-on: ubuntu-latest

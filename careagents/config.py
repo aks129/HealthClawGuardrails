@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import re
-from urllib.parse import urlparse
+
+from urllib3.exceptions import LocationParseError
+from urllib3.util import Url, parse_url
 
 from careagents import _build
 
@@ -25,6 +27,32 @@ _VETTED_MODEL_HOSTS = frozenset({
     "generativelanguage.googleapis.com",
     "api.groq.com",
 })
+
+#: Never in a model base URL: a backslash, whitespace or a control
+#: character (parsers disagree on them), userinfo, a query or a fragment.
+_MODEL_URL_REFUSED = re.compile(r"[\\@?#\s\x00-\x1f\x7f]")
+
+
+def model_endpoint(url: str | None) -> Url | None:
+    """A model base URL, parsed once, or None when it is not a plain
+    scheme://host[:port][/path].
+
+    Parsed with urllib3's parse_url, the parser requests itself uses, so the
+    host checked here is the host connected to. urllib.parse disagrees with
+    it: "https://evil.example\\@api.openai.com/v1" reads as api.openai.com
+    there and connects to evil.example (#990 security review F1). Anything
+    two parsers could read differently is refused before parsing."""
+    if not url or _MODEL_URL_REFUSED.search(url):
+        return None
+    try:
+        u = parse_url(url)
+    except LocationParseError:
+        return None
+    if (u.scheme not in ("http", "https") or not u.host or u.auth
+            or u.query is not None or u.fragment is not None):
+        return None
+    return Url(scheme=u.scheme, host=u.host.lower(), port=u.port,
+               path=(u.path or "").rstrip("/") or None)
 
 
 class ConfigError(RuntimeError):
@@ -174,6 +202,15 @@ class Config:
             if x.strip())
         # Where the worker sends the once-a-day funnel digest. Unset = off.
         self.digest_to = (e.get("CARE_DIGEST_TO") or "").strip()
+        # The day-2 and day-7 tester check-in emails (careagents/checkins.py).
+        # Off by default. Each CCs CARE_CHECKIN_CC (comma-separated), or the
+        # owner emails when unset; with neither, none is sent.
+        self.checkin_emails = e.get(
+            "CARE_CHECKIN_EMAILS", "").lower() in ("1", "true", "yes")
+        self.checkin_cc = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_CHECKIN_CC") or "").split(",")
+            if x.strip())
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
@@ -283,8 +320,14 @@ class Config:
         self.anthropic_oauth_beta = e.get(
             "ANTHROPIC_OAUTH_BETA", "oauth-2025-04-20")
         self.openai_api_key = e.get("OPENAI_API_KEY", "")
-        self.openai_base = (e.get("OPENAI_BASE_URL")
-                            or "https://api.openai.com/v1").rstrip("/")
+        # Rebuilt from its validated parts, so the host the gate checks
+        # (model_host) and the URL requests sends to cannot disagree. A URL
+        # that does not validate is kept as given: its host is never vetted.
+        raw_openai = (e.get("OPENAI_BASE_URL")
+                      or "https://api.openai.com/v1").rstrip("/")
+        parsed_openai = model_endpoint(raw_openai)
+        self.openai_base = (parsed_openai.url if parsed_openai is not None
+                            else raw_openai)
         self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5-5")
         # Current Claude models always think before answering, and thinking
         # spends the same max_tokens as the answer: at 1200 a thorough lab
@@ -304,24 +347,34 @@ class Config:
         # data to the model host, so that host must be vetted: one of the
         # owner-approved hosts in _VETTED_MODEL_HOSTS, or one named in
         # CARE_REAL_RECORDS_MODEL_HOSTS (naming it is the deliberate act).
-        # Exact hostname match. The Anthropic SDK honours ANTHROPIC_BASE_URL
-        # from the environment, so that is the Anthropic host when set.
+        # Exact hostname match, over https only. ANTHROPIC_BASE_URL is the
+        # Anthropic host when set; llm.py passes it to the SDK explicitly,
+        # validated the same way, rather than letting the SDK read the raw
+        # environment with a parser of its own.
+        # Kept on every process, whatever CARE_REAL_RECORDS says here: the
+        # worker makes the model calls and may not carry the web's setting,
+        # so it asks model_host_vetted per turn (careagents/worker.py).
+        raw_anthropic = (e.get("ANTHROPIC_BASE_URL")
+                         or "https://api.anthropic.com")
+        parsed_anthropic = model_endpoint(raw_anthropic)
+        self.anthropic_base_url = (
+            parsed_anthropic.url if parsed_anthropic is not None
+            else raw_anthropic)
+        self.extra_model_hosts = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_REAL_RECORDS_MODEL_HOSTS") or "")
+            .split(",") if x.strip())
         if self.real_records != "off":
-            serving_url = (
-                (e.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com")
-                if self.provider == "anthropic" else self.openai_base)
-            model_host = urlparse(serving_url).hostname
-            vetted = _VETTED_MODEL_HOSTS | {
-                x.strip().lower()
-                for x in (e.get("CARE_REAL_RECORDS_MODEL_HOSTS") or "")
-                .split(",") if x.strip()}
-            if model_host not in vetted:
+            model_host = self.model_host
+            if not self.model_host_vetted:
                 # Host only: a base URL can carry credentials.
                 raise ConfigError(
                     f"CARE_REAL_RECORDS={self.real_records} but chat would "
                     f"go to {self.provider} at unvetted host {model_host!r}; "
-                    "use a vetted provider or name the host in "
-                    "CARE_REAL_RECORDS_MODEL_HOSTS")
+                    "use a vetted provider over https, or name the host in "
+                    "CARE_REAL_RECORDS_MODEL_HOSTS. A base URL with "
+                    "userinfo, a query, a fragment, a backslash or "
+                    "whitespace is never vetted")
 
         # Chat rate limit: turns per window per session (LLM spend bound on a
         # public, unauthenticated site).
@@ -460,6 +513,29 @@ class Config:
         if self.anthropic_api_key or self.anthropic_oauth_token:
             return "anthropic"
         return "openai"
+
+    @property
+    def _model_endpoint(self) -> Url | None:
+        return model_endpoint(
+            self.anthropic_base_url if self.provider == "anthropic"
+            else self.openai_base)
+
+    @property
+    def model_host(self) -> str | None:
+        """The hostname chat turns are sent to, as requests reads it; None
+        when the base URL is refused (see model_endpoint)."""
+        u = self._model_endpoint
+        return u.host if u is not None else None
+
+    @property
+    def model_host_vetted(self) -> bool:
+        """May real records go to the model host? Only over https, and only
+        an exact match for an owner-approved host or one named in
+        CARE_REAL_RECORDS_MODEL_HOSTS. The boot check and the worker's
+        per-turn check both ask this, for either provider."""
+        u = self._model_endpoint
+        return (u is not None and u.scheme == "https"
+                and u.host in (_VETTED_MODEL_HOSTS | self.extra_model_hosts))
 
     def actions_sms_open_for(self, email) -> bool:
         """May this account be offered propose_action? See CARE_ACTIONS_SMS

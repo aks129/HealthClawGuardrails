@@ -8,6 +8,7 @@ F4), so `_turn` runs the worker as a deployed turn would.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -90,7 +91,8 @@ def test_a_turn_over_the_cap_is_answered_without_the_model(
     assert _used(svc) == 1
     answers = [row["content"] for rows in fake.logged.values()
                for row in rows if row["role"] == "assistant"]
-    assert answers == [sample_framed("model answer"), beta.DAILY_LIMIT_TEXT]
+    assert answers[0] == sample_framed("model answer") and len(answers) == 2
+    assert answers[1].startswith(beta.DAILY_LIMIT_TEXT + " More in ")
     assert _turn(c, agent_id, "q-3") == 429     # and admission says so
 
 
@@ -181,24 +183,112 @@ def test_the_chat_says_the_servers_sentence_at_the_daily_limit(
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
     from careagents import beta
-    assert got["daily"] == beta.DAILY_LIMIT_TEXT
+    assert got["daily"] == body["message"]
+    assert body["message"].startswith(beta.DAILY_LIMIT_TEXT + " More in ")
     assert "few minutes" in got["pace"]
     assert got["empty"] == got["pace"] == got["blankMessage"]
     # And the 429 branch hands the server's body to it, rather than a fixed
     # sentence: the branch sits inside the streaming loop, past the reach of
     # a harness, so its source is pinned.
     src = CHAT_JS.read_text(encoding="utf-8")
-    branch = src.split("if (resp.status === 429) {", 1)[1].split("}", 1)[0]
-    assert "addAgentText(limitText(await resp.json()" in branch
+    branch = src.split("if (resp.status === 429) {", 1)[1].split(
+        "return;", 1)[0]
+    assert "const limit = await resp.json()" in branch
+    assert "addAgentText(limitText(limit));" in branch
     assert "PACE_TEXT" not in branch and "pace limit" not in branch
 
 
 def test_the_daily_limit_sentence_is_plain():
     from careagents import beta
-    assert "UTC" not in beta.DAILY_LIMIT_TEXT
-    assert "midnight" not in beta.DAILY_LIMIT_TEXT
-    assert beta.DAILY_LIMIT_TEXT == ("You've reached today's message limit. "
-                                     "It resets overnight.")
+    text = beta.daily_limit_text()
+    assert "UTC" not in text and "midnight" not in text
+    assert "overnight" not in text
+    assert not re.search(r"\d:\d", text)      # never a clock time
+    assert text.startswith("You've used today's messages. More in ")
+
+
+@pytest.mark.parametrize("clock, says", [
+    # 17:00 UTC is 1pm in New York: seven hours to go, not "overnight".
+    ("2026-10-16T17:00:00+00:00", "More in about 7 hours."),
+    ("2026-10-16T00:00:01+00:00", "More in about 24 hours."),
+    ("2026-10-16T22:50:00+00:00", "More in about 1 hour."),
+    ("2026-10-16T23:00:00+00:00", "More in about 1 hour."),
+    ("2026-10-16T23:20:00+00:00", "More in under an hour."),
+    ("2026-10-16T23:59:59+00:00", "More in under an hour."),
+    ("2026-10-16T16:29:00+00:00", "More in about 8 hours."),
+    ("2026-10-16T16:31:00+00:00", "More in about 7 hours."),
+    # A clock in another zone is the same moment: 1pm EDT is 17:00 UTC.
+    ("2026-10-16T13:00:00-04:00", "More in about 7 hours."),
+])
+def test_the_daily_limit_says_how_long_until_utc_midnight(clock, says):
+    """#864: the allowance is per UTC day, so more comes at UTC midnight.
+    Said as plain hours from now, never as a UTC time."""
+    import datetime as dt
+    from careagents import beta
+    assert beta.daily_limit_text(dt.datetime.fromisoformat(clock)) == (
+        "You've used today's messages. " + says)
+
+
+def test_the_daily_limit_429_says_hours_and_offers_tell_us(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """The web 429 carries the hours sentence, and the page puts a "Tell
+    us" link to /feedback under it, with the screen and error=rate_limited
+    and nothing from the refused message (FHI-68 item 7). The pace 429 does
+    not get it: it is not the daily limit."""
+    import json
+    import shutil
+    import subprocess
+    app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
+    assert _turn(c, agent_id, "tell-1") == 200
+    r = c.post("/api/chat", json={"agent_id": agent_id,
+                                  "message": "a private question",
+                                  "request_id": "tell-2"})
+    assert r.status_code == 429
+    body = r.get_json()
+    assert re.fullmatch(r"You've used today's messages\. More in "
+                        r"(about \d{1,2} hours?|under an hour)\.",
+                        body["message"])
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(["node", "-e", _TELL_US_HARNESS, "--", str(CHAT_JS),
+                          json.dumps(body)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["text"] == "Need more? Tell us."
+    assert got["href"] == "/feedback?screen=chat&error=rate_limited"
+    assert "private" not in got["href"]
+    src = CHAT_JS.read_text(encoding="utf-8")
+    branch = src.split("if (resp.status === 429) {", 1)[1].split(
+        "return;", 1)[0]
+    assert ('if (limit && limit.error === "daily_limit_reached")\n'
+            '              addLimitFeedback();') in branch
+
+
+_TELL_US_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const m = src.match(/function addLimitFeedback\(\) \{[\s\S]*?\n  \}\n/);
+if (!m) throw new Error('addLimitFeedback not found');
+function node(tag) {
+  return { tag, className: '', textContent: '', href: '', kids: [],
+           appendChild(k) { this.kids.push(k); } };
+}
+function el(tag, cls, text) {
+  const n = node(tag);
+  if (cls) n.className = cls;
+  if (text) n.textContent = text;
+  return n;
+}
+const document = { createTextNode: (t) => ({ textContent: t, kids: [] }) };
+const log = node('div');
+new Function('el', 'document', 'log', 'URLSearchParams',
+             m[0] + 'addLimitFeedback();')(el, document, log, URLSearchParams);
+const p = log.kids[0];
+const text = (n) => n.textContent + n.kids.map(text).join('');
+const link = p.kids.find((k) => k.tag === 'a');
+process.stdout.write(JSON.stringify({ text: text(p), href: link.href }));
+"""
 
 
 def test_a_recovered_run_is_not_charged_twice(cfg, svc, monkeypatch):  # noqa: F811

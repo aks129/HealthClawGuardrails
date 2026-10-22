@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Check-in emails — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# The stop link in a check-in email (careagents/checkins.py). Opening it
+   only asks: mail scanners open links, and a GET that acted would stop
+   the emails before the person chose to. #}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card beta-page">
+    {% if outcome == "ask" %}
+    <h1>Stop check-in emails</h1>
+    <p>We send two short emails after you join, asking how it's going. This
+      stops them. Sign-in codes still come.</p>
+    <form method="post" action="/emails/stop">
+      <input type="hidden" name="t" value="{{ token }}">
+      <button class="btn-primary btn-block" type="submit">Stop these emails</button>
+    </form>
+    {% elif outcome == "stopped" %}
+    <h1>Done</h1>
+    <p>You won't get any more check-in emails.</p>
+    <p>Something confusing? <a href="/feedback">Tell us</a>.</p>
+    {% else %}
+    <h1>This link no longer works</h1>
+    <p>The account may have been deleted, or the link was cut short.</p>
+    <p>Something not right? <a href="/feedback">Tell us</a>.</p>
+    {% endif %}
+  </div>
+</main>
+{% endblock %}

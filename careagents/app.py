@@ -31,6 +31,7 @@ import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 from markupsafe import Markup, escape
+from sqlalchemy.exc import SQLAlchemyError
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code,
@@ -42,8 +43,9 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
-from careagents import beta_signup, errors, feedback, funnel, invites
+from careagents import beta_signup, causes, errors, feedback, funnel, invites
 from careagents import checkin_wallet, text_self
+from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -118,6 +120,11 @@ def chat_links(text) -> Markup:
 # chosen to end the 25s hold while leaving room for a loaded engine; it is not
 # a measured optimum, and a p99 from production should replace it.
 _ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
+
+#: Consecutive failed run-event reads before the browser stream says the
+#: turn failed (#926). A read that met a closing keep-alive connection
+#: succeeds on the next try; an engine that is really gone does not.
+_REPLAY_MAX_MISSES = 3
 
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
@@ -358,6 +365,13 @@ def create_app(config: Config | None = None,
     hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
                                     public_base=cfg.healthclaw_public_base)
     svc = accounts or AccountService(cfg)
+    # Spent and expired sign-in links hold a number; ones made before #1004
+    # deleted them are swept here, once per start. Idempotent, and a failure
+    # must not stop the app serving.
+    try:
+        svc.prune_imessage_links()
+    except SQLAlchemyError:
+        logger.warning("imessage link sweep failed at start", exc_info=True)
     # Exposed for deterministic integration tests and process diagnostics.
     # Production Gunicorn never executes this worker object; the systemd/OCI
     # worker service constructs its own clients and calls careagents.worker.
@@ -742,8 +756,10 @@ def create_app(config: Config | None = None,
             return ("Connecting your own records isn't open yet, so you're "
                     "using made-up records.")
         if outcome == invites.NONE:
-            return ("For now you can use made-up records. Connecting your "
-                    "own records isn't open to you yet.")
+            # The hub's own words for an empty account, not "isn't open
+            # to you", which reads as being left out (patient re-walk).
+            return ("For now you're using made-up records. Connecting your "
+                    "own records is coming later in the beta.")
         return None
 
     @app.get("/settings")
@@ -936,7 +952,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "no challenge"}), 400
         try:
             acct = svc.finish_authentication(request.get_json(force=True),
-                                             challenge)
+                                             challenge, method="passkey")
         except AuthError as exc:
             funnel.safely(funnel.count_issue, svc.session, "sign_in_failed")
             return jsonify({"error": str(exc)}), 400
@@ -1295,7 +1311,7 @@ def create_app(config: Config | None = None,
         me = current_account()
         if me is not None and me.email != email.strip().lower():
             return None
-        acct = svc.first_run_account(email)
+        acct = svc.first_run_account(email, sign_in=me is None)
         if acct is None:
             return None
         if me is None:
@@ -2209,6 +2225,8 @@ def create_app(config: Config | None = None,
         # all: a card there would promise an approval the relay refuses
         # (security review of #853).
         reviews = []
+        # Only a lookup that answered says no form is waiting (#998 L2).
+        pending_known = False
         if conn.get("status") != "revoked":
             try:
                 reviews = [{"id": a["id"],
@@ -2217,10 +2235,30 @@ def create_app(config: Config | None = None,
                             "form": a.get("kind") == "form-fill"}
                            for a in hc.pending_actions(ctx["tenant"])
                            if a.get("id")]
+                pending_known = True
             except HealthClawError:
                 logger.warning("pending reviews unavailable for agent %s",
                                agent_id)
                 reviews = []
+        # Approved, its card is gone and the reply above still says the
+        # form isn't done (patient walk 2026-10-18). The newest finished
+        # form this week is drawn as done, linking to its review page,
+        # which shows the PDF. Not while a form waits: that one is next.
+        done_form = None
+        if pending_known and not any(r["form"] for r in reviews):
+            try:
+                done = sorted(
+                    (a for a in hc.recent_actions(ctx["tenant"])
+                     if a.get("id") and a.get("kind") == "form-fill"
+                     and a.get("status") == "completed"),
+                    # str(): an engine row with a numeric time must not
+                    # 500 the chat (#998 L1).
+                    key=lambda a: str(a.get("updated_at") or ""),
+                    reverse=True)
+                done_form = done[0]["id"] if done else None
+            except HealthClawError:
+                logger.warning("recent forms unavailable for agent %s",
+                               agent_id)
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
@@ -2232,6 +2270,7 @@ def create_app(config: Config | None = None,
                                importing=importing,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               done_form=done_form,
                                starters=starters,
                                # A link session reaches it through a code
                                # sign-in first (/auth, #920 F1).
@@ -2397,6 +2436,7 @@ def create_app(config: Config | None = None,
         # at 90 seconds is no likelier to finish in the next 250ms than one
         # at 5, and a token that just arrived is likely followed by another.
         empty_streak = 0
+        misses = 0
         yield "data: " + json.dumps({
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
@@ -2405,7 +2445,22 @@ def create_app(config: Config | None = None,
                 with acting_for(account_id):
                     page = hc.agent_run_events(tenant, run_id, after=cursor,
                                                limit=100)
-            except HealthClawError:
+            except HealthClawError as exc:
+                # The class and status only: the message is engine text.
+                misses += 1
+                logger.warning(
+                    "run event read %d/%d failed for tenant %s: %s status=%s",
+                    misses, _REPLAY_MAX_MISSES, tenant, type(exc).__name__,
+                    exc.status)
+                # #926: one failed read is not a failed run. A poll that
+                # lands as the engine closes an idle keep-alive connection
+                # (gunicorn's 2s, the same as the poll's backoff cap) never
+                # reaches the engine, and ending here showed "Something went
+                # wrong" on a run that went on to complete. The read has no
+                # side effect and resumes at `cursor`, so it is tried again.
+                if misses < _REPLAY_MAX_MISSES:
+                    time.sleep(cfg.run_sse_poll_seconds)
+                    continue
                 # Without this the generator dies inside an open response and
                 # the browser is left with a stream that stopped for no stated
                 # reason (#219). Only this projection ends: the run is durable
@@ -2413,12 +2468,12 @@ def create_app(config: Config | None = None,
                 # text is the same generic sentence every other failure uses —
                 # an exception message here would be the first place engine
                 # internals reached a patient's screen.
-                logger.warning("run event stream failed for tenant %s", tenant)
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
                     "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
                 return
+            misses = 0
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -2467,7 +2522,8 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "message must be 1-2000 characters"}), 400
         workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
@@ -2491,7 +2547,7 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.DAILY_LIMIT_TEXT,
+                    "message": beta.daily_limit_text(),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -2506,13 +2562,15 @@ def create_app(config: Config | None = None,
         created, user_message_id = hc.claim_inbound_message(
             tenant, text, agent["id"], conversation_id, "web", request_id)
         if created is None or not user_message_id:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.ENGINE_UNAVAILABLE)
             return jsonify({"error": "message store unavailable"}), 503
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
-        except HealthClawError:
-            funnel.safely(funnel.count_issue, svc.session, "chat_error")
+        except HealthClawError as exc:
+            funnel.safely(funnel.count_chat_error, svc.session,
+                          causes.cause_of(exc))
             return jsonify({"error": "run queue unavailable"}), 503
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
@@ -3288,7 +3346,7 @@ def create_app(config: Config | None = None,
                            tester_terms.CONSENT_VERSION):
             return None
         if svc.daily_turns_used(account_id) >= cfg.chat_turns_per_day:
-            return beta.DAILY_LIMIT_TEXT
+            return beta.daily_limit_text()
         return None
 
     def _imessage_queue_turn(ctx, text, request_id, conversation_id):
@@ -3757,8 +3815,11 @@ def create_app(config: Config | None = None,
             created = svc.invite_real_records(email, invited_by)
         except (AuthError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"invited {email.strip().lower()}" if created
-                   else f"{email.strip().lower()} was already invited")
+        typed, key = email.strip().lower(), invites.invite_key(email)
+        click.echo(f"invited {typed}" if created
+                   else f"{typed} was already invited")
+        if key != typed:
+            click.echo(f"matches the inbox {key} (any alias of it)")
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
@@ -3780,7 +3841,9 @@ def create_app(config: Config | None = None,
 
     @_invites.command("list")
     def _invites_list():
-        rows = svc.real_record_invites()
+        """Each invite: as typed, the inbox it matches, when and by whom,
+        live or revoked, and whether that inbox has signed up yet."""
+        rows = invites.real_record_rows(svc.session)
         if not rows:
             click.echo("no invites")
         for r in rows:
@@ -3788,8 +3851,10 @@ def create_app(config: Config | None = None,
             state = ("revoked " + datetime.fromtimestamp(
                 r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
                      if r["revoked_at"] else "live")
-            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
-                       f"by {r['invited_by']:<20} {state}")
+            joined = "signed up" if r["signed_up"] else "not signed up"
+            click.echo(f"{r['display']:<40} matches {r['key']:<32} "
+                       f"{when:%Y-%m-%d} by {r['invited_by']:<20} "
+                       f"{state:<18} {joined}")
 
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
@@ -3802,5 +3867,6 @@ def create_app(config: Config | None = None,
         _VIA_LINK))
     checkin_wallet.register(app, svc, cfg, hc,
                             full_session=lambda: not session.get(_VIA_LINK))
+    checkins.register(app, svc, cfg)
 
     return app

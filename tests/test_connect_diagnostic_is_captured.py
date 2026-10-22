@@ -67,21 +67,27 @@ def test_a_refusal_is_accepted_and_given_a_reference(client):
     assert len(body["reference"]) >= 8
 
 
-def test_the_vendor_request_id_survives(caplog, client):
-    """The whole point. Without this the endpoint records that something
-    failed but not the one field Fasten can correlate against.
+def test_the_log_records_the_shape_of_the_report_not_its_values(caplog,
+                                                               client):
+    """The endpoint is unauthenticated, so since FHI-60 the payload is never
+    written: the log keeps its size and which of the page's field names it
+    carried. Fasten's request id reaches support through the patient, who
+    sees it on the connect page
+    (tests/test_fasten_widget_error_reference.py).
 
-    MUTATION: log only the error_type -> red.
+    MUTATION: log `raw` again -> red. Drop the key list -> red.
     """
     import logging
     with caplog.at_level(logging.WARNING):
-        _post(client, headers={"X-Tenant-Id": "desktop-demo"})
+        _post(client, {"payload": {**_REAL_PAYLOAD, "unexpected": "x"}},
+              headers={"X-Tenant-Id": "desktop-demo"})
 
     logged = " ".join(r.getMessage() for r in caplog.records)
-    assert "req_01J8XKQ2M4YB3" in logged, (
-        f"the vendor request id was not recorded, so there is still nothing "
-        f"to give support: {logged}")
-    assert "fasten_unauthorized_client" in logged
+    assert "req_01J8XKQ2M4YB3" not in logged
+    assert "fasten_unauthorized_client" not in logged
+    assert "unexpected" not in logged
+    assert "keys=error,event_type,request_id other_keys=1" in logged, logged
+    assert "bytes=" in logged
 
 
 def test_the_reference_is_stable_enough_to_quote_and_find(caplog, client):

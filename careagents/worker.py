@@ -14,10 +14,12 @@ import re
 import signal
 import socket
 import threading
+import traceback
 import uuid
 from datetime import datetime, timezone
 
-from careagents import beta, funnel, llm, routing, tester_terms, text_self
+from careagents import beta, causes, checkins, funnel, llm, routing
+from careagents import tester_terms, text_self
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, tools_for_turn,
@@ -129,6 +131,16 @@ def _parse_time(value: str | None) -> datetime | None:
 def _error_class(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name and name[0].isalpha() else "WorkerError"
+
+
+def _raised_at(exc: BaseException) -> str:
+    """Where `exc` was raised, as file:line in function. Code, not data:
+    unlike a formatted traceback it carries no part of the message."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "-"
+    f = frames[-1]
+    return f"{os.path.basename(f.filename)}:{f.lineno} in {f.name}"
 
 
 # One source of truth for patient-facing failure text — careagents/agent.py
@@ -249,8 +261,10 @@ class RunWorker:
                 payload={"status": "cancelled"})
         except RunDeadlineExceeded:
             heartbeat.stop()
-            funnel.safely(funnel.count_issue, self.accounts.session,
-                          "chat_error")
+            logger.warning("CareAgents run %s failed: cause=%s", run_id,
+                           causes.DEADLINE)
+            funnel.safely(funnel.count_chat_error, self.accounts.session,
+                          causes.DEADLINE)
             refund = self._mark_refund(run)
             try:
                 self.hc.transition_agent_run(
@@ -281,14 +295,23 @@ class RunWorker:
                 error_class="AmbiguousToolOutcome")
         except Exception as exc:  # noqa: BLE001 - boundary records safe class
             heartbeat.stop()
-            logger.exception("CareAgents run %s failed", run_id)
-            funnel.safely(funnel.count_issue, self.accounts.session,
-                          "chat_error")
+            # The class, the cause code and where it was raised (#926);
+            # never the message, which can carry the question or answer.
+            cause = causes.cause_of(exc)
+            logger.error("CareAgents run %s failed: %s cause=%s at %s",
+                         run_id, _error_class(exc), cause, _raised_at(exc))
+            funnel.safely(funnel.count_chat_error, self.accounts.session,
+                          cause)
+            if causes.needs_owner(exc):
+                funnel.safely(funnel.alert_owner, self.accounts.session,
+                              self.cfg, cause)
+            text = _failure_text(exc,
+                                 owner_told=bool(self.cfg.owner_emails))
             refund = self._mark_refund(run)
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
-                    {"text": _failure_text(exc)})
+                    {"text": text})
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.failed",
@@ -298,7 +321,7 @@ class RunWorker:
                 # Only once the engine took this worker's failure: a worker
                 # that lost its lease lands here too, and the run may yet
                 # finish elsewhere with a real answer.
-                self._answer_failed_turn(run, _failure_text(exc))
+                self._answer_failed_turn(run, text)
             except HealthClawError:
                 logger.exception("could not record failure for run %s", run_id)
         else:
@@ -399,6 +422,14 @@ class RunWorker:
             self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
+        if (context["connection"].get("kind") != "sample"
+                and not self.cfg.model_host_vetted):
+            # Fail closed per turn, before any record read or model call:
+            # real records go only to an approved model host. The boot check
+            # in config.py runs only where CARE_REAL_RECORDS is set, and this
+            # process may not have it. Anything not sample counts as real.
+            raise llm.ModelHostNotApproved(
+                "model host not approved for real records")
         if context["connection"].get("kind") != "sample":
             # The weekly number (beta spec 4.5): integers only. A retried run
             # can count twice; the weekly figure counts accounts, so that
@@ -508,7 +539,7 @@ class RunWorker:
             allowed, _used = self.accounts.claim_daily_turn(
                 context["account_id"], self.cfg.chat_turns_per_day, day=day)
             if not allowed:
-                self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
+                self._finish(run, {"text": beta.daily_limit_text(),
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return
@@ -772,10 +803,37 @@ class _IdleBackoff:
             return interval
 
 
+def warn_real_records_unset(cfg: Config, accounts: AccountService) -> bool:
+    """At boot: warn, never fail, when this worker has CARE_REAL_RECORDS off
+    but real-record connections exist, which only the web can have made.
+    The worker still refuses each real-record turn whose model host is not
+    approved; the warning says the setting should be mirrored here."""
+    if cfg.real_records != "off":
+        return False
+    from careagents.models import Connection
+    try:
+        with accounts.session() as s:
+            real = (s.query(Connection.id)
+                    .filter(Connection.kind != "sample").first())
+    except Exception:  # noqa: BLE001 - a boot warning never stops a worker
+        logger.warning("could not check for real-record connections")
+        return False
+    if real is None:
+        return False
+    logger.warning(
+        "CARE_REAL_RECORDS is unset on this worker but real-record "
+        "connections exist: mirror the web's CARE_REAL_RECORDS here. Model "
+        "host %s is %s for real records; unapproved, their turns are "
+        "refused.", cfg.model_host,
+        "approved" if cfg.model_host_vetted else "NOT approved")
+    return True
+
+
 def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
+    warn_real_records_unset(cfg, accounts)
     # The routing counts (careagents/routing.py) write through this pool
     # rather than opening one of their own.
     routing.use_session_scope(getattr(accounts, "session", None))
@@ -820,6 +878,12 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
         threads.append(threading.Thread(
             target=funnel.run_digest, args=(accounts.session, cfg, stop),
             daemon=False, name="careagents-digest"))
+    if cfg.checkin_emails:
+        # Day-2 and day-7 tester check-ins (careagents/checkins.py). Each is
+        # claimed once across workers before it is sent.
+        threads.append(threading.Thread(
+            target=checkins.run, args=(accounts.session, cfg, stop),
+            daemon=False, name="careagents-checkins"))
     for thread in threads:
         thread.start()
     for thread in threads:

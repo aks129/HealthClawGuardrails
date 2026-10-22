@@ -94,6 +94,58 @@ def mailbox_hash(email: str) -> str:
         beta_signup.account_key(email).encode("utf-8")).hexdigest()
 
 
+def _undotted(email) -> str:
+    """The address lowercased, with a trailing dot on its domain dropped
+    (`corp.example.` is the same host in DNS) (#993 F2)."""
+    typed = (email or "").strip().lower()
+    local, at, domain = typed.rpartition("@")
+    return f"{local}@{domain.rstrip('.')}" if at else typed
+
+
+def invite_key(email) -> str:
+    """What a real-record invite GRANTS on, and what `ca_real_record_invites`
+    is keyed by. "" for no address.
+
+    The grant fails closed, so this folds only what is known to reach one
+    inbox: the address lowercased with its domain in ASCII
+    (`beta_signup.ascii_email`) and no trailing dot, and on Gmail and
+    googlemail the dots and a +tag dropped (`beta_signup.mailbox`). On any
+    other domain a +tag is kept: where `+` is an ordinary character,
+    `bob+x@` and `bob@` are two people. What DENIES uses the wider
+    `inbox_key` (#993 F1)."""
+    from careagents import beta_signup
+    typed = _undotted(email)
+    if not typed:
+        return ""
+    address = beta_signup.ascii_email(typed) or typed
+    if address.rpartition("@")[2] in beta_signup._GMAIL:
+        return beta_signup.mailbox(address)
+    return address
+
+
+def inbox_key(email) -> str:
+    """What a real-record invite DENIES on: `beta_signup.account_key`,
+    which folds +tags on every domain, with no trailing dot. A revoke, an
+    invite already held, a link join and the stage 1 place all count the
+    inbox this wide, so `carol+x@` cannot undo the revoke of `carol@` or
+    take a second place for it (#993 F1). "" for no address."""
+    from careagents import beta_signup
+    typed = _undotted(email)
+    return beta_signup.account_key(typed) if typed else ""
+
+
+def alias_invite(rows, email) -> str | None:
+    """Of `rows` ((key, revoked_at) pairs from ca_real_record_invites), is
+    there an invite on the same inbox (`inbox_key`) under another key?
+    "revoked" when any such is revoked, else "live", else None."""
+    key, inbox = invite_key(email), inbox_key(email)
+    states = {"revoked" if revoked_at is not None else "live"
+              for other, revoked_at in rows
+              if other != key and inbox_key(other) == inbox}
+    return ("revoked" if "revoked" in states
+            else "live" if states else None)
+
+
 class InvitePending(Base):
     """A beta request made through a link, waiting for its confirm."""
     __tablename__ = "ca_invite_pending"
@@ -241,17 +293,17 @@ def inviter_has_access(svc, cfg, account) -> bool:
 
 def _real_records_for(svc, cfg, email: str, inviter_id: str) -> str:
     """The real-record outcome of one join. Only ever a fresh invite."""
-    from careagents import beta_signup
     from careagents.models import RealRecordInvite
     if not tester_terms.approved():
         return CLOSED
     if not inviter_has_access(svc, cfg, svc.get_account(inviter_id)):
         return NONE
-    key = beta_signup.account_key(email)
     with svc.session() as s:
-        for (other,) in s.query(RealRecordInvite.email):
-            if other != email and beta_signup.account_key(other) == key:
-                return NONE         # the inbox holds one under another alias
+        rows = s.query(RealRecordInvite.email,
+                       RealRecordInvite.revoked_at).all()
+    if alias_invite(rows, email) is not None:
+        return NONE         # the inbox holds one under another alias
+    # The same check runs again inside the write, under its lock.
     outcome = svc.grant_join_invite(email, inviter_id)
     return {"created": GRANTED, "live": HAD, "full": FULL}.get(outcome, NONE)
 
@@ -480,6 +532,20 @@ def register(app, svc, cfg, beta_context) -> None:
         if not set_cap(svc.session, which, value):
             raise click.ClickException("no link by that code or email")
         click.echo(f"cap set to {cap}")
+
+
+def real_record_rows(session_scope) -> list[dict]:
+    """The real-record invites for the owner's list (`flask invites list`):
+    the address as typed, the inbox it matches, and whether an account on
+    that inbox exists yet, so "invited but not joined" shows."""
+    from careagents.models import RealRecordInvite
+    with session_scope() as s:
+        joined = {invite_key(e) for (e,) in s.query(Account.email)}
+        return [{"display": r.display_email or r.email, "key": r.email,
+                 "invited_at": r.invited_at, "invited_by": r.invited_by,
+                 "revoked_at": r.revoked_at, "signed_up": r.email in joined}
+                for r in s.query(RealRecordInvite).order_by(
+                    RealRecordInvite.invited_at)]
 
 
 def settings_row(svc, cfg, account_id: str) -> dict:
