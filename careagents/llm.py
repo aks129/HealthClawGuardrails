@@ -485,6 +485,10 @@ def _observe(turn: LLMTurn, tier, started: float) -> None:
 REFUSAL_TEXT = ("I can't help with that one. Try asking it another way, "
                 "or ask your doctor.")
 CUT_OFF_TEXT = "(That ran long and was cut off. Ask me to continue.)"
+#: After the words of an answer the model declined part way through
+#: (stop_reason "refusal" with text already written), so it does not read
+#: as a whole answer. The worker adds it, with the 911 line (#1017).
+DECLINED_PARTIAL_TEXT = "(That answer stopped before it finished.)"
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
@@ -586,4 +590,11 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
             args = {}
         turn.tool_calls.append(ToolCall(
             id=c["id"], name=c["function"]["name"], arguments=args))
+    if msg.get("refusal"):
+        # OpenAI's decline arrives as `message.refusal`, with no content.
+        # The same as Anthropic's stop_reason "refusal": our fixed sentence,
+        # never the provider's wording, and the worker adds the 911 line.
+        turn.stop_reason = "refusal"
+        if not turn.text.strip():
+            turn.text = REFUSAL_TEXT
     return turn

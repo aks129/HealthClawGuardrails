@@ -638,3 +638,93 @@ def test_the_pages_own_failure_line_is_the_trailer():
     m = re.search(r'addAgentText\("Connection hiccup — try that again\.'
                   r'\\n\\n([^"]+)", null, "connection"\);', _chat_js())
     assert m and m.group(1) == beta.EMERGENCY_TRAILER
+
+
+# --- round 6: the decline signal, an empty answer, OpenAI's refusal ----------
+
+class _OpenAIResp:
+    status_code = 200
+    headers: dict = {}
+
+    def __init__(self, message):
+        self._message = message
+
+    def json(self):
+        return {"choices": [{"message": self._message}]}
+
+
+def _openai_turn(monkeypatch, message):
+    from types import SimpleNamespace
+
+    from careagents import llm
+    monkeypatch.setattr(llm.requests, "post",
+                        lambda *a, **k: _OpenAIResp(message))
+    ocfg = SimpleNamespace(openai_base="http://openai.invalid/v1",
+                           openai_api_key="k", openai_model="m",
+                           run_deadline_seconds=120)
+    return llm._openai_complete(ocfg, "system", [
+        {"role": "user", "content": "hi"}], [])
+
+
+def test_an_openai_refusal_is_a_refusal(monkeypatch):
+    """OpenAI declines with `message.refusal` and no content: read, it is
+    the same refusal as Anthropic's, our sentence and never the provider's
+    wording."""
+    from careagents import llm
+    turn = _openai_turn(monkeypatch, {
+        "role": "assistant", "content": None,
+        "refusal": "I'm sorry, I cannot assist with that request."})
+    assert turn.stop_reason == "refusal"
+    assert turn.text == llm.REFUSAL_TEXT
+    plain = _openai_turn(monkeypatch, {"role": "assistant",
+                                       "content": "The A1c was 7.2."})
+    assert plain.stop_reason == "" and plain.text == "The A1c was 7.2."
+
+
+def _declined(text):
+    """A turn the model declined after writing `text`, as llm.complete
+    returns it."""
+    from careagents import llm
+    return llm.LLMTurn(text=text, stop_reason="refusal")
+
+
+@pytest.mark.parametrize("said,lead", (
+    ("quiero morir", beta.EMERGENCY_LINE + "\n" + beta.SELF_HARM_LINE),
+    ("how are my labs?", "")))
+def test_a_declined_partial_answer_says_it_stopped_and_carries_911(
+        cfg, svc, monkeypatch, said, lead):  # noqa: F811
+    from careagents import agent as agent_mod
+    from careagents import llm
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(agent_mod.llm, "complete",
+                        lambda *a, **k: _declined("I hear how much pain"))
+    _queue(c, agent_id, said, "dp-1")
+    _work(cfg, svc, fake)
+    [out] = _answers(fake)
+    body = "I hear how much pain\n\n" + llm.DECLINED_PARTIAL_TEXT
+    if lead:
+        assert out == f"{lead}\n\n{body}\n\n{beta.SAMPLE_FRAME}"
+    else:
+        assert out == (f"{beta.SAMPLE_FRAME}\n\n{body}\n\n"
+                       f"{beta.EMERGENCY_TRAILER}")
+
+
+@pytest.mark.parametrize("reply", ("", "   \n  "))
+def test_an_empty_answer_is_a_failure_with_911(cfg, svc, monkeypatch, reply):  # noqa: F811
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply=reply)
+    _queue(c, agent_id, "how are my labs?", "empty-1")
+    _work(cfg, svc, fake)
+    assert _answers(fake) == [beta.SAMPLE_FRAME + "\n\n" + GENERIC_FAILURE_TEXT
+                              + "\n\n" + beta.EMERGENCY_TRAILER]
+
+
+def test_the_911_and_988_lines_keep_their_line_break_on_a_sample():
+    """_drop_echo used to rejoin the first paragraph's sentences with
+    spaces, putting the 911 and 988 lines on one line."""
+    from careagents.worker import _drop_echo
+    led = beta.with_911("Reply.", "quiero morir")
+    assert _drop_echo(led, beta.SAMPLE_FRAME) == led
+    echoed = beta.SAMPLE_FRAME + " " + led
+    assert _drop_echo(echoed, beta.SAMPLE_FRAME) == led

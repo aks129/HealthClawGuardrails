@@ -21,8 +21,8 @@ from datetime import datetime, timezone
 from careagents import beta, causes, checkins, funnel, llm, routing
 from careagents import tester_terms
 from careagents.accounts import AccountService
-from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
-                              TOOL_LABELS, TOOLS,
+from careagents.agent import (GENERIC_FAILURE_TEXT, MAX_TOOL_ROUNDS,
+                              SAMPLE_TOOL_LABELS, TOOL_LABELS, TOOLS,
                               failure_text as agent_failure_text,
                               records_arriving,
                               tool_error_result as agent_tool_error_result,
@@ -93,14 +93,16 @@ def _drop_echo(text: str, lead: str) -> str:
     advice, no clinical word, short). The rest of the answer is untouched."""
     lead_sentences = {_plain(s) for s in re.split(r"(?<=[.!?])\s+", lead)}
     first, sep, rest = text.partition("\n\n")
-    sentences = re.split(r"(?<=[.!?])\s+", first.strip())
-    while sentences:
-        s = _plain(sentences[0])
+    # Sentences with the whitespace after each kept, so what stays keeps
+    # its own line breaks: the 911 and 988 lines are two lines (#1017).
+    parts = re.split(r"(?<=[.!?])(\s+)", first.strip())
+    while parts:
+        s = _plain(parts[0])
         if not s or s in lead_sentences or _disclaimer_only(s):
-            sentences.pop(0)
+            del parts[:2]
             continue
         break
-    first = " ".join(sentences)
+    first = "".join(parts)
     return (first + sep + rest if first else rest).strip()
 
 
@@ -587,6 +589,9 @@ class RunWorker:
                     "checkpoint_id": checkpoint_id,
                     "round": round_number,
                     "text": turn.text,
+                    # "refusal" when the model declined (#1017): _finish
+                    # gives a decline the 911 line, whatever its text.
+                    "stop_reason": getattr(turn, "stop_reason", "") or "",
                     "tool_calls": [
                         {"id": call.id, "name": call.name,
                          "arguments": call.arguments}
@@ -728,13 +733,24 @@ class RunWorker:
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
-        text = str(checkpoint.get("text") or "").strip() or "…"
-        if text == llm.REFUSAL_TEXT:
-            # The model declined (stop_reason "refusal", which llm.complete
-            # answers with this sentence): a refusal like any other, and
-            # likeliest after self-harm wording. 911 and 988 first for a
-            # crisis, else the 911 line after it.
-            text = beta.with_911(text, _said(run))
+        text = str(checkpoint.get("text") or "").strip()
+        said = _said(run)
+        if (checkpoint.get("stop_reason") == "refusal"
+                or text == llm.REFUSAL_TEXT):
+            # The model declined: a refusal like any other, and likeliest
+            # after self-harm wording. The signal is the stop reason; the
+            # exact sentence (which llm.complete puts in for an empty
+            # decline) is the fallback for checkpoints written before it
+            # was kept. A decline cut off mid-answer says it stopped.
+            # 911 and 988 first for a crisis, else the 911 line after it.
+            if not text:
+                text = llm.REFUSAL_TEXT
+            elif text != llm.REFUSAL_TEXT:
+                text = f"{text}\n\n{llm.DECLINED_PARTIAL_TEXT}"
+            text = beta.with_911(text, said)
+        elif not text:
+            # An empty answer is a failure, not an answer of "…".
+            text = beta.with_911(GENERIC_FAILURE_TEXT, said)
         if lead:
             # The line is in the stored history, so a model may already
             # open with it on a later turn. Say it once. A real answer
