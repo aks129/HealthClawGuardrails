@@ -233,6 +233,22 @@ def test_the_test_patient_never_counts_as_real_records(tester):
     assert svc.has_connections(acct.id) is True
 
 
+def test_the_hub_still_works_for_an_account_holding_only_the_test_patient(
+        tester):
+    """It is the account's visible sample afterwards: the hub renders it and
+    the sample tap answers, rather than a second mint or a 500."""
+    browser, hc, svc, acct = tester
+    assert _choose(browser).status_code == 200
+    assert browser.get("/").status_code == 200
+    r = browser.post("/api/connections/sample", json={})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    # The existing one opens, with an assistant to open it in, as a sample
+    # tap's own sample does.
+    assert r.get_json()["existing"] is True
+    assert r.get_json().get("redirect")
+    assert len(hc.seeded) == 1
+
+
 def test_a_seed_that_fails_leaves_nothing_behind(monkeypatch):
     hc = _FakeClient(seed_error=HealthClawError("seed failed (503)", 503))
     app, svc = _careagents(hc, **FLAGS)

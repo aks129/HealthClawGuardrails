@@ -272,6 +272,9 @@ def _register_test_patient(app, svc, hc, signed_in) -> None:
             except HealthClawError:
                 logger.warning("record count after test patient seed "
                                "failed for %s", cid)
+            # It is the account's visible sample now: give it the first
+            # assistant, as the sample tap does, so the hub opens it.
+            svc.ensure_first_agent(account_id, cid)
             return _no_store(jsonify({"ready": True}))
         finally:
             svc.release_sample_start(account_id)

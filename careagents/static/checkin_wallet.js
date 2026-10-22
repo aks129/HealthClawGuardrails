@@ -258,7 +258,12 @@ const NO_RECORDS = {
 // The reasons that mean "nothing real to share", where the page may offer
 // the test patient instead (card.dataset.testPatient, set by the server
 // only when CARE_CHECKIN_TEST_PATIENT is on).
-const OFFER_TEST = new Set(["no_records", "sample_only"]);
+// Each says only what is missing: the longer NO_RECORDS text tells the
+// person to go and connect records, which this screen offers instead.
+const OFFER_TEST = {
+  no_records: "There are no records on your account yet.",
+  sample_only: "Your account has only the sample records, which are made up and can't be shared.",
+};
 
 /* Resolves to true when the person chose the test patient. */
 function offerTestPatient(why) {
@@ -302,8 +307,8 @@ function start() {
       try { records = await loadRecords(request, unsupportedItems); } catch (e) {
         code = e.message;
       }
-      if (OFFER_TEST.has(code) && card.dataset.testPatient) {
-        if (!(await offerTestPatient(NO_RECORDS[code]))) {
+      if (Object.hasOwn(OFFER_TEST, code) && card.dataset.testPatient) {
+        if (!(await offerTestPatient(OFFER_TEST[code]))) {
           await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
           return { response: declineAll(request) };
         }
