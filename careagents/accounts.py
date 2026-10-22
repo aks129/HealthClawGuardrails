@@ -27,9 +27,11 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
+# Its table goes in Base.metadata before any engine is built, as below.
+from careagents import checkins
 # Also puts the beta, invite and funnel tables in Base.metadata before any
 # engine is built.
-from careagents import beta_signup, funnel, invites
+from careagents import beta_signup, funnel, invites, signins
 from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
@@ -296,12 +298,14 @@ class AccountService:
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
+                acct.last_login_method = "email_code"
                 s.flush()
                 result = _detach(acct)
         if error:
             raise AuthError(error)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
+        funnel.safely(signins.count, self.session, result.id, "email_code")
         return result
 
     def has_connections(self, account_id: str) -> bool:
@@ -317,14 +321,19 @@ class AccountService:
                 Connection.account_id == account_id,
                 Connection.kind != "sample").first() is not None
 
-    def first_run_account(self, email: str) -> Account | None:
+    def first_run_account(self, email: str,
+                          sign_in: bool = True) -> Account | None:
         """The account a confirmed beta request signs in to, or None.
 
         The confirm link proves the mailbox, as an email code does, so the
         address gets the account a code would give it: made now if there
         is none, verified, its sign-in stamped. None when the account
         already has a connection: a forwarded link must never open records
-        that are already there, so that account signs in the usual way."""
+        that are already there, so that account signs in the usual way.
+
+        `sign_in=False` when this browser is already signed in as the
+        address (app.py `_first_run` keeps that session): no sign-in
+        happened, so none is stamped or counted."""
         email = email.strip().lower()
         with self.session() as s:
             acct = s.query(Account).filter_by(email=email).first()
@@ -339,11 +348,16 @@ class AccountService:
                 s.add(Person(account_id=acct.id, kind="self"))
             elif acct.email_verified_at is None:
                 acct.email_verified_at = now()
-            acct.last_login_at = now()
+            if sign_in or made:
+                acct.last_login_at = now()
+                acct.last_login_method = "signup_confirm"
             s.flush()
             result = _detach(acct)
         if made:
             funnel.safely(funnel.new_account, self.session, result.id)
+        if sign_in or made:
+            funnel.safely(signins.count, self.session, result.id,
+                          "signup_confirm")
         return result
 
     def ping(self) -> bool:
@@ -405,7 +419,12 @@ class AccountService:
 
     def finish_authentication(self, credential: dict,
                               expected_challenge: str,
-                              require_uv: bool = False) -> Account:
+                              require_uv: bool = False,
+                              method: str | None = None) -> Account:
+        """Verify a passkey assertion. `method` is the sign-in it is
+        counted as (careagents/signins.py), passed by the sign-in route.
+        None, the default, counts nothing: the consent screen's check makes
+        no session."""
         raw_id = base64url_to_bytes(credential["rawId"])
         with self.session() as s:
             pk = s.query(Passkey).filter_by(credential_id=raw_id).first()
@@ -422,9 +441,14 @@ class AccountService:
             )
             pk.sign_count = verification.new_sign_count
             acct = s.get(Account, pk.account_id)
-            acct.last_login_at = now()
+            if method:
+                acct.last_login_at = now()
+                acct.last_login_method = method
             s.flush()
-            return _detach(acct)
+            result = _detach(acct)
+        if method:
+            funnel.safely(signins.count, self.session, result.id, method)
+        return result
 
     def has_passkey(self, account_id: str) -> bool:
         with self.session() as s:
@@ -441,23 +465,30 @@ class AccountService:
     # --- real-record invites (beta pathway spec section 4.2) ---------------
 
     @staticmethod
-    def _invite_email(email: str) -> str:
+    def _invite_email(email: str) -> tuple[str, str]:
+        """(the inbox an invite is keyed by, the address as typed). See
+        `invites.invite_key`."""
         email = (email or "").strip().lower()
         if "@" not in email or len(email) > 255:
             raise AuthError("Enter a valid email address.")
-        return email
+        key = invites.invite_key(email)
+        if key.startswith("@") or len(key) > 255:
+            raise AuthError("Enter a valid email address.")
+        return key, email
 
     #: Postgres advisory-lock key that serialises stage 1 invite writes, so
     #: the count of live invites and the write that depends on it are one
     #: step. Distinct from the migration keys in models.py.
     _INVITE_LOCK_KEY = 9_280_001
 
-    def _write_invite(self, email: str, invited_by: str,
+    def _write_invite(self, email: str, display: str, invited_by: str,
                       reopen: bool) -> str:
         """Create (or, with `reopen`, reopen) an invite only while fewer than
         STAGE1_INVITE_CAP are live, as one atomic step (#928 F1). Returns
         "created", "reopened", "live" (already live, unchanged), "revoked"
-        (revoked and left so) or "full".
+        (revoked and left so), "full", or "alias-live" / "alias-revoked":
+        the inbox (`invites.inbox_key`) already holds an invite under
+        another address, and nothing is written (#993 F1).
 
         The cap sits inside the writing statement. SQLite takes its write
         lock when that statement starts, so the count it reads cannot move
@@ -467,22 +498,31 @@ class AccountService:
         from careagents.beta import STAGE1_INVITE_CAP
         live = ("(SELECT COUNT(*) FROM ca_real_record_invites "
                 "WHERE revoked_at IS NULL)")
-        args = {"e": email, "t": now(), "b": invited_by,
+        args = {"e": email, "d": display, "t": now(), "b": invited_by,
                 "cap": STAGE1_INVITE_CAP}
         with self.engine.begin() as conn:
             if self.engine.dialect.name == "postgresql":
                 conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
                              {"k": self._INVITE_LOCK_KEY})
+            else:
+                # SQLite: take the write lock before reading the rows.
+                conn.execute(text("UPDATE ca_real_record_invites "
+                                  "SET email = email WHERE 1 = 0"))
+            alias = invites.alias_invite(conn.execute(text(
+                "SELECT email, revoked_at FROM ca_real_record_invites")),
+                display)
+            if alias is not None:
+                return f"alias-{alias}"
             if conn.execute(text(
                     "INSERT INTO ca_real_record_invites "
-                    "(email, invited_at, invited_by) "
-                    "SELECT :e, :t, :b WHERE NOT EXISTS ("
+                    "(email, display_email, invited_at, invited_by) "
+                    "SELECT :e, :d, :t, :b WHERE NOT EXISTS ("
                     "SELECT 1 FROM ca_real_record_invites WHERE email = :e) "
                     f"AND {live} < :cap"), args).rowcount:
                 return "created"
             if reopen and conn.execute(text(
                     "UPDATE ca_real_record_invites SET revoked_at = NULL, "
-                    "invited_at = :t, invited_by = :b "
+                    "invited_at = :t, invited_by = :b, display_email = :d "
                     "WHERE email = :e AND revoked_at IS NOT NULL "
                     f"AND {live} < :cap"), args).rowcount:
                 return "reopened"
@@ -505,11 +545,16 @@ class AccountService:
         cannot pass the cap (#928 F1).
         """
         from careagents.beta import STAGE1_INVITE_CAP
-        email = self._invite_email(email)
+        key, display = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
-        outcome = self._write_invite(email, invited_by, reopen=True)
+        outcome = self._write_invite(key, display, invited_by, reopen=True)
+        if outcome.startswith("alias-"):
+            raise ValueError(
+                "Another address for the same inbox already holds an invite "
+                f"({outcome[6:]}). Use that address, or revoke it with "
+                "`flask invites revoke`.")
         if outcome == "full":
             raise ValueError(
                 f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
@@ -520,31 +565,46 @@ class AccountService:
         """A fresh invite for someone who joined through a link, or nothing
         (#928 F2): an invite that exists in any state, live or revoked by
         the operator, is left exactly as it is, `invited_by` included.
-        Returns "created", "live", "revoked" or "full"."""
-        email = self._invite_email(email)
-        return self._write_invite(email, (invited_by or "")[:255],
-                                  reopen=False)
+        Returns "created", "live", "revoked" or "full"; an invite on the
+        same inbox under another address counts as "live" or "revoked"."""
+        key, display = self._invite_email(email)
+        outcome = self._write_invite(key, display, (invited_by or "")[:255],
+                                     reopen=False)
+        return outcome[6:] if outcome.startswith("alias-") else outcome
 
     def revoke_real_records_invite(self, email: str) -> bool:
         """Revoke an invite. New real connections are refused from now on;
         existing ones are left alone. Returns False when there was no live
-        invite to revoke."""
-        email = self._invite_email(email)
+        invite to revoke. Any alias revokes every live invite on the inbox,
+        counted wide (`invites.inbox_key`, #993 F1)."""
+        self._invite_email(email)
+        inbox = invites.inbox_key(email)
+        revoked = False
         with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            if row is None or row.revoked_at is not None:
-                return False
-            row.revoked_at = now()
-            return True
+            for row in s.query(RealRecordInvite).filter(
+                    RealRecordInvite.revoked_at.is_(None)):
+                if invites.inbox_key(row.email) == inbox:
+                    row.revoked_at = now()
+                    revoked = True
+        return revoked
 
     def real_records_invited(self, email) -> bool:
-        """Does this email hold a live (not revoked) invite?"""
-        email = (email or "").strip().lower()
-        if not email:
+        """Does this email hold a live invite? Granted on the narrow key
+        (`invites.invite_key`), and refused when any invite on the wider
+        inbox (`invites.inbox_key`) is revoked (#993 F1). No address, no
+        invite."""
+        key = invites.invite_key(email)
+        if not key or (email or "").strip().endswith("."):
+            # A trailing-dot domain is folded for storing and revoking an
+            # invite, never to grant one: the gate fails closed (#993 F2).
             return False
         with self.session() as s:
-            row = s.get(RealRecordInvite, email)
-            return row is not None and row.revoked_at is None
+            row = s.get(RealRecordInvite, key)
+            if row is None or row.revoked_at is not None:
+                return False
+            rows = s.query(RealRecordInvite.email,
+                           RealRecordInvite.revoked_at).all()
+        return invites.alias_invite(rows, email) != "revoked"
 
     # --- pause (beta spec section 4.6) --------------------------------------
 
@@ -992,15 +1052,17 @@ class AccountService:
             # (tests/test_careagents_account_delete_voice.py enumerates them).
             for model in (Surface, Agent, Grant, Connection, Passkey,
                           UsageDay, RefundDay, ActivityDay, VoiceUsageDay,
-                          Person):
+                          signins.SignInDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)
             funnel.delete_for_account(s, account_id)
+            checkins.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
-            # The invite is keyed by the same address (beta spec 4.2). The
+            # The invite is keyed by the same inbox (beta spec 4.2). The
             # operator can invite again if the person comes back.
-            s.query(RealRecordInvite).filter_by(email=acct.email).delete()
+            s.query(RealRecordInvite).filter_by(
+                email=invites.invite_key(acct.email)).delete()
             # So is a beta request (beta onboarding brief section 5),
             # matched by mailbox since a request keeps its domain in ASCII;
             # its iMessage spot goes to the oldest waitlisted request.

@@ -49,6 +49,7 @@ from r6 import constant_time
 from r6.access import (TenantRejected, TenantSource, require_open_tenant,
                        tenant_from_request)
 from r6.audit import add_audit_event
+from r6.log_safety import loggable_id
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def medent_callback():
     error = request.args.get('error', '')
 
     if error:
-        logger.warning('MEDENT callback error: %s', error)
+        logger.warning('MEDENT callback error (len=%d)', len(error))
         return f"""
         <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
         <h2 style="color:#f87171">Authorization error: {escape(error)}</h2>
@@ -158,7 +159,7 @@ def hbo_callback():
     error = request.args.get('error', '')
 
     if error:
-        logger.warning('HBO callback error: %s', error)
+        logger.warning('HBO callback error (len=%d)', len(error))
         return f"""
         <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
         <h2 style="color:#f87171">Authorization error: {escape(error)}</h2>
@@ -235,7 +236,8 @@ def ingest():
 
     job_id = str(uuid.uuid4())[:8]
     logger.info('SHC ingest: source=%s tenant=%s entries=%d job=%s',
-                source, tenant_id, len(entries), job_id)
+                loggable_id(source), loggable_id(tenant_id), len(entries),
+                job_id)
 
     app = current_app._get_current_object()
     t = threading.Thread(
@@ -322,7 +324,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
         logger.info(
             'SHC job %s complete: source=%s ingested=%d skipped=%d '
             'refused=%d failed=%d skipped_types=%s',
-            job_id, source, ingested, skipped, refused, failed,
+            job_id, loggable_id(source), ingested, skipped, refused, failed,
             types_summary or '-',
         )
 

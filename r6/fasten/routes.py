@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 
 from models import db
-from r6.access import TenantRejected, TenantSource, tenant_from_request
+from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
+                       tenant_from_request)
 from r6.audit import add_audit_event
 from r6.fasten.enrollment import (
     clear_enrollment_session,
@@ -45,9 +46,11 @@ fasten_blueprint = Blueprint('fasten', __name__, url_prefix='/fasten')
 def _tenant_header_or_error():
     """Resolve X-Tenant-Id through the access kernel (spec §1.1, slice 9).
 
-    Returns ``(tenant_id, None)`` or ``(None, response)``. Used by the two
-    write routes whose only guard is the tenant header, so the id it returns
-    is the partition key an EHR connection or an ingest job is bound to.
+    Returns ``(tenant, None)`` or ``(None, response)``. Used by the two
+    write routes that start from the tenant header, so the id it returns is
+    the partition key an EHR connection or an ingest job is bound to. The
+    Tenant is returned, not just its id, so the retry route can ask
+    require_grant about it.
 
     The absent-header answer is the 400 these routes always gave. A MALFORMED
     id raises out to the app-wide TenantRejected handler — before this slice
@@ -56,7 +59,7 @@ def _tenant_header_or_error():
     see there.
     """
     try:
-        return tenant_from_request(sources=(TenantSource.HEADER,)).id, None
+        return tenant_from_request(sources=(TenantSource.HEADER,)), None
     except TenantRejected as exc:
         if exc.reason == TenantRejected.MALFORMED:
             raise
@@ -216,10 +219,18 @@ def retry_job(task_id):
     Recovery hatch for jobs stuck by a redeploy/crash mid-ingest, or failed
     ones. Tenant-scoped; refuses completed jobs (409) and jobs without stored
     links (409, cannot recover without the signed URLs).
+
+    A retry writes a full ingest into the tenant, so it needs what any other
+    write needs: a step-up token bound to that tenant (#912). The grant is
+    checked before the job lookup, so a caller without one learns nothing
+    about which task ids exist.
     """
-    tenant_id, tenant_error = _tenant_header_or_error()
+    tenant, tenant_error = _tenant_header_or_error()
     if tenant_error is not None:
         return tenant_error
+    require_grant(scope=Scope.WRITE, tenant=tenant,
+                  absent_status=401, rejected_status=401)
+    tenant_id = tenant.id
     job = FastenJob.query.filter_by(task_id=task_id, tenant_id=tenant_id).first()
     if not job:
         return jsonify({'error': 'not found'}), 404
@@ -250,6 +261,15 @@ def retry_job(task_id):
     job.skipped_resources = 0
     job.failed_resources = 0
     job.failure_reason = None
+    # The one ingest trigger that wrote no audit row (S-14). Same shape as
+    # the refusal above: fixed words, no task id or links.
+    add_audit_event(
+        event_type='fasten_import_retried',
+        agent_id='fasten-connect',
+        tenant_id=tenant_id,
+        outcome='success',
+        detail='retry relaunched a stored export',
+    )
     db.session.commit()
     _launch_ingest(job.id, links, tenant_id, task_id)
     return jsonify({'status': 'retrying', 'task_id': task_id}), 202
@@ -451,9 +471,10 @@ def register_connection():
     Optional body:   endpoint_id, brand_id, portal_id, tefca_directory_id,
                      platform_type, connection_status, consent_expires_at
     """
-    tenant_id, tenant_error = _tenant_header_or_error()
+    tenant, tenant_error = _tenant_header_or_error()
     if tenant_error is not None:
         return tenant_error
+    tenant_id = tenant.id
 
     if tenant_closed(tenant_id):
         return jsonify({'error': 'connection disconnected'}), 409

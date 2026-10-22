@@ -193,11 +193,6 @@ def test_a_token_minted_for_one_tenant_is_refused_on_another(app, client,
 
 # --- engine gaps the relay inherits (pinned; flip when fixed) -----------------
 
-@pytest.mark.xfail(strict=True, reason="#973 flag 1: the engine checkin "
-                   "export rebuilds meta and drops a record's own HTEST tag; "
-                   "a tester's synthetic upload reaches a clinic unmarked. "
-                   "Engine fix in flight. Do not turn CARE_CHECKIN_WALLET on "
-                   "in production until this passes.")
 def test_a_records_own_htest_tag_survives_the_relay(real_chain):
     browser, _ = real_chain
     r = browser.post(RELAY, json={"resource_types": ["Patient"]})

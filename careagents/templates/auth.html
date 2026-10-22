@@ -21,11 +21,10 @@
     <p class="setup-sub" id="invite-why">To get your invite link, confirm it's you with a code we email. Then you'll go back to Settings.</p>
     {% elif code_for_connect %}
     <p class="setup-sub" id="connect-why">To connect your own records, confirm it's you with a code we email. Then you'll go back to your hub.</p>
-    {% elif prefill %}
-    <p class="setup-sub">We'll email you an 8-digit code to sign in.</p>
     {% else %}
-    <p class="setup-sub">Sign in with your face or fingerprint. No passwords —
-    a passkey lives on your device and can't be stolen by a fake site.</p>
+    {# The emailed code works for everyone; a passkey only for someone who
+       made one (patient walk 2026-10-18), so the code leads. #}
+    <p class="setup-sub">We'll email you an 8-digit code to sign in.</p>
     {% endif %}
 
     <div id="err" class="form-error" hidden></div>
@@ -35,21 +34,14 @@
 
     <!-- Step: passkey-first (skipped when an existing account is enrolling) -->
     <div id="step-start" {% if enroll %}hidden{% endif %}>
-      {# Sent here by a beta confirm (`prefill`): a newcomer has no
-         passkey, so the email code comes first and is the big button. #}
-      {% if not prefill %}
-      <button class="btn-primary btn-block" id="passkey-btn">
-        Sign in with a passkey</button>
-      <div class="or">or use your email</div>
-      {% endif %}
       <label class="field-label" for="email">Email</label>
       <input class="field" id="email" type="email" inputmode="email"
              autocomplete="email" placeholder="you@example.com" autofocus
              {%- if prefill %} value="{{ prefill }}"{% endif %}>
-      <button class="{{ 'btn-primary' if prefill else 'btn-secondary' }} btn-block" id="email-btn">
+      <button class="btn-primary btn-block" id="email-btn">
         Email me a code</button>
       {# Not on the way to adding one: there is no passkey to use yet. #}
-      {% if prefill and not code_for_passkey %}
+      {% if not code_for_passkey %}
       <div class="or">or</div>
       <button class="btn-secondary btn-block" id="passkey-btn">
         Sign in with a passkey</button>

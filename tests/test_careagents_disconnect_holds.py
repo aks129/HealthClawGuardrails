@@ -181,14 +181,14 @@ def test_the_hub_renders_the_version_its_cards_show(cfg, svc, monkeypatch):  # n
 
 
 def test_home_js_echoes_the_rendered_version_on_every_consent_post():
-    """Each of the three consent posts (connect tile, terms card, refresh)
-    sends the version the page was rendered with, and none copies the
+    """Each of the four consent posts (connect tile, upload tile, terms
+    card, refresh) sends the version the page was rendered with, and none copies the
     server's version out of a 428 into a retry."""
     from pathlib import Path
     js = (Path(__file__).resolve().parent.parent
           / "careagents" / "static" / "home.js").read_text()
     sends = re.findall(r"consent_version\s*[:=]\s*shownConsentVersion", js)
-    assert len(sends) == 3
+    assert len(sends) == 4
     assert "res.d.consent_version" not in js
 
 
