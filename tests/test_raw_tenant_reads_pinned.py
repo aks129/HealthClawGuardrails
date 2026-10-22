@@ -188,8 +188,11 @@ def test_connect_diagnostic_answer_ignores_the_tenant(client, headers, payload,
 
 
 def test_connect_diagnostic_logs_a_valid_tenant(client, caplog):
+    """As its keyed hash since FHI-60, never the id itself."""
+    from r6.log_safety import id_hash
     with caplog.at_level(logging.WARNING, logger='r6.routes'):
         client.post('/r6/fhir/internal/connect-diagnostic',
                     headers={'X-Tenant-Id': 'desktop-demo'},
                     json={'payload': {'step': 'connect'}})
-    assert 'tenant=desktop-demo ' in caplog.text
+    assert f'tenant={id_hash("desktop-demo")} ' in caplog.text
+    assert 'desktop-demo' not in caplog.text
