@@ -3,7 +3,7 @@ the record has none, labelled general information and a pharmacist.
 
 Beta feedback (2026-10-22): a tester on the sample records asked "do I need
 to take metformin at a certain time?" and was told the agent did not have
-that data. Three things lined up to say so:
+that data. Four things lined up to say so:
 
 - the sample metformin order (r6/seed.py) carried no dosageInstruction;
 - the engine strips dosage free text (`dosageInstruction[].text`,
@@ -165,7 +165,10 @@ def test_the_safety_core_says_how_to_answer_when_to_take_a_medication():
     # Never dosing: amounts, frequency, missed doses, stopping, combining.
     "Give no general information about how much to take, how often, a "
     "missed or extra dose, stopping, splitting, or combining it with "
-    "anything else",
+    "anything else: say it isn't shown in what I can see here",
+    # "How should I take it?" is a timing question too, and only that.
+    "When asked when or how to take a medication (time of day, or with "
+    "or without food)",
     # An overdose or feeling unwell is the emergency rule's.
     "the emergency rule above comes first",
 ])
@@ -184,10 +187,13 @@ PAIN = {"coding": [{"system": "http://snomed.info/sct", "code": "22253000",
                     "display": CANARY}], "text": CANARY}
 
 
+Q6H_PRN = "as needed, no more often than every 6 hours"
+
+
 @pytest.mark.parametrize("prn, expected", [
-    ({"asNeededCodeableConcept": PAIN}, "as needed, up to every 6 hours"),
-    ({"asNeededFor": [PAIN]}, "as needed, up to every 6 hours"),
-    ({"asNeededBoolean": True}, "as needed, up to every 6 hours"),
+    ({"asNeededCodeableConcept": PAIN}, Q6H_PRN),
+    ({"asNeededFor": [PAIN]}, Q6H_PRN),
+    ({"asNeededBoolean": True}, Q6H_PRN),
 ])
 def test_an_as_needed_order_says_its_schedule_is_a_limit(prn, expected):
     item = _item(_med([{"timing": {"repeat": {
@@ -199,7 +205,7 @@ def test_an_as_needed_order_says_its_schedule_is_a_limit(prn, expected):
 def test_an_as_needed_range_says_the_most_often():
     item = _item(_med([{"asNeededBoolean": True, "timing": {"repeat": {
         "frequency": 1, "frequencyMax": 2, "period": 1, "periodUnit": "d"}}}]))
-    assert item["timing"] == ["as needed, up to twice a day"]
+    assert item["timing"] == ["as needed, no more often than twice a day"]
 
 
 @pytest.mark.parametrize("repeat, expected", [
@@ -238,6 +244,57 @@ def test_more_than_three_steps_says_more_exist():
     assert _item(_med(steps))["timing"] == [
         "in the morning", "in the afternoon", "in the evening",
         "and more steps"]
+
+
+@pytest.mark.parametrize("status", [["active"], {"code": "active"}, 3])
+def test_a_status_that_is_no_string_is_unknown_not_a_crash(status):
+    # #1018: `status in <frozenset>` raised TypeError on a list or object.
+    res = _med([{"timing": {"repeat": {"when": ["CM"]}}}])
+    res["status"] = status
+    item = _item(res)
+    assert "status" not in item
+    assert item["timing"] == ["with breakfast"]
+
+
+def test_one_unreadable_row_never_drops_the_rest(monkeypatch):
+    import careagents.agent as agent
+    real = agent._only_absence_codes
+
+    def boom(res):
+        if res.get("id") == "bad":
+            raise TypeError("surprise")
+        return real(res)
+    monkeypatch.setattr(agent, "_only_absence_codes", boom)
+    good, bad = _med([]), _med([])
+    bad["id"] = "bad"
+    items = _summarize_bundle({"resourceType": "Bundle", "total": 2,
+                               "entry": [{"resource": bad},
+                                         {"resource": good}]})
+    assert len(items) == 2
+    # The bad row is still a record, never absence, and says nothing of
+    # what it holds.
+    assert items[0]["unreadable"] is True
+    assert items[0]["type"] == "MedicationRequest"
+    assert set(items[0]) == {"type", "name", "unreadable", "note"}
+    assert items[1]["type"] == "MedicationRequest"
+
+
+def test_a_list_status_through_the_engine_keeps_the_summary(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """#1018 end to end: the engine accepts the row on ingest, and the
+    summary still carries every list."""
+    chain = Chain(cfg, svc, monkeypatch, allergy=True)
+    res = _med([{"timing": {"repeat": {"when": ["CM"]}}}])
+    res.update(id="qa-1018", status=["active"], intent="order",
+               subject={"reference": "Patient/demo-patient-rivera"})
+    result = chain.hc.ingest_bundle(TENANT, {
+        "resourceType": "Bundle", "type": "collection",
+        "entry": [{"resource": res}]})
+    assert not result.get("errors"), result
+    out = json.loads(_execute_tool(chain.hc, TENANT, "get_health_summary",
+                                   {}, []))
+    assert out["conditions"] and out["allergies"]
+    assert len(out["medications"]) >= 2
 
 
 def test_one_bad_row_never_takes_the_summary_down(monkeypatch):
