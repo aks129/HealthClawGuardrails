@@ -280,7 +280,7 @@ class RunWorker:
                 self._refund(refund)
                 # This worker failed it, so this worker answers. When the
                 # engine got there first it wrote the answer itself.
-                self._answer_failed_turn(run, beta.emergency_first(
+                self._answer_failed_turn(run, beta.with_911(
                     _failure_text(RunDeadlineExceeded()), _said(run)))
             except HealthClawError:
                 # The authoritative heartbeat may already have committed the
@@ -310,7 +310,7 @@ class RunWorker:
             if causes.needs_owner(exc):
                 funnel.safely(funnel.alert_owner, self.accounts.session,
                               self.cfg, cause)
-            text = beta.emergency_first(
+            text = beta.with_911(
                 _failure_text(exc, owner_told=bool(self.cfg.owner_emails)),
                 _said(run))
             refund = self._mark_refund(run)
@@ -425,7 +425,7 @@ class RunWorker:
         if blocked:
             # Before any record read and before any model call (beta spec
             # 4.3 and 4.6). The run still ends normally, with this sentence.
-            self._finish(run, {"text": beta.emergency_first(blocked, user_text),
+            self._finish(run, {"text": beta.with_911(blocked, user_text),
                                "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
@@ -546,13 +546,10 @@ class RunWorker:
             allowed, _used = self.accounts.claim_daily_turn(
                 context["account_id"], self.cfg.chat_turns_per_day, day=day)
             if not allowed:
-                # Crisis wording anywhere in the loaded conversation, as
-                # routing.crisis_in_window reads it, leads with 911.
-                said = [m["content"] for m in history
-                        if m.get("role") in ("user", "assistant")
-                        and isinstance(m.get("content"), str)]
-                self._finish(run, {"text": beta.emergency_first(
-                                       beta.daily_limit_text(), *said),
+                # The current message only, as at admission: the model's
+                # own "not urgent" must not lead an ordinary limit with 911.
+                self._finish(run, {"text": beta.with_911(
+                                       beta.daily_limit_text(), user_text),
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return
@@ -736,7 +733,16 @@ class RunWorker:
             # The line is in the stored history, so a model may already
             # open with it on a later turn. Say it once. A real answer
             # (no lead) is never touched.
-            text = f"{lead}\n\n{_drop_echo(text, lead) or '…'}"
+            body = _drop_echo(text, lead) or "…"
+            if routing.is_crisis(_said(run)):
+                # Never ahead of the 911 guidance: the #1015 live run read
+                # "Nothing here is about you." before "call 911". After the
+                # answer's first paragraph instead.
+                first, sep, rest = body.partition("\n\n")
+                text = (f"{first}\n\n{lead}\n\n{rest}" if sep
+                        else f"{first}\n\n{lead}")
+            else:
+                text = f"{lead}\n\n{body}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
         # HealthClaw owns the final fencing transaction. A client-side

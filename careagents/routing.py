@@ -158,18 +158,35 @@ _MAX_HAIKU_CHARS = 120
 #: count. Broad stems (morir, urgen) are deliberate: a false positive costs
 #: one Sonnet call, a miss puts the next "ok" after a crisis on Haiku.
 #: Security review of #1017 checked the Spanish against ordinary Spanish.
+#: Not self-harm: "me corto el pelo", "voy a cortarme las uñas".
+_NOT_GROOMING = (r"(?! (?:el |la |las |los |mi |mis )?"
+                 r"(?:pelo|cabello|unas|flequillo|barba))")
+
 _SELF_HARM_PATTERNS = [
     r"suicid", r"kill(?:ing)? my ?self", r"end(?:ing)? (?:it|my life|it all)",
     r"(?:want to|wanna|going to|gonna) die", r"don'?t want to (?:live|be here)",
     r"self.?harm", r"hurt(?:ing)? my ?self", r"cut(?:ting)? my ?self",
-    r"overdos", r"\bod\b", r"988",
-    r"sobredosis", r"tome demasiad",
-    r"morir", r"muriendo", r"me muero", r"no quiero vivir",
+    # 911 and 988 as numbers on their own, never inside a phone number or
+    # a lab value.
+    r"overdos", r"\bod\b", r"(?<![\d-])988(?![\d-])",
+    r"sobredosis",
+    r"muriendo", r"me muero", r"no quiero vivir",
     r"quitarme la vida", r"acabar con (?:mi vida|todo)", r"terminar con todo",
     r"hacerme dano", r"me (?:quiero |voy a )?hacer dano", r"lastimarme",
-    r"cortarme", r"me corto", r"me estoy cortando", r"cortandome",
+    r"cortarme" + _NOT_GROOMING, r"me corto" + _NOT_GROOMING,
+    r"me corte" + _NOT_GROOMING, r"me estoy cortando" + _NOT_GROOMING,
+    r"cortandome" + _NOT_GROOMING,
     r"matar(?:me|se)", r"(?:quiero|kiero|voy a) matar",
-    r"(?:todas|muchas|un frasco de) (?:las |mis )?pastillas",
+    r"(?<!no )(?:quiero|quisiera|prefiero|deseo) morir",
+    r"ganas de morir", r"kiero morir", r"(?:want to|wanna) morir",
+    r"took (?:too many|a (?:whole )?bottle of|all (?:of )?(?:my|the)) "
+    r"(?:pills|meds|medications?|tablets)",
+    r"better off (?:dead|without me)", r"no reason to live",
+    r"hang(?:ing)? my ?self", r"slit(?:ting)? my (?:wrists?|throat)",
+    r"\bkms\b", r"unalive",
+    r"no vale la pena vivir", r"quiero desaparecer",
+    r"(?:quiero|voy a) colgarme", r"me (?:quiero |voy a )?colgar\b",
+    r"cort\w* las venas", r"me (?:hice|he hecho) dano", r"me lastime",
 ]
 
 #: Medical emergencies, abuse and being unsafe.
@@ -179,8 +196,8 @@ _URGENT_PATTERNS = [
     r"seizure", r"unconscious", r"passed out", r"pass(?:es|ing)? out",
     r"faint", r"bleeding", r"anaphyla", r"throat (?:is )?(?:closing|swelling)",
     r"can'?t swallow", r"cannot swallow", r"can not swallow",
-    r"911", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
-    r"abuse", r"\bunsafe\b",
+    r"(?<![\d-])911(?![\d-])", r"emergenc", r"\bem?r\b", r"ambulance",
+    r"crisis", r"abuse", r"\bunsafe\b",
     r"dolor (?:en el|de|del) pecho", r"ambulancia", r"desmay", r"sangrado",
     r"convulsi", r"derrame", r"infarto",
     r"(?:no puedo|can.?t|cannot|cuesta|dificultad para|trabajo para) respirar",
@@ -192,12 +209,30 @@ _URGENT_PATTERNS = [
     r"no (?:siento|puedo mover) (?:el|la|mi) (?:brazo|pierna|cara|mano)",
     r"mitad del cuerpo", r"cara caida", r"cayo la cara", r"boca torcida",
     r"no puede hablar", r"habla arrastrada", r"embolia", r"\bictus\b",
-    r"(?:dolor|duele|presion|opresion|aprieta)\w*.{0,20}pecho",
+    # Bounded: an unbounded \w* here was quadratic in a long word.
+    r"(?:dolor|duele|presion|opresion|aprieta|arde)\w{0,6}.{0,20}pecho",
     r"pecho.{0,10}(?:hurts|duele|aprieta)", r"chest duele",
     r"ataque (?:al corazon|cardiac)", r"paro cardiac", r"epilep",
     r"urgen", r"abus", r"me pega", r"violencia", r"maltrat",
     r"no (?:estoy|me siento) segur[oa] (?:en|aqui|con)",
     r"segur[oa] en (?:mi )?casa", r"anafila", r"cierra la garganta",
+    # Overdose and dying wording that is ambiguous on its own: 911, not 988.
+    r"tome demasiad[oa]s? (?:pastillas|pildoras|tabletas|medicina|"
+    r"medicamento|dosis|ibuprofeno|paracetamol|acetaminofen|insulina|"
+    r"aspirina|tylenol)",
+    r"(?:me )?tome (?:todas|muchas) (?:las |mis )?pastillas",
+    r"un frasco de pastillas", r"(?:voy|va|vamos) a morir",
+    r"(?:short(?:ness)? of|trouble|difficulty|hard to|struggling to) breath",
+    r"not breathing", r"turning blue", r"\bchok(?:e|es|ed|ing)\b",
+    r"(?:face|mouth|smile) (?:is )?droop", r"droop\w{0,4} (?:face|mouth)",
+    r"slurr", r"can'?t feel my (?:arm|leg|face|hand|side)",
+    r"worst headache", r"(?:coughing|vomiting|throwing) (?:up )?blood",
+    r"allergic reaction", r"(?:lips?|tongue|face|throat) (?:are |is )?swell",
+    r"(?:husband|wife|partner|boyfriend|girlfriend|he|she) (?:hits|beats) me",
+    r"not safe at home",
+    r"no respira", r"no respiro", r"ahogando", r"falta (?:la |de )?respiracion",
+    r"(?:vomito|vomitando|toso|tosiendo) sangre", r"peor dolor de cabeza",
+    r"traba la lengua", r"cara dormida", r"me (?:golpea|amenaza)",
 ]
 
 #: Crisis and emergency language. Never Haiku, whatever else the message
@@ -288,6 +323,7 @@ def _unaccented(text: str) -> str:
     non-ASCII text."""
     return "".join(ch for ch in unicodedata.normalize("NFKD", text)
                    if unicodedata.category(ch) not in ("Mn", "Me")
+                   and not unicodedata.combining(ch)
                    and ch not in _INVISIBLE)
 
 
@@ -363,10 +399,14 @@ def crisis_in_window(messages: list[dict]) -> bool:
     or "thanks". On Haiku, which sees only that reply (#931 F2), they got a
     cheerful goodbye; Sonnet, with the history, checked they were safe
     (QA #931 Q1, live 3 of 3). The conversation stays on Sonnet instead.
-    Tool results (record content) are not scanned."""
+    Tool results (record content) are not scanned, and neither is the 911
+    line every refusal ends with (beta.EMERGENCY_TRAILER): it is there
+    whatever the person said, so it is no signal."""
+    from careagents.beta import EMERGENCY_TRAILER  # beta imports this module
     return any(
         m.get("role") in ("user", "assistant")
-        and isinstance(m.get("content"), str) and is_crisis(m["content"])
+        and isinstance(m.get("content"), str)
+        and is_crisis(m["content"].replace(EMERGENCY_TRAILER, ""))
         for m in messages)
 
 

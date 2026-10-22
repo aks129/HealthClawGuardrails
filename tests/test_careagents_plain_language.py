@@ -281,7 +281,9 @@ def test_a_failed_turn_leaves_an_answer_in_the_history(
         pass
     rows = [row for rows in fake.logged.values() for row in rows]
     assert [row["role"] for row in rows] == ["user", "assistant"]
-    assert rows[1]["content"] == agent_mod.GENERIC_FAILURE_TEXT
+    from careagents import beta
+    assert rows[1]["content"] == beta.with_911(
+        agent_mod.GENERIC_FAILURE_TEXT)
     assert "model fell over" not in rows[1]["content"]
     # Replayed, the run writes it once.
     assert rows[1]["reply_to"] == rows[0]["id"]

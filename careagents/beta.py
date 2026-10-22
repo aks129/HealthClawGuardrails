@@ -86,6 +86,33 @@ def emergency_first(reply: str, *said: str) -> str:
     return f"{lead}\n\n{reply}"
 
 
+#: After every refusal or failure that is not led by EMERGENCY_LINE
+#: (security re-review of #1017): the word list decides only whether the
+#: line comes first, never whether there is one.
+EMERGENCY_TRAILER = ("If this is an emergency, call 911. "
+                     "Si es una emergencia, llame al 911.")
+
+
+def with_911(reply: str, said: str = "") -> str:
+    """A refusal or failure `reply` that always carries a 911 line: led by
+    emergency_first's lines when `said`, the person's current message
+    only, reads as a crisis, else followed by EMERGENCY_TRAILER. `said` is
+    empty where the message is not at hand. Never echoes `said`."""
+    led = emergency_first(reply, said)
+    if led != reply or reply.startswith(EMERGENCY_LINE):
+        return led
+    if reply.endswith(EMERGENCY_TRAILER):
+        return reply
+    return f"{reply}\n\n{EMERGENCY_TRAILER}"
+
+
+def without_trailer(text: str) -> str:
+    """`text` without with_911's trailing line, for code that recognises a
+    fixed sentence by its words (errors.collapse_failed_turns)."""
+    tail = "\n\n" + EMERGENCY_TRAILER
+    return text[:-len(tail)] if text.endswith(tail) else text
+
+
 #: The sample connection's one line: the banner on its chat page, and the
 #: opening line of every answer the worker finishes on it, web and text
 #: alike. A tester read a sample creatinine rise, dated today and worded

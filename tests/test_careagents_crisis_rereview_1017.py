@@ -71,9 +71,11 @@ def test_web_run_queue_down_leads_with_911(cfg, svc, monkeypatch):  # noqa: F811
     assert str(body.get("message", "")).startswith(SELF_HARM_LEAD)
 
 
-def test_sendblue_timeout_text_leads_with_911(sb_cfg, sb_svc, monkeypatch):  # noqa: F811
+def test_sendblue_timeout_text_carries_911(sb_cfg, sb_svc, monkeypatch):  # noqa: F811
     """Workers up at admission, then nobody finishes the run: the
-    deliverer's timeout text is a fixed reply outside handle_inbound."""
+    deliverer's timeout text is a fixed reply outside handle_inbound.
+    Adjusted for the round-4 design: the person's message is not at hand
+    there, so the 911 line follows the sentence (beta.with_911)."""
     app, c, fake, hc, agent_id = _sb_app(sb_cfg, sb_svc, monkeypatch)
     _sb_pair(c, agent_id)
     fake.sent.clear()
@@ -81,13 +83,15 @@ def test_sendblue_timeout_text_leads_with_911(sb_cfg, sb_svc, monkeypatch):  # n
     later = time.time() + 3600
     _deliverer(app, fake, clock=lambda: later).once()
     assert len(fake.sent) == 1
-    assert fake.sent[0][1].startswith(LEAD)
+    assert fake.sent[0][1].endswith("\n\n" + beta.EMERGENCY_TRAILER)
 
 
-def test_relay_reply_for_a_swept_crisis_run_leads_with_911(
+def test_relay_reply_for_a_swept_crisis_run_carries_911(
         cfg, svc, monkeypatch):  # noqa: F811
     """The engine fails a queued run past its deadline itself; no worker
-    ever calls emergency_first. The relay is sent run_reply's fallback."""
+    ever calls emergency_first. The relay is sent run_reply's fallback.
+    Adjusted for the round-4 design: the message is not at hand there, so
+    the 911 line follows the sentence."""
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _pair(c, agent_id)
     run_id = _inbound(c, PHONE, "no puedo respirar").get_json()["run_id"]
@@ -97,7 +101,7 @@ def test_relay_reply_for_a_swept_crisis_run_leads_with_911(
               headers={**RELAY_HDRS, "X-Imessage-Handle": PHONE})
     reply = r.get_json()["reply"]
     assert GENERIC_FAILURE_TEXT in reply           # the fixed fallback
-    assert reply.startswith(LEAD)
+    assert reply.endswith("\n\n" + beta.EMERGENCY_TRAILER)
 
 
 def test_a_photo_with_a_crisis_caption_texts_911_first(

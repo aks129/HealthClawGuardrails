@@ -27,7 +27,7 @@ from typing import Callable
 
 from flask import jsonify, request
 
-from careagents import imessage, sendblue
+from careagents import beta, imessage, routing, sendblue
 from careagents.accounts import secret_matches
 from careagents.healthclaw import HealthClawError
 
@@ -167,6 +167,13 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
         logger.info("sendblue inbound from %s: %s%s", imessage.mask(to),
                     status, " (run queued)" if run_id else "")
         replies = [r for r in (out.get("notice"), out.get("reply")) if r]
+        if out.get("notice") and routing.is_crisis(content):
+            # A crisis caption's 911 line goes first, never behind "I can
+            # only read text" (security re-review of #1017, F1): the reply,
+            # already led by it, comes first, or the notice alone is led.
+            reply = out.get("reply")
+            replies = ([reply, out["notice"]] if reply else
+                       [beta.emergency_first(out["notice"], content)])
         if replies or run_id:
             _send_later(to, replies, bool(run_id))
         return jsonify({"ok": True}), 200

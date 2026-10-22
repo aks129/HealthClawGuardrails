@@ -6,7 +6,13 @@ too. Where a fixed sentence answers (the limit at admission, web and text;
 the limit, pause or terms in the worker; a failed turn) and what the person
 said reads as a crisis, beta.emergency_first puts the bilingual 911 line
 first, and the 988 line for self-harm wording. The limit still holds and no
-model is called. Synthetic text only.
+model is called.
+
+Security re-review (round 4): every refusal or failure now carries a 911
+line whatever was said (beta.with_911). Crisis wording in the current
+message puts the emergency line first; anything else gets
+EMERGENCY_TRAILER after the sentence. The word list decides the order,
+never whether there is a line. Synthetic text only.
 """
 
 from __future__ import annotations
@@ -58,13 +64,44 @@ def test_a_crisis_led_failure_stays_on_the_page():
     """collapse_failed_turns shows a wall of failures once; it must never
     do that by hiding the emergency line."""
     from careagents.agent import GENERIC_FAILURE_TEXT
-    led = beta.emergency_first(GENERIC_FAILURE_TEXT, "chest pain")
+    led = beta.with_911(GENERIC_FAILURE_TEXT, "chest pain")
     past = [{"role": "user", "content": "chest pain"},
             {"role": "assistant", "content": led},
             {"role": "user", "content": "hello?"},
-            {"role": "assistant", "content": GENERIC_FAILURE_TEXT}]
+            {"role": "assistant", "content": beta.with_911(
+                GENERIC_FAILURE_TEXT)}]
     shown = [m["content"] for m in errors.collapse_failed_turns(past)]
     assert led in shown
+
+
+def test_failures_ending_with_the_911_line_still_collapse():
+    """The trailer must not stop a wall of ordinary failures collapsing,
+    nor take "Report a problem" (`failed`) off the one kept."""
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    fail = beta.with_911(GENERIC_FAILURE_TEXT)
+    assert fail.endswith("\n\n" + beta.EMERGENCY_TRAILER)
+    past = [{"role": "user", "content": "how are my labs?"},
+            {"role": "assistant", "content": fail},
+            {"role": "user", "content": "how are my labs?"},
+            {"role": "assistant", "content": fail}]
+    shown = errors.collapse_failed_turns(past)
+    assert [m["role"] for m in shown] == ["user", "assistant"]
+    assert shown[-1]["failed"] is True
+
+
+@pytest.mark.parametrize("reply", (
+    "You've used today's messages.", "Something went wrong."))
+def test_with_911_always_carries_the_line(reply):
+    plain = beta.with_911(reply, "how are my labs?")
+    assert plain == reply + "\n\n" + beta.EMERGENCY_TRAILER
+    assert beta.with_911(plain, "how are my labs?") == plain    # once
+    assert beta.with_911(reply) == plain                        # no message
+    led = beta.with_911(reply, "chest pain")
+    assert led == beta.EMERGENCY_LINE + "\n\n" + reply
+    assert beta.with_911(led, "chest pain") == led
+    assert beta.EMERGENCY_TRAILER not in led
+    assert "911" in beta.EMERGENCY_TRAILER and "llame" in (
+        beta.EMERGENCY_TRAILER)
 
 
 # --- the day's limit at admission: web and text -------------------------------
@@ -95,14 +132,15 @@ def test_web_at_the_limit_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: 
     assert not fake.runs
 
 
-def test_web_at_the_limit_without_a_crisis_is_unchanged(
+def test_web_at_the_limit_without_a_crisis_ends_with_911(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _spend_the_day(cfg, svc)
     r = c.post("/api/chat", json={"agent_id": agent_id, "message": "hi",
                                   "request_id": "lim-plain"})
     assert r.status_code == 429
-    assert r.get_json()["message"] == beta.daily_limit_text()
+    assert r.get_json()["message"] == (beta.daily_limit_text() + "\n\n"
+                                       + beta.EMERGENCY_TRAILER)
 
 
 @pytest.mark.parametrize("said", URGENT + SELF_HARM)
@@ -118,13 +156,13 @@ def test_text_at_the_limit_leads_with_911(cfg, svc, monkeypatch, said):  # noqa:
     assert len(fake.runs) == runs_before
 
 
-def test_text_at_the_limit_without_a_crisis_is_unchanged(
+def test_text_at_the_limit_without_a_crisis_ends_with_911(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _pair(c, agent_id)
     _spend_the_day(cfg, svc)
     assert _inbound(c, PHONE, "one more").get_json()["reply"] == (
-        beta.daily_limit_text())
+        beta.daily_limit_text() + "\n\n" + beta.EMERGENCY_TRAILER)
 
 
 # --- in the worker: the limit, a pause, a failed turn ------------------------
@@ -189,12 +227,13 @@ def test_a_paused_crisis_turn_leads_with_911(cfg, svc, monkeypatch):  # noqa: F8
                               + beta.PAUSED_TEXT]
 
 
-def test_a_paused_ordinary_turn_is_unchanged(cfg, svc, monkeypatch):  # noqa: F811
+def test_a_paused_ordinary_turn_ends_with_911(cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _queue(c, agent_id, "how are my labs?", "p-2")
     svc.set_paused(EMAIL, True)
     _work(cfg, svc, fake)
-    assert _answers(fake) == [beta.PAUSED_TEXT]
+    assert _answers(fake) == [beta.PAUSED_TEXT + "\n\n"
+                              + beta.EMERGENCY_TRAILER]
 
 
 @pytest.mark.parametrize("said,lead", (
@@ -211,8 +250,8 @@ def test_a_failed_turn_leads_with_911_for_a_crisis(
     _work(cfg, svc, fake)
     expected = failure_text(RuntimeError(),
                             owner_told=bool(cfg.owner_emails))
-    if lead:
-        expected = f"{lead}\n\n{expected}"
+    expected = (f"{lead}\n\n{expected}" if lead else
+                f"{expected}\n\n{beta.EMERGENCY_TRAILER}")
     run_id = next(iter(fake.runs))
     errors_said = [e["payload"].get("text") for e in fake.events[run_id]
                    if e["type"] == "agent.error"]
@@ -288,18 +327,33 @@ def test_text_too_long_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F81
                                      + imessage.TOO_LONG_TEXT)
 
 
-def test_text_ordinary_replies_are_unchanged(cfg, svc, monkeypatch):  # noqa: F811
+def test_text_ordinary_refusals_end_with_911(cfg, svc, monkeypatch):  # noqa: F811
     from careagents import imessage
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _pair(c, agent_id)
+    tail = "\n\n" + beta.EMERGENCY_TRAILER
     assert _inbound(c, PHONE, "x" * 2100).get_json() == {
         "error": "message must be 1-2000 characters",
-        "reply": imessage.TOO_LONG_TEXT}
+        "reply": imessage.TOO_LONG_TEXT + tail}
     deps = app.extensions["careagents_imessage"]
     monkeypatch.setattr(deps, "workers_ready", lambda: False)
     assert _inbound(c, PHONE, "hi").get_json() == {
         "error": "run_workers_unavailable",
-        "reply": imessage.UNAVAILABLE_TEXT}
+        "reply": imessage.UNAVAILABLE_TEXT + tail}
+
+
+def test_text_answers_that_are_not_refusals_get_no_trailer(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """HELP and STOP confirmations, and a stranger's sign-in link, are not
+    refusals: carriers want STOP's confirmation to be one plain text."""
+    from careagents import imessage
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    assert _inbound(c, PHONE, "HELP").get_json() == {
+        "reply": imessage.HELP_TEXT}
+    assert beta.EMERGENCY_TRAILER not in _inbound(
+        c, "+15550100779", "hello").get_json()["reply"]
+    assert _inbound(c, PHONE, "STOP").get_json() == {
+        "reply": imessage.STOP_TEXT}
 
 
 def test_a_stranger_in_crisis_gets_911_with_the_sign_in_link(
@@ -333,33 +387,134 @@ def test_web_burst_limit_leads_with_911(cfg, svc, monkeypatch, said):  # noqa: F
                             "message": _lead(said) + "\n\n" + PACE_TEXT}
 
 
-def test_web_burst_limit_without_a_crisis_is_unchanged(
+def test_web_burst_limit_without_a_crisis_ends_with_911(
         cfg, svc, monkeypatch):  # noqa: F811
+    from careagents.app import PACE_TEXT
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     monkeypatch.setattr(cfg, "chat_turns_per_window", 1)
     _queue(c, agent_id, "hi", "b-3")
     r = c.post("/api/chat", json={"agent_id": agent_id, "message": "hi",
                                   "request_id": "b-4"})
-    assert r.status_code == 429 and r.get_json() == {"error": "rate_limited"}
+    assert r.status_code == 429 and r.get_json() == {
+        "error": "rate_limited",
+        "message": PACE_TEXT + "\n\n" + beta.EMERGENCY_TRAILER}
 
 
-@pytest.mark.parametrize("said,lead", (
-    ("me duele el pecho", True), ("quiero morir", True), ("hi", False)))
+UNAVAILABLE = "Chat is temporarily unavailable. Try again soon."
+
+
+def _unavailable(code, said, lead):
+    if lead:
+        return {"error": code, "emergency": True,
+                "message": _lead(said) + "\n\n" + UNAVAILABLE}
+    return {"error": code,
+            "message": UNAVAILABLE + "\n\n" + beta.EMERGENCY_TRAILER}
+
+
+CASES = (("me duele el pecho", True), ("quiero morir", True), ("hi", False))
+
+
+@pytest.mark.parametrize("said,lead", CASES)
 def test_web_without_workers(cfg, svc, monkeypatch, said, lead):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     fake.worker_available = False
     r = c.post("/api/chat", json={"agent_id": agent_id, "message": said,
                                   "request_id": "w-down"})
     assert r.status_code == 503
-    plain = {"error": "run_workers_unavailable",
-             "message": "Chat is temporarily unavailable. Try again soon."}
-    if lead:
-        assert r.get_json() == {**plain, "emergency": True, "message": (
-            _lead(said) + "\n\nChat is temporarily unavailable. Try again "
-            "soon.")}
-    else:
-        assert r.get_json() == plain
+    assert r.get_json() == _unavailable("run_workers_unavailable", said, lead)
     assert fake.runs == {}
+
+
+@pytest.mark.parametrize("said,lead", CASES)
+def test_web_message_store_down(cfg, svc, monkeypatch, said, lead):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(fake, "claim_inbound_message",
+                        lambda *a, **k: (None, None))
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": said,
+                                  "request_id": "s-down"})
+    assert r.status_code == 503
+    assert r.get_json() == _unavailable("message store unavailable", said,
+                                        lead)
+
+
+@pytest.mark.parametrize("said,lead", CASES)
+def test_web_run_queue_down(cfg, svc, monkeypatch, said, lead):  # noqa: F811
+    from careagents.healthclaw import HealthClawError
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    def _down(*_a, **_k):
+        raise HealthClawError("synthetic queue outage", 503)
+    monkeypatch.setattr(fake, "create_agent_run", _down)
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": said,
+                                  "request_id": "q-down"})
+    assert r.status_code == 503
+    assert r.get_json() == _unavailable("run queue unavailable", said, lead)
+
+
+def test_a_stream_error_ends_with_911():
+    """The error frame the page shows for a failed run: the worker's text
+    already carries the line; the engine's own, or none, gets it here."""
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    from careagents.imessage import run_reply
+    tail = "\n\n" + beta.EMERGENCY_TRAILER
+    assert run_reply([{"type": "agent.error", "payload": {}}], "http://x",
+                     "a") == GENERIC_FAILURE_TEXT + tail
+    led = beta.with_911(GENERIC_FAILURE_TEXT, "chest pain")
+    assert run_reply([{"type": "agent.error", "payload": {"text": led}}],
+                     "http://x", "a") == led
+
+
+# --- the sample frame never comes before the 911 guidance --------------------
+
+def test_a_sample_crisis_answer_puts_the_frame_after_its_first_paragraph(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """#1015 live run: "Nothing here is about you." read before "call
+    911". For a crisis message the frame goes after the first paragraph."""
+    answer = ("Call 911 now. Llame al 911 ahora.\n\n"
+              "In these made-up records, the sample person has asthma.")
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply=answer)
+    _queue(c, agent_id, "me duele el pecho", "fr-1")
+    _work(cfg, svc, fake)
+    [said] = _answers(fake)
+    assert said == ("Call 911 now. Llame al 911 ahora.\n\n"
+                    + beta.SAMPLE_FRAME + "\n\n"
+                    "In these made-up records, the sample person has asthma.")
+
+
+def test_a_sample_ordinary_answer_still_opens_with_the_frame(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply="The A1c was 7.2.")
+    _queue(c, agent_id, "how is my a1c?", "fr-2")
+    _work(cfg, svc, fake)
+    assert _answers(fake) == [beta.SAMPLE_FRAME + "\n\nThe A1c was 7.2."]
+
+
+def test_a_one_paragraph_crisis_answer_ends_with_the_frame(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply="Call 911 now.")
+    _queue(c, agent_id, "chest pain", "fr-3")
+    _work(cfg, svc, fake)
+    assert _answers(fake) == ["Call 911 now.\n\n" + beta.SAMPLE_FRAME]
+
+
+# --- what a crisis window reads ----------------------------------------------
+
+def test_the_trailer_is_not_a_crisis_signal():
+    """Every refusal ends with the 911 trailer; reading it as a crisis would
+    hold every conversation that ever hit a limit on Sonnet."""
+    from careagents import routing
+    history = [{"role": "user", "content": "how are my labs?"},
+               {"role": "assistant",
+                "content": beta.with_911(beta.daily_limit_text())},
+               {"role": "user", "content": "ok"}]
+    assert not routing.crisis_in_window(history)
+    assert routing.tier_for(history) == routing.TIER_HAIKU
+    led = beta.with_911(beta.daily_limit_text(), "chest pain")
+    history[1]["content"] = led
+    assert routing.crisis_in_window(history)
 
 
 def _chat_js():
@@ -375,14 +530,18 @@ def test_the_pace_sentence_matches_the_page():
     assert m and m.group(1) == PACE_TEXT
 
 
-def test_the_page_shows_a_flagged_503_instead_of_retrying():
-    """The 503 branch sits inside the streaming loop, past the reach of a
-    node harness, so its source is pinned, as the 429 branch's is."""
+def test_the_page_shows_every_admission_503_sentence():
+    """Every 503 refusing a turn carries the 911 line, so the page shows any
+    one with a message, not only a crisis. Only for the POST that asked: a
+    reconnect to a running run (state.runId set) keeps retrying. The branch
+    sits inside the streaming loop, past the reach of a node harness, so
+    its source is pinned, as the 429 branch's is."""
     src = _chat_js()
-    branch = src.split("if (resp.status === 503) {", 1)[1].split(
-        "if (!resp.ok", 1)[0]
-    assert "refusal.emergency === true" in branch
+    head = "if (resp.status === 503 && !state.runId) {"
+    branch = src.split(head, 1)[1].split("if (!resp.ok", 1)[0]
+    assert "emergency" not in branch
+    assert 'typeof refusal.message === "string"' in branch
     assert "addAgentText(refusal.message);" in branch
     assert "return;" in branch
-    assert src.index("if (resp.status === 503) {") < src.index(
+    assert src.index(head) < src.index(
         'throw new Error("event stream unavailable")')

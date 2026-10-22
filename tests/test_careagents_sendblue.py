@@ -307,8 +307,9 @@ def test_a_review_card_is_delivered_as_a_link(sb_cfg, sb_svc, monkeypatch):
     assert ("Your intake form is ready: http://localhost/review/ag_1/act-2"
             in reply)
     assert "https://example.com/f.pdf" not in reply
+    from careagents import beta
     assert imessage.run_reply([], "http://x", "a").endswith(
-        "Please try again.")
+        "Please try again.\n\n" + beta.EMERGENCY_TRAILER)
 
 
 def test_a_run_that_never_finishes_gets_one_timeout_text(

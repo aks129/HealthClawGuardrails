@@ -1566,7 +1566,9 @@ def test_a_stream_that_fails_mid_run_says_so_instead_of_going_quiet(
               for line in body.splitlines() if line.startswith("data: ")]
     assert response.status_code == 200
     assert frames[0]["type"] == "accepted"
-    assert frames[-1] == {"type": "error", "text": GENERIC_FAILURE_TEXT}
+    from careagents import beta
+    assert frames[-1] == {"type": "error",
+                          "text": beta.with_911(GENERIC_FAILURE_TEXT)}
     assert len(frames) == 2, (
         f"the error frame must be terminal, got {frames}")
     assert "OperationalError" not in body and "db-7" not in body
@@ -4451,8 +4453,8 @@ def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
     d = second.get_json()
     assert d["error"] == "daily_limit_reached" and d["limit"] == 1
     # Tells the user when, not just no, and in hours (#864).
-    assert re.search(r"More in (about \d+ hours?|under an hour)\.$",
-                     d["message"])
+    assert re.search(r"More in (about \d+ hours?|under an hour)\.\n\n"
+                     r"If this is an emergency, call 911\.", d["message"])
 
 
 # --- consent gate (real records only) ----------------------------------------

@@ -668,13 +668,15 @@
               addLimitFeedback();
             return;
           }
-          // A refusal of crisis wording carries the 911 line (app.py,
-          // _with_emergency): say it now rather than retrying into
-          // "Connection hiccup", which would never show it.
-          if (resp.status === 503) {
+          // A chat turn the server could not take carries its sentence and
+          // the 911 line (app.py, _with_emergency): say it now rather than
+          // retrying into "Connection hiccup", which would never show it.
+          // Only for the POST that asked: a reconnect to a run in progress
+          // keeps retrying.
+          if (resp.status === 503 && !state.runId) {
             const refusal = await resp.clone().json().catch(() => ({}));
-            if (refusal && refusal.emergency === true
-                && typeof refusal.message === "string") {
+            if (refusal && typeof refusal.message === "string"
+                && refusal.message) {
               typing.remove();
               addAgentText(refusal.message);
               return;

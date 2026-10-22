@@ -2330,8 +2330,10 @@ def create_app(config: Config | None = None,
         if kind == "agent.text":
             return {"type": "text", "text": payload.get("text") or ""}
         if kind == "agent.error":
-            return {"type": "error",
-                    "text": payload.get("text") or GENERIC_FAILURE_TEXT}
+            # The worker's failure text already carries the 911 line; one
+            # the engine wrote, or none, gets it here.
+            return {"type": "error", "text": beta.with_911(
+                payload.get("text") or GENERIC_FAILURE_TEXT)}
         return None
 
     def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
@@ -2390,24 +2392,30 @@ def create_app(config: Config | None = None,
 
         The patient-facing sentence is the same in every failure state,
         because it is true in all of them. Only the machine-readable code
-        differs. Crisis wording gets the emergency line first, flagged so
-        chat.js shows it instead of retrying (_with_emergency).
+        differs. It carries the 911 line (_with_emergency), and chat.js
+        shows it instead of retrying.
         """
+        return _chat_unavailable(
+            _REFUSAL_CODES.get(state, "run_workers_unavailable"), text)
+
+    def _chat_unavailable(code: str, text: str):
+        """A 503 for a chat turn that could not be taken: the store, the
+        run queue or the workers. One sentence for all of them."""
         return jsonify(_with_emergency({
-            "error": _REFUSAL_CODES.get(state, "run_workers_unavailable"),
+            "error": code,
             "message": "Chat is temporarily unavailable. Try again soon.",
         }, text)), 503
 
     def _with_emergency(body: dict, text: str) -> dict:
-        """`body` with its sentence led by beta.emergency_first and marked
-        `emergency` when `text` reads as a crisis; `body` unchanged
-        otherwise. The sentence defaults to the pace sentence chat.js shows
-        for a 429 that carries none."""
+        """`body` with its sentence carrying the 911 line (beta.with_911):
+        led by it, and marked `emergency`, when `text` reads as a crisis;
+        followed by it otherwise. The sentence defaults to the pace
+        sentence chat.js shows for a 429 that carries none."""
         sentence = body.get("message") or PACE_TEXT
-        led = beta.emergency_first(sentence, text)
-        if led == sentence:
-            return body
-        return {**body, "message": led, "emergency": True}
+        said = beta.with_911(sentence, text)
+        if said.startswith(beta.EMERGENCY_LINE):
+            return {**body, "message": said, "emergency": True}
+        return {**body, "message": said}
 
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
                     account_id: str | None = None):
@@ -2458,7 +2466,8 @@ def create_app(config: Config | None = None,
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
-                    "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
+                    "type": "error",
+                    "text": beta.with_911(GENERIC_FAILURE_TEXT)}) + "\n\n"
                 return
             misses = 0
             events = page.get("events") or []
@@ -2535,9 +2544,8 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    # Crisis wording still gets the emergency line first.
-                    "message": beta.emergency_first(
-                        beta.daily_limit_text(), text),
+                    # Always the 911 line; first for crisis wording.
+                    "message": beta.with_911(beta.daily_limit_text(), text),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -2554,14 +2562,14 @@ def create_app(config: Config | None = None,
         if created is None or not user_message_id:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.ENGINE_UNAVAILABLE)
-            return jsonify({"error": "message store unavailable"}), 503
+            return _chat_unavailable("message store unavailable", text)
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
         except HealthClawError as exc:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.cause_of(exc))
-            return jsonify({"error": "run queue unavailable"}), 503
+            return _chat_unavailable("run queue unavailable", text)
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(

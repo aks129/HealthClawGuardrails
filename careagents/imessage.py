@@ -299,7 +299,10 @@ FINAL_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "waiting_for_human"})
 
 def timeout_text(origin: str) -> str:
-    return f"That took too long. Please try again or open {_host(origin)}."
+    """The Sendblue deliverer's answer for a run nobody finished. The
+    person's message is not at hand there, so the 911 line follows."""
+    return beta.with_911(
+        f"That took too long. Please try again or open {_host(origin)}.")
 
 
 # Markdown the model may still write on a text surface. Only at a line's
@@ -425,8 +428,12 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
                     f"{quote(action_id, safe='')}" if action_id else
                     "Your intake form is ready in your CareAgents chat.")
         elif kind == "agent.error":
-            parts.append(payload.get("text") or GENERIC_FAILURE_TEXT)
-    return "\n\n".join([*parts, *extras]).strip() or (
+            # The worker's failure text already carries the 911 line; one
+            # the engine wrote, or none (a run swept past its deadline
+            # before any worker claimed it), gets it here.
+            parts.append(beta.with_911(
+                payload.get("text") or GENERIC_FAILURE_TEXT))
+    return "\n\n".join([*parts, *extras]).strip() or beta.with_911(
         GENERIC_FAILURE_TEXT + " Please try again.")
 
 
@@ -559,8 +566,9 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
 
     Every fixed sentence sent back (the day's limit, busy, unavailable, too
     long, a sign-in link, a refusal) leads with beta.emergency_first's
-    911 line when the text reads as a crisis. Silence stays silence: an
-    opted-out number gets no reply at all."""
+    911 line when the text reads as a crisis, and a refusal that does not
+    ends with it (beta.with_911). Silence stays silence: an opted-out
+    number gets no reply at all."""
     body, status = _inbound(deps, raw_handle, text, request_id,
                             conversation_id, transport_block)
     if isinstance(body.get("reply"), str):
@@ -642,22 +650,27 @@ def _inbound(deps: Deps, raw_handle: str, text: str,
     text = menu_question(text) or text
     if not text:
         return {"error": "empty message"}, 400
+
+    def refusal(sentence: str) -> str:
+        # Every refusal carries the 911 line (beta.with_911).
+        return beta.with_911(sentence, text[:_CRISIS_SCAN_CHARS])
+
     if len(text) > 2000:
         return {"error": "message must be 1-2000 characters",
-                "reply": TOO_LONG_TEXT}, 400
+                "reply": refusal(TOO_LONG_TEXT)}, 400
     if not deps.workers_ready():
         return {"error": "run_workers_unavailable",
-                "reply": UNAVAILABLE_TEXT}, 503
+                "reply": refusal(UNAVAILABLE_TEXT)}, 503
     if not deps.allow_turn(surface["account_id"]):
-        return {"reply": busy_text(deps.burst_window_seconds)}, 200
+        return {"reply": refusal(busy_text(deps.burst_window_seconds))}, 200
     blocked = deps.admission_block(surface["account_id"], ctx)
     if blocked:
-        return {"reply": blocked}, 200
+        return {"reply": refusal(blocked)}, 200
     try:
         run = deps.queue_turn(ctx, text, request_id, conversation_id)
     except deps.queue_error:
         return {"error": "run queue unavailable",
-                "reply": UNAVAILABLE_TEXT}, 503
+                "reply": refusal(UNAVAILABLE_TEXT)}, 503
     body = {"run_id": run["id"], "status": run.get("status"),
             "duplicate": bool(run.get("duplicate"))}
     if svc.take_imessage_welcome(surface["id"]):

@@ -160,3 +160,18 @@ def test_a_spanish_crisis_keeps_the_next_ok_on_sonnet():
             ]
             assert routing.crisis_in_window(messages), said
             assert routing.tier_for(messages) == routing.TIER_SONNET, said
+
+
+# --- QA's live re-review of #1017 -------------------------------------------
+
+def test_qa_phrases_the_live_run_saw_missed():
+    """English "cut myself" was caught; "me corté" was not. A haircut or
+    nails are not self-harm."""
+    for text in ("me corté", "me corte", "me corté el brazo"):
+        assert routing.is_crisis(text), text
+        assert routing.is_self_harm(text), text
+    for text in ("no respiro", "me estoy ahogando", "NO RESPIRO bien"):
+        assert routing.is_crisis(text), text
+    for text in ("me corté el pelo", "me corte las uñas",
+                 "ayer me corté el cabello"):
+        assert not routing.is_crisis(text), text
