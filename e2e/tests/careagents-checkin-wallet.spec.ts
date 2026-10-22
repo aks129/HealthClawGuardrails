@@ -485,6 +485,7 @@ test.describe('check-in wallet', () => {
     ['sample_only', 'only the sample records'],
     ['no_records', 'no records on your account yet'],
     ['several_records', 'more than one set of records'],
+    ['records_not_ready', "records aren't ready to share yet"],
     ['unavailable', "couldn't read your records just now"],
   ]) {
     test(`a can't-answer reason waits for OK: ${code}`, async ({ page }) => {

@@ -291,6 +291,47 @@ def test_the_relay_answers_from_the_test_patient(tester):
     assert hc.exports == [conn["tenant_id"]]
 
 
+@pytest.mark.parametrize("kind,status,someone_else", [
+    ("direct", "empty", False),
+    ("direct", "revoked", False),
+    ("fasten", "pending", False),
+    ("direct", "active", True),
+])
+def test_real_records_not_ready_are_named_and_never_offered(
+        tester, kind, status, someone_else):
+    """Any non-sample connection on the account, not yet one the relay can
+    answer from, is `records_not_ready`: not an offer the route refuses."""
+    browser, hc, svc, acct = tester
+    person = svc.add_person(acct.id, "parent") if someone_else else None
+    svc.add_connection(acct.id, kind, "ca-waiting", "Records", status=status,
+                       person_id=person)
+    svc.add_connection(acct.id, "sample", "ca-sample", "Sample records",
+                       provider="CareAgents sample")
+    r = browser.post(RELAY, json={"resource_types": ["Patient"]})
+    assert r.status_code == 409
+    assert r.get_json() == {"error": "records_not_ready"}
+    assert _choose(browser).get_json() == {"error": "has_records"}
+    assert hc.exports == [] and hc.seeded == []
+
+
+def test_the_page_offers_the_test_patient_only_where_it_can_be_made():
+    """The offer's reasons are the relay's two that the route accepts, and
+    the refusals it does not offer on have words, none of them "a few
+    minutes"."""
+    import re
+    from pathlib import Path
+    js = (Path(checkin_wallet.__file__).parent / "static"
+          / "checkin_wallet.js").read_text()
+    offer = re.search(r"const OFFER_TEST = \{(.*?)\n\};", js, re.S).group(1)
+    assert set(re.findall(r"^\s*(\w+):", offer, re.M)) == {
+        "no_records", "sample_only"}
+    words = re.search(r"const NO_RECORDS = \{(.*?)\n\};", js, re.S).group(1)
+    for code in ("records_not_ready", "has_records"):
+        line = re.search(rf"^\s*{code}: \"([^\"]+)\"", words, re.M)
+        assert line, code
+        assert "few minutes" not in line.group(1)
+
+
 def test_a_plain_sample_is_still_sample_only(tester):
     browser, hc, svc, acct = tester
     svc.add_connection(acct.id, "sample", "ca-sample", "Sample records",
