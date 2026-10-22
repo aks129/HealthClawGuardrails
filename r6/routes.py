@@ -30,7 +30,7 @@ from werkzeug.http import (
     unquote_header_value,
 )
 from models import db
-from r6 import checkin as _checkin
+from r6 import checkin as _checkin, ktc as _ktc
 from r6 import constant_time
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
@@ -1932,13 +1932,13 @@ def record_connect_diagnostic():
 def issue_step_up_token():
     """Mint a step-up token; `_internal_mint_authorized` gates it. A body
     `scope` of "read" mints one that no write path accepts (H4, spec §13.6).
-    A `purpose` mints a check-in export token: r6/checkin.mint (FHI-53)."""
+    A `purpose` mints a check-in or ktc export token: r6/checkin, r6/ktc."""
     body = request.get_json(silent=True) or {}
     tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'default')
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
     if 'purpose' in body:
-        return _checkin.mint(tenant_id, body)
+        return (_ktc if body['purpose'] == 'ktc' else _checkin).mint(tenant_id, body)
     scope = body.get('scope')
     if scope not in (None, 'read'):
         return jsonify({'error': 'scope must be "read" or absent'}), 400
@@ -3330,7 +3330,7 @@ def share_bundle():
                            display/text stripped, relabelled by code); SSN-class
                            identifiers, text, note and conclusion removed;
                            meta.tag stamped intake-identified (#282).
-        checkin         — SMART Health Check-in, its own token: r6/checkin.export
+        checkin, ktc    — own tokens: r6/checkin.export, r6/ktc.export (SHL)
         deidentified    — apply_patient_controlled_redaction; strips name/
                           telecom/address/notes, preserves birthDate and clinical
                           codes, injects healthclaw canonical identifier; stamps
@@ -3355,10 +3355,10 @@ def share_bundle():
     tenant = tenant_from_request(sources=(TenantSource.HEADER,))
     tenant_id = tenant.id
 
-    # `checkin` has its own gate; every other profile keeps WRITE below.
+    # `checkin` and `ktc` have their own gates; the rest keep WRITE below.
     parsed = request.get_json(silent=True)
-    if isinstance(parsed, dict) and parsed.get('profile') == 'checkin':
-        return _checkin.export(tenant, parsed)
+    if isinstance(parsed, dict) and parsed.get('profile') in ('checkin', 'ktc'):
+        return (_ktc if parsed['profile'] == 'ktc' else _checkin).export(tenant, parsed)
 
     # Step-up required — this bundle carries identified patient data
     # Access kernel, slice 6. 401 for both halves keeps this site's dialect.

@@ -103,8 +103,11 @@ def test_the_page_asks_the_four_questions_in_order(made):
     for b in boxes:
         assert f'maxlength="{feedback.ANSWER_MAX}"' in b
         assert "required" not in b
-    # Nothing asks for a name, an email or a phone number.
-    assert "<input" not in form.replace('type="hidden"', "")
+    # Nothing asks for a name or a phone number. Signed out, the one input
+    # is an optional address to be answered at (never kept).
+    inputs = re.findall(r"<input[^>]*>", form.replace('type="hidden"', ""))
+    assert len(inputs) == 1 and 'name="reply_email"' in inputs[0]
+    assert "required" not in inputs[0]
 
 
 def test_the_page_opens_signed_in_too(made, monkeypatch):
@@ -345,10 +348,10 @@ def test_every_step_names_a_label_that_is_on_the_screen():
     screens = {t: (_TEMPLATES / t).read_text()
                for t in ("landing.html", "auth.html", "home.html")}
     labels = [q for s in beta_signup.NEXT_STEPS for q in _quoted(s)]
-    assert labels == ["Get started", "or use your email", "Email me a code",
+    assert labels == ["Get started", "Email me a code",
                       "Continue", "Skip for now", "Chat", "Tell us"]
     where = {"Get started": "landing.html",
-             "or use your email": "auth.html", "Email me a code": "auth.html",
+             "Email me a code": "auth.html",
              "Continue": "auth.html", "Skip for now": "auth.html",
              "Chat": "home.html"}
     for label, page in where.items():
@@ -512,15 +515,14 @@ def test_a_send_that_did_not_go_gives_its_slot_back(made, sent, monkeypatch):
     assert len(sent) == feedback.SENDS_PER_WINDOW
 
 
-SAME_EMAIL = ('Under "or use your email", type the same email you used to '
-              'join the beta and tap "Email me a code".')
+SAME_EMAIL = ('Type the same email you used to join the beta and tap '
+              '"Email me a code".')
 
 
 def test_step_two_says_to_use_the_same_email(made, sent):
     # The account finds its beta request by mailbox (text_tile, purge), so
-    # a different address loses the text tile and the request. And the big
-    # button on the sign-in screen is the passkey one, so the step says
-    # where the email box is.
+    # a different address loses the text tile and the request. The email
+    # box leads the sign-in screen (patient walk 2026-10-18).
     assert beta_signup.NEXT_STEPS[1] == SAME_EMAIL
     app, _ = made(RESEND_API_KEY="re_test")
     _confirm(app, sent)

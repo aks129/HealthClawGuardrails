@@ -16,8 +16,10 @@ pinned to shrink (tests/test_ratchets.py): `mint` is the check-in branch of
 """
 
 import json
+import os
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from flask import Response, jsonify, request
 
@@ -25,6 +27,7 @@ from models import db
 from r6 import access, stepup
 from r6.audit import add_audit_event
 from r6.models import R6Resource
+from r6.runtime_config import resolve_app_env
 
 #: The six items a check-in may ask for. Organization is deliberately absent:
 #: payor Organizations are fetched by the ids the exported Coverage
@@ -108,22 +111,130 @@ _PATIENT_ID = re.compile(r'[A-Za-z0-9\-.]{1,255}')
 _ENTRY_TYPES = CHECKIN_TYPES | {'Organization'}
 
 
+def public_base():
+    """The origin our fullUrls name, with one trailing slash (FHI-61).
+
+    PUBLIC_BASE_URL, the setting the action rails and SDC delivery links
+    already read. Not `request.host_url`: the CareAgents relay calls the
+    engine server to server, so the request's host is the internal one, and
+    a clinic would receive (and the wallet rewrite references to) a URL
+    nobody outside can follow.
+
+    Usable means http(s), a host, no credentials, no query or fragment; in
+    production, https only. Unset or unusable: None in production, which
+    the export refuses rather than publish the request host; elsewhere the
+    request host, for local development."""
+    raw = os.environ.get('PUBLIC_BASE_URL', '').strip().rstrip('/')
+    production = resolve_app_env() == 'production'
+    parts = urlsplit(raw)
+    usable = (parts.scheme in (('https',) if production else ('http', 'https'))
+              and parts.hostname and not parts.username
+              and not parts.password and not parts.query
+              and not parts.fragment and '#' not in raw and '?' not in raw)
+    if usable:
+        return raw + '/'
+    return None if production else request.host_url
+
+
 def full_url(resource):
-    """`{our host}r6/fhir/{type}/{id}`, or None when the type or id is not a
-    shape we would serve. The wallet matches records by fullUrl and resolves
-    references against it (QA #963), so every entry needs one; an id that
+    """`{public_base}r6/fhir/{type}/{id}`, or None when the type or id is
+    not a shape we would serve, or there is no public base. The wallet
+    matches records by fullUrl and resolves references against it (QA
+    #963), so every entry needs one; an id that
     could walk the path (`.`, `..`) or carry anything but the store's id
     characters gets no URL, and its entry is not sent."""
     rtype, rid = resource.get('resourceType'), resource.get('id')
     if (rtype not in _ENTRY_TYPES or not isinstance(rid, str)
             or not _PATIENT_ID.fullmatch(rid) or rid in ('.', '..')):
         return None
-    return f'{request.host_url}r6/fhir/{rtype}/{rid}'
+    base = public_base()
+    return f'{base}r6/fhir/{rtype}/{rid}' if base else None
+
+
+def stored_meta(row):
+    """The row's `meta` as stored. `to_fhir_json` replaces `meta`
+    wholesale, which takes the HTEST test-data marker with it; the profile
+    reads that one coding back from here (r6/access.py _test_markers)."""
+    try:
+        meta = json.loads(row.resource_json).get('meta')
+    except (ValueError, AttributeError):
+        return None
+    return meta if isinstance(meta, dict) else None
 
 
 def _entry(resource):
     url = full_url(resource)
     return {'fullUrl': url, 'resource': resource} if url else None
+
+
+def collect(tenant, types, patient_id, profile):
+    """The entries an export sends, and the types among them.
+
+    Only `types`, only rows of the one patient (a Patient by id, anything
+    else by its subject/patient/beneficiary reference), not deleted, and
+    only rows that carry an allow-listed claim for their own type, read
+    BEFORE `profile` runs (a profile may drop `meta.profile`). Each row goes
+    through `profile`, then the payor Organizations the exported Coverage
+    references are fetched by id in this tenant, never by type. An entry
+    without a fullUrl we would serve is not sent."""
+    rows = R6Resource.query.filter(
+        R6Resource.tenant_id == tenant.id,
+        R6Resource.is_deleted == False,  # noqa: E712
+        R6Resource.resource_type.in_(types),
+    ).order_by(R6Resource.resource_type, R6Resource.id).all()
+
+    own = f'Patient/{patient_id}'
+    entries = []
+    type_set = set()
+    payor_ids = set()
+    for row in rows:
+        stored = row.to_fhir_json()
+        if row.resource_type == 'Patient':
+            if row.id != patient_id:
+                continue
+        else:
+            ref = next((r.get('reference') for r in (
+                stored.get('subject'), stored.get('patient'),
+                stored.get('beneficiary')) if isinstance(r, dict)), None)
+            if ref != own:
+                continue
+        if not has_claim(stored):
+            continue
+        resource = profile(
+            stored, patient_id=patient_id, stored_meta=stored_meta(row))
+        entry = _entry(resource)
+        if entry is None:
+            continue
+        entries.append(entry)
+        type_set.add(row.resource_type)
+        for payor in resource.get('payor') or []:
+            payor_ids.add(payor['reference'].split('/', 1)[1])
+
+    if payor_ids:
+        orgs = R6Resource.query.filter(
+            R6Resource.tenant_id == tenant.id,
+            R6Resource.is_deleted == False,  # noqa: E712
+            R6Resource.resource_type == 'Organization',
+            R6Resource.id.in_(sorted(payor_ids)),
+        ).order_by(R6Resource.id).all()
+        for org in orgs:
+            entry = _entry(profile(
+                org.to_fhir_json(), patient_id=patient_id,
+                stored_meta=stored_meta(org)))
+            if entry is not None:
+                entries.append(entry)
+                type_set.add('Organization')
+    return entries, type_set
+
+
+def collection(entries):
+    """A `collection` Bundle of `entries`, stamped now."""
+    return {
+        'resourceType': 'Bundle',
+        'type': 'collection',
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        'entry': entries,
+    }
 
 
 def mint(tenant_id, body):
@@ -162,7 +273,10 @@ def export(tenant, body):
     - Each row goes through r6/access.py _checkin_profile. Payor Organizations
       are fetched by the ids the exported Coverage references, in this
       tenant, never by type.
-    - Every entry carries an absolute fullUrl on our own host (full_url).
+    - Every entry carries an absolute fullUrl on our public base (full_url,
+      public_base). In production without one: 503, audited, token not
+      spent.
+    - A record's own HTEST test-data marker stays on it (stored_meta).
     - Over MAX_BUNDLE_BYTES: 413, no bundle, audited as a failure, and the
       token is not spent. Never truncated.
     - One AuditEvent, from fixed words.
@@ -185,6 +299,18 @@ def export(tenant, body):
             'diagnostics': 'profile "checkin" requires resource_types from '
                            'the check-in set and a patient_id'}]}), 400
 
+    # Fail closed before the grant (FHI-61): a production engine with no
+    # public base would publish its internal host. Any caller gets the same
+    # answer, and the token is not spent.
+    if public_base() is None:
+        add_audit_event(
+            'read', resource_type='Bundle', resource_id='share-bundle',
+            agent_id=AUDIT_AGENT, tenant_id=tenant.id, outcome='failure',
+            detail='share-bundle export (profile=checkin) refused: '
+                   'PUBLIC_BASE_URL is not configured')
+        db.session.commit()
+        return jsonify({'error': 'checkin_unavailable'}), 503
+
     # Checked here without spending; spent only once the bundle is known to
     # fit, so a 413 does not burn it. A narrower retry still needs a newly
     # minted token: the type set must match the token's `op` exactly.
@@ -193,58 +319,9 @@ def export(tenant, body):
                  absent_status=401, rejected_status=401)
     access.require_grant(**grant)
 
-    rows = R6Resource.query.filter(
-        R6Resource.tenant_id == tenant.id,
-        R6Resource.is_deleted == False,  # noqa: E712
-        R6Resource.resource_type.in_(types),
-    ).order_by(R6Resource.resource_type, R6Resource.id).all()
-
-    own = f'Patient/{patient_id}'
-    entries = []
-    type_set = set()
-    payor_ids = set()
-    for row in rows:
-        stored = row.to_fhir_json()
-        if row.resource_type == 'Patient':
-            if row.id != patient_id:
-                continue
-        else:
-            ref = next((r.get('reference') for r in (
-                stored.get('subject'), stored.get('patient'),
-                stored.get('beneficiary')) if isinstance(r, dict)), None)
-            if ref != own:
-                continue
-        if not has_claim(stored):
-            continue
-        resource = access._checkin_profile(stored, patient_id=patient_id)
-        entry = _entry(resource)
-        if entry is None:
-            continue
-        entries.append(entry)
-        type_set.add(row.resource_type)
-        for payor in resource.get('payor') or []:
-            payor_ids.add(payor['reference'].split('/', 1)[1])
-
-    if payor_ids:
-        orgs = R6Resource.query.filter(
-            R6Resource.tenant_id == tenant.id,
-            R6Resource.is_deleted == False,  # noqa: E712
-            R6Resource.resource_type == 'Organization',
-            R6Resource.id.in_(sorted(payor_ids)),
-        ).order_by(R6Resource.id).all()
-        for org in orgs:
-            entry = _entry(access._checkin_profile(
-                org.to_fhir_json(), patient_id=patient_id))
-            if entry is not None:
-                entries.append(entry)
-                type_set.add('Organization')
-
-    bundle = {
-        'resourceType': 'Bundle',
-        'type': 'collection',
-        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
-        'entry': entries,
-    }
+    entries, type_set = collect(tenant, types, patient_id,
+                                access._checkin_profile)
+    bundle = collection(entries)
     payload = json.dumps(bundle)
     if len(payload.encode('utf-8')) > MAX_BUNDLE_BYTES:
         add_audit_event(

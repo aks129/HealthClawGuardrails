@@ -43,6 +43,9 @@ class Account(Base):
     email_verified_at = Column(Float, nullable=True)
     created_at = Column(Float, default=now)
     last_login_at = Column(Float, nullable=True)
+    # How that latest sign-in was made: one of careagents/signins.py's
+    # METHODS, a name we write. The per-day counts are ca_sign_in_days.
+    last_login_method = Column(String(16), nullable=True)
     # Sample-connect lease (calm hub spec section 4). Set while this
     # account's sample tenant is minted and seeded, cleared after. A double
     # tap races on this row, not on the tenant mint. A timestamp, not PHI.
@@ -328,6 +331,26 @@ class UsageDay(Base):
     turns = Column(Integer, default=0)
 
 
+#: How many failed turns one account may be given back per UTC day. A
+#: failure still costs the operator its model call, so the refund is
+#: bounded: past it, a failed turn counts like any other.
+REFUNDS_PER_DAY = 3
+
+
+class RefundDay(Base):
+    """How many failed turns one account was given back on one UTC day
+    (AccountService.refund_daily_turn). Counts only, like UsageDay. Its own
+    table so `ca_usage_days`, whose shape older databases are migrated
+    from, keeps its columns."""
+    __tablename__ = "ca_refund_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_refund_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("rfd"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False)               # UTC "YYYY-MM-DD"
+    count = Column(Integer, nullable=False, default=0)
+
+
 class VoiceUsageDay(Base):
     """Per-account daily speech spend: seconds transcribed, characters
     spoken (careagents/voice.py). ElevenLabs bills both to the operator, so
@@ -405,15 +428,21 @@ class RealRecordInvite(Base):
     environment allowlist. Account-level data: an email, when, and who
     invited it. No health information.
 
-    One row per email. Revoking stamps `revoked_at`; inviting again clears it.
-    A revoked invite blocks NEW real connections; existing ones keep working
-    until the person disconnects them or the operator closes real records.
+    One row per inbox: `email` is the match key (`invites.invite_key`: case
+    everywhere, and dots and +tags on Gmail only), so every alias of an
+    invited inbox matches; `display_email` is the address as the owner
+    typed it, for their list. Revoking stamps `revoked_at`; inviting again
+    clears it. A revoked invite blocks NEW real connections; existing ones
+    keep working until the person disconnects them or the operator closes
+    real records.
     """
     __tablename__ = "ca_real_record_invites"
     email = Column(String(255), primary_key=True)
     invited_at = Column(Float, nullable=False, default=now)
     invited_by = Column(String(255), nullable=False)
     revoked_at = Column(Float, nullable=True)
+    # NULL: the same as `email` (a row from before the key was the inbox).
+    display_email = Column(String(255), nullable=True)
 
 
 class EmailToken(Base):
@@ -428,6 +457,10 @@ class EmailToken(Base):
     # Failed-guess counter so a login code can be burned after a few misses
     # (anti-brute-force). See AccountService.verify_email_code.
     attempts = Column(Integer, default=0)
+    # The inbox `email` delivers to (beta_signup.mailbox): the key the
+    # per-address caps count on, so variants of one inbox share them.
+    # NULL on codes issued before it existed.
+    mailbox = Column(String(255), index=True)
 
 
 #: What a peer adding the same column first looks like: Postgres says the
@@ -468,6 +501,9 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+        if "last_login_method" not in cols:
+            _add_column(engine, "ca_accounts", "last_login_method",
+                        "VARCHAR(16)")
     if "ca_surfaces" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
         if "code_exp" not in cols:
@@ -504,6 +540,20 @@ def _ensure_columns(engine) -> None:
                 conn.execute(text(
                     "ALTER TABLE ca_email_tokens ADD COLUMN attempts INTEGER "
                     "DEFAULT 0"))
+        if "mailbox" not in cols:
+            _add_column(engine, "ca_email_tokens", "mailbox", "VARCHAR(255)")
+            # The index create_all gives a new table, under its name. A
+            # peer racing the same statement on Postgres loses with a
+            # duplicate key on the catalogue: the index is there.
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "ix_ca_email_tokens_mailbox "
+                        "ON ca_email_tokens (mailbox)"))
+            except IntegrityError as exc:
+                if "duplicate key" not in str(exc.orig).lower():
+                    raise
     if "ca_agents" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_agents")}
         if "advisor" not in cols:
@@ -514,6 +564,15 @@ def _ensure_columns(engine) -> None:
             _add_column(engine, "ca_agents", "routines", "VARCHAR(255)")
         if "person_id" not in cols:
             _add_column(engine, "ca_agents", "person_id", "VARCHAR(32)")
+    if "ca_beta_mail_caps" in tables:
+        # The rolling day's send times (beta_signup.claim_mail) and the
+        # last "how to sign in" email (claim_already). A row from before
+        # them reads as one email, at sent_at.
+        cols = {c["name"] for c in insp.get_columns("ca_beta_mail_caps")}
+        if "sends" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "sends", "VARCHAR(128)")
+        if "already_at" not in cols:
+            _add_column(engine, "ca_beta_mail_caps", "already_at", "FLOAT")
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:
@@ -797,6 +856,87 @@ def _ensure_people(engine) -> None:
             logger.warning("ca_people migration retried")
 
 
+#: Advisory-lock key for the invite-key migration; distinct from the others.
+_INVITE_KEYS_LOCK_KEY = 9_280_002
+
+
+def _invites_to_rekey(conn) -> list:
+    """Rows of ca_real_record_invites not yet keyed by their inbox, with
+    every row that shares an inbox with one of them."""
+    from careagents.invites import invite_key
+    rows = conn.execute(text(
+        "SELECT email, invited_at, invited_by, revoked_at, display_email "
+        "FROM ca_real_record_invites")).all()
+    stale = {invite_key(r[0]) for r in rows if invite_key(r[0]) != r[0]}
+    return [r for r in rows if invite_key(r[0]) in stale]
+
+
+def _ensure_invite_keys(engine) -> None:
+    """Key every real-record invite by its inbox (`invites.invite_key`).
+    Before, a row was keyed by the address as typed, and only that exact
+    string matched. Idempotent, on SQLite and Postgres.
+
+    A row whose key changes keeps the typed address as `display_email`.
+    Two aliases of one inbox become one row: the latest owner action
+    between them wins, a revoke at the same moment as an invite included,
+    so an inbox the owner last revoked stays revoked.
+
+    Web and worker boot together. On Postgres an advisory lock serialises
+    them, as `_ensure_people` does; on SQLite the first write takes the
+    database's write lock before the rows are read, so the second boot
+    reads the first one's result and finds nothing to do.
+    """
+    from careagents.invites import invite_key
+    insp = inspect(engine)
+    if "ca_real_record_invites" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("ca_real_record_invites")}
+    if "display_email" not in cols:
+        _add_column(engine, "ca_real_record_invites", "display_email",
+                    "VARCHAR(255)")
+    with engine.connect() as conn:
+        if not _invites_to_rekey(conn):
+            return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _INVITE_KEYS_LOCK_KEY})
+                else:
+                    conn.execute(text(
+                        "UPDATE ca_real_record_invites SET email = email "
+                        "WHERE 1 = 0"))
+                groups: dict[str, list] = {}
+                for r in _invites_to_rekey(conn):
+                    groups.setdefault(invite_key(r[0]), []).append(r)
+                for key, group in groups.items():
+                    # (moment of the last action, revoked) - a tie goes
+                    # to the revoke.
+                    win = max(group, key=lambda r: (
+                        r[3] if r[3] is not None else r[1], r[3] is not None))
+                    display = win[4] or (win[0] if win[0] != key else None)
+                    for r in group:
+                        conn.execute(text(
+                            "DELETE FROM ca_real_record_invites "
+                            "WHERE email = :e"), {"e": r[0]})
+                    conn.execute(text(
+                        "INSERT INTO ca_real_record_invites (email, "
+                        "invited_at, invited_by, revoked_at, display_email) "
+                        "VALUES (:e, :a, :b, :r, :d)"),
+                        {"e": key, "a": win[1], "b": win[2], "r": win[3],
+                         "d": display})
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK
+                         or "locked" in str(exc.orig).lower())
+            if attempt == 2 or not retryable:
+                raise
+            logger.warning("ca_real_record_invites key migration retried")
+
+
 #: What a peer creating the same table first looks like, by backend. SQLite
 #: and Postgres both say "already exists"; Postgres can instead trip the
 #: unique index on its type catalogue when two CREATE TABLEs overlap.
@@ -856,6 +996,7 @@ def make_engine(url: str):
     _ensure_usage_day_unique(engine)
     _ensure_imessage_handle_unique(engine)
     _ensure_people(engine)
+    _ensure_invite_keys(engine)
     return engine
 
 

@@ -57,10 +57,11 @@
      (#928 F6), so say how to get it rather than leave the section out. #}
   <section class="hub-section" id="invite-section">
     <div class="section-head"><h2>Invite friends and family</h2></div>
-    <p class="card-note">Your invite link is one step away. We'll email you a
-      code to confirm it's you, then bring you back here.</p>
+    <p class="card-note">You opened CareAgents from the link in our email.
+      Before we make your invite link, we email you a code to check it's
+      you. Then we bring you back here.</p>
     <a class="btn-primary btn-block" id="invite-signin"
-       href="/auth?invite=1">Sign in to get your invite link</a>
+       href="/auth?invite=1">Email me a code for my invite link</a>
   </section>
   {% endif %}
 
@@ -87,7 +88,14 @@
       {% else %}
       <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
       {% endif %}
-      <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
+      {# Not an app store app: the web app added to the home screen. #}
+      <details class="surface phone-app"><summary><b>Phone app</b>
+        <span>add to your home screen</span></summary>
+        <p>iPhone: open this page in Safari, tap the Share button, then
+          tap "Add to Home Screen".</p>
+        <p>Android: open this page in Chrome, tap the menu (three dots),
+          then tap "Add to Home screen".</p>
+      </details>
     </div>
     <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
        hidden></p>
@@ -141,7 +149,7 @@
         <legend>Tone</legend>
         {% for key, p in tones %}
         <label class="choice-row"><input type="radio" name="tone-{{ a.id }}"
-          value="{{ key }}" {% if a.persona == key %}checked{% endif %}><span>{{ p.name }}</span></label>
+          value="{{ key }}" {% if a.persona == key %}checked{% endif %}><span>{{ tone_words[key] | capitalize }}</span></label>
         {% endfor %}
       </fieldset>
       <fieldset class="choice-group assistant-routines">

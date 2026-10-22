@@ -62,8 +62,9 @@ def _link(svc, code):
 
 
 def _invite_row(svc, email):
+    """The invite the inbox of `email` holds (keyed by `invite_key`)."""
     with svc.session() as s:
-        row = s.get(RealRecordInvite, email)
+        row = s.get(RealRecordInvite, invites.invite_key(email))
         return None if row is None else (row.invited_by, row.revoked_at)
 
 
@@ -208,7 +209,9 @@ def test_a_join_without_a_live_code_is_an_ordinary_join(
     app, svc = made(RESEND_API_KEY="re_test")
     c = app.test_client()
     r = _post(c, email="plain@example.com", invite="f" * 32)
-    assert r.status_code == 200 and r.get_json() == {"ok": True}
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "sent": True}
+    # A dead code names nobody: the ordinary subject.
+    assert sent[-1][1].startswith("Confirm you asked to test CareAgents")
     token = _confirm_token(sent[-1][3])
     assert c.post("/beta/confirm", data={"t": token}).status_code == 200
     assert _invite_row(svc, "plain@example.com") is None
@@ -430,7 +433,9 @@ def test_a_link_passes_on_real_records_only_from_an_inviter_who_has_them(
     assert invites.join_outcome(svc.session, "late@example.com") == "none"
     assert _invite_row(svc, "late@example.com") is None
     hub = c.get("/home").get_data(as_text=True)
-    assert "For now you can use made-up records" in hub
+    # The kinder words the empty hub uses (patient re-walk on #979).
+    assert ("For now you&#39;re using made-up records. Connecting your own "
+            "records is coming later in the beta.") in hub
 
 
 def test_a_confirm_link_session_of_the_owner_gets_no_funnel_page(
