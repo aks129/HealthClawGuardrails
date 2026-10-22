@@ -14,6 +14,8 @@ sample answers) never removes a Spanish emergency line. Synthetic only.
 
 from __future__ import annotations
 
+import unicodedata
+
 from careagents import beta, personas, routing
 from careagents.worker import _drop_echo
 
@@ -64,3 +66,57 @@ def test_spanish_never_reaches_the_english_app_card():
     for text in ("hola", "gracias", "¿Qué puedes hacer?",
                  "tengo dolor en el pecho", "no puedo respirar"):
         assert routing.classify(text) == routing.TIER_SONNET
+
+
+# --- Spanish crisis wording routes as an English crisis does -----------------
+#
+# routing._CRISIS was English stems only: "no puedo respirar" did not match,
+# so after it a plain "ok" went to Haiku whenever the reply had not said 911
+# or 988. Each phrase is tried as written, without accents and in capitals.
+
+SPANISH_CRISIS = (
+    "no puedo respirar", "tengo dolor en el pecho", "dolor de pecho",
+    "necesito una ambulancia", "tuve un desmayo", "me desmayé",
+    "tengo un sangrado fuerte", "pienso en el suicidio",
+    "tengo pensamientos suicidas", "quiero morir", "quiero matarme",
+    "creo que es una sobredosis", "tomé demasiadas pastillas",
+    "tomé demasiado ibuprofeno", "tuvo una convulsión",
+    "creo que es un derrame", "un ataque al corazón", "tuve un infarto",
+)
+
+
+def _deaccent(text):
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text)
+                   if not unicodedata.combining(ch))
+
+
+def test_each_spanish_crisis_phrase_is_a_crisis():
+    for phrase in SPANISH_CRISIS:
+        for text in {phrase, _deaccent(phrase), phrase.upper(),
+                     f"¿Qué hago? {phrase}.", f"ok {_deaccent(phrase)}"}:
+            assert routing.is_crisis(text), text
+            assert routing.classify(text) == routing.TIER_SONNET, text
+
+
+def test_ordinary_spanish_is_not_a_crisis():
+    for text in ("tengo una pregunta sobre mi presión",
+                 "tengo una pregunta sobre mi presion",
+                 "¿cuándo fue mi último análisis de sangre?",
+                 "hola, gracias", "quiero ver mis vacunas",
+                 "tomé mi pastilla de la presión"):
+        assert not routing.is_crisis(text), text
+
+
+def test_a_spanish_crisis_keeps_the_next_ok_on_sonnet():
+    assert routing.tier_for([{"role": "user", "content": "ok"}]) == (
+        routing.TIER_HAIKU)
+    for phrase in SPANISH_CRISIS:
+        for said in (phrase, _deaccent(phrase)):
+            messages = [
+                {"role": "user", "content": said},
+                # A reply that happened not to say 911 or 988.
+                {"role": "assistant", "content": "Entiendo. Estoy aquí."},
+                {"role": "user", "content": "ok"},
+            ]
+            assert routing.crisis_in_window(messages), said
+            assert routing.tier_for(messages) == routing.TIER_SONNET, said

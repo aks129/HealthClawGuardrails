@@ -161,6 +161,13 @@ _CRISIS = re.compile(r"|".join([
     r"seizure", r"unconscious", r"passed out", r"faint", r"bleeding",
     r"911", r"988", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
     r"abuse", r"\bunsafe\b",
+    # Spanish, written without accents: is_crisis matches the text with its
+    # accents taken off, so "convulsión" and "convulsion" both count.
+    # "suicid" above already covers suicidio and suicida.
+    r"no puedo respirar", r"dolor (?:en el|de|del) pecho", r"ambulancia",
+    r"desmay", r"sangrado", r"quiero morir", r"matarme",
+    r"me quiero matar", r"sobredosis", r"tome demasiad", r"convulsi",
+    r"derrame", r"ataque al corazon", r"infarto",
 ]))
 
 #: Whole messages made only of these words are small talk.
@@ -221,8 +228,15 @@ def normalize(text: str) -> str:
     return t.replace("’", "'").casefold().strip()
 
 
+def _unaccented(text: str) -> str:
+    """`text` with combining accents taken off: "desmayé" reads "desmaye".
+    For crisis matching only; classify still refuses non-ASCII text."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text)
+                   if not unicodedata.combining(ch))
+
+
 def is_crisis(text: str) -> bool:
-    return bool(_CRISIS.search(normalize(text)))
+    return bool(_CRISIS.search(_unaccented(normalize(text))))
 
 
 def classify(text: str) -> int:
