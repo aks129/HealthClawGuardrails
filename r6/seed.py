@@ -49,9 +49,40 @@ _LAB_SERIES = (
      [(540, 0.8), (360, 0.82), (180, 0.79), (6, 0.8), (0, 1.3)]),
 )
 
+#: Dated blood pressure panels, so the sample records can chart one (QA
+#: 2026-10-22: the chart showed none). Synthetic values that bounce as
+#: office readings do. Each predates demo-obs-bp below, which stays the
+#: latest reading, so care gaps and the BP-control measure see what they
+#: saw before. Its code too (55284-4): under 85354-9 the model's lab list
+#: named one test twice, "Blood pressure" and "Blood pressure panel".
+#: [(days before seeding, systolic, diastolic), ...]
+_BP_SERIES = [(540, 146, 92), (360, 141, 90), (270, 144, 91),
+              (180, 136, 86), (90, 134, 85), (30, 131, 83)]
+
+
+def _bp_series(now: datetime) -> list[dict]:
+    def part(code: str, value: int) -> dict:
+        return {"code": {"coding": [{"system": "http://loinc.org",
+                                     "code": code}]},
+                # As demo-obs-bp states it, so the series has one unit: a
+                # UCUM code here would read as "mm[Hg]" beside its "mmHg".
+                "valueQuantity": {"value": value, "unit": "mmHg"}}
+    return [{
+        "resourceType": "Observation",
+        "id": f"demo-obs-bp-{n}",
+        "status": "final",
+        "code": {"coding": [{"system": "http://loinc.org",
+                             "code": "55284-4"}]},
+        "subject": {"reference": "Patient/__PATIENT_ID__"},
+        "component": [part("8480-6", systolic), part("8462-4", diastolic)],
+        "effectiveDateTime": (now - timedelta(days=days_ago)).strftime(
+            '%Y-%m-%dT%H:%M:%SZ'),
+    } for n, (days_ago, systolic, diastolic) in enumerate(_BP_SERIES,
+                                                          start=1)]
+
 
 def _lab_series(now: datetime) -> list[dict]:
-    out = []
+    out = _bp_series(now)
     for name, loinc, unit, points in _LAB_SERIES:
         for n, (days_ago, value) in enumerate(points, start=1):
             when = (now - timedelta(days=days_ago)).strftime(
