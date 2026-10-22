@@ -2082,8 +2082,8 @@ def seed_tenant():
     Seed a tenant with a realistic Patient + Observations + Condition bundle
     for live MCP testing.
 
-    Re-seeding with the BUILT-IN set is a no-op: every built-in resource
-    carries a stable id and the seed skips what is already present (#457).
+    Re-seeding with the BUILT-IN set adds only what is missing: each built-in
+    resource has a stable id and the seed skips what is already present (#457).
     A caller-supplied `bundle` is different — resources in it without an
     `id` still get a generated one and are appended, because a caller
     posting their own data is asking for new rows.
@@ -2137,7 +2137,7 @@ def seed_tenant():
         'created_count': count,
         'step_up_token': token,
         'note': ('Use step_up_token for write operations. Re-seeding the built-in '
-                 'set is a no-op; supply a bundle to add resources.')
+                 'set adds only what is missing; a bundle adds resources.')
     }), 201
 
 

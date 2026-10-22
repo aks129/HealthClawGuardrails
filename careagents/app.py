@@ -142,6 +142,24 @@ CHART_FOOTNOTE = ("This chart is not a diagnosis. Each result is compared "
                   "with typical adult ranges, and ranges differ by lab, age "
                   "and sex. If your lab report shows a different range, go "
                   "by your lab's range.")
+#: Where nothing on the chart was scored (blood pressure: the engine has no
+#: range for it), the range sentence above would be untrue (QA #1021).
+CHART_FOOTNOTE_UNSCORED = ("This chart is not a diagnosis. These readings "
+                           "were not compared with any range; your clinician "
+                           "can say what they mean for you.")
+#: Scored and unscored series on one card.
+CHART_FOOTNOTE_MIXED = (CHART_FOOTNOTE + " Readings shown in grey were not "
+                        "compared with any range.")
+
+
+def _chart_footnote(series: list[dict]) -> str:
+    """The footnote that is true of these series: a series is scored when
+    any reading carries the engine's flag rather than IND."""
+    scored = [any(r.get("flag") != "IND" for r in s["readings"])
+              for s in series]
+    if scored and not any(scored):
+        return CHART_FOOTNOTE_UNSCORED
+    return CHART_FOOTNOTE if all(scored) else CHART_FOOTNOTE_MIXED
 
 # FHIR R4 §3.2 SHALL support `application/fhir+json`; the two legacy
 # variants ride the same accept-list so a real FHIR client, a plain-JSON
@@ -2640,11 +2658,10 @@ def create_app(config: Config | None = None,
         except HealthClawError:
             return jsonify({"error": "labs unavailable"}), 502
         keys = labs_timeline_mod.keys_for_topic(request.args.get("topic"))
-        return jsonify({
-            "series": labs_timeline_mod.build_series(labs.get("bundle") or {},
-                                                     keys),
-            "disclaimer": CHART_FOOTNOTE,
-        })
+        series = labs_timeline_mod.build_series(labs.get("bundle") or {},
+                                                keys)
+        return jsonify({"series": series,
+                        "disclaimer": _chart_footnote(series)})
 
     # --- pending approvals (#215) --------------------------------------------
 

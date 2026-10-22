@@ -46,6 +46,54 @@ def test_the_bp_history_carries_no_upstream_display():
         assert "text" not in p["code"]
 
 
+def test_the_footnote_claims_a_range_check_only_where_one_ran(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """QA #1021: under a BP chart, where the engine scored nothing, "each
+    result is compared with typical adult ranges" is untrue.
+
+    MUTATION: always send CHART_FOOTNOTE -> red."""
+    from careagents.app import CHART_FOOTNOTE
+    chain = Chain(cfg, svc, monkeypatch)
+
+    def footnote(topic=None):
+        params = {"agent": chain.agent}
+        if topic:
+            params["topic"] = topic
+        return chain.s.get(f"{BASE}/api/labs/timeline",
+                           params=params).json()["disclaimer"]
+
+    bp = footnote("blood pressure")
+    assert "not a diagnosis" in bp
+    assert "typical adult ranges" not in bp
+    assert "not compared with any range" in bp
+    # A scored lab keeps the footnote it had.
+    assert footnote("cholesterol") == CHART_FOOTNOTE
+    # Both on one card: the range sentence, and which readings it skips.
+    both = footnote()
+    assert "typical adult ranges" in both
+    assert "not compared with any range" in both
+
+
+def test_the_brief_still_lists_every_sample_lab_beside_the_bp_history():
+    """QA #1021: the brief's Recent labs is capped at ten readings, newest
+    first. The BP history must not push another test off it."""
+    from r6.brief.engine import build_labs
+    observations = [r for r in _built_in_resources()
+                    if r["resourceType"] == "Observation"]
+    labels = {f.label for f in build_labs(observations)}
+    assert {"Glucose (blood)", "Hemoglobin A1c", "Creatinine",
+            "LDL cholesterol (calculated)", "Cholesterol (total)",
+            "Blood pressure"} <= labels
+
+
+def test_the_timeline_tool_offers_blood_pressure():
+    """QA #1021 F2: a description listing only labs sent "how's my blood
+    pressure?" to get_labs instead of the chart."""
+    from careagents.agent import TOOLS
+    [tool] = [t for t in TOOLS if t["name"] == "show_lab_timeline"]
+    assert "blood pressure" in tool["description"]
+
+
 def test_the_bp_chart_on_the_real_engine_has_readings(cfg, svc,  # noqa: F811
                                                        monkeypatch):
     """What the card fetches, end to end: sample connect, $interpret on the

@@ -81,6 +81,21 @@ def _bp_series(now: datetime) -> list[dict]:
                                                           start=1)]
 
 
+def _stored_bp_date(tenant_id: str) -> datetime | None:
+    """The date of the tenant's live demo-obs-bp, or None."""
+    row = (R6Resource.query
+           .filter_by(tenant_id=tenant_id, resource_type='Observation',
+                      id='demo-obs-bp', is_deleted=False)
+           .first())
+    if row is None:
+        return None
+    raw = row.to_fhir_json().get('effectiveDateTime')
+    try:
+        return datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
 def _lab_series(now: datetime) -> list[dict]:
     out = _bp_series(now)
     for name, loinc, unit, points in _LAB_SERIES:
@@ -192,6 +207,13 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
         source = 'sample'
     if resources is None:
         resources = _built_in_resources()
+        # A tenant seeded before the BP history keeps its demo-obs-bp and its
+        # old date. Dated from now, the history would land after it and take
+        # over as the latest reading, so it is dated from that reading.
+        anchor = _stored_bp_date(tenant_id)
+        if anchor is not None:
+            history = {r['id']: r for r in _bp_series(anchor)}
+            resources = [history.get(r.get('id'), r) for r in resources]
 
     patient_id = None
     created = 0

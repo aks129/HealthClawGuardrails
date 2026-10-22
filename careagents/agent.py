@@ -124,7 +124,8 @@ TOOLS = [
      "description": ("Show a CHART of how a lab value has changed over time. "
                      "Use for any 'timeline', 'trend', 'over time', 'history' "
                      "or 'has it improved' question about a lab (cholesterol, "
-                     "LDL, HDL, triglycerides, A1c, glucose). The chart "
+                     "LDL, HDL, triglycerides, A1c, glucose) or blood "
+                     "pressure. The chart "
                      "appears in the conversation, so describe what it shows "
                      "rather than listing every number."),
      "parameters": {"type": "object", "properties": {
@@ -1036,14 +1037,25 @@ def _not_evaluated(consumer: dict, bundle: dict) -> list[dict] | None:
             not isinstance(name, str) or not code or _obs_loinc(r) != code
             for name, code, r in zip(names, codes, unscored)):
         return None
-    out = []
+    # One entry per analyte, its latest reading, as _latest_per_analyte does
+    # for scored ones: listing a BP history left the model to order raw
+    # dates and work out a direction itself (QA #1021, #942).
+    groups: dict[str, list[tuple[tuple, dict]]] = {}
     for name, r in zip(names, unscored):
+        date = _obs_date(r)
+        raw = str(r.get("effectiveDateTime") or r.get("issued") or "")
+        groups.setdefault(name, []).append(
+            ((date is not None, date or "", raw if date else ""), r))
+    out = []
+    for name, readings in groups.items():
+        r = sorted(readings, key=lambda x: x[0])[-1][1]
         value, unit = _plain_value(r)
         rng = r.get("referenceRange")
         out.append({"analyte": name, "date": _obs_date(r), "value": value,
                     "unit": unit,
                     "reference_range_in_records": bool(
-                        isinstance(rng, list) and rng)})
+                        isinstance(rng, list) and rng),
+                    "earlier_readings": len(readings) - 1})
     return out
 
 
@@ -1258,7 +1270,9 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 f"{len(not_evaluated)} reading(s) in not_evaluated were not "
                 "scored against a reference range. Zero flagged results here "
                 "means nothing was SCORED as abnormal, not that nothing is "
-                "abnormal. Report the "
+                "abnormal. Each not_evaluated reading is that test's latest; "
+                "earlier_readings are counted, not listed, so give no "
+                "direction from them. Report the "
                 + ("latest readings" if latest is not None else "lines")
                 + " you were given AND, for each not_evaluated reading, give "
                 "its value and date in plain words and say there is no "
