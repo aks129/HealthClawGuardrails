@@ -248,6 +248,31 @@ def test_auth_says_why_a_code_and_that_the_page_is_kept(app):  # noqa: F811
     assert "blood" not in page and "agent_abc" not in page
 
 
+def test_auth_promises_no_page_while_a_texted_link_waits(app):  # noqa: F811
+    """/home sends the texted link first and drops the page, so the line
+    would promise what does not happen. MUTATION: ignore it -> red."""
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    with client.session_transaction() as s:
+        s["imessage_link"] = "link_123"
+    page = client.get("/auth").get_data(as_text=True)
+    assert 'id="resume-why"' not in page and "data-resume" not in page
+
+
+def test_auth_promises_no_page_while_a_consent_request_waits(app):  # noqa: F811
+    """The same for a consent request parked by /authorize (#846).
+    MUTATION: ignore it -> red."""
+    from tests.test_careagents_signin_return_qa import _handle
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    r = client.get("/authorize", query_string={"req": _handle()})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
+    with client.session_transaction() as s:
+        assert s.get("consent_req") and s.get(KEY) == "/settings"
+    page = client.get("/auth").get_data(as_text=True)
+    assert 'id="resume-why"' not in page and "data-resume" not in page
+
+
 def test_auth_says_nothing_of_a_page_when_none_is_waiting(app):  # noqa: F811
     page = app.test_client().get("/auth").get_data(as_text=True)
     assert 'id="resume-why"' not in page and "data-resume" not in page

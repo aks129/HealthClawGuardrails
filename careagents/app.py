@@ -653,8 +653,12 @@ def create_app(config: Config | None = None,
                                    session.get("imessage_link")),
                                # A page tapped while signed out is waiting:
                                # say so, and go straight there after the
-                               # code (patient walk of #1016).
-                               resume=_parked_target(session) is not None,
+                               # code (patient walk of #1016). Not while a
+                               # consent request or texted link waits: /home
+                               # sends those first and drops the page.
+                               resume=(_parked_target(session) is not None
+                                       and not session.get("consent_req")
+                                       and not session.get("imessage_link")),
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 

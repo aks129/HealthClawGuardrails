@@ -31,7 +31,7 @@
   // asked from, set by the server only for this account's own chat.
   const back = $("auth-card").dataset.back || "";
   // A page tapped while signed out is waiting (#1016): after the code, go
-  // straight there; the hub offers a passkey later.
+  // straight there; the chat menu and Settings offer a passkey later.
   const resume = $("auth-card").dataset.resume === "1";
 
   // Not drawn on the way to adding a first passkey (auth.html).
