@@ -410,6 +410,13 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
                 link = f"Your full visit brief: {origin}/brief?agent={agent_id}"
                 if link not in extras:
                     extras.append(link)
+            elif card == "review" and payload.get("label"):
+                # Not a form (propose_action's text): approved on the page,
+                # never by a reply here.
+                extras.append(
+                    f"{payload['label']} waiting for your approval. Only "
+                    f"the review page approves it: {origin}/review/"
+                    f"{agent_id}/{payload.get('action_id', '')}")
             elif card == "review":
                 extras.append(
                     "I've prepared a form for your review — approve each "
