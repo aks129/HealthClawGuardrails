@@ -158,6 +158,13 @@ _MAX_HAIKU_CHARS = 120
 #: count. Broad stems (morir, urgen) are deliberate: a false positive costs
 #: one Sonnet call, a miss puts the next "ok" after a crisis on Haiku.
 #: Security review of #1017 checked the Spanish against ordinary Spanish.
+#: Pills and drugs by name, for the dose and bottle patterns below: "how
+#: much salt would kill me" is not a dose (security round 8).
+_DRUG = (r"pills?|tablets?|meds|medications?|medicines?|insulin|tylenol|"
+         r"acetaminophen|paracetamol|ibuprofen|advil|aspirin|metformin|"
+         r"opioids?|oxy\w{0,8}|xanax|benzos?|fentanyl|morphine|"
+         r"antidepressants?|sleeping pills|doses?")
+
 #: Not self-harm: "me corto el pelo", "voy a cortarme las uñas".
 _NOT_GROOMING = (r"(?! (?:el |la |las |los |mi |mis )?"
                  r"(?:pelo|cabello|unas|flequillo|barba))")
@@ -193,20 +200,24 @@ _SELF_HARM_PATTERNS = [
     # is going to kill me" is a figure of speech (security round 6).
     r"(?:want|wish|need) (?:it |them |someone |something )?to kill me",
     r"kill me now", r"(?:pills?|doses?|amount|many) (?:would|will|to) kill me",
-    r"(?:would|will) it take to kill me",
+    r"(?:" + _DRUG + r")\b.{0,30}(?:would|will) it take to kill me",
     # Security round 7: ideation the narrowed patterns missed.
     r"wish (?:someone|somebody) would kill me",
     r"(?:just|please) (?:just )?kill me",
-    r"(?:how much|how many) \w+(?: \w+)? (?:would|will|to) kill me",
+    r"(?:how much|how many) (?:of (?:my|the|these|those) )?(?:\w+ )?"
+    r"(?:" + _DRUG + r")\b(?: \w+)? (?:would|will|to) kill me",
     r"(?:would|will|could) (?:\d+|\w+) (?:pills?|tablets?|doses?) kill me",
-    r"(?:wish|want) (?:i was|i were|to be) dead",
-    r"hope i (?:don'?t|do not|never) wake up",
-    r"want (?:it all|everything) to end",
-    r"(?:took|swallowed) a (?:whole )?bottle of",
-    r"(?:too many|overdos\w*|took|swallowed)\b.{0,40}\bon purpose",
-    r"(?:pastillas|sobredosis|demasiad\w*).{0,40}a proposito",
+    r"(?:wish|want) (?:i was|i were|to be) dead"
+    r"(?! (?:tired|certain|serious|sure|set|wrong|right|last))",
+    r"hope i (?:don'?t|do not|never) wake up"
+    r"(?! (?:late|early|too|on time|in time))",
+    r"want (?:it all|everything) to end(?! (?:well|on|soon|early|by|in))",
+    r"(?:took|swallowed) a (?:whole )?bottle of (?:my |the |\w+ )?"
+    r"(?:" + _DRUG + r")\b",
+    r"(?:too many|overdos\w{0,6})\b.{0,40}\bon purpose",
+    r"(?:pastillas|sobredosis|demasiad\w{0,4}).{0,40}a proposito",
     r"alguien me mate", r"ojala (?:estuviera|estar) muert",
-    r"ojala no despert",
+    r"ojala no despert(?!\w{0,4} (?:tan|temprano))",
     r"lethal dose", r"dosis letal", r"cuantas pastillas .{0,20}(?:matar|morir)",
 ]
 

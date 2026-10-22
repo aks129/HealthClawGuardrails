@@ -759,6 +759,12 @@ class RunWorker:
             # open with it on a later turn. Say it once. A real answer
             # (no lead) is never touched.
             body = _drop_echo(text, lead) or "…"
+            # The model sees the line closing every earlier answer and may
+            # close with it too: any copy that is a paragraph of its own
+            # goes, so the line is said once (security round 8).
+            body = "\n\n".join(
+                p for p in body.split("\n\n")
+                if p.strip() != lead).strip() or "…"
             # At the end of every answer, never ahead of anything in it:
             # the #1015 live run read "Nothing here is about you." before
             # "call 911", and no word list can say which answers carry
