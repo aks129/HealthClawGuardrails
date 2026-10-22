@@ -57,6 +57,24 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: Session key: the page a signed-out person asked for, so the sign-in that
+#: follows ends there and not on the hub (beta feedback, 2026-10-22).
+_AFTER_SIGN_IN = "after_sign_in"
+#: Longer than any page here; the cookie that carries it is small.
+_AFTER_SIGN_IN_MAX = 512
+
+
+def _local_target(raw) -> str | None:
+    """`raw` if it is a path on this site, else None. A path starts with a
+    single "/" and holds only visible ASCII: no "//" or "\\" a browser reads
+    as another host, no scheme, no whitespace or control character."""
+    if (not isinstance(raw, str) or not 1 <= len(raw) <= _AFTER_SIGN_IN_MAX
+            or not raw.startswith("/") or raw.startswith("//")
+            or "\\" in raw or not all(33 <= ord(c) <= 126 for c in raw)):
+        return None
+    return raw
+
+
 #: What the hub says when HealthClaw cannot be reached to set up or
 #: refresh records: a sentence and what to do, never "service unavailable".
 RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
@@ -477,6 +495,12 @@ def create_app(config: Config | None = None,
                 if request.path.startswith("/api/") or request.path.startswith(
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
+                # A page, not a form post: the sign-in that follows comes
+                # back here (/home resumes it), so a tapped link is not lost.
+                target = _local_target(request.full_path.rstrip("?"))
+                if (request.method == "GET" and target
+                        and request.path != "/home"):
+                    session[_AFTER_SIGN_IN] = target
                 return redirect(url_for("auth"))
             # The engine's audit trail names the account that asked
             # (one assistant per person spec, section 6.2).
@@ -510,6 +534,7 @@ def create_app(config: Config | None = None,
         # and without it the person lands on the hub, not the request (#846).
         consent_req = session.get("consent_req")
         imessage_link = session.get("imessage_link")
+        after_sign_in = _local_target(session.get(_AFTER_SIGN_IN))
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
@@ -520,6 +545,9 @@ def create_app(config: Config | None = None,
         # an id, not the token, and spent only after this sign-in.
         if isinstance(imessage_link, str):
             session["imessage_link"] = imessage_link
+        # The page a signed-out tap asked for, resumed once by /home.
+        if after_sign_in:
+            session[_AFTER_SIGN_IN] = after_sign_in
 
     # --- pages ---------------------------------------------------------------
 
@@ -590,6 +618,11 @@ def create_app(config: Config | None = None,
         # So does a texted sign-in link: bind the handle it came from.
         if session.get("imessage_link"):
             return redirect(url_for("imessage_link_claim"))
+        # Then the page tapped while signed out, once. The page itself
+        # checks the account owns what it names.
+        after_sign_in = _local_target(session.pop(_AFTER_SIGN_IN, None))
+        if after_sign_in:
+            return redirect(after_sign_in)
         acct = current_account()
         data = svc.list_home(acct.id)
         view = hub_view.build(data, time.time())
