@@ -485,6 +485,63 @@ def _nka_item(res: dict, kinds: list[str]) -> dict:
     return item
 
 
+#: FHIR event-timing codes (Timing.repeat.when) a dose can be tied to, in
+#: plain words. A code not listed says nothing.
+_DOSE_WHEN = {
+    "MORN": "in the morning", "AFT": "in the afternoon",
+    "EVE": "in the evening", "NIGHT": "at night", "HS": "at bedtime",
+    "WAKE": "on waking",
+    "C": "with meals", "CM": "with breakfast", "CD": "with lunch",
+    "CV": "with dinner",
+    "AC": "before meals", "ACM": "before breakfast", "ACD": "before lunch",
+    "ACV": "before dinner",
+    "PC": "after meals", "PCM": "after breakfast", "PCD": "after lunch",
+    "PCV": "after dinner",
+}
+_DOSE_PERIOD_UNIT = {"h": "hour", "d": "day", "wk": "week", "mo": "month"}
+
+
+def _whole(value, top: int) -> int | None:
+    """`value` as a whole number in 1..top, else None. A bool is no number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != int(value) or not 1 <= value <= top:
+        return None
+    return int(value)
+
+
+def _dose_timing(dosage) -> str | None:
+    """One Dosage's timing in plain words, from structure alone.
+
+    Dosage free text (`text`, `patientInstruction`, `timing.code.text`) is
+    stripped by the engine and never read here: real feeds put names in it.
+    Every part below comes from a closed map or a bounded whole number, so
+    nothing upstream wrote reaches the model (#922)."""
+    if not isinstance(dosage, dict):
+        return None
+    parts = []
+    timing = dosage.get("timing")
+    repeat = timing.get("repeat") if isinstance(timing, dict) else None
+    if isinstance(repeat, dict):
+        freq = _whole(repeat.get("frequency"), 24)
+        period = _whole(repeat.get("period"), 365)
+        unit = _DOSE_PERIOD_UNIT.get(repeat.get("periodUnit"))
+        if freq and period and unit:
+            times = {1: "once", 2: "twice"}.get(freq, f"{freq} times")
+            every = (f"a {unit}" if period == 1
+                     else f"every {period} {unit}s")
+            parts.append(f"{times} {every}")
+        when = repeat.get("when")
+        if isinstance(when, list):
+            said = [_DOSE_WHEN[w] for w in when
+                    if isinstance(w, str) and w in _DOSE_WHEN]
+            if said:
+                parts.append(" and ".join(said))
+    if dosage.get("asNeededBoolean") is True or dosage.get("asNeeded") is True:
+        parts.append("as needed")
+    return ", ".join(parts) or None
+
+
 #: Records per list the tools hand the model: the engine's search page (50,
 #: r6/routes.py), so a list one search can return is never cut here. At 12,
 #: a 19-condition record lost diabetes, hypertension and atrial
@@ -661,6 +718,16 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         # whatever is copied verbatim is a channel to the model (#922).
         if res.get("status") in _STATUS.get(rt, ()):
             item["status"] = res["status"]
+        if rt in _MEDICATION_TYPES:
+            # When it is taken, so "do I take it at a certain time?" is
+            # answered from the record (beta feedback 2026-10-22).
+            dosages = res.get("dosageInstruction"
+                              if rt == "MedicationRequest" else "dosage")
+            said = [t for t in map(_dose_timing, dosages
+                                   if isinstance(dosages, list) else ())
+                    if t]
+            if said:
+                item["timing"] = said[:3]
         vq = res.get("valueQuantity")
         if isinstance(vq, dict) and vq.get("value") is not None:
             # The coded, allow-listed unit, never the free-text `unit`:

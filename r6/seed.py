@@ -131,6 +131,12 @@ def _built_in_resources() -> list[dict]:
             "intent": "order",
             "subject": {"reference": "Patient/__PATIENT_ID__"},
             "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "860975", "display": "Metformin 500 MG Oral Tablet"}]},
+            # Structured timing, as real feeds send beside their free text.
+            # Only the structure survives a read (dosage text is stripped),
+            # so that is all the sample carries.
+            "dosageInstruction": [{"timing": {"repeat": {
+                "frequency": 2, "period": 1, "periodUnit": "d",
+                "when": ["CM", "CV"]}}}],
         },
         *_lab_series(moment),
         intake_questionnaire(),
