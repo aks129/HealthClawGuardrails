@@ -168,16 +168,17 @@ def test_the_reload_decision_follows_the_record_count(d, reloads):
 
 
 def test_the_upload_handler_reloads_only_through_the_decision():
-    """The handler must use uploadReloads and carry its line across the
-    reload; no other reload may sit in the upload path."""
+    """The upload path must decide through uploadReloads and carry its line
+    across the reload; no other reload may sit in it. Since #860 the
+    decision is made in sendFile and the change handler acts on it."""
     src = _HOME_JS.read_text()
-    a = src.index('fileInput.addEventListener("change"')
+    a = src.index("async function sendFile(")
     b = src.index("// --- what the last action did", a)
-    handler = src[a:b]
-    assert "if (uploadReloads(d))" in handler
-    assert "return carryNotice(parts.join(\" \"));" in handler
-    assert "location.reload" not in handler
-    assert "ing > 0" not in handler
+    path = src[a:b]
+    assert "reloads: uploadReloads(d)" in path
+    assert "if (out.reloads) return carryNotice(out.line);" in path
+    assert "location.reload" not in path
+    assert "ing > 0" not in path
 
 
 _HOME_JS = (pathlib.Path(__file__).resolve().parents[1]

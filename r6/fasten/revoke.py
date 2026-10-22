@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from models import db
 from r6.audit import add_audit_event
+from r6.log_safety import loggable_id
 from r6.fasten.models import (FastenConnection, FastenJob,
                               TenantClosure, tenant_closed)
 from r6.fasten.reaper import TERMINAL_STATUSES
@@ -72,7 +73,7 @@ def revoke_tenant(tenant_id: str) -> dict:
     # The tenant named in the body, the one revoked; a header on the same
     # request is never consulted and never logged here.
     logger.info('fasten revoke: tenant=%s already=%s connections=%d jobs=%d',
-                tenant_id, already, connections, jobs)
+                loggable_id(tenant_id), already, connections, jobs)
     return {
         'tenant_id': tenant_id,
         'revoked': True,

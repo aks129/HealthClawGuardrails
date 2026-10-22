@@ -82,8 +82,10 @@ CONFIRM_CAP = 86400
 CONFIRM_SECONDS = 86400
 
 #: Form submits per client address per window, and how many addresses the
-#: limiter remembers before it forgets the oldest.
-SUBMITS_PER_WINDOW = 5
+#: limiter remembers before it forgets the oldest. Generous on purpose: a
+#: family joining from one home Wi-Fi shares one address (patient re-walk,
+#: #979). What protects a victim's inbox is the per-mailbox cap, not this.
+SUBMITS_PER_WINDOW = 20
 WINDOW_SECONDS = 600
 LIMITER_KEYS = 512
 
@@ -787,10 +789,8 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
 #: screen (tests/test_careagents_feedback.py checks each one).
 NEXT_STEPS = (
     'Open careagents.cloud and tap "Get started".',
-    # The big button on that screen is the passkey one; say where the
-    # email box is.
-    'Under "or use your email", type the same email you used to join the '
-    'beta and tap "Email me a code".',
+    'Type the same email you used to join the beta and tap '
+    '"Email me a code".',
     'We email you an 8-digit code. Type it in and tap "Continue".',
     'If it offers a passkey, you can set one up or tap "Skip for now".',
     'On your hub, tap "Chat" to open the made-up records. Ask a question, '

@@ -23,6 +23,11 @@
         <a class="btn-primary" href="/home">Go to your hub</a>
       {% else %}
         <a class="btn-primary" href="/auth">Get started</a>
+        {# After sign-out this page is where a returning tester lands, and
+           "Get started" read as sign-up only (patient walk 2026-10-18).
+           Beside the button, so it is above the fold in an in-app
+           browser (375x560). #}
+        <span class="cta-note">Been here? <a href="/auth">Sign in</a></span>
       {% endif %}
       <span class="cta-note">Start with made-up records. No real ones needed.</span>
     </div>

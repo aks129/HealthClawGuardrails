@@ -4450,7 +4450,9 @@ def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
     assert second.status_code == 429
     d = second.get_json()
     assert d["error"] == "daily_limit_reached" and d["limit"] == 1
-    assert "resets" in d["message"].lower()   # tells the user when, not just no
+    # Tells the user when, not just no, and in hours (#864).
+    assert re.search(r"More in (about \d+ hours?|under an hour)\.$",
+                     d["message"])
 
 
 # --- consent gate (real records only) ----------------------------------------
@@ -5119,13 +5121,15 @@ def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
     replies = [relay.get(f"/api/surfaces/imessage/runs/{r}", headers=hdrs,
                          query_string={"handle": "+15550001111"}
                          ).get_json()["reply"] for r in runs]
-    assert replies == [sample_framed("model answer"), beta.DAILY_LIMIT_TEXT]
+    assert replies[0] == sample_framed("model answer") and len(replies) == 2
+    assert replies[1].startswith(beta.DAILY_LIMIT_TEXT + " More in ")
     assert calls == [1] and used() == 1
     # Once spent, admission answers it too, without queueing a run.
     third = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
                        json={"handle": "+15550001111", "text": "more"})
     assert third.status_code == 200
-    assert third.get_json() == {"reply": beta.DAILY_LIMIT_TEXT}
+    assert third.get_json()["reply"].startswith(
+        beta.DAILY_LIMIT_TEXT + " More in ")
 
 
 def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):
@@ -5573,10 +5577,11 @@ def test_flash_cue_is_class_keyed_with_a_single_keyframe():
 
 def test_connection_action_buttons_are_styled_and_thumb_sized():
     """44px is the tap target floor; the shared rule is what supplies it."""
-    for sel in (".conn-refresh", ".conn-disconnect", ".conn-delete",
-                ".conn-refresh-msg"):
+    for sel in (".conn-refresh", ".conn-upload", ".conn-disconnect",
+                ".conn-delete", ".conn-refresh-msg"):
         assert sel in _CSS, sel
-    shared = _CSS.split(".conn-refresh, .conn-disconnect, .conn-delete {")[1]
+    shared = _CSS.split(
+        ".conn-refresh, .conn-upload, .conn-disconnect, .conn-delete {")[1]
     assert "min-height: 44px" in shared.split("}")[0]
 
 
