@@ -24,6 +24,18 @@ is OFF unless KTC_EXPORT_ENABLED is set (`export_enabled`): the tests turn
 it on, no deployment does. PR 3 replaces the body with
 `{link_id, shlink, exp}` and can then remove the flag.
 
+`"deliver": "link"` is that body, added beside the bundle answer rather
+than replacing it: the bundle is encrypted and stored in r6/shl_links.py and
+the answer is `{link_id, shlink, exp}`, so the plaintext stays here. Two
+more gates apply to it, both checked before the token is spent:
+
+- Test data only. Every exported entry must carry the HTEST marker, unless
+  KTC_LINK_REAL_RECORDS is set. CareAgents' text line (Sendblue) is not yet
+  under a BAA, and a link is made from a text conversation, so until the
+  owner says otherwise a link carries made-up records only (403).
+- LINK_MAX_BUNDLE_BYTES, lower than MAX_BUNDLE_BYTES, so the encrypted file
+  stays under the 1 MB a receiver such as RX Genie accepts (413).
+
 Both handlers live here rather than in r6/routes.py, which is pinned to
 shrink: `mint` is the ktc branch of /internal/step-up-token and `export`
 the ktc branch of $share-bundle.
@@ -35,7 +47,7 @@ import os
 from flask import Response, jsonify
 
 from models import db
-from r6 import access, checkin, stepup
+from r6 import access, checkin, shl_links, stepup
 from r6.audit import add_audit_event
 from r6.runtime_config import TRUE_VALUES
 
@@ -58,6 +70,16 @@ MAX_BUNDLE_BYTES = 2_000_000
 #: The agent id the export audits under. Fixed words.
 AUDIT_AGENT = 'careagents-ktc'
 
+#: A bundle delivered as a link stays under this, so its JWE (base64url,
+#: 4/3 the size, plus a short header) stays under a receiver's 1 MB.
+LINK_MAX_BUNDLE_BYTES = 700_000
+
+#: The label every link carries. Fixed words: a receiver may log it, so it
+#: names no person.
+LINK_LABEL = 'Shared health records'
+
+_TEST_MARKER = ('http://terminology.hl7.org/CodeSystem/v3-ActReason', 'HTEST')
+
 
 def export_enabled():
     """Whether this engine answers the ktc export. Off unless
@@ -65,6 +87,28 @@ def export_enabled():
     bundle, which the design keeps inside the engine."""
     return os.environ.get('KTC_EXPORT_ENABLED', '').strip().lower() \
         in TRUE_VALUES
+
+
+def link_real_records():
+    """Whether a link may carry records without the HTEST marker. Off
+    unless KTC_LINK_REAL_RECORDS says so; the owner sets it once the text
+    line is under a BAA."""
+    return os.environ.get('KTC_LINK_REAL_RECORDS', '').strip().lower() \
+        in TRUE_VALUES
+
+
+def is_test_data(resource):
+    """True when the exported resource carries the HTEST marker on
+    meta.tag or meta.security (the profile keeps it there, r6/access.py)."""
+    meta = resource.get('meta') if isinstance(resource, dict) else None
+    if not isinstance(meta, dict):
+        return False
+    system, code = _TEST_MARKER
+    return any(
+        isinstance(c, dict) and c.get('system') == system
+        and c.get('code') == code
+        for slot in ('tag', 'security')
+        for c in (meta.get(slot) if isinstance(meta.get(slot), list) else []))
 
 
 def parse_types(value):
@@ -137,6 +181,13 @@ def export(tenant, body):
     # (#963 security review F4).
     types = parse_types(body.get('resource_types'))
     patient_id = body.get('patient_id')
+    deliver = body.get('deliver')
+    if deliver not in (None, 'link'):
+        return _refuse(
+            tenant, 400, 'deliver malformed',
+            {'resourceType': 'OperationOutcome', 'issue': [{
+                'severity': 'error', 'code': 'value',
+                'diagnostics': 'deliver must be "link" or absent'}]})
     if types is None or not (isinstance(patient_id, str)
                              and checkin._PATIENT_ID.fullmatch(patient_id)):
         return _refuse(
@@ -165,12 +216,20 @@ def export(tenant, body):
                                'Patient record'}]})
 
     payload = json.dumps(checkin.collection(entries))
-    if len(payload.encode('utf-8')) > MAX_BUNDLE_BYTES:
+    limit = LINK_MAX_BUNDLE_BYTES if deliver == 'link' else MAX_BUNDLE_BYTES
+    if len(payload.encode('utf-8')) > limit:
         return _refuse(tenant, 413,
                        f'over the size limit; types={",".join(types)}',
                        {'error': 'ktc_too_large'})
 
+    if deliver == 'link':
+        refused = _link_refusal(tenant, entries)
+        if refused is not None:
+            return refused
+
     access.require_grant(**grant, consume_nonce=True)
+    if deliver == 'link':
+        return _deliver_link(tenant, entries, type_set, types, payload)
     add_audit_event(
         'read', resource_type='Bundle', resource_id='share-bundle',
         agent_id=AUDIT_AGENT, tenant_id=tenant.id,
@@ -179,3 +238,33 @@ def export(tenant, body):
                 f'types={",".join(types)}'))
     db.session.commit()
     return Response(payload, status=200, mimetype='application/fhir+json')
+
+
+def _link_refusal(tenant, entries):
+    """The refusal for `deliver: link`, or None. Checked before the token
+    is spent: test data only unless KTC_LINK_REAL_RECORDS, and a public
+    https base to build the file URL on."""
+    if not link_real_records() and not all(
+            is_test_data(e.get('resource')) for e in entries):
+        return _refuse(tenant, 403, 'link refused: not test data',
+                       {'error': 'ktc_not_test_data'})
+    if shl_links.public_base() is None:
+        return _refuse(tenant, 503, 'link refused: no public base url',
+                       {'error': 'ktc_link_unavailable'})
+    return None
+
+
+def _deliver_link(tenant, entries, type_set, types, payload):
+    """`deliver: link`, token spent: the bundle encrypted and stored, the
+    answer the shlink."""
+    link = shl_links.issue(tenant.id, payload.encode('utf-8'), LINK_LABEL)
+    add_audit_event(
+        'read', resource_type='Bundle', resource_id='share-bundle',
+        agent_id=AUDIT_AGENT, tenant_id=tenant.id,
+        detail=(f'share-bundle export (profile=ktc, deliver=link): '
+                f'{len(entries)} resources across {len(type_set)} type(s); '
+                f'types={",".join(types)}'))
+    db.session.commit()
+    resp = jsonify(link)
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp

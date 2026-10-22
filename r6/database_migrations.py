@@ -49,6 +49,7 @@ def register_model_metadata() -> None:
     import r6.command_center.models  # noqa: F401
     import r6.fasten.models  # noqa: F401
     import r6.models  # noqa: F401
+    import r6.shl_links  # noqa: F401
     import r6.smbp.models  # noqa: F401
     import r6.wearables.models  # noqa: F401
 
