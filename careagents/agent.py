@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import json
 import datetime
+import logging
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
 from careagents import causes, labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
+
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 
@@ -485,6 +488,183 @@ def _nka_item(res: dict, kinds: list[str]) -> dict:
     return item
 
 
+#: FHIR event-timing codes (Timing.repeat.when) a dose can be tied to, in
+#: plain words. A code not listed says nothing.
+_DOSE_WHEN = {
+    "MORN": "in the morning", "AFT": "in the afternoon",
+    "EVE": "in the evening", "NIGHT": "at night", "HS": "at bedtime",
+    "WAKE": "on waking",
+    "C": "with meals", "CM": "with breakfast", "CD": "with lunch",
+    "CV": "with dinner",
+    "AC": "before meals", "ACM": "before breakfast", "ACD": "before lunch",
+    "ACV": "before dinner",
+    "PC": "after meals", "PCM": "after breakfast", "PCD": "after lunch",
+    "PCV": "after dinner",
+}
+_DOSE_PERIOD_UNIT = {"h": "hour", "d": "day", "wk": "week", "mo": "month"}
+#: Timing elements that limit how long or how many times the schedule runs.
+#: They are not rendered, so a timing that has one says nothing: "3 times a
+#: day" for a 5-day course is more than the record lists.
+_DOSE_LIMIT_KEYS = ("boundsDuration", "boundsRange", "boundsPeriod",
+                    "count", "countMax", "duration", "durationMax")
+#: Event-timing codes said per dosage: a feed can repeat one thousands of
+#: times, and every word here is a word in the model's context.
+_DOSE_WHEN_MAX = 4
+#: The longest a timing line can be. A line over it is not said at all.
+_DOSE_LINE_MAX = 160
+#: Orders and statements no longer in use: their timing is not how the
+#: medication is taken now, so it is not handed to the model.
+_DOSE_ENDED = frozenset({"stopped", "cancelled", "completed",
+                         "entered-in-error", "ended", "not-taken"})
+#: Timing lines per medication; past this, a line says more exist.
+_DOSE_LINES_MAX = 3
+
+
+def _whole(value, top: int) -> int | None:
+    """`value` as a whole number in 1..top, else None. A bool, NaN or an
+    infinity is no number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    # NaN fails every comparison and an infinity the range, so neither
+    # reaches int().
+    if not 1 <= value <= top or value != int(value):
+        return None
+    return int(value)
+
+
+def _range(low, high, top: int):
+    """(low, high-or-None) as whole numbers, high only when it is a real
+    upper bound; None when either is malformed."""
+    lo = _whole(low, top)
+    if lo is None:
+        return None
+    if high is None:
+        return lo, None
+    hi = _whole(high, top)
+    if hi is None or hi < lo:
+        return None
+    return lo, (hi if hi > lo else None)
+
+
+def _dose_timing(dosage) -> str | None:
+    """One Dosage's timing in plain words, from structure alone; None when
+    there is none or any part of it is malformed. Never raises.
+
+    Dosage free text (`text`, `patientInstruction`, `timing.code.text`) is
+    stripped by the engine and never read here: real feeds put names in it.
+    Every part below comes from a closed map or a bounded whole number, so
+    nothing upstream wrote reaches the model (#922). A range is said as a
+    range, and a schedule that cannot be said in full is not said at all: a
+    narrower one would reach the model as what the record lists."""
+    if not isinstance(dosage, dict):
+        return None
+    # As needed, however the feed says it: a flag (R4 asNeededBoolean, R5
+    # asNeeded) or a coded reason (R4 asNeededCodeableConcept, R5
+    # asNeededFor). Only the presence of a reason is read, never its text or
+    # display. After redaction the code is often the only as-needed signal
+    # left, and without it "every 6 hours as needed" read as a fixed
+    # schedule (QA on #1015).
+    prn = (dosage.get("asNeededBoolean") is True
+           or dosage.get("asNeeded") is True
+           or isinstance(dosage.get("asNeededCodeableConcept"), dict)
+           or (isinstance(dosage.get("asNeededFor"), list)
+               and any(isinstance(c, dict) for c in dosage["asNeededFor"])))
+    parts = ["as needed"] if prn else []
+    timing = dosage.get("timing")
+    repeat = timing.get("repeat") if isinstance(timing, dict) else None
+    if repeat is not None and not isinstance(repeat, dict):
+        return None
+    if isinstance(repeat, dict):
+        if any(k in repeat for k in _DOSE_LIMIT_KEYS):
+            return None
+        if any(k in repeat for k in ("frequency", "frequencyMax", "period",
+                                     "periodMax", "periodUnit")):
+            freq = _range(repeat.get("frequency"),
+                          repeat.get("frequencyMax"), 24)
+            period = _range(repeat.get("period"), repeat.get("periodMax"),
+                            365)
+            code = repeat.get("periodUnit")
+            unit = (_DOSE_PERIOD_UNIT.get(code) if isinstance(code, str)
+                    else None)
+            if not (freq and period and unit):
+                return None
+            (f_lo, f_hi), (p_lo, p_hi) = freq, period
+            a_unit = f"{'an' if unit == 'hour' else 'a'} {unit}"
+            if prn:
+                # As needed, the schedule is a limit, not a plan: the most
+                # often it may be taken, from the larger frequency and the
+                # shorter period.
+                f_top = f_hi or f_lo
+                if f_top == 1 and p_lo > 1:
+                    limit = f"every {p_lo} {unit}s"
+                else:
+                    times = {1: "once", 2: "twice"}.get(f_top,
+                                                        f"{f_top} times")
+                    limit = (f"{times} {a_unit}" if p_lo == 1
+                             else f"{times} every {p_lo} {unit}s")
+                parts.append(f"no more often than {limit}")
+            else:
+                times = (f"{f_lo} to {f_hi} times" if f_hi else
+                         {1: "once", 2: "twice"}.get(f_lo, f"{f_lo} times"))
+                if p_hi:
+                    every = f"every {p_lo} to {p_hi} {unit}s"
+                elif p_lo == 1:
+                    every = a_unit
+                else:
+                    every = f"every {p_lo} {unit}s"
+                parts.append(f"{times} {every}")
+        when = repeat.get("when")
+        if when is not None:
+            if not isinstance(when, list):
+                return None
+            said = []
+            for w in when:
+                phrase = _DOSE_WHEN.get(w) if isinstance(w, str) else None
+                if phrase and phrase not in said:
+                    said.append(phrase)
+                    if len(said) == _DOSE_WHEN_MAX:
+                        break
+            if said:
+                parts.append(" and ".join(said))
+    line = ", ".join(parts)
+    return line if line and len(line) <= _DOSE_LINE_MAX else None
+
+
+def _medication_timing(res: dict, rt: str) -> list[str]:
+    """Timing lines for one medication record: at most _DOSE_LINES_MAX, then
+    a line saying more exist. Empty for a record no longer in use, and on
+    any surprise: one bad row never takes the summary down with it."""
+    status = res.get("status")
+    if isinstance(status, str) and status in _DOSE_ENDED:
+        return []
+    dosages = res.get("dosageInstruction" if rt == "MedicationRequest"
+                      else "dosage")
+    if not isinstance(dosages, list):
+        return []
+    try:
+        said = [t for t in map(_dose_timing, dosages) if t]
+    except Exception:  # noqa: BLE001 — fail closed: no timing, not no summary
+        return []
+    if len(said) > _DOSE_LINES_MAX:
+        return said[:_DOSE_LINES_MAX] + ["and more steps"]
+    return said
+
+
+def _unreadable_row(rt) -> dict:
+    """What a record that could not be summarized becomes: still a record,
+    never absence, and nothing it holds. Its type is said only when it is
+    one we search for."""
+    known = isinstance(rt, str) and (
+        rt in _STATUS or rt in ("Condition", "AllergyIntolerance"))
+    return {"type": rt if known else "record",
+            "name": "a record I could not read just now",
+            "unreadable": True,
+            "note": ("This record could not be read just now, for a reason "
+                     "on OUR side. It is still a real record: never treat "
+                     "it as absent, do not guess what it is, and suggest "
+                     "confirming it with their doctor.")}
+
+
 #: Records per list the tools hand the model: the engine's search page (50,
 #: r6/routes.py), so a list one search can return is never cut here. At 12,
 #: a 19-condition record lost diabetes, hypertension and atrial
@@ -508,183 +688,208 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     function. It cannot fire on the synthetic demo tenant, which is why
     nothing caught it; it fires on the first real record with a long list.
     """
-    entries = bundle.get("entry") or []
-    total = sum(1 for e in entries
-                if (e.get("resource") or {}).get("resourceType")
-                != "OperationOutcome")
+    entries = bundle.get("entry")
+    # An entry or resource that is not an object is no record: skipped
+    # here, not left to the engine's ingest check, so `.get` below cannot
+    # raise out of the summary (security on #1015).
+    resources = [e["resource"] for e in
+                 (entries if isinstance(entries, list) else ())
+                 if isinstance(e, dict) and isinstance(e.get("resource"), dict)]
+    total = sum(1 for r in resources
+                if r.get("resourceType") != "OperationOutcome")
     out = []
     dropped = 0
     withdrawn_nka = False
-    for entry in entries[:limit]:
-        res = entry.get("resource") or {}
+    for res in resources[:limit]:
         rt = res.get("resourceType")
         if rt == "OperationOutcome":
             continue
-        item = {"type": rt}
-        if rt != "AllergyIntolerance" and _only_absence_codes(res):
-            # Coded only as "no known allergy" or "not asked", on a list
-            # that is not allergies: no clinical finding, so not a record of
-            # this kind. Left out, and not counted, so the list does not
-            # read as longer than shown. Never an allergy statement either:
-            # that is AllergyIntolerance's alone (#949 patient tester).
-            dropped += 1
-            continue
-        if rt == "AllergyIntolerance" and _is_allergy_status(res):
-            # Not an allergy: a note that none were recorded. Its label
-            # ("Patient not asked", the terminology service's for SNOMED
-            # 1631000175102) reached a person verbatim as if it were one.
-            # Never read as "no known allergies" either: that is only ever
-            # the person's own attestation.
-            item.update({
-                "not_an_allergy": True,
-                "statement": ALLERGY_STATUS_STATEMENT,
-                "note": ("This record is not an allergy. Tell the person, in "
-                         "these plain words, that their records don't say "
-                         "whether they have allergies. Do not quote the "
-                         "record, and never say they have no allergies.")})
-            out.append(item)
-            continue
-        nka = _nka_kinds(res) if rt == "AllergyIntolerance" else []
-        if nka and _withdrawn(res):
-            # Entered in error or refuted: the entry says nothing either
-            # way (#949 F2), so it is not sent at all. Sent with a "do not
-            # mention it" note, the model mentioned it and disclosed the
-            # note (#949 real-model QA): what must not reach the person is
-            # never handed to the model. Not counted either. A withdrawn
-            # REAL allergy is kept: dropping it would let a "no known
-            # allergies" entry beside it be quoted.
-            dropped += 1
-            withdrawn_nka = True
-            continue
-        if nka:
-            # Before the name below: that is where the resolver's label
-            # "No known allergy" became an allergy's name (#946).
-            out.append(_nka_item(res, nka))
-            continue
-        code = res.get("code") or res.get("medicationCodeableConcept") or {}
-        # Ingest stores whatever arrived: a string `code` or `coding`
-        # raised here and failed the whole turn (#949 security round 4).
-        # Malformed reads as an unreadable record, never a name or absence.
-        if not isinstance(code, dict):
-            code = {}
-        if not isinstance(code.get("coding"), list):
-            code = {**code, "coding": []}
-        first = (code["coding"] or [None])[0]
-        text = code.get("text") or (
-            first.get("display") if isinstance(first, dict) else "")
-        text = text if isinstance(text, str) else ""
-        if _carries_absence_code(res):
-            # Backstop: whatever the checks above made of it, a record
-            # with a status or "no known allergy" coding is never named by
-            # its text, which may hold that concept's label (#949 F1). Every
-            # type, not allergies alone: feeds put "No known allergy" on
-            # the problem list too, and it read as a fact beside an empty
-            # allergy list (#949 F3). A substance coded beside the absence
-            # concept is a real allergy, named by that coding's label
-            # alone (FHI-48); an allergy with no label says so plainly.
-            text = _substance_label(res)
-            if not text and rt == "AllergyIntolerance":
-                # Still a real record the model must not treat as absent:
-                # the unreadable note below says how to talk about it.
-                item["unreadable"] = True
-                text = ALLERGY_UNNAMED
-        lookup_reason = None
-        if not text and resolve_ref is not None:
-            # No inline code — the name may live behind medicationReference.
-            ref = (res.get("medicationReference") or {}).get("reference")
-            if ref:
-                text, lookup_reason = resolve_ref(ref)
-                text = text or ""
-        if text:
-            item["name"] = text.strip()
-        else:
-            # A record exists but carries no readable label. Say so explicitly
-            # and pass the raw code through: dropping the name key entirely
-            # made the model report the condition as ABSENT (#207).
-            # Unreadable is not absent.
-            #
-            # Two distinct situations hide here, and they deserve different
-            # sentences because they have different remedies:
-            #
-            # - A code is present but our label table doesn't know it. That is
-            #   OUR gap; "unlabeled record, code X" is accurate and the code
-            #   gives the person something to look up or ask about.
-            # - Nothing codeable ever existed. Live example (MEDENT,
-            #   2026-08-04): an AllergyIntolerance whose only coding carried
-            #   free text — which redaction rightly strips, because real
-            #   feeds put patient names there. No table can ever fix that
-            #   row. Calling it "unreadable to me" sounds like our failure
-            #   and tells the person nothing; "recorded but not coded at the
-            #   source" is what actually happened and points at the fix
-            #   (ask the clinic to code it / confirm details at the visit).
-            #
-            # The record is named with the system its coding comes from,
-            # never the code itself (`_CODE_SYSTEM_NAMES`).
-            codings = [c for c in (code.get("coding") or [])
-                       if isinstance(c, dict) and c.get("code")]
-            system = next((_CODE_SYSTEM_NAMES[c.get("system")]
-                           for c in codings
-                           if c.get("system") in _CODE_SYSTEM_NAMES), None)
-            if system:
-                item["name"] = f"unlabeled record ({system} code)"
-            elif codings:
-                item["name"] = "unlabeled record"
-            elif lookup_reason in ("unavailable", "not-attempted",
-                                  "not-a-ref"):
-                # We did not learn anything about this record's coding, so we
-                # say nothing about it. "The source sent free text" below is a
-                # finding; asserting it here would be inventing one — the
-                # defect PR #376 fixed, reached by a different route.
-                #
-                # "not-a-ref" belongs here too: a #contained or urn:uuid:
-                # target is ordinary FHIR that we decline to chase, so we
-                # learn nothing about its coding either. Routing it to the
-                # sentence below was the fourth way into the same falsehood.
-                item["name"] = "a medication I could not look up just now"
-                item["note"] = (
-                    "The name is stored behind a reference this turn could "
-                    "not read, so it is missing for a reason on OUR side, not "
-                    "the clinic's. Do not describe how the source recorded "
-                    "it. It is still a real record — never treat it as "
-                    "absent; offer to try again.")
+        # One row that breaks a rule below (#1018: a list where a
+        # status belongs) is one unreadable record, never the end of the
+        # summary: an exception here lost every list on every turn.
+        try:
+            item = {"type": rt}
+            if rt != "AllergyIntolerance" and _only_absence_codes(res):
+                # Coded only as "no known allergy" or "not asked", on a list
+                # that is not allergies: no clinical finding, so not a record of
+                # this kind. Left out, and not counted, so the list does not
+                # read as longer than shown. Never an allergy statement either:
+                # that is AllergyIntolerance's alone (#949 patient tester).
+                dropped += 1
+                continue
+            if rt == "AllergyIntolerance" and _is_allergy_status(res):
+                # Not an allergy: a note that none were recorded. Its label
+                # ("Patient not asked", the terminology service's for SNOMED
+                # 1631000175102) reached a person verbatim as if it were one.
+                # Never read as "no known allergies" either: that is only ever
+                # the person's own attestation.
+                item.update({
+                    "not_an_allergy": True,
+                    "statement": ALLERGY_STATUS_STATEMENT,
+                    "note": ("This record is not an allergy. Tell the person, in "
+                             "these plain words, that their records don't say "
+                             "whether they have allergies. Do not quote the "
+                             "record, and never say they have no allergies.")})
+                out.append(item)
+                continue
+            nka = _nka_kinds(res) if rt == "AllergyIntolerance" else []
+            if nka and _withdrawn(res):
+                # Entered in error or refuted: the entry says nothing either
+                # way (#949 F2), so it is not sent at all. Sent with a "do not
+                # mention it" note, the model mentioned it and disclosed the
+                # note (#949 real-model QA): what must not reach the person is
+                # never handed to the model. Not counted either. A withdrawn
+                # REAL allergy is kept: dropping it would let a "no known
+                # allergies" entry beside it be quoted.
+                dropped += 1
+                withdrawn_nka = True
+                continue
+            if nka:
+                # Before the name below: that is where the resolver's label
+                # "No known allergy" became an allergy's name (#946).
+                out.append(_nka_item(res, nka))
+                continue
+            code = res.get("code") or res.get("medicationCodeableConcept") or {}
+            # Ingest stores whatever arrived: a string `code` or `coding`
+            # raised here and failed the whole turn (#949 security round 4).
+            # Malformed reads as an unreadable record, never a name or absence.
+            if not isinstance(code, dict):
+                code = {}
+            if not isinstance(code.get("coding"), list):
+                code = {**code, "coding": []}
+            first = (code["coding"] or [None])[0]
+            text = code.get("text") or (
+                first.get("display") if isinstance(first, dict) else "")
+            text = text if isinstance(text, str) else ""
+            if _carries_absence_code(res):
+                # Backstop: whatever the checks above made of it, a record
+                # with a status or "no known allergy" coding is never named by
+                # its text, which may hold that concept's label (#949 F1). Every
+                # type, not allergies alone: feeds put "No known allergy" on
+                # the problem list too, and it read as a fact beside an empty
+                # allergy list (#949 F3). A substance coded beside the absence
+                # concept is a real allergy, named by that coding's label
+                # alone (FHI-48); an allergy with no label says so plainly.
+                text = _substance_label(res)
+                if not text and rt == "AllergyIntolerance":
+                    # Still a real record the model must not treat as absent:
+                    # the unreadable note below says how to talk about it.
+                    item["unreadable"] = True
+                    text = ALLERGY_UNNAMED
+            lookup_reason = None
+            if not text and resolve_ref is not None:
+                # No inline code — the name may live behind medicationReference.
+                ref = (res.get("medicationReference") or {}).get("reference")
+                if ref:
+                    text, lookup_reason = resolve_ref(ref)
+                    text = text or ""
+            if text:
+                item["name"] = text.strip()
             else:
-                item["name"] = "recorded but not coded at the source"
-                item["uncoded"] = True
+                # A record exists but carries no readable label. Say so explicitly
+                # and pass the raw code through: dropping the name key entirely
+                # made the model report the condition as ABSENT (#207).
+                # Unreadable is not absent.
+                #
+                # Two distinct situations hide here, and they deserve different
+                # sentences because they have different remedies:
+                #
+                # - A code is present but our label table doesn't know it. That is
+                #   OUR gap; "unlabeled record, code X" is accurate and the code
+                #   gives the person something to look up or ask about.
+                # - Nothing codeable ever existed. Live example (MEDENT,
+                #   2026-08-04): an AllergyIntolerance whose only coding carried
+                #   free text — which redaction rightly strips, because real
+                #   feeds put patient names there. No table can ever fix that
+                #   row. Calling it "unreadable to me" sounds like our failure
+                #   and tells the person nothing; "recorded but not coded at the
+                #   source" is what actually happened and points at the fix
+                #   (ask the clinic to code it / confirm details at the visit).
+                #
+                # The record is named with the system its coding comes from,
+                # never the code itself (`_CODE_SYSTEM_NAMES`).
+                codings = [c for c in (code.get("coding") or [])
+                           if isinstance(c, dict) and c.get("code")]
+                system = next((_CODE_SYSTEM_NAMES[c.get("system")]
+                               for c in codings
+                               if c.get("system") in _CODE_SYSTEM_NAMES), None)
+                if system:
+                    item["name"] = f"unlabeled record ({system} code)"
+                elif codings:
+                    item["name"] = "unlabeled record"
+                elif lookup_reason in ("unavailable", "not-attempted",
+                                      "not-a-ref"):
+                    # We did not learn anything about this record's coding, so we
+                    # say nothing about it. "The source sent free text" below is a
+                    # finding; asserting it here would be inventing one — the
+                    # defect PR #376 fixed, reached by a different route.
+                    #
+                    # "not-a-ref" belongs here too: a #contained or urn:uuid:
+                    # target is ordinary FHIR that we decline to chase, so we
+                    # learn nothing about its coding either. Routing it to the
+                    # sentence below was the fourth way into the same falsehood.
+                    item["name"] = "a medication I could not look up just now"
+                    item["note"] = (
+                        "The name is stored behind a reference this turn could "
+                        "not read, so it is missing for a reason on OUR side, not "
+                        "the clinic's. Do not describe how the source recorded "
+                        "it. It is still a real record — never treat it as "
+                        "absent; offer to try again.")
+                else:
+                    item["name"] = "recorded but not coded at the source"
+                    item["uncoded"] = True
+                    item["note"] = (
+                        "The source system sent this record as free text with no "
+                        "standard code, and free text is removed for privacy. It "
+                        "is still a real record — never treat it as absent; "
+                        "suggest confirming the details with the clinician.")
+                item["unreadable"] = True
+            # Every field below is checked against a closed set or a parse before
+            # it is copied: ingest accepts any string in `status` or a date, and
+            # whatever is copied verbatim is a channel to the model (#922).
+            # A list or object status is unhashable, and `in` on a set raised
+            # out of the whole summary (#1018): only a string can be a status.
+            status = res.get("status")
+            if isinstance(status, str) and status in _STATUS.get(rt, ()):
+                item["status"] = status
+            if rt in _MEDICATION_TYPES:
+                # When it is taken, so "do I take it at a certain time?" is
+                # answered from the record (beta feedback 2026-10-22).
+                said = _medication_timing(res, rt)
+                if said:
+                    item["timing"] = said
+            vq = res.get("valueQuantity")
+            if isinstance(vq, dict) and vq.get("value") is not None:
+                # The coded, allow-listed unit, never the free-text `unit`:
+                # upstream can write a name or an instruction there. A unit we
+                # do not recognise means no number, as on get_labs (#884 QA F1).
+                unit = labs_timeline.coded_unit(
+                    vq, _ANALYTE_KEY.get(_obs_loinc(res) or ""), _RECORD_UNITS)
+                if unit is not None:
+                    item["value"] = f"{vq.get('value')} {unit}".strip()
+            date = labs_timeline.parse_date(res.get("effectiveDateTime"))
+            if date:
+                item["date"] = date
+            if item.get("unreadable") and "note" not in item:
+                # A coded record we cannot name. "I couldn't read it... I can't
+                # rule anything out" read to people as a mystery illness (#949
+                # patient tester): it is one entry to ask about, no more.
+                entry = f"one entry from {date}" if date else "one entry"
                 item["note"] = (
-                    "The source system sent this record as free text with no "
-                    "standard code, and free text is removed for privacy. It "
-                    "is still a real record — never treat it as absent; "
-                    "suggest confirming the details with the clinician.")
-            item["unreadable"] = True
-        # Every field below is checked against a closed set or a parse before
-        # it is copied: ingest accepts any string in `status` or a date, and
-        # whatever is copied verbatim is a channel to the model (#922).
-        if res.get("status") in _STATUS.get(rt, ()):
-            item["status"] = res["status"]
-        vq = res.get("valueQuantity")
-        if isinstance(vq, dict) and vq.get("value") is not None:
-            # The coded, allow-listed unit, never the free-text `unit`:
-            # upstream can write a name or an instruction there. A unit we
-            # do not recognise means no number, as on get_labs (#884 QA F1).
-            unit = labs_timeline.coded_unit(
-                vq, _ANALYTE_KEY.get(_obs_loinc(res) or ""), _RECORD_UNITS)
-            if unit is not None:
-                item["value"] = f"{vq.get('value')} {unit}".strip()
-        date = labs_timeline.parse_date(res.get("effectiveDateTime"))
-        if date:
-            item["date"] = date
-        if item.get("unreadable") and "note" not in item:
-            # A coded record we cannot name. "I couldn't read it... I can't
-            # rule anything out" read to people as a mystery illness (#949
-            # patient tester): it is one entry to ask about, no more.
-            entry = f"one entry from {date}" if date else "one entry"
-            item["note"] = (
-                f"Say plainly that {entry} has no readable name here, and "
-                "that their doctor can say what it is. It is still a real "
-                "record, never absent. Do not guess what it is or suggest it "
-                "could be serious, and never say you can't rule anything "
-                "out.")
-        out.append(item)
+                    f"Say plainly that {entry} has no readable name here, and "
+                    "that their doctor can say what it is. It is still a real "
+                    "record, never absent. Do not guess what it is or suggest it "
+                    "could be serious, and never say you can't rule anything "
+                    "out.")
+            out.append(item)
+        except Exception as exc:  # noqa: BLE001 — fail closed per record
+            # The class only, as worker.py logs a failed run: the message
+            # can carry the record's text. A feed that breaks every row
+            # shows up here instead of as a quietly unreadable list.
+            name = type(exc).__name__
+            logger.warning("summary row unreadable: %s",
+                           name if name[:1].isalpha() else "SummaryError")
+            out.append(_unreadable_row(rt))
 
     # The bundle's total, when the engine gives one: the entries are one page
     # (50 by default), so counting them calls a longer list complete.
