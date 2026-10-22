@@ -28,7 +28,8 @@
 <main class="setup-wrap">
   <div class="setup-card checkin-wallet" id="wallet"
        data-signed-in="{{ '1' if signed_in else '0' }}"
-       data-records="{{ url_for('checkin_wallet_records') }}">
+       data-records="{{ url_for('checkin_wallet_records') }}"
+       {% if test_patient %}data-test-patient="{{ url_for('checkin_wallet_test_patient') }}"{% endif %}>
     <p class="checkin-test-note"><b>Test version.</b> This answers from the
       records on your CareAgents account. You choose what the website gets.</p>
 
@@ -81,6 +82,21 @@
       <p class="setup-sub">This page answers check-in requests. Open it from a
         check-in page, and it will show you what the website asks for.</p>
     </section>
+
+    {% if test_patient %}
+    {# Only an account with no real records reaches this (checkin_wallet.js). #}
+    <section id="wallet-test-patient" hidden>
+      <h1>No records to share yet</h1>
+      <p class="setup-sub" id="wallet-test-patient-why"></p>
+      <p class="setup-sub">Testing check-in? Use our connectathon test
+        patient: a made-up person with US Core records, kept on your account
+        only. You still choose each item before anything is sent.</p>
+      <button class="btn-primary btn-block" id="wallet-test-patient-use">
+        Use the connectathon test patient</button>
+      <button class="btn-secondary btn-block" id="wallet-test-patient-no">
+        Don't share anything</button>
+    </section>
+    {% endif %}
 
     <section id="wallet-review" hidden>
       <h1>A website is asking for your health information</h1>
