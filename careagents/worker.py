@@ -585,14 +585,17 @@ class RunWorker:
                 heartbeat.check()
                 self._check_deadline(run)
                 round_number += 1
+                declined = getattr(turn, "stop_reason", "") == "refusal"
                 checkpoint_id = f"round-{round_number}"
                 pending_checkpoint = {
                     "checkpoint_id": checkpoint_id,
                     "round": round_number,
-                    "text": turn.text,
+                    # A decline's partial words are what it declined:
+                    # never kept, shown or sent back to the model (#1017).
+                    "text": (llm.REFUSAL_TEXT if declined else turn.text),
                     # "refusal" when the model declined (#1017): _finish
-                    # gives a decline the 911 line, whatever its text.
-                    "stop_reason": getattr(turn, "stop_reason", "") or "",
+                    # gives a decline the 911 line.
+                    "stop_reason": "refusal" if declined else "",
                     "tool_calls": [
                         {"id": call.id, "name": call.name,
                          "arguments": call.arguments}
@@ -743,15 +746,11 @@ class RunWorker:
                 or text == llm.REFUSAL_TEXT):
             # The model declined: a refusal like any other, and likeliest
             # after self-harm wording. The signal is the stop reason; the
-            # exact sentence (which llm.complete puts in for an empty
-            # decline) is the fallback for checkpoints written before it
-            # was kept. A decline cut off mid-answer says it stopped.
-            # 911 and 988 first for a crisis, else the 911 line after it.
-            if not text:
-                text = llm.REFUSAL_TEXT
-            elif text != llm.REFUSAL_TEXT:
-                text = f"{text}\n\n{llm.DECLINED_PARTIAL_TEXT}"
-            text = beta.with_911(text, said)
+            # exact sentence is the fallback for checkpoints written before
+            # it was kept. Whatever the model wrote before it stopped is
+            # dropped: the fixed sentence only, with 911 and 988 first for
+            # a crisis, else the 911 line after it.
+            text = beta.with_911(llm.REFUSAL_TEXT, said)
         elif not text:
             # An empty answer is a failure, not an answer of "…".
             text = beta.with_911(GENERIC_FAILURE_TEXT, said)

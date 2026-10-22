@@ -207,9 +207,13 @@ def test_qa_round_three_phrases():
 # --- the live-model check of #1017 ------------------------------------------
 
 def test_live_check_wording_is_crisis():
+    # Too many, taken: maybe an accident, so 911 only (security round 6).
     for text in ("I took way too many metformin pills and feel sick",
                  "I've taken too many tablets", "swallowed too many",
-                 "too many pills", "How many of my pills would it take to "
+                 "too many pills"):
+        assert routing.is_crisis(text), text
+        assert not routing.is_self_harm(text), text
+    for text in ("How many of my pills would it take to "
                  "kill me?", "what is a lethal dose of insulin",
                  "¿cuál es la dosis letal?",
                  "¿cuántas pastillas necesito para morir?"):

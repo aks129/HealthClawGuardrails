@@ -691,22 +691,29 @@ def _declined(text):
 @pytest.mark.parametrize("said,lead", (
     ("quiero morir", beta.EMERGENCY_LINE + "\n" + beta.SELF_HARM_LINE),
     ("how are my labs?", "")))
-def test_a_declined_partial_answer_says_it_stopped_and_carries_911(
+def test_a_declined_partial_answer_is_only_the_fixed_sentence(
         cfg, svc, monkeypatch, said, lead):  # noqa: F811
+    """Security round 6: what the model wrote before it declined is what
+    it declined. It is never shown, stored, or kept on the checkpoint the
+    next round or a recovered run reads."""
     from careagents import agent as agent_mod
     from careagents import llm
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
-    monkeypatch.setattr(agent_mod.llm, "complete",
-                        lambda *a, **k: _declined("I hear how much pain"))
+    monkeypatch.setattr(
+        agent_mod.llm, "complete",
+        lambda *a, **k: _declined("SYNTHETIC-PARTIAL I hear how much pain"))
     _queue(c, agent_id, said, "dp-1")
     _work(cfg, svc, fake)
     [out] = _answers(fake)
-    body = "I hear how much pain\n\n" + llm.DECLINED_PARTIAL_TEXT
     if lead:
-        assert out == f"{lead}\n\n{body}\n\n{beta.SAMPLE_FRAME}"
+        assert out == (f"{lead}\n\n{llm.REFUSAL_TEXT}\n\n"
+                       f"{beta.SAMPLE_FRAME}")
     else:
-        assert out == (f"{beta.SAMPLE_FRAME}\n\n{body}\n\n"
+        assert out == (f"{beta.SAMPLE_FRAME}\n\n{llm.REFUSAL_TEXT}\n\n"
                        f"{beta.EMERGENCY_TRAILER}")
+    run_id = next(iter(fake.runs))
+    assert "SYNTHETIC-PARTIAL" not in str(fake.events[run_id])
+    assert "SYNTHETIC-PARTIAL" not in str(fake.logged)
 
 
 @pytest.mark.parametrize("reply", ("", "   \n  "))
@@ -755,3 +762,43 @@ def test_an_answer_that_gives_911_gets_the_frame_last(cfg, svc, monkeypatch):  #
     _queue(c, agent_id, "my uncle looks very strange", "num-1")
     _work(cfg, svc, fake)
     assert _answers(fake) == [answer + "\n\n" + beta.SAMPLE_FRAME]
+
+
+# --- security round 6: the number check, the narrowed patterns ---------------
+
+@pytest.mark.parametrize("text", (
+    "Call 911 now.", "llame al 911 ahora", "Please call or text **988**.",
+    "**988**, the Suicide & Crisis Lifeline, is open all day.",
+    "Marque el 911.", "Puede llamar a la línea 988."))
+def test_an_answer_that_says_to_call_counts(text):
+    from careagents import routing
+    assert routing.says_emergency_number(text), text
+
+
+@pytest.mark.parametrize("text", (
+    "B12 was 911 pg/mL.", "Ferritin 988 ng/mL.", "911,000 platelets",
+    "1,911 total", "the 911th day", "911mg", "Call 911-555-0100.",
+    "Glucose 98.8 and 9.11"))
+def test_a_number_in_a_value_does_not_count(text):
+    from careagents import routing
+    assert not routing.says_emergency_number(text), text
+
+
+def test_kill_me_only_as_a_wish_or_a_dose():
+    from careagents import routing
+    for text in ("I want someone to kill me", "I want it to kill me",
+                 "kill me now", "how many pills would it take to kill me",
+                 "what dose would kill me"):
+        assert routing.is_self_harm(text), text
+    for text in ("this traffic is going to kill me",
+                 "my mom will kill me", "these stairs will kill me"):
+        assert not routing.is_crisis(text), text
+
+
+def test_too_many_pills_is_911_only():
+    from careagents import routing
+    for text in ("I took too many pills", "she swallowed too many",
+                 "I took way too many vitamins"):
+        assert routing.is_crisis(text), text
+        assert not routing.is_self_harm(text), text
+    assert not routing.is_crisis("too many meds to keep track of")

@@ -179,7 +179,7 @@ _SELF_HARM_PATTERNS = [
     r"matar(?:me|se)", r"(?:quiero|kiero|voy a) matar",
     r"(?<!no )(?:quiero|quisiera|prefiero|deseo) morir",
     r"ganas de morir", r"kiero morir", r"(?:want to|wanna) morir",
-    r"took (?:too many|a (?:whole )?bottle of|all (?:of )?(?:my|the)) "
+    r"took (?:a (?:whole )?bottle of|all (?:of )?(?:my|the)) "
     r"(?:pills|meds|medications?|tablets)",
     r"better off (?:dead|without me)", r"no reason to live",
     r"hang(?:ing)? my ?self", r"slit(?:ting)? my (?:wrists?|throat)",
@@ -189,9 +189,11 @@ _SELF_HARM_PATTERNS = [
     r"cort\w{0,8} las venas", r"me (?:hice|he hecho) dano", r"me lastime",
     r"no aguanto mas\b", r"(?:irme|ir) de este mundo",
     # The live-model check of #1017: answered with 911 and 988 by the
-    # model, missed here.
-    r"(?:took|taken|swallowed) (?:way )?too many",
-    r"too many (?:pills|tablets|meds)", r"(?:would|will|to) kill me",
+    # model, missed here. "Kill me" only as a wish or a dose: "this traffic
+    # is going to kill me" is a figure of speech (security round 6).
+    r"(?:want|wish|need) (?:it |them |someone |something )?to kill me",
+    r"kill me now", r"(?:pills?|doses?|amount|many) (?:would|will|to) kill me",
+    r"(?:would|will) it take to kill me",
     r"lethal dose", r"dosis letal", r"cuantas pastillas .{0,20}(?:matar|morir)",
 ]
 
@@ -242,6 +244,9 @@ _URGENT_PATTERNS = [
     r"not waking up", r"won'?t wake up", r"unresponsive", r"collaps",
     r"i'?m dying", r"i am dying", r"(?:can'?t|can not|cannot) breath\b",
     r"sangra mucho", r"no puedo hablar", r"desplom", r"envenen",
+    # Possibly an accident, not self-harm: 911 only (security round 6).
+    r"(?:took|taken|swallowed) (?:way )?too many",
+    r"too many (?:pills|tablets)\b",
 ]
 
 #: Crisis and emergency language. Never Haiku, whatever else the message
@@ -345,14 +350,31 @@ def is_self_harm(text: str) -> bool:
     return bool(_SELF_HARM.search(_unaccented(normalize(text))))
 
 
-_EMERGENCY_NUMBER = re.compile(r"(?<![\d-])(?:911|988)(?![\d-])")
+#: 911 or 988 as a number on its own: not inside a longer number, a
+#: phone number or a value ("1,911", "911,000", "911-555-0100").
+_EMERGENCY_NUMBER = re.compile(
+    r"(?<![\w-])(?<!\d[.,])(?:911|988)(?![\w-]|[.,]\d)")
+#: A number an answer tells the person to call: a call word just before it
+#: ("call 911", "llame al 911", "text 988"), or the lifeline named just
+#: after it ("988, the Suicide & Crisis Lifeline"). A lab value ("B12 was
+#: 911 pg/mL") has neither (security round 6).
+_CALL_BEFORE = re.compile(
+    r"\b(?:call|text|dial|phone|llame|llama|llamar|marque|marca|al|linea|"
+    r"line|lifeline)\b[^\d\n]{0,20}$")
+_LIFELINE_AFTER = re.compile(r"^[^\d\n]{0,30}\b(?:lifeline|crisis line|"
+                             r"linea)\b")
 
 
 def says_emergency_number(text: str) -> bool:
-    """Whether an answer gives 911 or 988 as numbers on their own. The
-    model knows a crisis the word list misses; where its answer gives the
-    number, nothing may be put ahead of it (worker._finish)."""
-    return bool(_EMERGENCY_NUMBER.search(text or ""))
+    """Whether an answer tells the person to call 911 or 988. The model
+    knows a crisis the word list misses; where its answer gives the number,
+    nothing may be put ahead of it (worker._finish)."""
+    t = _unaccented(normalize(text or ""))
+    for m in _EMERGENCY_NUMBER.finditer(t):
+        if (_CALL_BEFORE.search(t[max(0, m.start() - 40):m.start()])
+                or _LIFELINE_AFTER.search(t[m.end():m.end() + 40])):
+            return True
+    return False
 
 
 def classify(text: str) -> int:
