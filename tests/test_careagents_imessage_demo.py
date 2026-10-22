@@ -133,8 +133,9 @@ def test_a_trend_question_by_text_gets_words_and_a_link(
     fake.sent.clear()
     _ask(app, c, fake, "has my cholesterol changed?", "trend-1")
     [(_, text)] = fake.sent
-    assert text.startswith(sample_framed(
-        "Your cholesterol went from 210 to 244."))
+    # The sample line closes the text, after the chart's link (#1017).
+    assert text.startswith("Your cholesterol went from 210 to 244.")
+    assert text.endswith(sample_framed("").strip())
     assert f"/chat?agent={agent_id}&chart=cholesterol" in text
     tool_result = next(m["content"] for m in seen[-1]["history"]
                        if m.get("role") == "tool")

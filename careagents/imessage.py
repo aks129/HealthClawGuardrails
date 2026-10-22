@@ -367,11 +367,14 @@ def _break_long(paragraph: str, limit: int) -> list[str]:
     return pieces
 
 
-def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
-    """A reply as texts of at most TEXT_PART_LIMIT characters, cut at
-    paragraph breaks where it can, in order. At most MAX_TEXT_PARTS; a
-    longer answer ends by pointing to the web chat, where the whole answer
-    is."""
+#: The sample's made-up-records line as the worker writes it, for the holder
+#: or for someone they care for (beta.sample_frame).
+_SAMPLE_FRAME_LINE = re.compile(
+    re.escape(beta.SAMPLE_FRAME) + "|These are made-up records\\. Nothing "
+    "here is about [^\\n]{1,60}, or about you\\.")
+
+
+def _chunks(text: str) -> list[str]:
     chunks: list[str] = []
     for paragraph in (p.strip() for p in text.split("\n\n")):
         if not paragraph:
@@ -381,13 +384,40 @@ def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
                 chunks[-1] += "\n\n" + piece
             else:
                 chunks.append(piece)
+    return chunks
+
+
+def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
+    """A reply as texts of at most TEXT_PART_LIMIT characters, cut at
+    paragraph breaks where it can, in order. At most MAX_TEXT_PARTS; a
+    longer answer ends by pointing to the web chat, where the whole answer
+    is.
+
+    A sample answer's made-up-records line (the worker ends every sample
+    answer with it, #1017) always closes the last text: the body is cut
+    to make room for it, never the line itself. A card's link that came
+    after it (run_reply) moves ahead of it."""
+    paragraphs = [p.strip() for p in text.split("\n\n")]
+    frame = ""
+    for i in range(len(paragraphs) - 1, -1, -1):
+        if _SAMPLE_FRAME_LINE.fullmatch(paragraphs[i]):
+            frame = paragraphs.pop(i)
+            break
+    body = _chunks("\n\n".join(paragraphs))
+    chunks = list(body)
+    if frame:
+        if chunks and len(chunks[-1]) + 2 + len(frame) <= TEXT_PART_LIMIT:
+            chunks[-1] += "\n\n" + frame
+        else:
+            chunks.append(frame)
     if len(chunks) <= MAX_TEXT_PARTS:
         return chunks or [text]
     tail = (f"The rest is in your chat: {origin}/chat?agent={agent_id}"
             if agent_id else f"The rest is in your chat at {origin}")
-    last = _break_long(chunks[MAX_TEXT_PARTS - 1],
-                       TEXT_PART_LIMIT - len(tail) - 2)[0]
-    return [*chunks[:MAX_TEXT_PARTS - 1], f"{last}\n\n{tail}"]
+    closing = [tail, frame] if frame else [tail]
+    room = TEXT_PART_LIMIT - sum(len(s) + 2 for s in closing)
+    last = _break_long(body[MAX_TEXT_PARTS - 1], room)[0]
+    return [*body[:MAX_TEXT_PARTS - 1], "\n\n".join([last, *closing])]
 
 
 def run_reply(events: list[dict], origin: str, agent_id: str) -> str:

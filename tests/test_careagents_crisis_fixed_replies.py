@@ -786,3 +786,66 @@ def test_too_many_pills_is_911_only():
         assert routing.is_crisis(text), text
         assert not routing.is_self_harm(text), text
     assert not routing.is_crisis("too many meds to keep track of")
+
+
+# --- the frame survives the split into texts ---------------------------------
+#
+# The made-up-records line closes every sample answer (round 8), so on a
+# text surface it is in the last part. split_reply cuts a long answer to
+# four parts; it cuts the body to make room, never the line.
+
+def _split(text, agent_id="ag_1"):
+    from careagents import imessage
+    return imessage.split_reply(text, "https://care.example", agent_id)
+
+
+def test_a_short_sample_answer_is_one_text_ending_with_the_frame():
+    text = f"The A1c was 7.2.\n\n{beta.SAMPLE_FRAME}"
+    assert _split(text) == [text]
+
+
+@pytest.mark.parametrize("frame", (beta.SAMPLE_FRAME,
+                                   beta.sample_frame("your parent")))
+@pytest.mark.parametrize("paragraphs", (6, 4))
+def test_a_long_sample_answer_keeps_the_frame_in_its_last_text(
+        frame, paragraphs):
+    from careagents import imessage
+    body = "\n\n".join(f"Part {i}. " + "z" * 950 for i in range(paragraphs))
+    parts = _split(f"{body}\n\n{frame}")
+    assert len(parts) == imessage.MAX_TEXT_PARTS
+    assert all(len(p) <= imessage.TEXT_PART_LIMIT for p in parts)
+    assert parts[-1].endswith("\n\n" + frame)
+    assert ("The rest is in your chat: https://care.example/chat?agent=ag_1"
+            in parts[-1])
+    assert sum(p.count(frame) for p in parts) == 1
+
+
+def test_a_sample_answer_that_just_fits_adds_no_link():
+    from careagents import imessage
+    body = "\n\n".join(f"Part {i}. " + "z" * 950 for i in range(3))
+    parts = _split(f"{body}\n\n{beta.SAMPLE_FRAME}")
+    assert len(parts) == imessage.MAX_TEXT_PARTS
+    assert parts[-1] == beta.SAMPLE_FRAME
+
+
+def test_a_card_link_after_the_frame_moves_ahead_of_it():
+    from careagents import imessage
+    events = [{"type": "agent.text",
+               "payload": {"text": f"Here it is.\n\n{beta.SAMPLE_FRAME}"}},
+              {"type": "agent.card",
+               "payload": {"type": "card", "kind": "brief"}}]
+    reply = imessage.run_reply(events, "https://care.example", "ag_1")
+    [part] = _split(reply)
+    assert part.startswith("Here it is.")
+    assert part.endswith("\n\n" + beta.SAMPLE_FRAME)
+    assert "visit brief" in part
+
+
+def test_a_real_answer_is_split_as_before():
+    from careagents import imessage
+    body = "\n\n".join(f"Part {i}. " + "z" * 950 for i in range(6))
+    parts = _split(body)
+    assert len(parts) == imessage.MAX_TEXT_PARTS
+    assert parts[-1].endswith(
+        "The rest is in your chat: https://care.example/chat?agent=ag_1")
+    assert beta.SAMPLE_FRAME not in "".join(parts)
