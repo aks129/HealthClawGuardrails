@@ -64,6 +64,15 @@ def test_ok_after_a_spanish_crisis_stays_on_sonnet(spanish, english):
     assert routing.tier_for(turn(spanish)) == routing.TIER_SONNET, spanish
 
 
+@pytest.mark.parametrize("text", [
+    "me quiero matar", "ME QUIERO MATAR", "dolor del pecho",
+    "tengo dolor del pecho"])
+def test_alternatives_the_pr_tests_do_not_reach(text):
+    """Mutation survivors on the PR head: removing r"me quiero matar" or
+    the "del" in r"dolor (?:en el|de|del) pecho" left its tests green."""
+    assert routing.is_crisis(text), text
+
+
 @pytest.mark.xfail(strict=True, reason=(
     "#1017 known gap: _disclaimer_only reads English words only, so a "
     "Spanish sample answer shows the English frame and its own Spanish "
