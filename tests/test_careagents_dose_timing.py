@@ -279,6 +279,31 @@ def test_one_unreadable_row_never_drops_the_rest(monkeypatch):
     assert items[1]["type"] == "MedicationRequest"
 
 
+def test_an_unreadable_row_logs_its_class_never_its_message(
+        monkeypatch, caplog):
+    import careagents.agent as agent
+
+    def boom(_res):
+        raise TypeError(CANARY)
+    monkeypatch.setattr(agent, "_only_absence_codes", boom)
+    with caplog.at_level("WARNING", logger="careagents.agent"):
+        [item] = _summarize_bundle({"resourceType": "Bundle", "total": 1,
+                                    "entry": [{"resource": _med([])}]})
+    assert item["unreadable"] is True
+    assert "TypeError" in caplog.text
+    assert CANARY not in caplog.text
+
+
+@pytest.mark.parametrize("entries", [
+    ["s"], [{"resource": ["x"]}], [None], [{"resource": "x"}],
+])
+def test_an_entry_that_is_no_object_never_raises(entries):
+    bundle = {"resourceType": "Bundle", "entry": entries + [
+        {"resource": _med([])}]}
+    items = _summarize_bundle(bundle)
+    assert [i["type"] for i in items] == ["MedicationRequest"]
+
+
 def test_a_list_status_through_the_engine_keeps_the_summary(
         cfg, svc, monkeypatch):  # noqa: F811
     """#1018 end to end: the engine accepts the row on ingest, and the

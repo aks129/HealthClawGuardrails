@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import json
 import datetime
+import logging
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
 from careagents import causes, labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
+
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 
@@ -685,15 +688,19 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     function. It cannot fire on the synthetic demo tenant, which is why
     nothing caught it; it fires on the first real record with a long list.
     """
-    entries = bundle.get("entry") or []
-    total = sum(1 for e in entries
-                if (e.get("resource") or {}).get("resourceType")
-                != "OperationOutcome")
+    entries = bundle.get("entry")
+    # An entry or resource that is not an object is no record: skipped
+    # here, not left to the engine's ingest check, so `.get` below cannot
+    # raise out of the summary (security on #1015).
+    resources = [e["resource"] for e in
+                 (entries if isinstance(entries, list) else ())
+                 if isinstance(e, dict) and isinstance(e.get("resource"), dict)]
+    total = sum(1 for r in resources
+                if r.get("resourceType") != "OperationOutcome")
     out = []
     dropped = 0
     withdrawn_nka = False
-    for entry in entries[:limit]:
-        res = entry.get("resource") or {}
+    for res in resources[:limit]:
         rt = res.get("resourceType")
         if rt == "OperationOutcome":
             continue
@@ -875,7 +882,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                     "could be serious, and never say you can't rule anything "
                     "out.")
             out.append(item)
-        except Exception:  # noqa: BLE001 — fail closed per record
+        except Exception as exc:  # noqa: BLE001 — fail closed per record
+            # The class only, as worker.py logs a failed run: the message
+            # can carry the record's text. A feed that breaks every row
+            # shows up here instead of as a quietly unreadable list.
+            name = type(exc).__name__
+            logger.warning("summary row unreadable: %s",
+                           name if name[:1].isalpha() else "SummaryError")
             out.append(_unreadable_row(rt))
 
     # The bundle's total, when the engine gives one: the entries are one page
