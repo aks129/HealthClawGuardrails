@@ -137,11 +137,48 @@ $("signin-code-input").addEventListener("keydown", (e) => {
 // for (checkin_answer.js recordNames), or why there is nothing to send.
 function describe(m) {
   if (m.unsupported) return ["This wallet can't answer this yet. You can answer it in person instead."];
+  if (m.form) return m.form.displays;
   if (!m.entries.length) return ["Nothing on file. The website will be told that."];
   return recordNames(m);
 }
 
-/* Resolves to {kind: "send", share}, {kind: "declined-all"} or
+/* A form's questions (checkin_answer.js readForm), one radio group each.
+   The text is the website's: textContent only, never markup. Nothing is
+   picked to start with. */
+function formQuestions(form, i) {
+  const box = document.createElement("div");
+  box.className = "checkin-form";
+  form.questions.forEach((q, qi) => {
+    const set = document.createElement("fieldset");
+    set.className = "checkin-question";
+    const legend = document.createElement("legend");
+    legend.textContent = q.prefix ? `${q.prefix} ${q.text}` : q.text;
+    set.append(legend);
+    q.options.forEach((o, oi) => {
+      const lab = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `form-${i}-${qi}`;
+      input.value = String(oi);
+      lab.append(input, ` ${o.display}`);
+      set.append(lab);
+    });
+    box.append(set);
+  });
+  return box;
+}
+
+/* { linkId: option index } for the questions answered on item i. */
+function formAnswers(form, i) {
+  const out = {};
+  form.questions.forEach((q, qi) => {
+    const picked = $("wallet-items").querySelector(`input[name="form-${i}-${qi}"]:checked`);
+    if (picked) out[q.linkId] = Number(picked.value);
+  });
+  return out;
+}
+
+/* Resolves to {kind: "send", share, answers}, {kind: "declined-all"} or
    {kind: "closed"}. Every choice starts at "Don't share". */
 function review(request, origin, matches) {
   // The origin is what the browser reported, shown as a website. Request
@@ -169,7 +206,8 @@ function review(request, origin, matches) {
       what.append(row);
     });
     li.append(title, what);
-    if (!m.unsupported && m.entries.length) {
+    if (m.form) li.append(formQuestions(m.form, i));
+    if (!m.unsupported && (m.entries.length || m.form)) {
       const group = document.createElement("div");
       group.className = "checkin-choice";
       group.setAttribute("role", "radiogroup");
@@ -190,12 +228,22 @@ function review(request, origin, matches) {
   show("wallet-review");
   return new Promise((resolve) => {
     $("wallet-send").onclick = () => {
+      clear();
       const share = {};
+      const answers = {};
+      let missing = null;
       matches.forEach((m, i) => {
         const picked = list.querySelector(`input[name="choice-${i}"]:checked`);
-        if (picked && picked.value === "share") share[m.item.id] = true;
+        if (!picked || picked.value !== "share") return;
+        share[m.item.id] = true;
+        if (!m.form) return;
+        answers[m.item.id] = formAnswers(m.form, i);
+        if (Object.keys(answers[m.item.id]).length !== m.form.questions.length)
+          missing = missing || itemHeading(m);
       });
-      resolve({ kind: "send", share });
+      // A form is sent whole or not at all: say so rather than decline it.
+      if (missing) return fail(`Answer every question in "${missing}", or choose Don't share for it.`);
+      resolve({ kind: "send", share, answers });
     };
     $("wallet-decline-all").onclick = () => resolve({ kind: "declined-all" });
     $("wallet-close").onclick = () => resolve({ kind: "closed" });
@@ -333,7 +381,7 @@ function start() {
         await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
         return { response: declineAll(request) };
       }
-      const response = buildResponse(request, matches, choice.share);
+      const response = buildResponse(request, matches, choice.share, choice.answers);
       if (checkWalletResponse(request, response).length) {
         await untilOk("Couldn't answer", "Something went wrong building the answer. Nothing was shared. Tap OK to tell the website.");
         return { error: CANT_SHARE };

@@ -10,7 +10,8 @@
  *  2. The answer rules in careagents/static/checkin_answer.js, run as shipped
  *     against the synthetic test patient (FHI-51): unprofiled records left
  *     out, nothing on file -> unavailable, an allergy sent only when it codes
- *     a substance, unchosen -> declined, a form -> unsupported, and a
+ *     a substance, unchosen -> declined, a form named only by its canonical
+ *     -> unsupported (an inline PHQ-2 is filled in, FHI-55), and a
  *     response the vendored library's own pre-flight check finds clean.
  *
  * The records come from POST /checkin/wallet/records, which relays the
@@ -585,5 +586,97 @@ test.describe('check-in wallet', () => {
     }, { request: REQUEST, bundle: FIXTURE });
     expect(tags.length).toBe(6);
     for (const t of tags) expect(t).toEqual([]);
+  });
+
+  // FHI-55: the organizers' form-phq2.json request, as published. The
+  // questions come from its inline Questionnaire; the answers go back to
+  // the check-in page as one QuestionnaireResponse and nowhere else.
+  const PHQ2 = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+    'fixtures', 'checkin-request-form-phq2.json'), 'utf8'));
+  const CANONICAL = PHQ2.items[1].content.questionnaireCanonical;
+  const phq2 = (wallet: Page) => wallet.locator('#wallet-items li[data-item=phq2]');
+  const done = (page: Page) => expect.poll(
+    () => page.evaluate(() => (window as any).__result), { timeout: 15_000 });
+
+  test('fills in the PHQ-2 sent inline and sends one QuestionnaireResponse',
+    async ({ page }) => {
+      const asked = await serveRelay(page);
+      const req = structuredClone(PHQ2);
+      req.items[1].content.questionnaireCanonical = `${CANONICAL}|1`;
+      const wallet = await checkIn(page, req);
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      const form = phq2(wallet);
+      await expect(form.locator('legend')).toHaveText([
+        '1. Little interest or pleasure in doing things',
+        '2. Feeling down, depressed, or hopeless']);
+      // Nothing picked, and the item starts at "Don't share".
+      await expect(form.locator('fieldset input:checked')).toHaveCount(0);
+      await expect(form.locator('.checkin-choice input[value=decline]')).toBeChecked();
+
+      // Chosen with a question unanswered: said, not sent in part.
+      await form.locator('.checkin-choice input[value=share]').check();
+      await form.locator('fieldset').nth(0).getByLabel('Several days').check();
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-err')).toContainText('Answer every question');
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+
+      await form.locator('fieldset').nth(1).getByLabel('Nearly every day').check();
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus).toEqual([
+        { item: 'patient', status: 'declined' },
+        { item: 'phq2', status: 'fulfilled' }]);
+      const [art] = r.json.artifacts;
+      expect(art.fulfills).toEqual(['phq2']);
+      expect(art.value.resourceType).toBe('QuestionnaireResponse');
+      expect(art.value.questionnaire).toBe(`${CANONICAL}|1`);
+      expect(art.value.item.map((i: any) => [i.linkId, i.answer[0].valueCoding.code]))
+        .toEqual([['phq2-1', 'LA6569-3'], ['phq2-2', 'LA6571-9']]);
+      // The relay was asked for the Patient only: the answers stay in the tab.
+      expect(asked).toEqual([{ resource_types: ['Patient'] }]);
+    });
+
+  test('the form can be declined', async ({ page }) => {
+    await serveRelay(page);
+    const wallet = await checkIn(page, PHQ2);
+    await phq2(wallet).locator('fieldset').nth(0).getByLabel('Not at all').check();
+    await wallet.locator('#wallet-send').click();
+    await done(page).toMatchObject({ status: 'completed' });
+    const r = await page.evaluate(() => (window as any).__result);
+    expect(r.json.artifacts).toEqual([]);
+    expect(r.json.requestStatus.find((s: any) => s.item === 'phq2').status)
+      .toBe('declined');
+  });
+
+  test("a form's words are shown as text, never as markup", async ({ page }) => {
+    await serveRelay(page);
+    const req = structuredClone(PHQ2);
+    const q = req.items[1].content.questionnaire;
+    q.item[1].text = '<img src=x onerror="window.__pwned=1">Interest';
+    q.item[1].answerOption[0].valueCoding.display = '<b>Not at all</b>';
+    const wallet = await checkIn(page, req);
+    const form = phq2(wallet);
+    await expect(form.locator('legend').first())
+      .toHaveText('1. <img src=x onerror="window.__pwned=1">Interest');
+    await expect(form.getByText('<b>Not at all</b>').first()).toBeVisible();
+    await expect(form.locator('img, b')).toHaveCount(0);
+    expect(await wallet.evaluate(() => (window as any).__pwned)).toBeUndefined();
+  });
+
+  test('a form too large to trust is answered unsupported', async ({ page }) => {
+    await serveRelay(page);
+    const req = structuredClone(PHQ2);
+    const q = req.items[1].content.questionnaire;
+    for (let n = 0; n < 60; n++)
+      q.item.push({ ...structuredClone(q.item[1]), linkId: `extra-${n}` });
+    const wallet = await checkIn(page, req);
+    await expect(phq2(wallet)).toContainText('You can answer it in person instead.');
+    await expect(phq2(wallet).locator('fieldset')).toHaveCount(0);
+    await wallet.locator('#wallet-send').click();
+    await done(page).toMatchObject({ status: 'completed' });
+    const r = await page.evaluate(() => (window as any).__result);
+    expect(r.json.requestStatus.find((s: any) => s.item === 'phq2').status)
+      .toBe('unsupported');
   });
 });

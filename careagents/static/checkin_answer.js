@@ -3,8 +3,9 @@
    rules below can be exercised on their own (e2e checkin-wallet spec).
 
    The rules, per request item:
-     unsupported  the library said so, or it is not a FHIR selection this
-                  wallet can send (a form, say: PHQ-2 is later work)
+     unsupported  the library said so, or it is neither a FHIR selection
+                  this wallet can send nor a small inline form it can show
+                  (readForm)
      unavailable  nothing on file claims the requested profile. Nothing is
                   stamped with a claim to make it fit, and "no known
                   allergies" is never sent: an allergy goes only when it
@@ -12,6 +13,7 @@
                   refuted record or one said only in words reads unavailable
      declined     there is something, and the person did not choose to share
      fulfilled    the person chose to share it: one Bundle, fhirVersion 4.0.1
+                  (a form: one QuestionnaireResponse, every question answered)
 
    Request keys are read with Object.hasOwn (own()), never `in` or a bare
    lookup: the request is the website's, and a key named like a built-in
@@ -119,6 +121,111 @@ function answerable(item, unsupported) {
     Array.isArray(accept) && accept.includes(FHIR_JSON);
 }
 
+/* --- Forms (FHI-55) -------------------------------------------------------
+
+   A `form.fhir` item is answered only from the Questionnaire the website
+   sent inline, and only when it is small, flat and single-choice, as the
+   PHQ-2 is: display lines and choice questions, each with its own coded
+   answer options. Everything shown is the website's own words, put on the
+   page as text, never as markup; the Questionnaire's generated narrative
+   is never read. Anything else is unsupported rather than half shown. The
+   answers stay in this tab: they go only into the sealed response. */
+
+const FORM_MAX_CHARS = 32768;      // the Questionnaire, serialised
+const FORM_MAX_QUESTIONS = 10;
+const FORM_MAX_OPTIONS = 10;
+const FORM_TEXT_MAX = 500;
+const FORM_CANONICAL_MAX = 1024;
+// What would make a question more than one pick from a fixed list.
+const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
+
+const text = (v, max = FORM_TEXT_MAX) =>
+  typeof v === "string" && v.trim() && v.length <= max ? v : null;
+
+function readOption(option) {
+  const c = own(option, "valueCoding");
+  const code = text(own(c, "code"), 256);
+  const display = text(own(c, "display"));
+  const system = own(c, "system");
+  if (!code || !display) return null;
+  if (system !== undefined && !text(system, FORM_CANONICAL_MAX)) return null;
+  const coding = system === undefined ? { code, display } : { system, code, display };
+  return { coding, display };
+}
+
+/* The form an item carries, or null when this wallet will not answer it:
+   { canonical, title, displays: [text], questions: [{ linkId, prefix,
+   text, options: [{ coding, display }] }] }. */
+export function readForm(item) {
+  const content = own(item, "content");
+  const accept = own(item, "accept");
+  if (own(content, "kind") !== "form.fhir" || !Array.isArray(accept) ||
+      !accept.includes(FHIR_JSON)) return null;
+  const q = own(content, "questionnaire");
+  if (own(q, "resourceType") !== "Questionnaire") return null;
+  let size;
+  try { size = JSON.stringify(q).length; } catch (e) { return null; }
+  if (size > FORM_MAX_CHARS) return null;
+
+  // What the answer names: the item's canonical exactly as sent (a `|1`
+  // version included), else the inline url, with its version if it has one.
+  let canonical = own(content, "questionnaireCanonical");
+  if (canonical === undefined) {
+    const url = text(own(q, "url"), FORM_CANONICAL_MAX);
+    const version = own(q, "version");
+    canonical = url && (version === undefined ? url
+      : text(version, 64) && `${url}|${version}`);
+  }
+  if (!text(canonical, FORM_CANONICAL_MAX)) return null;
+
+  const items = own(q, "item");
+  if (!Array.isArray(items)) return null;
+  const displays = [];
+  const questions = [];
+  const linkIds = new Set();
+  for (const it of items) {
+    if (it === null || typeof it !== "object") return null;
+    if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k))) return null;
+    if (own(it, "repeats") === true) return null;
+    const linkId = text(own(it, "linkId"), 255);
+    const words = text(own(it, "text"));
+    if (!linkId || !words || linkIds.has(linkId)) return null;
+    linkIds.add(linkId);
+    const type = own(it, "type");
+    if (type === "display") { displays.push(words); continue; }
+    if (type !== "choice") return null;
+    const prefix = own(it, "prefix");
+    if (prefix !== undefined && !text(prefix, 16)) return null;
+    const options = own(it, "answerOption");
+    if (!Array.isArray(options) || options.length < 2 ||
+        options.length > FORM_MAX_OPTIONS) return null;
+    const read = options.map(readOption);
+    if (read.includes(null)) return null;
+    questions.push({ linkId, prefix: prefix || "", text: words, options: read });
+  }
+  if (!questions.length || questions.length > FORM_MAX_QUESTIONS) return null;
+  return { canonical, title: text(own(q, "title")) || "", displays, questions };
+}
+
+/* The QuestionnaireResponse for `picked` ({ linkId: option index }), or
+   null unless every question has exactly one of its own options. */
+function questionnaireResponse(form, picked) {
+  const item = [];
+  for (const question of form.questions) {
+    const i = own(picked, question.linkId);
+    if (!Number.isInteger(i) || i < 0 || i >= question.options.length) return null;
+    item.push({ linkId: question.linkId, text: question.text,
+      answer: [{ valueCoding: { ...question.options[i].coding } }] });
+  }
+  return {
+    resourceType: "QuestionnaireResponse",
+    status: "completed",
+    questionnaire: form.canonical,
+    authored: new Date().toISOString(),
+    item,
+  };
+}
+
 const strings = (obj, key) => {
   const v = own(obj, key);
   return Array.isArray(v) ? v.filter((s) => typeof s === "string") : [];
@@ -186,12 +293,15 @@ export function prepareRecords(bundle) {
   return { entries, patientFullUrl: patient ? patient.fullUrl : null };
 }
 
-/* For each item: { item, unsupported, entries, primary }. `entries` is what
-   would be sent; `primary` is the part of it the item asked for, which is
-   what the person is shown (a payer or prescriber rides along unnamed). */
+/* For each item: { item, unsupported, entries, primary }, and `form` for a
+   form this wallet can show (readForm). `entries` is what would be sent;
+   `primary` is the part of it the item asked for, which is what the person
+   is shown (a payer or prescriber rides along unnamed). */
 export function matchItems(request, unsupportedItems, records) {
   const unsupported = new Set((unsupportedItems || []).map((u) => own(u, "id")));
   return own(request, "items").map((item) => {
+    const form = unsupported.has(own(item, "id")) ? null : readForm(item);
+    if (form) return { item, unsupported: false, form, entries: [], primary: [] };
     if (!answerable(item, unsupported)) {
       return { item, unsupported: true, entries: [], primary: [] };
     }
@@ -210,16 +320,26 @@ export function matchItems(request, unsupportedItems, records) {
 }
 
 /* The SMART response. `share` maps item id -> true for what the person
-   chose to share; anything else is not shared. No HTEST tag: the records
+   chose to share; anything else is not shared. `answers` maps a form's
+   item id -> { linkId: option index }; a form chosen with any question
+   unanswered is declined, never sent in part. No HTEST tag: the records
    are the account's own now, not the synthetic test patient, and a test
    marker on them would mislabel them (the #960 note said the real-record
    export drops it). */
-export function buildResponse(request, matches, share) {
+export function buildResponse(request, matches, share, answers = {}) {
   const artifacts = [];
   const requestStatus = [];
   for (const m of matches) {
     const id = own(m.item, "id");
     if (m.unsupported) { requestStatus.push({ item: id, status: "unsupported" }); continue; }
+    if (m.form) {
+      const qr = own(share, id) === true ? questionnaireResponse(m.form, own(answers, id)) : null;
+      if (!qr) { requestStatus.push({ item: id, status: "declined" }); continue; }
+      artifacts.push({ id: `fhir-${id}`, mediaType: FHIR_JSON, fhirVersion: "4.0.1",
+        fulfills: [id], value: qr });
+      requestStatus.push({ item: id, status: "fulfilled" });
+      continue;
+    }
     if (!m.entries.length) { requestStatus.push({ item: id, status: "unavailable" }); continue; }
     if (own(share, id) !== true) { requestStatus.push({ item: id, status: "declined" }); continue; }
     artifacts.push({
