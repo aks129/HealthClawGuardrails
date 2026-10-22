@@ -144,10 +144,20 @@ def keys_for_topic(topic: str | None) -> list[str] | None:
     return hits
 
 
+def _dicts(value: object) -> list[dict]:
+    """The objects in a list, or none. A feed can put any JSON where FHIR
+    says list-of-objects; that row is skipped, never raised on (#1021)."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, dict)]
+
+
 def _loinc_of(resource: dict) -> str | None:
-    for coding in ((resource.get("code") or {}).get("coding") or []):
-        if isinstance(coding, dict) and coding.get("system") == LOINC \
-                and coding.get("code"):
+    code = resource.get("code")
+    if not isinstance(code, dict):
+        return None
+    for coding in _dicts(code.get("coding")):
+        if coding.get("system") == LOINC and coding.get("code"):
             return str(coding["code"])
     return None
 
@@ -162,9 +172,9 @@ def _flag_of(resource: dict) -> str:
     Never computed here. A second opinion on a reference range is how a
     patient ends up seeing a different verdict from the one we audited.
     """
-    for concept in (resource.get("interpretation") or []):
-        for coding in ((concept or {}).get("coding") or []):
-            if isinstance(coding, dict) and coding.get("code"):
+    for concept in _dicts(resource.get("interpretation")):
+        for coding in _dicts(concept.get("coding")):
+            if coding.get("code"):
                 # An unscored reading keeps the feed's own interpretation,
                 # whose code can be any text (#922): only a flag passes.
                 code = coding["code"]
@@ -227,8 +237,8 @@ def build_series(interpret_bundle: dict,
                 source = resource
             elif _loinc_of(resource) in BP_PANELS:
                 source = next(
-                    (c for c in (resource.get("component") or [])
-                     if isinstance(c, dict) and _loinc_of(c) in codes), None)
+                    (c for c in _dicts(resource.get("component"))
+                     if _loinc_of(c) in codes), None)
                 if source is None:
                     continue
             else:

@@ -890,7 +890,9 @@ _ANALYTE_KEY = {code: a["key"] for a in labs_timeline.ANALYTES
 
 
 def _obs_loinc(resource: dict) -> str | None:
-    for c in ((resource.get("code") or {}).get("coding") or []):
+    code = resource.get("code")
+    coding = code.get("coding") if isinstance(code, dict) else None
+    for c in (coding if isinstance(coding, list) else []):
         if isinstance(c, dict) and c.get("system") == _LOINC_SYSTEM:
             return c.get("code")
     return None
@@ -987,7 +989,10 @@ def _plain_value(resource: dict) -> tuple[object, str]:
             return value, unit
         return None, ""
     parts = {}
-    for c in resource.get("component") or []:
+    components = resource.get("component")
+    if not isinstance(components, list):
+        return None, ""
+    for c in components:
         if not isinstance(c, dict):
             return None, ""
         code = _obs_loinc(c)
