@@ -8,14 +8,17 @@ with no record of where they were going, and every sign-in ends on /home.
 
 Now the page asked for is parked in the session, carried across the
 session clear in _login (as consent_req is), and /home sends the person
-there once. Only a path on this site is ever followed.
+there once, within 15 minutes. Only a path on this site is ever followed.
 """
+import time
+
 import pytest
 
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, _make_account, app, cfg, svc)
 
 KEY = "after_sign_in"
+AT = "after_sign_in_at"
 
 
 def _tap_signed_out(client, target):
@@ -96,7 +99,9 @@ def test_a_target_off_this_site_is_never_followed(app, svc, monkeypatch,  # noqa
     MUTATION: follow any string -> red."""
     client = app.test_client()
     with client.session_transaction() as s:
+        # Fresh, so the path check is what refuses it.
         s[KEY] = planted
+        s[AT] = time.time()
     _login(client, svc, monkeypatch, "pat@example.com")
     with client.session_transaction() as s:
         assert KEY not in s
@@ -110,6 +115,7 @@ def test_a_planted_off_site_target_is_not_followed_by_home_either(
     _login(client, svc, monkeypatch, "pat@example.com")
     with client.session_transaction() as s:
         s[KEY] = "//evil.example/x"
+        s[AT] = time.time()
     assert client.get("/home").status_code == 200
 
 
@@ -122,9 +128,12 @@ def test_an_api_call_or_a_post_signed_out_parks_nothing(app):  # noqa: F811
         assert KEY not in s
 
 
-def test_a_waiting_consent_request_still_comes_first(app, svc, monkeypatch):  # noqa: F811
-    """The consent handoff (#846) and the texted iMessage link resume ahead
-    of an ordinary page: they are a step the person has to finish."""
+def test_a_waiting_imessage_link_comes_first_and_drops_the_page(
+        app, svc, monkeypatch):  # noqa: F811
+    """The texted iMessage link (and the consent handoff, #846) resume ahead
+    of an ordinary page: they are a step the person has to finish. The page
+    is dropped then, so it never takes over a later visit to the hub.
+    MUTATION: keep the page when an earlier step wins -> red."""
     client = app.test_client()
     _tap_signed_out(client, "/chat?agent=agent_abc")
     _login(client, svc, monkeypatch, "pat@example.com")
@@ -133,8 +142,7 @@ def test_a_waiting_consent_request_still_comes_first(app, svc, monkeypatch):  # 
     home = client.get("/home")
     assert "/chat?agent=agent_abc" not in home.headers["Location"]
     with client.session_transaction() as s:
-        # Still waiting for its turn.
-        assert s[KEY] == "/chat?agent=agent_abc"
+        assert KEY not in s and AT not in s
 
 
 def test_signing_out_forgets_the_page(app, svc, monkeypatch):  # noqa: F811
@@ -144,3 +152,73 @@ def test_signing_out_forgets_the_page(app, svc, monkeypatch):  # noqa: F811
     client.post("/logout")
     with client.session_transaction() as s:
         assert KEY not in s
+
+
+def test_a_signed_out_visit_to_the_hub_parks_nothing(app):  # noqa: F811
+    """/home is where every sign-in ends already; parking it would send the
+    hub to itself. MUTATION: drop the request.path != "/home" check -> red."""
+    client = app.test_client()
+    _tap_signed_out(client, "/home")
+    with client.session_transaction() as s:
+        assert KEY not in s
+
+
+def test_the_page_is_parked_with_the_time_it_was_tapped(app):  # noqa: F811
+    client = app.test_client()
+    before = time.time()
+    _tap_signed_out(client, "/settings")
+    with client.session_transaction() as s:
+        assert before <= s[AT] <= time.time()
+
+
+@pytest.mark.parametrize("age, resumes", [(14 * 60, True), (16 * 60, False)])
+def test_a_page_is_honoured_for_fifteen_minutes(app, svc, monkeypatch,  # noqa: F811
+                                                 age, resumes):
+    """Tapped, then the code typed `age` seconds later.
+    MUTATION: ignore the timestamp -> red."""
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + age)
+    _login(client, svc, monkeypatch, "pat@example.com")
+    home = client.get("/home")
+    if resumes:
+        assert home.status_code == 302
+        assert home.headers["Location"].endswith("/settings")
+    else:
+        assert home.status_code == 200
+    with client.session_transaction() as s:
+        assert KEY not in s and AT not in s
+
+
+def test_a_page_gone_stale_after_sign_in_is_not_followed_by_home(
+        app, svc, monkeypatch):  # noqa: F811
+    """Signed in in time, but the hub is first visited later."""
+    client = app.test_client()
+    _tap_signed_out(client, "/settings")
+    _login(client, svc, monkeypatch, "pat@example.com")
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 16 * 60)
+    assert client.get("/home").status_code == 200
+
+
+@pytest.mark.parametrize("ts", [None, "0", True, float("nan")])
+def test_a_page_with_no_usable_time_is_not_followed(app, svc, monkeypatch,  # noqa: F811
+                                                     ts):
+    client = app.test_client()
+    _login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        s[KEY] = "/settings"
+        if ts is not None:
+            s[AT] = ts
+    assert client.get("/home").status_code == 200
+
+
+def test_the_resume_keeps_the_path_percent_encoded(app, svc, monkeypatch):  # noqa: F811
+    """%3F is part of the path as tapped; decoded, it would come back as a
+    query. MUTATION: park request.full_path -> red."""
+    client = app.test_client()
+    _tap_signed_out(client, "/review/agent%3Fx/act-1?y=%2F")
+    _login(client, svc, monkeypatch, "pat@example.com")
+    assert (client.get("/home").headers["Location"]
+            == "/review/agent%3Fx/act-1?y=%2F")

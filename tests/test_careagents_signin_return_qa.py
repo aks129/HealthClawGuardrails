@@ -25,7 +25,8 @@ def _handle(request_id="req-qa1016"):
 def test_a_consent_request_resumes_before_the_parked_page(
         app, svc, monkeypatch):  # noqa: F811
     """Both parked while signed out: the consent step comes first, and the
-    tapped page waits for its turn. MUTATION: move the after_sign_in resume
+    tapped page is dropped then, so it never takes over a later visit to
+    the hub (fix round on #1016). MUTATION: move the after_sign_in resume
     above the consent_req pop in /home -> red."""
     client = app.test_client()
     assert client.get(TARGET).headers["Location"].endswith("/auth")
@@ -37,7 +38,7 @@ def test_a_consent_request_resumes_before_the_parked_page(
     assert home.status_code == 302
     assert "/authorize?req=" in home.headers["Location"]
     with client.session_transaction() as s:
-        assert s[KEY] == TARGET
+        assert KEY not in s
 
 
 def test_a_passkey_sign_in_returns_to_the_page_tapped(app, svc,  # noqa: F811

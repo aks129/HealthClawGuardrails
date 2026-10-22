@@ -60,6 +60,10 @@ _VIA_LINK = "via_link"
 #: Session key: the page a signed-out person asked for, so the sign-in that
 #: follows ends there and not on the hub (beta feedback, 2026-10-22).
 _AFTER_SIGN_IN = "after_sign_in"
+#: When it was parked. Honoured for _AFTER_SIGN_IN_TTL seconds only, so a
+#: page parked for one sign-in never takes over a hub visit later (#1016).
+_AFTER_SIGN_IN_AT = "after_sign_in_at"
+_AFTER_SIGN_IN_TTL = 15 * 60
 #: Longer than any page here; the cookie that carries it is small.
 _AFTER_SIGN_IN_MAX = 512
 
@@ -73,6 +77,29 @@ def _local_target(raw) -> str | None:
             or "\\" in raw or not all(33 <= ord(c) <= 126 for c in raw)):
         return None
     return raw
+
+
+def _tapped_target(req) -> str | None:
+    """The page as it was tapped, still percent-encoded, so %3F stays part
+    of the path rather than coming back as a query. From the server's raw
+    request line where it gives one, else Flask's decoded full path."""
+    raw = req.environ.get("RAW_URI") or req.environ.get("REQUEST_URI")
+    if isinstance(raw, str):
+        path = raw.split("?", 1)[0]
+        query = req.query_string.decode("latin-1")
+        target = _local_target(f"{path}?{query}" if query else path)
+        if target:
+            return target
+    return _local_target(req.full_path.rstrip("?"))
+
+
+def _parked_target(sess) -> str | None:
+    """The parked page if it is on this site and still fresh, else None."""
+    at = sess.get(_AFTER_SIGN_IN_AT)
+    if (not isinstance(at, (int, float)) or isinstance(at, bool)
+            or not 0 <= time.time() - at <= _AFTER_SIGN_IN_TTL):
+        return None
+    return _local_target(sess.get(_AFTER_SIGN_IN))
 
 
 #: What the hub says when HealthClaw cannot be reached to set up or
@@ -497,10 +524,11 @@ def create_app(config: Config | None = None,
                     return jsonify({"error": "sign in"}), 401
                 # A page, not a form post: the sign-in that follows comes
                 # back here (/home resumes it), so a tapped link is not lost.
-                target = _local_target(request.full_path.rstrip("?"))
+                target = _tapped_target(request)
                 if (request.method == "GET" and target
                         and request.path != "/home"):
                     session[_AFTER_SIGN_IN] = target
+                    session[_AFTER_SIGN_IN_AT] = time.time()
                 return redirect(url_for("auth"))
             # The engine's audit trail names the account that asked
             # (one assistant per person spec, section 6.2).
@@ -534,7 +562,8 @@ def create_app(config: Config | None = None,
         # and without it the person lands on the hub, not the request (#846).
         consent_req = session.get("consent_req")
         imessage_link = session.get("imessage_link")
-        after_sign_in = _local_target(session.get(_AFTER_SIGN_IN))
+        after_sign_in = _parked_target(session)
+        after_sign_in_at = session.get(_AFTER_SIGN_IN_AT)
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
@@ -548,6 +577,7 @@ def create_app(config: Config | None = None,
         # The page a signed-out tap asked for, resumed once by /home.
         if after_sign_in:
             session[_AFTER_SIGN_IN] = after_sign_in
+            session[_AFTER_SIGN_IN_AT] = after_sign_in_at
 
     # --- pages ---------------------------------------------------------------
 
@@ -611,6 +641,13 @@ def create_app(config: Config | None = None,
     @app.get("/home")
     @login_required
     def home():
+        # The page tapped while signed out is taken now, whatever wins
+        # below: fresh, it is followed once after the steps that come
+        # first; when one of those wins it is dropped, so it never takes
+        # over a later, unrelated visit to the hub.
+        after_sign_in = _parked_target(session)
+        session.pop(_AFTER_SIGN_IN, None)
+        session.pop(_AFTER_SIGN_IN_AT, None)
         # A consent request that was waiting on sign-in resumes here, once.
         pending_req = session.pop("consent_req", None)
         if pending_req:
@@ -618,9 +655,8 @@ def create_app(config: Config | None = None,
         # So does a texted sign-in link: bind the handle it came from.
         if session.get("imessage_link"):
             return redirect(url_for("imessage_link_claim"))
-        # Then the page tapped while signed out, once. The page itself
-        # checks the account owns what it names.
-        after_sign_in = _local_target(session.pop(_AFTER_SIGN_IN, None))
+        # Then the tapped page. The page itself checks the account owns
+        # what it names.
         if after_sign_in:
             return redirect(after_sign_in)
         acct = current_account()

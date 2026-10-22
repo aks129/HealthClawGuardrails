@@ -9,8 +9,11 @@ import { blockThirdParty, codeFromLog, uniqueEmail } from './careagents-fixtures
  * page again. auth.js still goes to /home; /home now sends it on.
  */
 
+// Its own code-request bucket (TEST-NET-2): from the shared 127.0.0.1 one
+// this sign-in spent the budget other specs count on (sec-960, #1016 QA F1).
 test.use({ viewport: { width: 375, height: 812 }, isMobile: true,
-           hasTouch: true });
+           hasTouch: true,
+           extraHTTPHeaders: { 'X-Real-IP': '198.51.100.16' } });
 
 test('signing in from a tapped link lands on that page, not the hub',
   async ({ page }) => {
