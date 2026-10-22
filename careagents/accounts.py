@@ -18,6 +18,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import func, or_, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -35,7 +36,8 @@ from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
                                Passkey, Person, RealRecordInvite, RefundDay,
-                               SendblueMessage, Surface, UsageDay, make_engine,
+                               SendblueMessage, Surface, UsageDay,
+                               VoiceUsageDay, make_engine,
                                make_session_factory, now)
 from careagents.models import REFUNDS_PER_DAY
 
@@ -1007,7 +1009,8 @@ class AccountService:
                 return False
             people = {c.person_id}
             for agent in s.query(Agent).filter_by(connection_id=conn_id).all():
-                s.query(Surface).filter_by(agent_id=agent.id).delete()
+                _drop_surfaces(s, s.query(Surface).filter_by(
+                    agent_id=agent.id).all())
                 people.add(agent.person_id)
                 s.delete(agent)
             # A grant outlives its connection as a record of what was shared
@@ -1038,9 +1041,18 @@ class AccountService:
             acct = s.get(Account, account_id)
             if acct is None:
                 return False
-            # People last: connections and agents point at them.
+            # Sign-in links texted to the account's messaging numbers carry
+            # the number itself, so they go too. The per-number STOP flag
+            # and counters stay: keyed by a hash, not the number, and a STOP
+            # must outlive the account that sent it.
+            _drop_surfaces(s, s.query(Surface).filter_by(
+                account_id=account_id).all())
+            # People last: connections and agents point at them. Every
+            # table with a foreign key to ca_accounts is listed here
+            # (tests/test_careagents_account_delete_voice.py enumerates them).
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, RefundDay, ActivityDay, signins.SignInDay, Person):
+                          UsageDay, RefundDay, ActivityDay, VoiceUsageDay,
+                          signins.SignInDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)
@@ -1327,7 +1339,8 @@ class AccountService:
                                          account_id=account_id).first()
             if a is None:
                 return False
-            s.query(Surface).filter_by(agent_id=agent_id).delete()
+            _drop_surfaces(s, s.query(Surface).filter_by(
+                agent_id=agent_id).all())
             s.delete(a)
             s.flush()
             self._release_person_agent(s, a.person_id)
@@ -1472,6 +1485,10 @@ class AccountService:
                 account_id, handle, pending_surface_id, welcome, also)
         except IntegrityError:
             return "taken"
+        except (StaleDataError, ObjectDeletedError):
+            # A disconnect or STOP deleted a row this bind was changing
+            # (#1004): nothing was bound. Text again for a fresh link.
+            return "expired"
 
     def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
                               welcome, also) -> str:
@@ -1500,8 +1517,7 @@ class AccountService:
                 x = Surface(account_id=account_id, kind="imessage",
                             agent_id=first.id if first else None)
                 s.add(x)
-            for old in bound:
-                s.delete(old)
+            _drop_surfaces(s, bound)
             # Deleted before the new row takes the handle, or the unique
             # index sees both at once.
             s.flush()
@@ -1583,7 +1599,7 @@ class AccountService:
                     st = s.get(ImessageHandleState, _handle_key(x.handle))
                     if st is not None:
                         st.link_count, st.link_window_start = 0, None
-                s.delete(x)
+            _drop_surfaces(s, rows)
             return len(rows)
 
     def _handle_state(self, s, handle: str) -> ImessageHandleState:
@@ -1597,17 +1613,16 @@ class AccountService:
 
     def imessage_stop(self, handle: str, also: str | None = None) -> bool:
         """Unbind the handle (and the raw spelling `also`, for a row bound
-        before normalization), void its unused sign-in links, and remember
+        before normalization), delete its sign-in links, and remember
         the STOP. True if this is news: not already opted out."""
         names = list({h for h in (handle, also) if h})
         with self.session() as s:
-            s.query(Surface).filter(
+            _drop_surfaces(s, s.query(Surface).filter(
                 Surface.kind == "imessage", Surface.handle.in_(names),
-                Surface.status == "active").delete(synchronize_session=False)
-            s.query(ImessageLink).filter(
-                ImessageLink.handle.in_(names),
-                ImessageLink.used_at.is_(None)).update(
-                    {"used_at": now()}, synchronize_session=False)
+                Surface.status == "active").all())
+            # Deleted, not stamped: a link row holds the number, and a
+            # missing link is refused like a used one (#1004).
+            _drop_links(s, names)
             st = self._handle_state(s, handle)
             first = st.opted_out_at is None
             st.opted_out_at = st.opted_out_at or now()
@@ -1648,6 +1663,7 @@ class AccountService:
                                          WINDOW_SECONDS, hash_token,
                                          new_link_token)
         with self.session() as s:
+            _prune_links(s)
             st = self._handle_state(s, handle)
             if (not st.link_window_start
                     or now() - st.link_window_start >= WINDOW_SECONDS):
@@ -1671,12 +1687,21 @@ class AccountService:
             return link.id if link else None
 
     def void_imessage_link(self, link_id: str) -> None:
-        """Spend a link without binding anything ("No, this isn't mine")."""
+        """Spend a link without binding anything ("No, this isn't mine").
+        Deleted, since it holds a number nobody bound (#1004); a missing
+        link is refused like a used one."""
         with self.session() as s:
-            s.execute(update(ImessageLink)
-                      .where(ImessageLink.id == link_id,
-                             ImessageLink.used_at.is_(None))
-                      .values(used_at=now()))
+            s.query(ImessageLink).filter(
+                ImessageLink.id == link_id,
+                ImessageLink.used_at.is_(None)).delete(
+                    synchronize_session=False)
+
+    def prune_imessage_links(self) -> int:
+        """Delete used and expired sign-in links whose number is not bound
+        (#1004). Idempotent; runs on every link issue, and once at app
+        start (careagents/app.py create_app) for rows made before."""
+        with self.session() as s:
+            return _prune_links(s)
 
     def imessage_link_handle(self, link_id: str) -> str | None:
         """The handle a live link would bind, for the confirm page."""
@@ -1691,6 +1716,10 @@ class AccountService:
         "connected", "confirmed", "taken" or "expired". Spent exactly
         once."""
         with self.session() as s:
+            link = s.get(ImessageLink, link_id)
+            if link is None:
+                return "expired"
+            handle = link.handle
             res = s.execute(update(ImessageLink)
                             .where(ImessageLink.id == link_id,
                                    ImessageLink.used_at.is_(None),
@@ -1698,7 +1727,6 @@ class AccountService:
                             .values(used_at=now()))
             if res.rowcount != 1:
                 return "expired"
-            handle = s.get(ImessageLink, link_id).handle
         return self.bind_imessage_handle(account_id, handle, welcome=True)
 
     def get_surface(self, surface_id: str) -> dict | None:
@@ -1845,6 +1873,39 @@ def secret_matches(provided: str, expected: str) -> bool:
 
 def _handle_key(handle: str) -> str:
     return hashlib.sha256(handle.encode()).hexdigest()
+
+
+def _drop_links(s, handles) -> None:
+    """Delete every sign-in link texted to `handles`: each row holds the
+    number itself (#1004)."""
+    handles = [h for h in handles if h]
+    if handles:
+        s.query(ImessageLink).filter(ImessageLink.handle.in_(handles)).delete(
+            synchronize_session=False)
+
+
+def _drop_surfaces(s, rows) -> None:
+    """Delete surfaces, and with an iMessage one the links texted to its
+    number. Every path that deletes or replaces an iMessage surface comes
+    here, or account delete can no longer find the number (#1004)."""
+    _drop_links(s, [x.handle for x in rows if x.kind == "imessage"])
+    for x in rows:
+        s.delete(x)
+    # Now, before the caller deletes the agent: Surface has no relationship
+    # to Agent, so the flush would not order the two, and Postgres enforces
+    # the foreign key.
+    s.flush()
+
+
+def _prune_links(s) -> int:
+    """Delete used or expired links whose number is not bound now. A bound
+    number's spent link goes when the binding does (_drop_surfaces)."""
+    bound = s.query(Surface.handle).filter(Surface.kind == "imessage",
+                                           Surface.status == "active",
+                                           Surface.handle.isnot(None))
+    return s.query(ImessageLink).filter(
+        or_(ImessageLink.used_at.isnot(None), ImessageLink.exp <= now()),
+        ImessageLink.handle.notin_(bound)).delete(synchronize_session=False)
 
 
 def new_binding_code() -> str:
