@@ -684,7 +684,7 @@ NON_CLINICAL_MUTATORS = {
 
 # GET routes that mutate persistent state. Every one breaks the read/write
 # split a reviewer relies on; they are listed so a NEW one cannot arrive
-# unnoticed. S-10 in the audit names two of these six.
+# unnoticed. S-10 in the audit names two of these.
 KNOWN_GET_MUTATORS = {
     "r6.consent_return": "spec §13.3: the consent decision lands as a browser redirect, a GET by protocol; it writes the consent audit row and an authorization code",
     "r6.curatr_evaluate": "S-10: persists curation_state + quality_score",
@@ -693,6 +693,7 @@ KNOWN_GET_MUTATORS = {
     "actions.action_status": "lazy expiry flips a stale proposal to expired",
     "agent_runs.get_agent_worker_health": "expire_overdue_runs() on a probe",
     "wearables.oauth_callback": "upserts WearableConnection (signed state)",
+    "shl.fetch_file": "SMART Health Link U flag: a GET by spec; spends one use, drops the ciphertext on the last, audits the read",
 }
 
 

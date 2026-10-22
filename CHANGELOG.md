@@ -7,6 +7,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+- Share with a pharmacy by text: PHARMACY, then YES, hands a one-use SMART
+  Health Link to a pharmacy's intake URL (RX Genie by default). Behind
+  `CARE_PHARMACY_SHARE` on CareAgents and `KTC_LINK_ENABLED` on the engine,
+  test (HTEST) records only. Runbook: docs/runbooks/pharmacy-shl-handoff.md.
+- Engine: the ktc export's `deliver: link` answer and the `shl_links` store
+  (migration `0012_shl_links`), served at `/shl/<link_id>`.
+
 ## [2.1.0] — 2026-10 — The check-in release
 
 2.1 readies the engine for SMART Health Check-in and moves CareAgents into an
