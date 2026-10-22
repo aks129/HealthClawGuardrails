@@ -226,7 +226,8 @@ def test_the_resume_keeps_the_path_percent_encoded(app, svc, monkeypatch):  # no
 
 # --- what the person is told (patient walk of #1016, G7) ---------------------
 
-RESUME_LINE = ("You were signed out when the browser closed. Enter the code "
+RESUME_LINE = ("To keep your health information safe, we check it's you "
+               "first. Enter the code "
                "we email you and we'll take you back to the page you opened.")
 STALE_NOTE = ("That link took a while, so we brought you here. Tap Chat to "
               "pick up where you left off.")

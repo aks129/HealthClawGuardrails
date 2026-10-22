@@ -17,7 +17,8 @@ test.use({ viewport: { width: 375, height: 812 }, isMobile: true,
            hasTouch: true,
            extraHTTPHeaders: { 'X-Real-IP': '198.51.100.16' } });
 
-const RESUME_LINE = 'You were signed out when the browser closed. Enter the ' +
+const RESUME_LINE = "To keep your health information safe, we check it's " +
+  'you first. Enter the ' +
   "code we email you and we'll take you back to the page you opened.";
 
 async function codeIn(page: Page, email: string): Promise<void> {
