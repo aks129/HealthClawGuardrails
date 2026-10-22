@@ -1465,10 +1465,18 @@ class AccountService:
     def bind_imessage_handle(self, account_id: str, handle: str,
                              pending_surface_id: str | None = None,
                              welcome: bool = False,
-                             also: str | None = None) -> str:
-        """Bind a handle to an account: "connected", "confirmed" or
-        "taken". "confirmed" is the sign-in link re-confirming a handle
+                             also: str | None = None,
+                             issued_at: float | None = None) -> str:
+        """Bind a handle to an account: "connected", "confirmed", "taken"
+        or "expired". "confirmed" is the sign-in link re-confirming a handle
         already bound here (#871): nothing new was connected.
+
+        A STOP always wins (#1005). `issued_at` is when the sign-in link
+        being claimed was minted: an opt-out at or after it refuses the
+        bind as "expired" and stays. The handle's state row is locked
+        first, here and in imessage_stop, so a STOP racing the bind on
+        Postgres either lands before it and is seen, or waits and then
+        unbinds what it bound.
 
         A handle is bound to at most one account. Bound elsewhere, nothing
         changes until that binding is undone (STOP, or disconnect on the
@@ -1482,18 +1490,28 @@ class AccountService:
         """
         try:
             return self._bind_imessage_handle(
-                account_id, handle, pending_surface_id, welcome, also)
+                account_id, handle, pending_surface_id, welcome, also,
+                issued_at)
         except IntegrityError:
             return "taken"
         except (StaleDataError, ObjectDeletedError):
-            # A disconnect or STOP deleted a row this bind was changing
-            # (#1004): nothing was bound. Text again for a fresh link.
+            # A delete that does not take the handle's lock (an account,
+            # agent or connection going) removed a row this bind was
+            # changing (#1004): nothing was bound. Text again for a fresh
+            # link. STOP and disconnect wait on the lock instead (#1005).
+            # Those deletes can still deadlock against a bind on Postgres;
+            # that OperationalError is not caught here and the request
+            # fails with nothing bound.
             return "expired"
 
     def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
-                              welcome, also) -> str:
+                              welcome, also, issued_at) -> str:
         names = {h for h in (handle, also) if h}
         with self.session() as s:
+            st = self._locked_handle_state(s, handle)
+            if (issued_at is not None and st.opted_out_at is not None
+                    and st.opted_out_at >= issued_at):
+                return "expired"
             bound = (s.query(Surface)
                      .filter(Surface.kind == "imessage",
                              Surface.handle.in_(names),
@@ -1528,7 +1546,6 @@ class AccountService:
             x.welcome_due = 1 if welcome else 0
             x.verified_at = x.last_inbound_at = now()
             x.reverify_notified_at = None
-            st = self._handle_state(s, handle)
             st.opted_out_at = None
             return "connected"
 
@@ -1593,12 +1610,25 @@ class AccountService:
                                            kind="imessage")
             if surface_id is not None:
                 q = q.filter_by(id=surface_id, status="active")
+            # State rows locked before the surfaces are deleted, in the
+            # order a bind takes them, so the two cannot deadlock (#1005).
+            # The rows are read again once the locks are held: a bind that
+            # held one may have replaced the row first read.
+            locked: dict = {}
             rows = q.all()
+            while True:
+                handles = sorted({x.handle for x in rows
+                                  if x.status == "active" and x.handle}
+                                 - locked.keys())
+                if not handles:
+                    break
+                for h in handles:
+                    locked[h] = self._locked_handle_state(s, h, create=False)
+                rows = q.populate_existing().all()
             for x in rows:
-                if x.status == "active" and x.handle:
-                    st = s.get(ImessageHandleState, _handle_key(x.handle))
-                    if st is not None:
-                        st.link_count, st.link_window_start = 0, None
+                st = locked.get(x.handle) if x.status == "active" else None
+                if st is not None:
+                    st.link_count, st.link_window_start = 0, None
             _drop_surfaces(s, rows)
             return len(rows)
 
@@ -1611,19 +1641,53 @@ class AccountService:
             s.add(st)
         return st
 
+    def _locked_handle_state(self, s, handle: str,
+                             create: bool = True) -> ImessageHandleState | None:
+        """The handle's state row, locked for this transaction, and read
+        fresh, so an opt-out committed while the lock was awaited is seen
+        (#1005). Postgres locks the row (FOR UPDATE). SQLite drops FOR
+        UPDATE, so a write that changes nothing takes its database write
+        lock first, and a racing writer waits for the commit before it
+        reads (as _lock_codes does).
+
+        The first-ever row is inserted in a savepoint: a racing insert of
+        the same handle waits on it, fails on the primary key, and then
+        reads and locks the row the other one committed."""
+        key = _handle_key(handle)
+        if self.engine.dialect.name == "sqlite":
+            s.execute(update(ImessageHandleState)
+                      .where(ImessageHandleState.handle_key == key)
+                      .values(handle_key=ImessageHandleState.handle_key))
+
+        def read():
+            return (s.query(ImessageHandleState).filter_by(handle_key=key)
+                    .with_for_update().populate_existing().first())
+        st = read()
+        if st is None and create:
+            try:
+                with s.begin_nested():
+                    st = ImessageHandleState(handle_key=key, fail_count=0,
+                                             link_count=0)
+                    s.add(st)
+            except IntegrityError:
+                st = read()
+        return st
+
     def imessage_stop(self, handle: str, also: str | None = None) -> bool:
         """Unbind the handle (and the raw spelling `also`, for a row bound
         before normalization), delete its sign-in links, and remember
         the STOP. True if this is news: not already opted out."""
         names = list({h for h in (handle, also) if h})
         with self.session() as s:
+            # Locked first, as a bind does (#1005): a bind already holding
+            # it commits, and the deletes below then see what it bound.
+            st = self._locked_handle_state(s, handle)
             _drop_surfaces(s, s.query(Surface).filter(
                 Surface.kind == "imessage", Surface.handle.in_(names),
                 Surface.status == "active").all())
             # Deleted, not stamped: a link row holds the number, and a
             # missing link is refused like a used one (#1004).
             _drop_links(s, names)
-            st = self._handle_state(s, handle)
             first = st.opted_out_at is None
             st.opted_out_at = st.opted_out_at or now()
             return first
@@ -1663,8 +1727,10 @@ class AccountService:
                                          WINDOW_SECONDS, hash_token,
                                          new_link_token)
         with self.session() as s:
+            # The state row first, as STOP takes it, then the links: in the
+            # other order the two deadlock (#1005).
+            st = self._locked_handle_state(s, handle)
             _prune_links(s)
-            st = self._handle_state(s, handle)
             if (not st.link_window_start
                     or now() - st.link_window_start >= WINDOW_SECONDS):
                 st.link_window_start, st.link_count = now(), 0
@@ -1719,7 +1785,7 @@ class AccountService:
             link = s.get(ImessageLink, link_id)
             if link is None:
                 return "expired"
-            handle = link.handle
+            handle, issued_at = link.handle, link.created_at
             res = s.execute(update(ImessageLink)
                             .where(ImessageLink.id == link_id,
                                    ImessageLink.used_at.is_(None),
@@ -1727,7 +1793,8 @@ class AccountService:
                             .values(used_at=now()))
             if res.rowcount != 1:
                 return "expired"
-        return self.bind_imessage_handle(account_id, handle, welcome=True)
+        return self.bind_imessage_handle(account_id, handle, welcome=True,
+                                         issued_at=issued_at)
 
     def get_surface(self, surface_id: str) -> dict | None:
         """An active surface by id, with its account, or None."""
