@@ -2251,7 +2251,7 @@ class FakeClient:
     def checkin_export(self, tenant, resource_types):
         return b'{"resourceType": "Bundle", "type": "collection", "entry": []}'
 
-    def seed(self, tenant):
+    def seed(self, tenant, bundle=None):
         return 7
 
     def search(self, tenant, resource_type, params=None):
