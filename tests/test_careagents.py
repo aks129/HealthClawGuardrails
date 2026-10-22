@@ -2251,6 +2251,14 @@ class FakeClient:
     def checkin_export(self, tenant, resource_types):
         return b'{"resourceType": "Bundle", "type": "collection", "entry": []}'
 
+    def mint_ktc_token(self, tenant, resource_types):
+        return f"ktc-{tenant}-{','.join(sorted(set(resource_types)))}"
+
+    def ktc_share_link(self, tenant, resource_types):
+        # Pinned against the engine in tests/test_shl_links.py and the
+        # client in tests/test_careagents_pharmacy_share.py.
+        return {"shlink": "shlink:/fake", "exp": 0}
+
     def seed(self, tenant):
         return 7
 

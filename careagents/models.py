@@ -279,6 +279,32 @@ class SendblueMessage(Base):
     outcome = Column(String(16), nullable=True)
 
 
+class PharmacyShare(Base):
+    """One offer to share records with a pharmacy, by text, and the
+    person's answer: the consent record (careagents/pharmacy_share.py).
+
+    Pointers, times and fixed codes only. No record content, no link (the
+    link carries its key), no phone number. The offer is answered once:
+    `answered_at` is set by a conditional update, so a second YES does
+    nothing. `surface_id` is a plain pointer, as in SendblueMessage.
+    """
+    __tablename__ = "ca_pharmacy_shares"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("phs"))
+    account_id = Column(String(32), nullable=False, index=True)
+    agent_id = Column(String(32), nullable=False)
+    connection_id = Column(String(32), nullable=True)
+    surface_id = Column(String(32), nullable=False, index=True)
+    pharmacy_host = Column(String(255), nullable=False)
+    purpose = Column(String(64), nullable=False)
+    asked_at = Column(Float, default=now)
+    expires_at = Column(Float, nullable=False)
+    answered_at = Column(Float, nullable=True)
+    decision = Column(String(8), nullable=True)        # yes | no
+    # sent | not_test_data | no_records | failed | refused
+    outcome = Column(String(24), nullable=True)
+    finished_at = Column(Float, nullable=True)
+
+
 class Grant(Base):
     """A consent the person gave a third-party agent to read one connection
     through HealthClaw's MCP server (spec §13.4). A pointer and a decision:
