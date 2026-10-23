@@ -354,8 +354,14 @@ def test_ci_gate_fails_without_waiting_out_the_clock_when_ci_fails(capsys):
 
 def test_ci_gate_fails_when_ci_never_finishes(capsys):
     clock = _Clock()
+
+    def sleep(seconds):
+        # Mutation (deadline check removed) loops forever on a fake clock;
+        # fail instead of hanging the suite.
+        assert clock.t < 10_000, "ci_gate ignored its deadline"
+        clock.sleep(seconds)
     code = release.ci_gate(SHA, 2400, 30, lambda: (RUN_LIVE, _jobs(lint=("in_progress", None))),
-                           clock=clock, sleep=clock.sleep)
+                           clock=clock, sleep=sleep)
     assert code == 1
     assert 2400 <= clock.t < 2400 + 30
     assert "did not finish within 2400s" in capsys.readouterr().err
