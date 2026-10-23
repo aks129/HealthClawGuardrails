@@ -11,6 +11,42 @@ import pytest
 # rehearsal (docs/runbooks/resource-identity-migration.md) points the suite at
 # a migrated Postgres copy. sqlite:///:memory: is the local/unconfigured default.
 os.environ['TESTING'] = '1'
+
+
+def _own_postgres_per_xdist_worker():
+    """Under pytest-xdist, give each worker its own Postgres database.
+
+    Every test creates and drops the whole schema, so two workers on one
+    database drop each other's tables mid-test. Worker gw1 gets `test_gw1`,
+    created on first use; SQLite (:memory:) is already per-process.
+    """
+    worker = os.environ.get('PYTEST_XDIST_WORKER')
+    if not worker:
+        return
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+    created = set()
+    for var in ('SQLALCHEMY_DATABASE_URI', 'MIGRATION_TEST_DATABASE_URL',
+                'CARE_TEST_DATABASE_URL'):
+        raw = os.environ.get(var, '')
+        if not raw.startswith('postgresql'):
+            continue
+        url = make_url(raw)
+        mine = url.set(database=f'{url.database}_{worker}')
+        if mine.database not in created:
+            admin = create_engine(url, isolation_level='AUTOCOMMIT')
+            with admin.connect() as conn:
+                exists = conn.execute(
+                    text('SELECT 1 FROM pg_database WHERE datname = :d'),
+                    {'d': mine.database}).scalar()
+                if not exists:
+                    conn.execute(text(f'CREATE DATABASE "{mine.database}"'))
+            admin.dispose()
+            created.add(mine.database)
+        os.environ[var] = mine.render_as_string(hide_password=False)
+
+
+_own_postgres_per_xdist_worker()
 os.environ.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///:memory:')
 os.environ['STEP_UP_SECRET'] = 'test-secret-for-hmac-validation'
 # Command-center tests assume desktop-demo is publicly readable (mirrors
