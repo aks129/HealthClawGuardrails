@@ -45,7 +45,7 @@ def test_a_run_queued_before_the_pause_answers_paused_without_a_model(
 
     RunWorker(cfg, fake, svc, "pause-worker").run_once()
 
-    assert _texts(fake) == [beta.PAUSED_TEXT]
+    assert _texts(fake) == [beta.with_911(beta.PAUSED_TEXT)]
     assert next(iter(fake.runs.values()))["status"] == "completed"
 
 

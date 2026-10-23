@@ -119,6 +119,11 @@ def _parked_target(sess) -> str | None:
 
 #: What the hub says when HealthClaw cannot be reached to set up or
 #: refresh records: a sentence and what to do, never "service unavailable".
+#: The burst limit's sentence. chat.js shows its own copy (PACE_TEXT) for
+#: a 429 that carries no message; this one is sent only when crisis wording
+#: needs the emergency line ahead of it. Pinned equal by a test.
+PACE_TEXT = "You've hit the pace limit for now \u2014 give it a few minutes."
+
 RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
                      "Please try again in a minute.")
 #: What a link session is told when it reaches for more than the sample.
@@ -2479,8 +2484,10 @@ def create_app(config: Config | None = None,
         if kind == "agent.text":
             return {"type": "text", "text": payload.get("text") or ""}
         if kind == "agent.error":
-            return {"type": "error",
-                    "text": payload.get("text") or GENERIC_FAILURE_TEXT}
+            # The worker's failure text already carries the 911 line; one
+            # the engine wrote, or none, gets it here.
+            return {"type": "error", "text": beta.with_911(
+                payload.get("text") or GENERIC_FAILURE_TEXT)}
         return None
 
     def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
@@ -2534,17 +2541,48 @@ def create_app(config: Config | None = None,
         WORKERS_NOT_READY: "run_workers_unavailable",
     }
 
-    def _refuse_turn_without_workers(state: str):
+    def _refuse_turn_without_workers(state: str, text: str = ""):
         """The 503 body for a chat turn no worker can be promised to run.
 
         The patient-facing sentence is the same in every failure state,
         because it is true in all of them. Only the machine-readable code
-        differs.
+        differs. It carries the 911 line (_with_emergency), and chat.js
+        shows it instead of retrying.
         """
-        return jsonify({
-            "error": _REFUSAL_CODES.get(state, "run_workers_unavailable"),
+        return _chat_unavailable(
+            _REFUSAL_CODES.get(state, "run_workers_unavailable"), text)
+
+    def _chat_unavailable(code: str, text: str):
+        """A 503 for a chat turn that could not be taken: the store, the
+        run queue or the workers. One sentence for all of them."""
+        return jsonify(_with_emergency({
+            "error": code,
             "message": "Chat is temporarily unavailable. Try again soon.",
-        }), 503
+        }, text)), 503
+
+    def _with_emergency(body: dict, text: str) -> dict:
+        """`body` with its sentence carrying the 911 line (beta.with_911):
+        led by it, and marked `emergency`, when `text` reads as a crisis;
+        followed by it otherwise. The sentence defaults to the pace
+        sentence chat.js shows for a 429 that carries none."""
+        sentence = body.get("message") or PACE_TEXT
+        said = beta.with_911(sentence, text)
+        if said.startswith(beta.EMERGENCY_LINE):
+            return {**body, "message": said, "emergency": True}
+        return {**body, "message": said}
+
+    def _run_said_anything(tenant: str, run_id: str,
+                           account_id: str | None) -> bool:
+        """Whether a run left the person any text or failure sentence, read
+        from its first event, so a resumed stream does not say it twice.
+        A read that fails counts as nothing said."""
+        try:
+            with acting_for(account_id):
+                page = hc.agent_run_events(tenant, run_id, after=0, limit=500)
+        except HealthClawError:
+            return False
+        return any(e.get("type") in ("agent.text", "agent.error")
+                   for e in page.get("events") or [])
 
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
                     account_id: str | None = None):
@@ -2595,7 +2633,8 @@ def create_app(config: Config | None = None,
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
-                    "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
+                    "type": "error",
+                    "text": beta.with_911(GENERIC_FAILURE_TEXT)}) + "\n\n"
                 return
             misses = 0
             events = page.get("events") or []
@@ -2611,6 +2650,14 @@ def create_app(config: Config | None = None,
             if len(events) >= 100:
                 continue
             status = page.get("status")
+            if status == "failed" and not _run_said_anything(
+                    tenant, run_id, account_id):
+                # A run the engine failed itself (swept past its deadline
+                # before a worker claimed it) has no answer at all: without
+                # this the page showed nothing. Generic, with the 911 line.
+                yield "data: " + json.dumps({
+                    "type": "error",
+                    "text": beta.with_911(GENERIC_FAILURE_TEXT)}) + "\n\n"
             if status in ("completed", "failed", "cancelled",
                           "waiting_for_human"):
                 done = {"type": "done", "status": status,
@@ -2648,10 +2695,11 @@ def create_app(config: Config | None = None,
         if workers != WORKERS_READY:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.ENGINE_UNAVAILABLE)
-            return _refuse_turn_without_workers(workers)
+            return _refuse_turn_without_workers(workers, text)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
-            return jsonify({"error": "rate_limited"}), 429
+            return jsonify(_with_emergency({"error": "rate_limited"},
+                                           text)), 429
         # A turn the worker will refuse (paused, or terms not accepted; beta
         # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
         # a model, so the day's allowance does not stop it here.
@@ -2671,7 +2719,8 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.daily_limit_text(),
+                    # Always the 911 line; first for crisis wording.
+                    "message": beta.with_911(beta.daily_limit_text(), text),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -2688,14 +2737,14 @@ def create_app(config: Config | None = None,
         if created is None or not user_message_id:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.ENGINE_UNAVAILABLE)
-            return jsonify({"error": "message store unavailable"}), 503
+            return _chat_unavailable("message store unavailable", text)
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
         except HealthClawError as exc:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.cause_of(exc))
-            return jsonify({"error": "run queue unavailable"}), 503
+            return _chat_unavailable("run queue unavailable", text)
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(
@@ -3738,9 +3787,12 @@ def create_app(config: Config | None = None,
             # assistant switched to real records mid-run, by kind or by a
             # move to a new tenant (where the run lookup would fail and the
             # relay retry forever), gets the pointer and nothing of the run.
+            # A refusal: it carries the 911 line (the message is not at
+            # hand here, so the line follows).
             return jsonify({"run_id": run_id,
-                            "reply": sendblue_surface.real_records_text(
-                                cfg.origin)})
+                            "reply": beta.with_911(
+                                sendblue_surface.real_records_text(
+                                    cfg.origin))})
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
             if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):
