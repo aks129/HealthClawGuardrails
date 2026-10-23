@@ -729,6 +729,30 @@ test.describe('check-in wallet', () => {
         .toBe('declined');
     });
 
+  // QA #1030 round 2: only Space or Enter on the option, or a pointer, is a
+  // choice. Moving focus onto it, or any other key there, is not: Send
+  // stays blocked and nothing is sent.
+  test('answered but never chose Share: Tab and other keys are not a choice',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, PHQ2);
+      const form = phq2(wallet);
+      await form.locator('fieldset').nth(0).getByLabel('Several days').check();
+      await form.locator('fieldset').nth(1).getByLabel('Not at all').check();
+      // Tab from the last answer lands on the Don't share that is on.
+      await form.locator('fieldset').nth(1).getByLabel('Nearly every day').focus();
+      await wallet.keyboard.press('Tab');
+      await expect(form.locator('.checkin-choice input[value=decline]')).toBeFocused();
+      for (const key of ['Shift', 'a', 'Escape', 'Home', 'End', 'Tab']) {
+        await form.locator('.checkin-choice input[value=decline]').focus();
+        await wallet.keyboard.press(key);
+      }
+      await wallet.locator('#wallet-send').focus();
+      await wallet.keyboard.press('Enter');
+      await expect(wallet.locator('#wallet-review-err')).toContainText("but chose Don't share");
+      expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
+    });
+
   test('the share choice is its own labelled control, apart from the answers',
     async ({ page }) => {
       await serveRelay(page);
