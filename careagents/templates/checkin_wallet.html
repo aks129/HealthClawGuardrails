@@ -20,8 +20,30 @@
   .checkin-item-title { font-weight: 700; }
   .checkin-item-what { color: var(--ink-soft); font-size: 15px; margin: 2px 0 6px;
     list-style: none; padding: 0; overflow-wrap: anywhere; }
-  .checkin-choice { display: flex; gap: 20px; }
-  .checkin-choice label { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+  /* The share choice: its own band, a label, and a two-part toggle, so it
+     does not read as one more question above it. */
+  .checkin-choice { border-top: 1px solid var(--hairline); margin-top: 10px; padding-top: 10px; }
+  .checkin-choice-label { display: block; font-size: 14px; font-weight: 600;
+    color: var(--ink-soft); margin: 0 0 6px; }
+  .checkin-seg { display: flex; border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm); overflow: hidden; }
+  .checkin-seg label { flex: 1; display: flex; align-items: center; justify-content: center;
+    gap: 6px; min-height: 44px; font-weight: 600; background: var(--surface-2); }
+  .checkin-seg label + label { border-left: 1px solid var(--hairline); }
+  .checkin-seg label:has(input:checked) { background: var(--surface);
+    box-shadow: inset 0 -3px 0 var(--ink); }
+  /* A heading of the website's own: its label inline, then its title in
+     ordinary weight. */
+  .checkin-website-title { font-weight: 400; overflow-wrap: anywhere; }
+  .checkin-website-label { font-weight: 700; color: var(--ink-soft); }
+  .checkin-website-says { font-size: 14px; font-weight: 600; color: var(--ink-soft);
+    margin: 6px 0 2px; }
+  .checkin-from-website { border-left: 3px solid var(--hairline); padding-left: 10px;
+    font-style: italic; }
+  .checkin-question { border: 0; padding: 0; margin: 0 0 10px; min-width: 0; }
+  .checkin-question legend { font-weight: 600; padding: 0; overflow-wrap: anywhere; }
+  .checkin-question label { display: flex; align-items: center; gap: 6px; min-height: 44px;
+    overflow-wrap: anywhere; }
 </style>
 {% endblock %}
 {% block content %}
@@ -105,6 +127,9 @@
       <p class="setup-sub">Choose what to share. Nothing is shared unless you
         choose it.</p>
       <ul class="checkin-items" id="wallet-items"></ul>
+      {# A problem with the choices is said here, beside the button the
+         person just tapped, not at the top of the card (#1030 QA). #}
+      <div id="wallet-review-err" class="form-error" role="alert" tabindex="-1" hidden></div>
       <button class="btn-primary btn-block" id="wallet-send">Send my choices</button>
       <button class="btn-secondary btn-block" id="wallet-decline-all">
         Don't share anything</button>

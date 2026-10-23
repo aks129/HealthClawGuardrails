@@ -167,7 +167,8 @@ test.describe('sec #960: hostile opener', () => {
       await expect(wallet.locator('#wallet-review')).toBeVisible();
       await expect(wallet.locator('#wallet-origin')).toHaveText(EVIL);
       await expect(wallet.locator('#wallet-purpose'))
-        .toHaveText(`The website says why: ${REQUEST.purpose}`);
+        // Isolated so a bidi control in it cannot reorder our words (#1030 F2).
+        .toHaveText(`The website says why: ⁨${REQUEST.purpose}⁩`);
       const radios = wallet.locator('#wallet-items input[type=radio]:checked');
       await expect(radios).toHaveCount(3);
       for (const v of await radios.evaluateAll((els) => els.map(

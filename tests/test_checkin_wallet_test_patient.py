@@ -291,16 +291,20 @@ def test_the_relay_answers_from_the_test_patient(tester):
     assert hc.exports == [conn["tenant_id"]]
 
 
-@pytest.mark.parametrize("kind,status,someone_else", [
-    ("direct", "empty", False),
-    ("direct", "revoked", False),
-    ("fasten", "pending", False),
-    ("direct", "active", True),
+@pytest.mark.parametrize("kind,status,someone_else,why", [
+    ("direct", "empty", False, "records_not_ready"),
+    ("fasten", "pending", False, "records_not_ready"),
+    ("direct", "error", False, "records_not_ready"),
+    ("direct", "revoked", False, "records_disconnected"),
+    ("direct", "active", True, "not_your_records"),
+    ("fasten", "revoked", True, "not_your_records"),
 ])
 def test_real_records_not_ready_are_named_and_never_offered(
-        tester, kind, status, someone_else):
+        tester, kind, status, someone_else, why):
     """Any non-sample connection on the account, not yet one the relay can
-    answer from, is `records_not_ready`: not an offer the route refuses."""
+    answer from, is named for what it is (still coming, disconnected, or
+    someone else's), and is never an offer the route refuses (#1027 QA F1,
+    #1030 QA wording)."""
     browser, hc, svc, acct = tester
     person = svc.add_person(acct.id, "parent") if someone_else else None
     svc.add_connection(acct.id, kind, "ca-waiting", "Records", status=status,
@@ -309,8 +313,23 @@ def test_real_records_not_ready_are_named_and_never_offered(
                        provider="CareAgents sample")
     r = browser.post(RELAY, json={"resource_types": ["Patient"]})
     assert r.status_code == 409
-    assert r.get_json() == {"error": "records_not_ready"}
+    assert r.get_json() == {"error": why}
     assert _choose(browser).get_json() == {"error": "has_records"}
+
+
+def test_ones_own_waiting_records_outrank_disconnected_and_others(tester):
+    browser, hc, svc, acct = tester
+    other = svc.add_person(acct.id, "parent")
+    svc.add_connection(acct.id, "direct", "ca-theirs", "Records",
+                       person_id=other)
+    svc.add_connection(acct.id, "direct", "ca-gone", "Upload",
+                       status="revoked")
+    r = browser.post(RELAY, json={"resource_types": ["Patient"]})
+    assert r.get_json() == {"error": "records_disconnected"}
+    svc.add_connection(acct.id, "fasten", "ca-coming", "Doctor",
+                       status="pending")
+    r = browser.post(RELAY, json={"resource_types": ["Patient"]})
+    assert r.get_json() == {"error": "records_not_ready"}
     assert hc.exports == [] and hc.seeded == []
 
 
@@ -326,7 +345,8 @@ def test_the_page_offers_the_test_patient_only_where_it_can_be_made():
     assert set(re.findall(r"^\s*(\w+):", offer, re.M)) == {
         "no_records", "sample_only"}
     words = re.search(r"const NO_RECORDS = \{(.*?)\n\};", js, re.S).group(1)
-    for code in ("records_not_ready", "has_records"):
+    for code in ("records_not_ready", "records_disconnected",
+                 "not_your_records", "has_records"):
         line = re.search(rf"^\s*{code}: \"([^\"]+)\"", words, re.M)
         assert line, code
         assert "few minutes" not in line.group(1)
