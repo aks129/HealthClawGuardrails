@@ -191,8 +191,14 @@ class AccountService:
         until another may be requested: the resend wait, or a per-address cap
         on codes or on wrong guesses. A wait is not a failure, but it is not a
         send either, and the caller must not report one it never observed
-        (#262). Every branch reads ca_email_tokens alone, so the answer is the
-        same whether or not the address has an account.
+        (#262). The returned wait turns on ca_email_tokens alone, so the
+        answer is the same whether or not the address has an account.
+
+        ca_accounts is read only to choose the email's wording: "login" for
+        an address that has an account, `purpose` (a new account) otherwise.
+        The mail goes to the inbox alone, whose owner already knows, and the
+        account's existence never reaches the HTTP answer, which stays
+        byte-identical (tests/test_careagents_walk_10_20_security.py).
         """
         email = email.strip().lower()
         if "@" not in email or len(email) > 255:
@@ -214,6 +220,8 @@ class AccountService:
              .filter(self._same_inbox(email), EmailToken.used.is_(False))
              .update({"used": True}, synchronize_session=False))
             code = f"{secrets.randbelow(CODE_MAX):08d}"
+            if s.query(Account.id).filter_by(email=email).first():
+                purpose = "login"
             # Sent to the address as typed; counted against its inbox.
             tok = EmailToken(email=email, code_hash=self._hash(code),
                              purpose=purpose, exp=now() + CODE_TTL,
@@ -301,6 +309,9 @@ class AccountService:
                 acct.last_login_method = "email_code"
                 s.flush()
                 result = _detach(acct)
+                # Said after the code, never before it: the code request's
+                # answer must not tell an account apart (10-20 walk).
+                result.new_account = made
         if error:
             raise AuthError(error)
         if made:

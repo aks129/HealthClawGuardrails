@@ -48,7 +48,10 @@ def send_code(cfg, email: str, code: str, purpose: str) -> str:
     never answered — a read timeout — is UNCONFIRMED, because the mail may
     already be in the person's inbox.
     """
-    verb = "Verify your email" if purpose == "verify" else "Your sign-in code"
+    # Named for what the code does (10-20 patient walk): "verify" is the
+    # first code for an address with no account, which makes one.
+    verb = ("Your code to make a new account" if purpose == "verify"
+            else "Your sign-in code")
     if not cfg.resend_api_key:
         logger.warning("DEV email — %s for %s: %s", verb, email, code)
         return SENT

@@ -33,9 +33,9 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from markupsafe import Markup, escape
 from sqlalchemy.exc import SQLAlchemyError
 
-from careagents.accounts import (AccountService, AuthError, MailError,
-                                 MailUnconfirmed, new_binding_code,
-                                 secret_matches)
+from careagents.accounts import (RESEND_COOLDOWN, AccountService, AuthError,
+                                 MailError, MailUnconfirmed,
+                                 new_binding_code, secret_matches)
 from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
 from careagents import security_headers, sendblue_surface
@@ -358,6 +358,9 @@ def create_app(config: Config | None = None,
 
     app.jinja_env.filters["contact_links"] = contact_links
     app.jinja_env.filters["chat_links"] = chat_links
+    # The resend wait, for the delete dialog's code step to count down as
+    # /auth does (10-20 patient walk).
+    app.jinja_env.globals["resend_wait"] = RESEND_COOLDOWN
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),
@@ -890,9 +893,11 @@ def create_app(config: Config | None = None,
             # Not an enumeration oracle: this branch turns only on the codes
             # already requested for this address, and their wrong guesses —
             # states requesters created — never on whether an account exists.
-            # start_email_code touches ca_email_tokens alone; accounts are
-            # created at verify. The genuine-send and wait responses are
-            # byte-identical for an address with an account and one without.
+            # start_email_code reads ca_accounts only to choose the email's
+            # wording; the account's existence never reaches this answer, and
+            # accounts are created at verify. The genuine-send and wait
+            # responses are byte-identical for an address with an account and
+            # one without (tests/test_careagents_walk_10_20_security.py).
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
@@ -910,7 +915,11 @@ def create_app(config: Config | None = None,
         # Nothing connected yet: the records come first, and the passkey
         # waits (it is in the chat's menu), so auth.js skips its prompt.
         return jsonify({"ok": True, "has_passkey": svc.has_passkey(acct.id),
-                        "first_run": not svc.has_connections(acct.id)})
+                        "first_run": not svc.has_connections(acct.id),
+                        # After the code only, so this says nothing to
+                        # someone who doesn't hold the inbox (10-20 walk).
+                        "new_account": bool(getattr(acct, "new_account",
+                                                    False))})
 
     # --- WebAuthn (biometric) ------------------------------------------------
 

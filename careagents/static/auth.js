@@ -136,6 +136,15 @@
       $("resend-code").hidden = false;
       return;
     }
+    // Said only now, after the code: before it, the answer is the same
+    // with or without an account (10-20 patient walk). The hub shows it
+    // (home.js showCarriedNotice); blocked storage costs only the line.
+    if (res.d.new_account === true) {
+      try {
+        sessionStorage.setItem("careagents.hubNotice",
+          "No account with this email yet, so we made a new one.");
+      } catch (e) { /* the hub opens anyway */ }
+    }
     // `first_run`: nothing connected yet. The records come first; the
     // passkey waits in the chat's menu rather than standing in the way.
     if (res.d.has_passkey || res.d.first_run === true ||
