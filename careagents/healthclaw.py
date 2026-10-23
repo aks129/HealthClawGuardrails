@@ -246,10 +246,15 @@ class HealthClawClient:
         self._tokens[tenant] = (token, time.time())
         return token
 
-    def seed(self, tenant: str) -> int:
+    def seed(self, tenant: str, bundle: dict | None = None) -> int:
+        """Seed the built-in sample, or `bundle` when given (the check-in
+        test patient, careagents/checkin_wallet.py)."""
+        body = {"tenant_id": tenant}
+        if bundle is not None:
+            body["bundle"] = bundle
         r = self._send(
             "POST", f"{self.fhir}/internal/seed",
-            json={"tenant_id": tenant},
+            json=body,
             headers={"X-Tenant-Id": tenant,
                      "X-Internal-Secret": self.mint_secret},
             what="seed")

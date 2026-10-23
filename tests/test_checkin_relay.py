@@ -170,8 +170,9 @@ def test_the_one_connection_answers_with_the_sorted_type_set(relay):
 
 
 def test_no_records_but_the_sample_is_a_fixed_refusal(monkeypatch):
-    """No records at all, and only the made-up sample, are told apart: the
-    wallet says which (#973 patient test, finding 4)."""
+    """No records at all, only the made-up sample, and real records not
+    ready yet are told apart: the wallet says which (#973 patient test,
+    finding 4; #1027 QA F1 split the last one out of `no_records`)."""
     hc = _FakeClient()
     app, svc = _careagents(hc)
     try:
@@ -179,13 +180,15 @@ def test_no_records_but_the_sample_is_a_fixed_refusal(monkeypatch):
         browser = app.test_client()
         _sign_in(browser, acct)
         assert _post(browser).get_json() == {"error": "no_records"}
-        svc.add_connection(acct.id, "direct", "ca-relay-wait", "Upload",
-                           status="pending")
-        assert _post(browser).get_json() == {"error": "no_records"}
         svc.add_connection(acct.id, "sample", "ca-relay-sample", "Sample")
         r = _post(browser)
         assert r.status_code == 409
         assert r.get_json() == {"error": "sample_only"}
+        svc.add_connection(acct.id, "direct", "ca-relay-wait", "Upload",
+                           status="pending")
+        r = _post(browser)
+        assert r.status_code == 409
+        assert r.get_json() == {"error": "records_not_ready"}
         assert hc.calls == []
     finally:
         svc.engine.dispose()

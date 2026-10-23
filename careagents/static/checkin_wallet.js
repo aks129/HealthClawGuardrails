@@ -25,8 +25,9 @@ const {
 
 const $ = (id) => document.getElementById(id);
 const card = $("wallet");
+// wallet-test-patient is on the page only when its flag is on.
 const SECTIONS = ["wallet-signin", "wallet-waiting", "wallet-direct",
-  "wallet-review", "wallet-done"];
+  "wallet-test-patient", "wallet-review", "wallet-done"].filter((s) => $(s));
 const show = (id) => SECTIONS.forEach((s) => ($(s).hidden = s !== id));
 const err = $("wallet-err");
 // How long "Waiting for the request" waits before it offers a next step.
@@ -249,7 +250,45 @@ const NO_RECORDS = {
   no_patient: "We couldn't tell whose records these are, so we didn't send any.",
   too_large: "Your records are too large to send this way.",
   paused: "Sharing records is paused on your account.",
+  busy: "Records are already being added to your account. Start check-in again in a moment.",
+  // A real-record connection the relay cannot answer from yet (#1027 QA F1).
+  records_not_ready: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
+  has_records: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
 };
+
+// --- the connectathon test patient ----------------------------------------
+
+// The reasons that mean "nothing real to share", where the page may offer
+// the test patient instead (card.dataset.testPatient, set by the server
+// only when CARE_CHECKIN_TEST_PATIENT is on).
+// Only where the server will make one: no real-record connection at all
+// (`no_records`) or only the sample. Each says only what is missing: the
+// longer NO_RECORDS text tells the person to go and connect records,
+// which this screen offers instead.
+const OFFER_TEST = {
+  no_records: "There are no records on your account yet.",
+  sample_only: "The sample records can't be used for check-in. You can use a made-up connectathon test patient instead.",
+};
+
+/* Resolves to true when the person chose the test patient. */
+function offerTestPatient(why) {
+  $("wallet-test-patient-why").textContent = why;
+  show("wallet-test-patient");
+  return new Promise((resolve) => {
+    $("wallet-test-patient-use").onclick = () => resolve(true);
+    $("wallet-test-patient-no").onclick = () => resolve(false);
+  });
+}
+
+/* Make the account's test patient (once; the server makes nothing the
+   second time), then read its records. Sends `{}`: nothing about the
+   request or the website. Throws the server's fixed code. */
+async function useTestPatient(request, unsupportedItems) {
+  done("Getting the test patient", "This takes a few seconds.");
+  const res = await post(card.dataset.testPatient, {});
+  if (!res.ok) throw new Error(typeof res.d.error === "string" ? res.d.error : "records");
+  return loadRecords(request, unsupportedItems);
+}
 
 // --- the hand-off -----------------------------------------------------------
 
@@ -269,8 +308,22 @@ function start() {
     async onRequest({ request, origin, unsupportedItems }) {
       clearTimeout(late);
       let records;
+      let code = "";
       try { records = await loadRecords(request, unsupportedItems); } catch (e) {
-        const why = Object.hasOwn(NO_RECORDS, e.message) ? NO_RECORDS[e.message]
+        code = e.message;
+      }
+      if (Object.hasOwn(OFFER_TEST, code) && card.dataset.testPatient) {
+        if (!(await offerTestPatient(OFFER_TEST[code]))) {
+          await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
+          return { response: declineAll(request) };
+        }
+        code = "";
+        try { records = await useTestPatient(request, unsupportedItems); } catch (e) {
+          code = e.message;
+        }
+      }
+      if (code) {
+        const why = Object.hasOwn(NO_RECORDS, code) ? NO_RECORDS[code]
           : "We couldn't read your records just now. Try check-in again in a few minutes.";
         await untilOk("Couldn't answer", `${why} Tap OK to tell the website.`);
         return { error: CANT_SHARE };

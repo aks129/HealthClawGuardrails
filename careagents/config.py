@@ -224,10 +224,17 @@ class Config:
             "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
         # SMART Health Check-in web wallet (careagents/checkin_wallet.py).
         # Off unless asked for: off, its routes are never registered and
-        # answer 404. While on, it answers only from the synthetic test
-        # patient, never from an account's records (FHI-54).
+        # answer 404. While on, it answers from the account holder's own one
+        # non-sample connection (#973).
         self.checkin_wallet_enabled = e.get(
             "CARE_CHECKIN_WALLET", "").lower() in ("1", "true", "yes", "on")
+        # The connectathon test patient on the wallet page: an account with
+        # no real records can choose one tenant seeded from the synthetic
+        # US Core fixture, so a visiting tester has something to share.
+        # Off unless asked for; needs CARE_CHECKIN_WALLET too.
+        self.checkin_test_patient_enabled = e.get(
+            "CARE_CHECKIN_TEST_PATIENT", "").lower() in (
+                "1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on
