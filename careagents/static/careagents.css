@@ -1124,6 +1124,26 @@ textarea:focus-visible {
 .testers-table tr.is-stuck td { background: var(--warn-bg); }
 .testers-stuck { color: var(--warn-ink); font-weight: 700; }
 .testers-method { color: var(--ink-soft); font-family: var(--sans); }
+.testers-you { font-size: 13px; font-weight: 700; color: var(--accent-ink); }
+/* The Morning block: one line of counts, then one card per stuck tester. */
+.morning-loop { margin: 0 0 4px; font-size: 17px; line-height: 1.6; }
+.morning-step { white-space: nowrap; }
+.morning-loop .num { font-family: var(--mono); font-weight: 700;
+  font-variant-numeric: tabular-nums; }
+.morning-arrow { color: var(--ink-soft); }
+.morning-side { margin: 0 0 4px; font-size: 15px; color: var(--ink-soft); }
+.morning-side .num { font-family: var(--mono); font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--ink); }
+.morning-h { margin: 16px 0 8px; font-size: 17px; }
+.morning-needs { list-style: none; margin: 0; padding: 0; }
+.morning-need { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: 12px; padding: 12px; margin: 0 0 8px; }
+.morning-who { display: flex; flex-direction: column; gap: 2px;
+  overflow-wrap: anywhere; }
+.morning-nudge { display: flex; gap: 8px; align-items: center;
+  margin-top: 8px; }
+.morning-nudge-text { flex: 1; font-size: 15px; }
+.morning-copy { min-height: 44px; flex: none; }
 
 /* --- the hub around outcomes (hub critique 2026-10) ---------------------- */
 /* Waiting for your OK follows Ask your assistant now, so it needs the

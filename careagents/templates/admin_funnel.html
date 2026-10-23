@@ -15,12 +15,38 @@
     <a class="pill" href="/home">Back to your hub</a>
   </div>
 
+  {# Morning: the loop in order, then who needs a nudge today. The owner's
+     own account is not counted. The nudges are fixed words chosen by fixed
+     rules (signins.needs_you); nothing here comes from a chat. #}
+  <section class="hub-section" id="funnel-morning">
+    <div class="section-head"><h2>Morning</h2></div>
+    <p class="morning-loop">{% for step in morning_loop.chain %}<span class="morning-step"><span class="num">{{ step.count }}</span> {{ step.label }}</span>{% if not loop.last %}<span class="morning-arrow" aria-hidden="true"> → </span>{% endif %}{% endfor %}</p>
+    <p class="morning-side">{% for s in morning_loop.side %}<span class="morning-step"><span class="num">{{ s.count }}</span> {{ s.label }}</span>{% if not loop.last %}<span class="morning-arrow" aria-hidden="true"> · </span>{% endif %}{% endfor %}</p>
+    <p class="card-note">Testers, not counting you. Along the arrows, each number counts only those who also reached the steps before it. Everyone starts on made-up records, so asking and acting do not need their own records. Came back: active again on a later day than the one they joined.</p>
+    <h3 class="morning-h">Needs you today</h3>
+    {% if needs_you %}
+    <ul class="morning-needs">
+      {% for n in needs_you %}
+      <li class="morning-need">
+        <div class="morning-who"><span class="testers-email">{% if n.name %}{{ n.name }} · {% endif %}{{ n.email }}</span>
+          <span class="testers-method">{{ n.stuck_at }}{% if n.days is not none %} · {{ n.days }}d since {{ n.since }}{% endif %}</span></div>
+        <div class="morning-nudge"><span class="morning-nudge-text">{{ n.nudge }}</span>
+          <button type="button" class="pill morning-copy" data-copy="{{ n.nudge }}">Copy</button></div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">Nobody is stuck today.</p>
+    {% endif %}
+  </section>
+
   <section class="hub-section" id="funnel-testers">
     <div class="section-head"><h2>Testers</h2>
       <a class="pill" href="/admin/funnel/testers.csv" download>Download CSV</a></div>
     {% if testers %}
     <p class="card-note">Newest first{% if testers|length >= testers_cap %}, the latest {{ testers_cap }}{% endif %}.
-      Highlighted: joined but never asked a question, or no chat turn or approval for 3 days or more. Joined is the first sign-in. Times are UTC.</p>
+      Highlighted: joined but never asked a question, or no chat turn or approval for 3 days or more. Joined is the first sign-in. Times are UTC.
+      Milestones: how many of the {{ milestones | length }} steps the tester has reached: {{ milestones | map("replace", "_", " ") | join(", ") }}.</p>
     <div class="funnel-scroll">
     <table class="funnel-table testers-table">
       <thead><tr><th>Email</th><th>Stuck at</th><th>Last active</th>
@@ -29,15 +55,15 @@
       <tbody>
       {% for t in testers %}
       <tr{% if t.stuck %} class="is-stuck"{% endif %}>
-        <td class="testers-email">{{ t.email }}</td>
+        <td class="testers-email">{{ t.email }}{% if t.is_owner %} <span class="testers-you">you</span>{% endif %}</td>
         <td>{{ (t.furthest or "-") | replace("_", " ") }}{% if t.idle_days is not none %}<br><span class="testers-method">{{ t.idle_days }}d since {% if t.last_active %}active{% else %}joined{% endif %}</span>{% endif %}
           {% if t.stuck %}<br><span class="testers-stuck">{{ t.stuck_reason }}</span>{% endif %}</td>
         <td class="num">{{ t.last_active or "never" }}</td>
         {# Joined is the first sign-in: an account is made only at one. #}
-        <td><span class="num-text">{{ t.joined }}</span><br><span class="testers-method">{{ t.joined_label }}</span></td>
+        <td><span class="num-text">{{ t.joined }}</span><br><span class="testers-method">{{ t.joined_label }}</span>{% if t.ref and t.ref != t.inviter %}<br><span class="testers-method">ref: {{ t.ref }}</span>{% endif %}</td>
         <td><span class="num-text">{{ t.last_sign_in or "-" }}</span>{% if t.last_method_label %}<br><span class="testers-method">{{ t.last_method_label }}</span>{% endif %}</td>
         <td class="num">{{ t.sign_ins_7d }}</td>
-        <td>{% if t.milestones %}<details class="testers-milestones"><summary>{{ t.milestones | length }} of {{ milestones | length }}</summary>{{ t.milestones | map("replace", "_", " ") | join(", ") }}</details>{% else %}0 of {{ milestones | length }}{% endif %}</td>
+        <td>{% if t.milestones %}<details class="testers-milestones"><summary title="Steps reached, of the {{ milestones | length }}. Tap to list them.">{{ t.milestones | length }} of {{ milestones | length }}</summary>{{ t.milestones | map("replace", "_", " ") | join(", ") }}</details>{% else %}0 of {{ milestones | length }}{% endif %}</td>
       </tr>
       {% endfor %}
       </tbody>
@@ -136,4 +162,5 @@
     {% endif %}
   </section>
 </main>
+<script src="{{ url_for('static', filename='admin_funnel.js') }}"></script>
 {% endblock %}

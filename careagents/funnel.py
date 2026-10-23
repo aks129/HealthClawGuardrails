@@ -573,12 +573,18 @@ def register(app, svc, cfg, full_session=lambda: True) -> None:
     @owner_only
     def admin_funnel():
         report = daily(svc.session, days=7)
+        testers = signins.testers(svc.session,
+                                  owner_emails=cfg.owner_emails)
         resp = app.make_response(render_template(
             "admin_funnel.html", report=report, milestones=MILESTONES,
             issue_kinds=ISSUE_KINDS, chat_error_causes=CHAT_ERROR_CAUSES,
             today=report["days"][0],
-            testers=signins.testers(svc.session),
-            testers_cap=signins.TESTERS_CAP))
+            testers=testers, testers_cap=signins.TESTERS_CAP,
+            morning_loop=signins.loop_counts(testers),
+            needs_you=signins.needs_you(
+                testers, signins.pending_requests(svc.session),
+                can_connect=lambda e: cfg.real_records_open_for(
+                    e, invited=svc.real_records_invited))))
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
