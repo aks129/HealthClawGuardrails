@@ -5,6 +5,7 @@ name: careagents-deploy
 # production drifted 22 commits behind main. Procedure and traps:
 # docs/runbooks/careagents-auto-deploy.md, which follows "Stage the build" and
 # "Deploy and confirm it worked" in docs/runbooks/careagents-durable-worker.md.
+# Nothing ships until CI has passed on the same commit (the CI gate step).
 #
 # Pause: disable this workflow in the Actions tab. Without the RAILWAY_TOKEN
 # environment secret it skips with a notice instead of failing.
@@ -20,8 +21,10 @@ on:
       - "uv.lock"
   workflow_dispatch:
 
+# actions: read lets the CI gate list ci.yml's runs and jobs for this commit.
 permissions:
   contents: read
+  actions: read
 
 # Never cancel a running deploy: a cancelled run can leave web and worker on
 # different uploads. GitHub keeps at most one run PENDING behind it, so the
@@ -40,7 +43,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: careagents-production
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Up to 60 minutes waiting for CI (a merge burst has queued CI for 15
+    # minutes ahead of a 33-minute postgres run), then the upload and up to
+    # 15 minutes for /healthz. A job timeout mid-upload splits web and worker,
+    # so this leaves room for all of it.
+    timeout-minutes: 90
     env:
       RAILWAY_CLI_VERSION: "5.63.1"
       # sha256 of railway-v5.63.1-x86_64-unknown-linux-musl.tar.gz, from the
@@ -62,8 +69,24 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # No later step needs git auth (stamp_build.sh runs only local git), so
+      # the checkout leaves no token in .git/config.
       - uses: actions/checkout@v7
         if: steps.gate.outputs.skip == 'false'
+        with:
+          persist-credentials: false
+
+      # main does not require a branch to be up to date before merging, so
+      # this commit can be a combination of PRs CI never tested together.
+      # Wait for ci.yml's push run on this exact sha (a manual run included)
+      # and ship only if every required job succeeded. Failed, skipped or
+      # missing, or no verdict within 60 minutes: fail here, before any
+      # railway step. The required list lives in the script (REQUIRED_CI_JOBS).
+      - name: Wait for CI to pass on this commit
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/careagents_release.py ci-gate --sha "$GITHUB_SHA" --timeout 3600
 
       # The release binary, checksum-verified, rather than `npm install -g`:
       # no install scripts, no unpinned transitive packages, and no token in
