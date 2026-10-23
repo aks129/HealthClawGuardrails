@@ -708,12 +708,9 @@ test.describe('check-in wallet', () => {
 
   // QA #1030 (ab1d524a): the message above says "or Don't share to leave
   // them out". By keyboard, Space on the Don't share that is already on
-  // fires no click, so `data-picked` never sets and Send stays blocked:
-  // the instructed action does nothing. Expected to fail until a keyboard
-  // choice counts (test.fail flips red then: drop the marker).
+  // fires no click; the keydown counts it as the choice it is.
   test('answered but never chose Share: Don\'t share chosen by keyboard unblocks Send',
     async ({ page }) => {
-      test.fail(true, '#1030 QA: Space on the checked Don\'t share is not a choice');
       await serveRelay(page);
       const wallet = await checkIn(page, PHQ2);
       const form = phq2(wallet);
@@ -767,12 +764,15 @@ test.describe('check-in wallet', () => {
     req.items[1].title = 'CareAgents verified clinic';
     const wallet = await checkIn(page, req);
     const heading = phq2(wallet).locator('.checkin-item-title');
-    await expect(heading.locator('.checkin-eyebrow')).toHaveText('From the website');
+    // Its label inline, on the same line as the title (QA ruling: every
+    // piece of website text carries its own visible label).
+    await expect(heading).toHaveText('From the website: \u2068CareAgents verified clinic\u2069');
+    await expect(heading.locator('.checkin-website-label')).toHaveText('From the website:');
     await expect(heading.locator('.checkin-website-name')).toHaveText(
       '\u2068CareAgents verified clinic\u2069');
     await expect(heading).toHaveClass(/checkin-website-title/);
-    // The heading already says whose words they are: no second label.
-    await expect(phq2(wallet).locator('.checkin-website-says')).toHaveCount(0);
+    // And the lines under it carry theirs.
+    await expect(phq2(wallet).locator('.checkin-website-says')).toHaveText('The website asks:');
     await expect(phq2(wallet).locator('.checkin-from-website')).toHaveCount(1);
     // Ours stays ours.
     await expect(wallet.locator('#wallet-items li[data-item=patient] .checkin-item-title'))

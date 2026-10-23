@@ -175,11 +175,24 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
       // website will be told that.") uses this exact element and style; the
       // purpose field is prefixed "The website says why:". Fixed behaviour:
       // the form's words carry a website attribution as purpose does.
-      const attributed = await wallet.locator('#wallet-items li[data-item=f]')
-        // Or a "From the website" heading, which then stands for the lines
-        // under it (#1030 QA copy).
-        .evaluate((li) => /website (says|asks)|from the website/i.test(li.textContent || ''));
-      expect(attributed, 'display text is shown unattributed').toBe(true);
+      // Each piece of website text carries its own label element, not just
+      // the phrase somewhere in the card: the website's own words can say
+      // "from the website" too (#1030 QA round 2). The heading's label is
+      // inline with the title; the display lines sit right under theirs.
+      const card = wallet.locator('#wallet-items li[data-item=f]');
+      await expect(card.locator('.checkin-item-title > .checkin-website-label'))
+        .toHaveText('From the website:');
+      const label = await card.locator('.checkin-from-website').evaluate((ul) => {
+        const prev = ul.previousElementSibling;
+        return prev && prev.classList.contains('checkin-website-says')
+          ? prev.textContent : null;
+      });
+      expect(label, 'display text is shown unattributed').toBe('The website asks:');
+      // A label made of the website's own words does not count.
+      for (const el of await card.locator('.checkin-website-label, .checkin-website-says').all()) {
+        expect(await el.evaluate((n) => n.closest('.checkin-from-website, .checkin-website-name')))
+          .toBeNull();
+      }
     });
 
   // ------------------------------------------------------------ PASS evidence

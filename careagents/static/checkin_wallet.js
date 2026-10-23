@@ -217,19 +217,20 @@ function review(request, origin, matches) {
     li.dataset.item = m.item.id;
     const title = document.createElement("div");
     title.className = "checkin-item-title";
-    // A heading of the website's own is said to be its, set apart, as its
-    // other words are (#1030 security F3).
+    // A heading of the website's own carries its own label, inline, so its
+    // words never read as ours (#1030 security F3; QA ruling: every piece
+    // of website text is labelled where it stands).
     const theirs = websiteHeading(m);
     if (theirs === null) title.textContent = itemHeading(m);
     else {
       title.classList.add("checkin-website-title");
-      const eyebrow = document.createElement("span");
-      eyebrow.className = "checkin-eyebrow";
-      eyebrow.textContent = "From the website";
+      const label = document.createElement("span");
+      label.className = "checkin-website-label";
+      label.textContent = "From the website: ";
       const name = document.createElement("span");
       name.className = "checkin-website-name";
       name.textContent = isolate(theirs, 80);
-      title.append(eyebrow, name);
+      title.append(label, name);
     }
     const what = document.createElement("ul");
     what.className = "checkin-item-what";
@@ -239,18 +240,17 @@ function review(request, origin, matches) {
       what.append(row);
     });
     if (m.form) {
-      // The form's display lines are the website's words, not ours: said
-      // so, and set apart, as the purpose is (#1030 security F3).
-      // A heading of the website's own already says whose they are.
+      // Everything under the heading is the website's words too: its intro
+      // lines and its questions. One label says so, always, before them,
+      // and they are set apart, as the purpose is (#1030 security F3).
+      const says = document.createElement("p");
+      says.className = "checkin-website-says";
+      says.textContent = "The website asks:";
+      li.append(title, says);
       if (m.form.displays.length) {
         what.classList.add("checkin-from-website");
-        if (theirs === null) {
-          const says = document.createElement("p");
-          says.className = "checkin-website-says";
-          says.textContent = "The website asks:";
-          li.append(title, says, what);
-        } else li.append(title, what);
-      } else li.append(title);
+        li.append(what);
+      }
       li.append(formQuestions(m.form, i));
     } else li.append(title, what);
     if (!m.unsupported && (m.entries.length || m.form)) {
@@ -274,7 +274,14 @@ function review(request, origin, matches) {
         input.name = `choice-${i}`;
         input.value = value;
         input.checked = value === "decline";
-        input.addEventListener("click", () => { group.dataset.picked = "1"; });
+        // A choice by pointer, or by keyboard on the option already on:
+        // Space or Enter there fires no click, and the message asks for
+        // exactly that (#1030 QA). Arrow keys move the choice and click.
+        const pick = () => { group.dataset.picked = "1"; };
+        input.addEventListener("click", pick);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === " " || e.key === "Spacebar" || e.key === "Enter") pick();
+        });
         lab.append(input, ` ${label}`);
         seg.append(lab);
       });

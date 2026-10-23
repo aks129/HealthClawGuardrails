@@ -32,12 +32,10 @@
   .checkin-seg label + label { border-left: 1px solid var(--hairline); }
   .checkin-seg label:has(input:checked) { background: var(--surface);
     box-shadow: inset 0 -3px 0 var(--ink); }
-  /* A heading of the website's own: a small "From the website" eyebrow
-     over its title in ordinary weight. */
+  /* A heading of the website's own: its label inline, then its title in
+     ordinary weight. */
   .checkin-website-title { font-weight: 400; overflow-wrap: anywhere; }
-  .checkin-eyebrow { display: block; font-size: 12px; font-weight: 700;
-    letter-spacing: .04em; text-transform: uppercase; color: var(--ink-soft); }
-  .checkin-website-name { display: block; font-size: 17px; }
+  .checkin-website-label { font-weight: 700; color: var(--ink-soft); }
   .checkin-website-says { font-size: 14px; font-weight: 600; color: var(--ink-soft);
     margin: 6px 0 2px; }
   .checkin-from-website { border-left: 3px solid var(--hairline); padding-left: 10px;
