@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="How Verifier and EHR teams can test the CareAgents web wallet for the SMART Health Check-in connectathon on Nov 3, 2026.">
+<title>CareAgents Check-in Wallet</title>
+<style>
+/* Layout: one reading column, a status strip up top, scenario checklist and test matrix as the working core */
+:root{color-scheme:light;
+  --bg:#f6f8f7; --surface:#ffffff; --fg:#17231f; --muted:#56655f; --line:#d5dfdb;
+  --accent:#0f6e5c; --accent-soft:#e1f1ec; --warn:#8a5a00; --warn-soft:#fbf1dc;
+  --display:"Fraunces",Georgia,serif; --body:"Source Sans 3",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1714; --surface:#16211d; --fg:#e4ece8; --muted:#9db0a8; --line:#2b3a34;
+  --accent:#5cc7ad; --accent-soft:#173a31; --warn:#f0c46a; --warn-soft:#3a2e14; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1714; --surface:#16211d; --fg:#e4ece8; --muted:#9db0a8; --line:#2b3a34;
+  --accent:#5cc7ad; --accent-soft:#173a31; --warn:#f0c46a; --warn-soft:#3a2e14; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--body)}
+.wrap{max-width:46rem;margin:0 auto;padding-block:2.5rem 4rem;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:2.25rem}
+h1,h2{font-family:var(--display);font-weight:600;line-height:1.2;text-wrap:balance;margin:0}
+h1{font-size:clamp(1.9rem,5vw,2.6rem)}
+h2{font-size:1.35rem}
+p{margin:0}
+.eyebrow{font:600 .78rem/1 var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lede{color:var(--muted);font-size:1.08rem}
+section{display:grid;gap:.9rem}
+.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.75rem}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.85rem 1rem;display:grid;gap:.25rem;min-width:0}
+.stat b{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.pill{display:inline-block;font-size:.8rem;font-weight:600;padding:.1rem .55rem;border-radius:999px}
+.pill.go{background:var(--accent-soft);color:var(--accent)}
+.pill.wait{background:var(--warn-soft);color:var(--warn)}
+code,.mono{font-family:var(--mono);font-size:.88em;word-break:break-all}
+ol,ul{margin:0;padding-left:1.25rem;display:grid;gap:.45rem}
+.table{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:34rem;font-size:.95rem}
+th,td{text-align:left;padding:.6rem .8rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+.note{border-left:3px solid var(--accent);padding:.2rem 0 .2rem 1rem;color:var(--muted)}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+footer{color:var(--muted);font-size:.9rem;border-top:1px solid var(--line);padding-top:1rem}
+</style>
+<style>html,body{margin:0}</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:grid;gap:.75rem">
+    <span class="eyebrow">Kill the Clipboard · SMART Health Check-in connectathon · Nov 3, 2026</span>
+    <h1>CareAgents Check-in Wallet</h1>
+    <p class="lede">A web wallet from FHIR IQ that answers a clinic's SMART Health Check-in request from a patient's records. This page is for Verifier and EHR teams who want to test against it, before and during the event.</p>
+  </header>
+
+  <section aria-labelledby="s-status">
+    <h2 id="s-status">Status</h2>
+    <div class="status">
+      <div class="stat"><b>Spec</b><span>SMART Health Check-in 1.0</span></div>
+      <div class="stat"><b>Role</b><span>Web wallet</span></div>
+      <div class="stat"><b>Self-serve testing</b><span><span class="pill wait">Target Oct 27</span></span></div>
+      <div class="stat"><b>Data</b><span><span class="pill go">Synthetic only</span></span></div>
+    </div>
+    <p class="note">The wallet is built and has passed a round trip with the SMART Testing EHR. Its public address goes live with our next release; we will mark it "up" in the connectathon registry the same day and post in <span class="mono">#kill-the-clipboard</span>.</p>
+  </section>
+
+  <section aria-labelledby="s-addr">
+    <h2 id="s-addr">Where to find it</h2>
+    <ul>
+      <li>Wallet: <span class="mono">https://careagents.cloud/checkin/wallet</span> (live from the release above)</li>
+      <li>Registry: listed in <span class="mono">https://smart-health-checkin.org/connectathon/wallets.json</span> while its status is up. Load the registry each time your check-in page opens, since the list changes during testing.</li>
+      <li>Origins: the wallet accepts a request from any Verifier origin and needs no reader authentication.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="s-scen">
+    <h2 id="s-scen">The three minimum scenarios</h2>
+    <ol>
+      <li><strong>Share records.</strong> Request records and insurance. The patient can share all, some, or none. Records come back as US Core resources; insurance as C4DIC Coverage.</li>
+      <li><strong>Fill in a form.</strong> Send the PHQ-2 inline. The wallet answers it as a QuestionnaireResponse.</li>
+      <li><strong>Decline one item.</strong> The patient declines Immunizations. Your page should show that item as declined, not as missing.</li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="s-priv">
+    <h2 id="s-priv">How the data moves</h2>
+    <ul>
+      <li>Your page and the wallet talk in the browser. The answer is encrypted in the browser before it reaches you.</li>
+      <li>CareAgents does not store the request or the answer, and neither reaches our server logs. Your clinic's address is kept out of our audit trail.</li>
+      <li>Every item is shared only after the patient agrees to that item.</li>
+      <li>All testing uses a synthetic test patient. Please send no real patient data.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="s-limits">
+    <h2 id="s-limits">Known limits</h2>
+    <ul>
+      <li>A record without a US Core profile claim is answered as <em>unavailable</em>. We do not add profile claims we have not validated.</li>
+      <li>Responses are capped at about 400 KB, so the "large response" advanced scenario (1 MB and up) is not supported yet.</li>
+      <li>Insurance member and group IDs are shared only in the check-in answer, and only after the patient agrees to that item. Social Security numbers are never shared.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="s-matrix">
+    <h2 id="s-matrix">Test matrix</h2>
+    <p>We will run all three scenarios with every Verifier that wants to pair. Results are posted here as they happen.</p>
+    <div class="table" role="region" aria-label="Test matrix" tabindex="0">
+      <table>
+        <thead><tr><th>Verifier</th><th>Share records</th><th>PHQ-2</th><th>Decline item</th></tr></thead>
+        <tbody>
+          <tr><td>SMART Testing EHR</td><td colspan="3"><span class="pill go">Round trip passed Oct 14</span> · full three-scenario run after release</td></tr>
+          <tr><td>Clinic check-in demo</td><td>To run</td><td>To run</td><td>To run</td></tr>
+          <tr><td>Your EHR or check-in page</td><td colspan="3">Tell us in Slack and we will schedule a slot before Nov 3</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-contact">
+    <h2 id="s-contact">Pair with us</h2>
+    <p>Post in <span class="mono">#kill-the-clipboard</span> on the CMS Health Tech Ecosystem Slack and mention CareAgents, or write to <span class="mono">contactus@healthclaw.io</span>. Tell us your Verifier's name, which scenarios you want to run, and a time window. We will confirm the same day.</p>
+  </section>
+
+  <footer>CareAgents by FHIR IQ. Built on HealthClaw Guardrails, an open-source guardrail layer for AI access to FHIR records. Event details: smart-health-checkin.org/connectathon.</footer>
+</div>
+</body>
+</html>
