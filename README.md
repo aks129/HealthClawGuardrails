@@ -282,7 +282,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `curatr_apply_fix` | Apply patient-approved fixes with Provenance tracking |
 | `action_propose` / `action_commit` | Propose / commit a real-world phone call or SMS |
 | `rx_transfer_request` | Draft a pharmacy-transfer request call from active meds (Schedule II refused); commit via `action_commit` |
-| `shl_generate` | Generate an encrypted SMART Health Link (QR) |
+| `shl_generate` | Generate an encrypted SMART Health Link (QR). Off by default: withheld from `tools/list` and refused unless `MCP_ENABLE_SHL_GENERATE=true` |
 
 **Utility tools:**
 
@@ -437,6 +437,10 @@ Patient-controlled encrypted record sharing via QR code, implemented on top of
 bundle (step-up auth, profiles, guardrails, audit trail); KTC governs sharing
 (zero-knowledge server-side storage, SHL STU 1 protocol, revocation, in-browser
 viewer).
+
+**Off by default.** `shl_generate` is withheld from `tools/list` and a call is
+refused unless the operator sets `MCP_ENABLE_SHL_GENERATE=true`. Patient-initiated
+sharing is being rebuilt behind a consent page.
 
 **What it does:** The `shl_generate` MCP tool (Write group, step-up required)
 fetches the patient's guardrailed FHIR bundle, encrypts it client-side in the MCP

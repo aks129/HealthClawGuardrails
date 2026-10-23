@@ -106,9 +106,10 @@ setup time for every client.
 9. **Inspect the share-link gate** (SMART Health Links)
    > Call shl_generate without credentials. Show its refusal without retrying.
 
-   Sharing also requires step-up authorization. The keyless demo returns
-   "Step-up authorization required", not a working link. Creating a link is
-   a separate authorized workflow.
+   `shl_generate` is off by default, so the demo does not list it and refuses
+   a call with "Tool shl_generate is not available on this server", not a
+   working link. Patient-initiated sharing is being rebuilt behind a consent
+   page.
 
 ## Connecting your own health data (Fasten Connect)
 

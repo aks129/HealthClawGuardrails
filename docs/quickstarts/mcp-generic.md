@@ -93,11 +93,16 @@ the demo endpoint today — tracked in
 
 ## The tools
 
-A hosted deployment serves **27**. The tool catalogue defines 29; two —
+A hosted deployment serves **26**. The tool catalogue defines 29; two —
 `fhir_get_token` and `fhir_seed` — are `PRIVILEGED_TOOL_NAMES` and are
 withheld from network transports on purpose, so they will not appear in your
 client's `tools/list`. That is deliberate, not a fault: minting step-up tokens
 and seeding tenants are operator actions, not agent actions.
+
+A third, `shl_generate`, is off by default on every server and is withheld
+from `tools/list`; a call is refused as not available. Patient-initiated
+SMART Health Link sharing is being rebuilt behind a consent page. An operator
+can re-enable the tool with `MCP_ENABLE_SHL_GENERATE=true`.
 
 Read: `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`,
 `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`,
@@ -106,12 +111,12 @@ Read: `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`,
 `wearables_sync_status`, `sources_check`, `fhir_compiled_truth`.
 Write (step-up gated): `fhir_propose_write`, `fhir_commit_write`,
 `curatr_apply_fix`, `action_propose`, `action_commit`, `rx_transfer_request`,
-`shl_generate`, `questionnaire_extract`.
+`questionnaire_extract`.
 ChatGPT-connector shims: `search`, `fetch`.
 
 Step-up for the write tier comes from the `X-Step-Up-Token` header, issued by
 the operator or by the patient connect flow — not from a tool call, because
-the tool that mints it is one of the two withheld above.
+the tool that mints it is one of the two privileged tools withheld above.
 
 Run the [10-minute demo script](README.md#the-10-minute-demo-script-works-in-any-connected-agent)
 from any of these clients.

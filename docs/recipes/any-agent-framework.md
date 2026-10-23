@@ -33,7 +33,8 @@ can drift out of step with it:
 
 `action_commit`, `action_propose`, `curatr_apply_fix`, `fhir_commit_write`,
 `fhir_propose_write`, `questionnaire_extract`, `rx_transfer_request`,
-`shl_generate`.
+`shl_generate` (off by default: withheld and refused unless
+`MCP_ENABLE_SHL_GENERATE=true`).
 
 Mint a token with `fhir_get_token` or `POST /r6/fhir/internal/step-up-token`.
 
