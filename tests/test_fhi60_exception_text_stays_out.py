@@ -137,7 +137,7 @@ def test_a_canonical_uuid_is_logged_as_sent(value, expected):
 @pytest.mark.parametrize("value", [
     _UUID.replace("-", ""),             # undashed 32-hex
     "req_01J8XKQ2M4YB3",
-    secrets.token_urlsafe(32),
+    pytest.param(secrets.token_urlsafe(32), id="random-urlsafe"),
     _UUID + "x",
     "{" + _UUID + "}",
     " " + _UUID,

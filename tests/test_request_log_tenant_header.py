@@ -91,9 +91,10 @@ def test_a_token_in_the_agent_and_request_id_headers_never_reaches_the_log(
 
 
 @pytest.mark.parametrize("value", [
-    secrets.token_urlsafe(48),          # an OAuth token: a valid tenant id
+    pytest.param(secrets.token_urlsafe(48),  # an OAuth token: a valid tenant id
+                 id="random-oauth-token"),
     "sk-ant-api03-" + "Zx9Qw7Er5Ty3Ui1Op0As2Df4Gh6Jk8Lz",
-    secrets.token_hex(16),
+    pytest.param(secrets.token_hex(16), id="random-hex"),
     "Synthetic Person 1970-01-01 see notes",
 ])
 def test_no_value_of_any_shape_is_written_for_an_id_header(
