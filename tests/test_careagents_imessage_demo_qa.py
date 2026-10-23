@@ -31,7 +31,7 @@ def test_a_failed_part_stops_the_rest(sb_cfg, sb_svc, monkeypatch):  # noqa: F81
     _model(monkeypatch, answer=answer)
     failing = FailsSecondPart()
     _ask(app, c, failing, "tell me everything", "long-fail-1")
-    assert failing.sent[0][1].startswith(sample_framed("Part 0"))
+    assert failing.sent[0][1].startswith("Part 0")
     assert failing.sent[1][1][:6] == "Part 1"
     assert len(failing.sent) == 2
     with sb_svc.session() as s:

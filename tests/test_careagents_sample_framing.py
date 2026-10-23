@@ -65,13 +65,14 @@ def _answer(c, fake, agent_id, cfg, svc, monkeypatch, prompts,  # noqa: F811
     return answers[0]
 
 
-def test_a_sample_answer_opens_by_saying_the_records_are_made_up(
+def test_a_sample_answer_ends_by_saying_the_records_are_made_up(
         cfg, svc, monkeypatch):  # noqa: F811
     _app, c, fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
     prompts = []
     answer = _answer(c, fake, agent_id, cfg, svc, monkeypatch, prompts)
-    assert answer.startswith(beta.SAMPLE_FRAME)
-    assert answer.endswith(MODEL_TEXT)
+    # Last, never ahead of anything in the answer (#1017 round 8).
+    assert answer.endswith(beta.SAMPLE_FRAME)
+    assert answer.startswith(MODEL_TEXT)
     # And the model was told whose records these are.
     assert prompts and all("made-up" in p for p in prompts)
 
@@ -83,7 +84,7 @@ def test_a_model_that_repeats_the_line_still_shows_it_once(
     _app, c, fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
     answer = _answer(c, fake, agent_id, cfg, svc, monkeypatch, [],
                      says=f"{beta.SAMPLE_FRAME}\n\n{MODEL_TEXT}")
-    assert answer == f"{beta.SAMPLE_FRAME}\n\n{MODEL_TEXT}"
+    assert answer == f"{MODEL_TEXT}\n\n{beta.SAMPLE_FRAME}"
 
 
 def test_a_real_answer_is_exactly_what_the_model_said(

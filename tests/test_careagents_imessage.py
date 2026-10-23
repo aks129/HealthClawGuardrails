@@ -398,8 +398,8 @@ def test_the_burst_limit_answers_in_words(cfg, svc, monkeypatch):  # noqa: F811
     assert _inbound(c, PHONE, "one").status_code == 202
     r = _inbound(c, PHONE, "two")
     assert r.status_code == 200
-    assert r.get_json() == {"reply": imessage.busy_text(
-        cfg.chat_window_seconds)}
+    assert r.get_json() == {"reply": beta.with_911(imessage.busy_text(
+        cfg.chat_window_seconds))}
     minutes = -(-cfg.chat_window_seconds // 60)
     assert f"about {minutes} minutes" in r.get_json()["reply"]
 
@@ -411,7 +411,7 @@ def test_no_workers_answers_in_words(cfg, svc, monkeypatch):  # noqa: F811
     monkeypatch.setattr(deps, "workers_ready", lambda: False)
     r = _inbound(c, PHONE, "hi")
     assert r.status_code == 503
-    assert r.get_json()["reply"] == imessage.UNAVAILABLE_TEXT
+    assert r.get_json()["reply"] == beta.with_911(imessage.UNAVAILABLE_TEXT)
 
 
 def test_a_paused_account_hears_so_through_the_runs_endpoint(
@@ -425,7 +425,7 @@ def test_a_paused_account_hears_so_through_the_runs_endpoint(
     _run(app)
     r = c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
               query_string={"handle": PHONE})
-    assert r.get_json()["reply"] == beta.PAUSED_TEXT
+    assert r.get_json()["reply"] == beta.with_911(beta.PAUSED_TEXT)
 
 
 # --- disconnect from the web ---------------------------------------------------

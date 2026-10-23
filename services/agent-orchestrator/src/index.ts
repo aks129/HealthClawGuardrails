@@ -26,7 +26,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import crypto from "crypto";
-import { FHIRTools } from "./tools";
+import { FHIRTools, shlGenerateEnabled } from "./tools";
 import { executeMCPTool } from "./mcp-tool-result";
 import { fetchWithTimeout } from "./fetch-timeout";
 
@@ -417,7 +417,9 @@ const FHIR_BASE_URL =
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").filter(Boolean);
 
 // Initialize FHIR tools
-const fhirTools = new FHIRTools(FHIR_BASE_URL);
+const fhirTools = new FHIRTools(FHIR_BASE_URL, {
+  enableShlGenerate: shlGenerateEnabled(),
+});
 
 // Supported MCP protocol versions (newest first)
 const SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"];

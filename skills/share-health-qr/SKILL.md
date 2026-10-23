@@ -19,6 +19,12 @@ access the patient's FHIR record. The QR encodes only an encrypted pointer
 manage link. Built on **jmandel/kill-the-clipboard-skill** (MIT, pinned
 `fa0020d`) — zero-knowledge storage, SHL STU 1.
 
+> **Off by default on hosted servers.** `shl_generate` is not listed and is
+> refused as not available unless the operator sets
+> `MCP_ENABLE_SHL_GENERATE=true`. Patient sharing of records with a clinic is
+> moving to a consent page. If the tool is not available, tell the patient so
+> and follow guardrail 1 below: do not improvise.
+
 ---
 
 ## Hard Guardrails

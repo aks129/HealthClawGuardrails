@@ -133,8 +133,9 @@ def test_a_trend_question_by_text_gets_words_and_a_link(
     fake.sent.clear()
     _ask(app, c, fake, "has my cholesterol changed?", "trend-1")
     [(_, text)] = fake.sent
-    assert text.startswith(sample_framed(
-        "Your cholesterol went from 210 to 244."))
+    # The sample line closes the text, after the chart's link (#1017).
+    assert text.startswith("Your cholesterol went from 210 to 244.")
+    assert text.endswith(sample_framed("").strip())
     assert f"/chat?agent={agent_id}&chart=cholesterol" in text
     tool_result = next(m["content"] for m in seen[-1]["history"]
                        if m.get("role") == "tool")
@@ -371,8 +372,10 @@ def test_the_deliverer_sends_the_parts_in_order(sb_cfg, sb_svc, monkeypatch):  #
     _model(monkeypatch, answer=answer)
     fake.sent.clear()
     _ask(app, c, fake, "tell me everything", "long-1")
-    assert fake.sent[0][1].startswith(sample_framed("Part 0"))
+    assert fake.sent[0][1].startswith("Part 0")
     assert [t[:6] for _, t in fake.sent[1:]] == ["Part 1", "Part 2"]
+    # The sample line closes the answer, so it is in the last part.
+    assert fake.sent[-1][1].endswith(sample_framed("").strip())
     _deliverer(app, fake).once()
     assert len(fake.sent) == 3
 

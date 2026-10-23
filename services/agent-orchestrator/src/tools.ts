@@ -181,18 +181,32 @@ export function internalMintSecret(): string {
 }
 const PRIVILEGED_TOOL_NAMES = new Set(["fhir_get_token", "fhir_seed"]);
 
+// shl_generate is withheld unless MCP_ENABLE_SHL_GENERATE turns it on. Its only
+// consent check was a sentence in its description, links lived up to 90 days,
+// and it handed the model the owner link carrying the key. Patient-initiated
+// sharing is rebuilt engine-side behind a consent page; the registration below
+// stays so the code remains diffable against upstream.
+const SHL_GENERATE_TOOL_NAME = "shl_generate";
+
+export function shlGenerateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MCP_ENABLE_SHL_GENERATE === "true" || env.MCP_ENABLE_SHL_GENERATE === "1";
+}
+
 export interface FHIRToolsOptions {
   allowPrivileged?: boolean;
+  enableShlGenerate?: boolean;
 }
 
 export class FHIRTools {
   private baseUrl: string;
   private allowPrivileged: boolean;
+  private enableShlGenerate: boolean;
   private registry: ReadonlyMap<ToolName, RegisteredTool>;
 
   constructor(baseUrl: string, options: FHIRToolsOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.allowPrivileged = options.allowPrivileged === true;
+    this.enableShlGenerate = options.enableShlGenerate === true;
     this.registry = this.buildToolRegistry();
   }
 
@@ -259,6 +273,7 @@ export class FHIRTools {
   getMCPToolSchemas(): MCPToolSchema[] {
     return this.getToolSchemas()
       .filter((tool) => this.allowPrivileged || !PRIVILEGED_TOOL_NAMES.has(tool.name))
+      .filter((tool) => this.enableShlGenerate || tool.name !== SHL_GENERATE_TOOL_NAME)
       .map((t) => ({
         name: t.name,
         title: t.title,
@@ -1195,6 +1210,9 @@ export class FHIRTools {
   ): Promise<Record<string, unknown>> {
     if (!this.allowPrivileged && PRIVILEGED_TOOL_NAMES.has(toolName)) {
       return { error: `Tool ${toolName} is not available on this transport` };
+    }
+    if (!this.enableShlGenerate && toolName === SHL_GENERATE_TOOL_NAME) {
+      return { error: `Tool ${toolName} is not available on this server` };
     }
 
     const tool = this.registry.get(toolName as ToolName);

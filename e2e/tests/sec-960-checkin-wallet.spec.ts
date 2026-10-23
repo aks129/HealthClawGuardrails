@@ -149,6 +149,12 @@ async function openAndSignIn(evil: Page): Promise<Page> {
   return wallet;
 }
 
+// Its own sign-in code budget. The server allows 30 code requests per client
+// address per 10 minutes (app.py CODE_REQUESTS_PER_IP), and this file runs
+// last against a server the whole suite has signed in to from 127.0.0.1. With
+// no edge in front, the limiter keys on X-Real-IP (TEST-NET-1, RFC 5737).
+test.use({ extraHTTPHeaders: { 'X-Real-IP': '192.0.2.60' } });
+
 const result = (evil: Page) => expect.poll(
   () => evil.evaluate(() => (window as any).__result), { timeout: 15_000 });
 

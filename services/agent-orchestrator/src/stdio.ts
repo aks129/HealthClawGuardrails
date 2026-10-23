@@ -16,7 +16,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { FHIRTools } from "./tools";
+import { FHIRTools, shlGenerateEnabled } from "./tools";
 import { executeMCPTool } from "./mcp-tool-result";
 
 const { version: SERVER_VERSION } = require("../package.json") as {
@@ -29,7 +29,10 @@ const FHIR_BASE_URL =
 console.error(`[healthclaw-guardrails] stdio transport starting`);
 console.error(`[healthclaw-guardrails] FHIR backend: ${FHIR_BASE_URL}`);
 
-const fhirTools = new FHIRTools(FHIR_BASE_URL, { allowPrivileged: true });
+const fhirTools = new FHIRTools(FHIR_BASE_URL, {
+  allowPrivileged: true,
+  enableShlGenerate: shlGenerateEnabled(),
+});
 
 const server = new Server(
   { name: "healthclaw-guardrails", version: SERVER_VERSION },

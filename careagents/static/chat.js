@@ -147,11 +147,23 @@
   // and texted answer with it; only that exact leading copy is dropped,
   // only while the banner is on this page, and never down to nothing
   // (careagents/beta.py under_banner does the same for the history).
+  // A crisis answer carries it at its end, so it never comes before the
+  // 911 guidance (worker._finish); that copy, or one between paragraphs,
+  // a paragraph of its own, is dropped the same way.
   function withoutFrame(text) {
     const banner = document.querySelector(".sample-banner");
     const frame = banner ? banner.textContent.trim() : "";
-    if (!frame || text.indexOf(frame + "\n\n") !== 0) return text;
-    const rest = text.slice(frame.length + 2);
+    if (!frame) return text;
+    let rest = "";
+    const inline = "\n\n" + frame + "\n\n";
+    if (text.indexOf(frame + "\n\n") === 0) {
+      rest = text.slice(frame.length + 2);
+    } else if (text.indexOf(inline) > 0) {
+      rest = text.replace(inline, "\n\n");
+    } else if (text.length > frame.length + 2
+               && text.slice(-(frame.length + 2)) === "\n\n" + frame) {
+      rest = text.slice(0, -(frame.length + 2));
+    }
     return rest.trim() ? rest : text;
   }
 
@@ -571,7 +583,7 @@
           state.cursor = Math.max(state.cursor, ev.next_cursor || 0);
         } else if (ev.type === "tool") addChip(ev.label);
         else if (ev.type === "card" && ev.kind === "review")
-          addReviewCard(ev.action_id, ev.review_url);
+          addReviewCard(ev.action_id, ev.review_url, ev.label);
         else if (ev.type === "card" && ev.kind === "pdf")
           addPdfCard(ev.url);
         // Drawn once the answer is in (on done), beside its "the full
@@ -635,6 +647,9 @@
     const requestId = (window.crypto && window.crypto.randomUUID)
       ? window.crypto.randomUUID()
       : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    // The last sentence a 503 refusing this turn carried (it ends with the
+    // 911 line): shown instead of "Connection hiccup" once retries run out.
+    let refusalText = "";
 
     try {
       const state = { runId: null, cursor: 0, done: false };
@@ -668,6 +683,24 @@
               addLimitFeedback();
             return;
           }
+          // A chat turn the server could not take carries its sentence and
+          // a 911 line (app.py, _with_emergency). Crisis wording is said at
+          // once. Any other is retried silently, as a blip usually passes,
+          // and said instead of "Connection hiccup" if the retries run out.
+          // Only for the POST that asked: a reconnect to a run in progress
+          // keeps its own retries.
+          if (resp.status === 503 && !state.runId) {
+            const refusal = await resp.clone().json().catch(() => ({}));
+            if (refusal && typeof refusal.message === "string"
+                && refusal.message) {
+              if (refusal.emergency === true) {
+                typing.remove();
+                addAgentText(refusal.message);
+                return;
+              }
+              refusalText = refusal.message;
+            }
+          }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
           const responseRunId = resp.headers.get("X-CareAgents-Run-ID");
           if (responseRunId) state.runId = responseRunId;
@@ -688,7 +721,10 @@
       if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
-      addAgentText("Connection hiccup — try that again.", null, "connection");
+      if (refusalText) addAgentText(refusalText, null, "connection");
+      // No server sentence reached the page, so it adds the 911 line itself
+      // (beta.EMERGENCY_TRAILER): this is all a hard outage shows.
+      else addAgentText("Connection hiccup — try that again.\n\nIf this is an emergency, call 911. Si es una emergencia, llame al 911.", null, "connection");
       showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();

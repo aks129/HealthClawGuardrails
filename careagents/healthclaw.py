@@ -568,6 +568,29 @@ class HealthClawClient:
                                   r.status_code)
         return aid
 
+    def propose_sms(self, tenant: str, phone: str, body: str) -> str:
+        """Stage a text to the person's own phone (careagents/text_self.py)
+        and submit it for approval, as start_form_action does. Every field
+        is the caller's, never the model's; `to` is the fixed label, so the
+        number stays out of the engine's audit details."""
+        from careagents.text_self import RECIPIENT_LABEL
+        h = self._headers(tenant)
+        r = self._send("POST", f"{self.actions}/propose", json={
+            "kind": "sms",
+            "payload": {"to": RECIPIENT_LABEL, "phone": phone,
+                        "body": body}},
+            headers=h, what="propose")
+        aid = self._json_object(r, "propose").get("id") if r.ok else None
+        if not aid:
+            raise HealthClawError(f"propose failed ({r.status_code})",
+                                  r.status_code)
+        r = self._send("POST", f"{self.actions}/{aid}/commit", headers=h,
+                       what="commit")
+        if r.status_code != 202:
+            raise HealthClawError(f"commit failed ({r.status_code})",
+                                  r.status_code)
+        return aid
+
     def pending_actions(self, tenant: str) -> list[dict]:
         """The tenant's proposals awaiting a person's answer (#215) — PHI-safe
         summaries from the engine's own list. Raises on any non-200: an

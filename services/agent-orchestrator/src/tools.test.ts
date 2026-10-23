@@ -7,7 +7,7 @@
  * 3. Express App Tests -- supertest against the exported Express app.
  */
 
-import { FHIRTools, MCPToolSchema } from "./tools";
+import { FHIRTools, MCPToolSchema, shlGenerateEnabled } from "./tools";
 import http from "http";
 
 // Mock node-fetch before importing anything that uses it.
@@ -27,12 +27,15 @@ const { app, closeMCPServerForTests } = indexModule;
 
 type FHIRToolsConstructor = new (
   baseUrl: string,
-  options?: { allowPrivileged?: boolean }
+  options?: { allowPrivileged?: boolean; enableShlGenerate?: boolean }
 ) => FHIRTools;
 
+// The full catalogue, as the manifest generator builds it: operator tools
+// plus the flag-gated shl_generate.
 const createPrivilegedTools = (baseUrl: string): FHIRTools =>
   new (FHIRTools as unknown as FHIRToolsConstructor)(baseUrl, {
     allowPrivileged: true,
+    enableShlGenerate: true,
   });
 
 afterAll(() => {
@@ -136,7 +139,8 @@ const EXPECTED_TOOL_NAMES = [
 
 const EXPECTED_TOOL_NAME_SET = new Set(EXPECTED_TOOL_NAMES);
 const EXPECTED_NETWORK_TOOL_NAMES = EXPECTED_TOOL_NAMES.filter(
-  (name) => name !== "fhir_get_token" && name !== "fhir_seed"
+  (name) =>
+    name !== "fhir_get_token" && name !== "fhir_seed" && name !== "shl_generate"
 );
 const EXPECTED_NETWORK_TOOL_NAME_SET = new Set(EXPECTED_NETWORK_TOOL_NAMES);
 
@@ -188,9 +192,54 @@ describe("Tool Schema Tests", () => {
     const restrictedTools = new FHIRTools("http://localhost:5000/r6/fhir");
     const names = restrictedTools.getMCPToolSchemas().map((tool) => tool.name);
 
-    expect(names).toHaveLength(27);
+    expect(names).toHaveLength(26);
     expect(names).not.toContain("fhir_get_token");
     expect(names).not.toContain("fhir_seed");
+  });
+
+  // shl_generate is withheld unless MCP_ENABLE_SHL_GENERATE turns it on: its
+  // only consent check was a sentence in its description, and it handed the
+  // model the owner link. Patient-initiated sharing is rebuilt engine-side.
+  describe("shl_generate is withheld by default", () => {
+    it("is not listed without the flag, even on a privileged transport", () => {
+      for (const options of [{}, { allowPrivileged: true }]) {
+        const names = new FHIRTools("http://localhost:5000/r6/fhir", options)
+          .getMCPToolSchemas()
+          .map((tool) => tool.name);
+        expect(names).not.toContain("shl_generate");
+      }
+    });
+
+    it("refuses a call without the flag, before any backend fetch", async () => {
+      const fetchMock = fetch as unknown as jest.Mock;
+      fetchMock.mockClear();
+      const restricted = new FHIRTools("http://localhost:5000/r6/fhir");
+      const result = await restricted.executeTool(
+        "shl_generate",
+        { label: "Records for the clinic" },
+        { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+      );
+      expect(result).toEqual({ error: "Tool shl_generate is not available on this server" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("is listed only with the flag", () => {
+      const names = new FHIRTools("http://localhost:5000/r6/fhir", {
+        enableShlGenerate: true,
+      })
+        .getMCPToolSchemas()
+        .map((tool) => tool.name);
+      expect(names).toContain("shl_generate");
+      expect(names).toHaveLength(27);
+    });
+
+    it("reads the flag as true or 1 only", () => {
+      expect(shlGenerateEnabled({})).toBe(false);
+      expect(shlGenerateEnabled({ MCP_ENABLE_SHL_GENERATE: "false" })).toBe(false);
+      expect(shlGenerateEnabled({ MCP_ENABLE_SHL_GENERATE: "yes" })).toBe(false);
+      expect(shlGenerateEnabled({ MCP_ENABLE_SHL_GENERATE: "true" })).toBe(true);
+      expect(shlGenerateEnabled({ MCP_ENABLE_SHL_GENERATE: "1" })).toBe(true);
+    });
   });
 
   // #296: four tool DESCRIPTIONS instructed a mechanism that does not exist on
@@ -2537,7 +2586,7 @@ describe("Express App Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(27);
+      expect(res.body.result.tools).toHaveLength(26);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -2545,7 +2594,7 @@ describe("Express App Tests", () => {
       expect(names).toEqual(EXPECTED_NETWORK_TOOL_NAME_SET);
     });
 
-    it.each(["fhir_get_token", "fhir_seed"])(
+    it.each(["fhir_get_token", "fhir_seed", "shl_generate"])(
       "does not execute %s over Streamable HTTP",
       async (toolName) => {
         const initRes = await request(app)
@@ -2767,10 +2816,10 @@ describe("Express App Tests", () => {
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(27);
+      expect(res.body.result.tools).toHaveLength(26);
     });
 
-    it.each(["fhir_get_token", "fhir_seed"])(
+    it.each(["fhir_get_token", "fhir_seed", "shl_generate"])(
       "does not execute %s over the HTTP bridge",
       async (toolName) => {
         const res = await request(app)
@@ -2998,7 +3047,7 @@ describe("Express App Tests", () => {
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(27);
+      expect(res.body.result.tools).toHaveLength(26);
     });
 
     it("does not forward the MCP transport credential to the FHIR backend", async () => {
@@ -3073,6 +3122,8 @@ describe("Express App Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.result.tools.length).toBeGreaterThan(0);
+      const names = res.body.result.tools.map((t: { name: string }) => t.name);
+      expect(names).not.toContain("shl_generate");
     });
 
     it("pins the synthetic demo tenant and drops a client-supplied tenant in demo mode", async () => {

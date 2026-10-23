@@ -177,9 +177,11 @@ def test_a_wrong_code_offers_a_new_one():
     html = (_TEMPLATES / "auth.html").read_text()
     js = (_STATIC / "auth.js").read_text()
     assert 'id="resend-code"' in html and "Send a new code" in html
-    # Right after the error box, so it reads as the way on from it.
-    assert html.index('id="err"') < html.index('id="resend-code"') < \
-        html.index('id="step-start"')
+    # After the error box, so it reads as the way on from it; and under
+    # "We sent a code moments ago… check your inbox" (patient walk of
+    # #1016), so that note reads before the button that asks for another.
+    assert html.index('id="err"') < html.index('id="code-note"') < \
+        html.index('id="resend-code"') < html.index('id="code"')
     verify = js.split('$("verify-btn").addEventListener')[1].split(
         '$("code").addEventListener')[0]
     assert '$("resend-code").hidden = false' in verify

@@ -25,7 +25,7 @@ import logging
 
 from flask import jsonify, render_template, request, session
 
-from careagents import funnel
+from careagents import beta, funnel
 from careagents.agent import (GENERIC_FAILURE_TEXT, RATE_LIMITED_TEXT,
                               UNAVAILABLE_TEXT)
 
@@ -60,8 +60,11 @@ def collapse_failed_turns(past: list[dict]) -> list[dict]:
     Nothing is deleted anywhere: this is only what the page shows.
     """
     def failure(m):
+        # Every failure ends with the 911 line (beta.with_911); one led by
+        # the emergency line instead is never collapsed, so it stays shown.
         return (m.get("role") != "user"
-                and str(m.get("content") or "").strip() in FAILURE_TEXTS)
+                and beta.without_trailer(str(m.get("content") or "").strip())
+                in FAILURE_TEXTS)
 
     out: list[dict] = []
     for m in past:

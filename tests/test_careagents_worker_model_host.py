@@ -17,7 +17,7 @@ import logging
 
 import pytest
 
-from careagents import agent, funnel, mail, tester_terms
+from careagents import agent, beta, funnel, mail, tester_terms
 from careagents.config import Config, ConfigError
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _turn, cfg, svc)
@@ -73,7 +73,8 @@ def test_a_real_record_turn_to_an_unapproved_host_is_refused(
                                     real=True, host=UNAPPROVED)
     assert calls == [], "the model was called for an unapproved host"
     errors = [f for f in frames if f["type"] == "error"]
-    assert errors and errors[-1]["text"] == agent.UNAVAILABLE_TEXT
+    assert errors and errors[-1]["text"] == beta.with_911(
+        agent.UNAVAILABLE_TEXT)
     assert not any(f["type"] == "text" for f in frames)
     today = funnel.daily(svc.session, days=1)["days"][0]
     assert today["chat_error"] == 1 and today["model_auth"] == 1

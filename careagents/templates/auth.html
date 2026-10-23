@@ -7,7 +7,8 @@
 {% block content %}
 <main class="setup-wrap">
   <div class="setup-card" id="auth-card"
-       {%- if back %} data-back="{{ back }}"{% endif %}>
+       {%- if back %} data-back="{{ back }}"{% endif %}
+       {%- if resume %} data-resume="1"{% endif %}>
     {# Plain words for what this page does. Someone already signed in
        is here to confirm it's them, not to sign in. #}
     <h1>{% if code_for_passkey or code_for_invite or code_for_connect %}Confirm it's you{% else %}Sign in or sign up{% endif %}</h1>
@@ -21,6 +22,10 @@
     <p class="setup-sub" id="invite-why">To get your invite link, confirm it's you with a code we email. Then you'll go back to Settings.</p>
     {% elif code_for_connect %}
     <p class="setup-sub" id="connect-why">To connect your own records, confirm it's you with a code we email. Then you'll go back to your hub.</p>
+    {% elif resume %}
+    {# A page tapped while signed out is kept (#1016). Never named: no
+       page, agent or topic on a screen anyone at the browser can read. #}
+    <p class="setup-sub" id="resume-why">To keep your health information safe, we check it's you first. Enter the code we email you and we'll take you back to the page you opened.</p>
     {% else %}
     {# The emailed code works for everyone; a passkey only for someone who
        made one (patient walk 2026-10-18), so the code leads. #}
@@ -28,9 +33,6 @@
     {% endif %}
 
     <div id="err" class="form-error" hidden></div>
-    {# Next to "That code is wrong or expired.": the way on, in one tap. #}
-    <button class="linkish" id="resend-code" type="button" hidden>
-      Send a new code</button>
 
     <!-- Step: passkey-first (skipped when an existing account is enrolling) -->
     <div id="step-start" {% if enroll %}hidden{% endif %}>
@@ -63,6 +65,11 @@
       <p class="setup-sub"><span id="code-lede">We sent an 8-digit code to</span>
         <b id="code-email"></b>.</p>
       <p class="setup-sub" id="code-note" hidden></p>
+      {# Under "We sent a code moments ago… check your inbox and spam
+         folder", so that reads first; and the way on after "That code is
+         wrong or expired.", in one tap (patient walk of #1016). #}
+      <button class="linkish" id="resend-code" type="button" hidden>
+        Send a new code</button>
       <label class="field-label" for="code">Code</label>
       <input class="field code-input" id="code" inputmode="numeric"
              maxlength="8" placeholder="••••••••" autocomplete="one-time-code">

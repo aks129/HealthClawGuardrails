@@ -586,4 +586,11 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
             args = {}
         turn.tool_calls.append(ToolCall(
             id=c["id"], name=c["function"]["name"], arguments=args))
+    if msg.get("refusal"):
+        # OpenAI's decline arrives as `message.refusal`, with no content.
+        # The same as Anthropic's stop_reason "refusal": our fixed sentence,
+        # never the provider's wording, and the worker adds the 911 line.
+        turn.stop_reason = "refusal"
+        if not turn.text.strip():
+            turn.text = REFUSAL_TEXT
     return turn

@@ -94,7 +94,13 @@
     var btn = document.getElementById('approve-btn');
     var gateMsg = document.getElementById('review-gate-msg');
 
+    // The CareAgents relay marks a text it will not approve (a number that
+    // is not the account's): there is nothing to tick, and its reason must
+    // stay on screen rather than be replaced by "tick the box".
+    var refused = /\bnot-your-number\b/.test(gateMsg.className);
+
     function evaluate() {
+      if (refused) { btn.disabled = true; return false; }
       var ok = form.querySelector('#ack').checked;
       btn.disabled = !ok;
       gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';

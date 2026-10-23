@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   CARE_ALLOW_BASE_URL, CARE_ALLOW_EMAIL, CARE_ALLOW_LOG,
-  CARE_BASE_URL, CARE_LOG,
+  CARE_ALLOW_UPLOAD_EMAIL, CARE_BASE_URL, CARE_LOG,
 } from '../playwright.config';
 import { blockThirdParty, signIn, uniqueEmail } from './careagents-fixtures';
 
@@ -137,7 +137,9 @@ test.describe('upload a file, real records open (allowlisted)', () => {
   test('one tap and "I agree" open the file picker, and no tap adds a card',
     async ({ page }) => {
       await blockThirdParty(page);
-      await signIn(page, CARE_ALLOW_EMAIL, CARE_ALLOW_LOG);
+      // Its own address: the menu test above signs CARE_ALLOW_EMAIL in
+      // moments earlier, inside the resend wait.
+      await signIn(page, CARE_ALLOW_UPLOAD_EMAIL, CARE_ALLOW_LOG);
       const before = await page.locator(cards).count();
 
       // Cancelling the consent card makes nothing.

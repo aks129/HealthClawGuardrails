@@ -19,6 +19,13 @@ from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
 from tests.test_careagents_sendblue import _make_real
 
 
+def _pointer(origin: str) -> str:
+    """The real-records pointer as sent: a refusal, so it carries the 911
+    line (beta.with_911, #1017)."""
+    from careagents import beta
+    return beta.with_911(sendblue_surface.real_records_text(origin))
+
+
 def _answer(c, run_id):
     return c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
                   query_string={"handle": PHONE})
@@ -36,7 +43,7 @@ def test_a_real_records_agent_queues_no_turn_and_gets_the_app_pointer(
     r = _inbound(c, PHONE, "how is my a1c?")
     assert r.status_code == 200
     body = r.get_json()
-    assert body == {"reply": sendblue_surface.real_records_text(cfg.origin)}
+    assert body == {"reply": _pointer(cfg.origin)}
     assert "run_id" not in body
     assert len(hc.runs) == runs_before
 
@@ -68,5 +75,5 @@ def test_an_answer_owed_from_before_a_switch_to_real_records_is_withheld(
     answer = _answer(c, run_id)
     assert answer.status_code == 200
     body = answer.get_json()
-    assert body["reply"] == sendblue_surface.real_records_text(cfg.origin)
+    assert body["reply"] == _pointer(cfg.origin)
     assert "6.1" not in str(body)
