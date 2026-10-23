@@ -1,6 +1,6 @@
 """CareAgents release checks: confirm a deploy landed, and notice drift.
 
-    python scripts/careagents_release.py ci-gate --sha <40-hex> [--timeout 2400]
+    python scripts/careagents_release.py ci-gate --sha <40-hex> [--timeout 3600]
     python scripts/careagents_release.py wait --sha <12-hex> [--timeout 900]
     python scripts/careagents_release.py drift [--grace 7200]
 
@@ -187,12 +187,15 @@ def _github(path: str, token: str, timeout: float = 15.0) -> dict:
 
 
 def fetch_ci(repo: str, sha: str, token: str, get=_github) -> tuple[dict | None, list]:
-    """(newest CI push run for `sha`, its latest-attempt jobs). Pinned to
-    ci.yml and `event=push`, so a job of the same name in another workflow,
-    or a pull_request run of the same head, never counts."""
+    """(newest CI push run on main for `sha`, its latest-attempt jobs). Pinned
+    to ci.yml, `event=push` and branch main, so a job of the same name in
+    another workflow, a pull_request run of the same head, or a newer push
+    run of the same sha on another branch (ci.yml also runs on master) never
+    counts. The branch is checked here too, not only in the query."""
     runs = get(f"/repos/{repo}/actions/workflows/{CI_WORKFLOW}/runs"
-               f"?head_sha={sha}&event=push&per_page=20", token).get("workflow_runs", [])
-    runs = [r for r in runs if r.get("head_sha") == sha and r.get("event") == "push"]
+               f"?head_sha={sha}&event=push&branch=main&per_page=20", token).get("workflow_runs", [])
+    runs = [r for r in runs if r.get("head_sha") == sha and r.get("event") == "push"
+            and r.get("head_branch") == "main"]
     if not runs:
         return None, []
     run = max(runs, key=lambda r: r.get("id", 0))
@@ -217,6 +220,11 @@ def ci_gate(sha: str, timeout: float, interval: float, fetch,
             state, detail = ci_verdict(run, jobs)
             if run is not None:
                 detail = f"CI run {int(run.get('id', 0))}: {detail}"
+        except urllib.error.HTTPError as err:
+            # A wrong token scope must not look like a slow CI run.
+            state, detail = PENDING, (
+                f"could not read CI: permission denied (HTTP {err.code}; check actions: read)"
+                if err.code in (401, 403) else f"could not read CI: HTTP {err.code}")
         except Exception as err:  # noqa: BLE001 - an API blip is retried, never a pass
             state, detail = PENDING, f"could not read CI: {type(err).__name__}"
         if detail != last:
@@ -310,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     g = sub.add_parser("ci-gate", help="wait for CI on a commit; exit 0 only if it passed")
     g.add_argument("--sha", required=True)
-    g.add_argument("--timeout", type=float, default=2400)
+    g.add_argument("--timeout", type=float, default=3600)
     g.add_argument("--interval", type=float, default=30)
     w = sub.add_parser("wait", help="poll /healthz until a deploy has landed")
     w.add_argument("--sha", required=True)

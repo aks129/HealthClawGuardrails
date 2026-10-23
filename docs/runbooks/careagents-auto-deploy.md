@@ -30,8 +30,10 @@ still works and stays the fallback. The workflow follows it step for step.
    `python-tests`, `postgres-tests`, `node-tests`, `lint`, `secret-scan`,
    `dependency-audit` and `compliance-gates` all concluded `success`.
    `playwright-tests` is not required. A failed, skipped or missing required
-   job fails the deploy at once. If CI has no verdict after 40 minutes, the
-   deploy fails too. Either way nothing is uploaded. A manual **Run
+   job fails the deploy at once. If CI has no verdict after 60 minutes, the
+   deploy fails too. Only `main`'s push run counts. If the log repeats
+   "permission denied (check actions: read)", the token scope is wrong, not
+   CI slow. Either way nothing is uploaded. A manual **Run
    workflow** waits the same way for CI on the `main` tip it runs. After CI
    is fixed or re-run green, choose **Re-run all jobs** on the failed deploy.
 3. Downloads the pinned Railway CLI release binary and checks it against a

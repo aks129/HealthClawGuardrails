@@ -389,17 +389,57 @@ def test_fetch_ci_reads_only_ci_yml_push_runs_for_this_sha():
         calls.append(path)
         if "/runs?" in path:
             return {"workflow_runs": [
-                {"id": 5, "head_sha": SHA, "event": "push"},
-                {"id": 9, "head_sha": SHA, "event": "pull_request"},
-                {"id": 8, "head_sha": LATER, "event": "push"},
-                {"id": 7, "head_sha": SHA, "event": "push"},
+                {"id": 5, "head_sha": SHA, "event": "push", "head_branch": "main"},
+                {"id": 9, "head_sha": SHA, "event": "pull_request", "head_branch": "main"},
+                {"id": 8, "head_sha": LATER, "event": "push", "head_branch": "main"},
+                {"id": 7, "head_sha": SHA, "event": "push", "head_branch": "main"},
             ]}
         return {"jobs": [{"name": "lint"}]}
 
     run, jobs = release.fetch_ci("o/r", SHA, "tok", get=get)
     assert run["id"] == 7 and jobs == [{"name": "lint"}]
-    assert calls[0] == f"/repos/o/r/actions/workflows/ci.yml/runs?head_sha={SHA}&event=push&per_page=20"
+    assert calls[0] == ("/repos/o/r/actions/workflows/ci.yml/runs"
+                        f"?head_sha={SHA}&event=push&branch=main&per_page=20")
     assert calls[1] == "/repos/o/r/actions/runs/7/jobs?filter=latest&per_page=100"
+
+
+def test_fetch_ci_counts_only_mains_run_when_another_branch_has_the_same_sha():
+    # ci.yml also runs on pushes to master. A newer green push run of the same
+    # sha on master must not stand in for main's failed one. The client-side
+    # head_branch check matters even with branch=main in the query, so the
+    # fake ignores the query. Mutation: dropping that check picks run 2 and
+    # the verdict becomes PASS.
+    failed = _jobs(lint=("completed", "failure"))
+
+    def get(path, token):
+        if "/runs?" in path:
+            return {"workflow_runs": [
+                {"id": 1, "head_sha": SHA, "event": "push", "head_branch": "main", "status": "completed"},
+                {"id": 2, "head_sha": SHA, "event": "push", "head_branch": "master", "status": "completed"},
+            ]}
+        return {"jobs": failed if "/runs/1/" in path else _jobs()}
+
+    run, jobs = release.fetch_ci("o/r", SHA, "t", get=get)
+    assert run["id"] == 1
+    assert release.ci_verdict(run, jobs)[0] == release.FAIL
+
+
+def test_fetch_ci_with_only_another_branchs_run_is_none():
+    runs = {"workflow_runs": [{"id": 2, "head_sha": SHA, "event": "push", "head_branch": "master"}]}
+    assert release.fetch_ci("o/r", SHA, "t", get=lambda p, t: runs) == (None, [])
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_ci_gate_names_a_permission_problem_instead_of_waiting_quietly(code, capsys):
+    import urllib.error
+    clock = _Clock()
+
+    def denied():
+        raise urllib.error.HTTPError("https://api.github.com/x", code, "Forbidden", {}, None)
+    assert release.ci_gate(SHA, 60, 30, denied, clock=clock, sleep=clock.sleep) == 1
+    out = capsys.readouterr()
+    assert f"could not read CI: permission denied (HTTP {code}; check actions: read)" in out.out
+    assert "permission denied" in out.err   # the final ::error:: carries it too
 
 
 def test_fetch_ci_with_no_run_is_none():
@@ -421,14 +461,17 @@ def test_the_ci_gate_runs_before_any_railway_step_and_holds_the_deploy():
     assert len(railway) >= 2 and gate < min(railway), names
     step = steps[gate]
     assert step["run"].strip() == (
-        'python3 scripts/careagents_release.py ci-gate --sha "$GITHUB_SHA" --timeout 2400')
+        'python3 scripts/careagents_release.py ci-gate --sha "$GITHUB_SHA" --timeout 3600')
     # A failing gate must stop the job: no continue-on-error on it, and no
     # later step that runs regardless of earlier failures.
     assert not step.get("continue-on-error")
     for later in steps[gate + 1:]:
         assert not any(w in str(later.get("if", "")) for w in ("always()", "failure()", "!cancelled()"))
-    # Room for 40 minutes of CI, the uploads and 15 minutes of /healthz.
-    assert job["timeout-minutes"] >= 40 + 15 + 5
+    # Room for 60 minutes of CI, the uploads and 15 minutes of /healthz.
+    assert job["timeout-minutes"] >= 60 + 15 + 5
+    # No later step needs git auth, so the checkout keeps no token on disk.
+    checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_drift_workflow_has_history_and_alarms_only_past_the_grace():
