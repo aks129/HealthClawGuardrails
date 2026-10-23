@@ -128,7 +128,8 @@ TOOLS = [
      "description": ("Show a CHART of how a lab value has changed over time. "
                      "Use for any 'timeline', 'trend', 'over time', 'history' "
                      "or 'has it improved' question about a lab (cholesterol, "
-                     "LDL, HDL, triglycerides, A1c, glucose). The chart "
+                     "LDL, HDL, triglycerides, A1c, glucose) or blood "
+                     "pressure. The chart "
                      "appears in the conversation, so describe what it shows "
                      "rather than listing every number."),
      "parameters": {"type": "object", "properties": {
@@ -921,16 +922,19 @@ _ANALYTE_KEY = {code: a["key"] for a in labs_timeline.ANALYTES
 
 
 def _obs_loinc(resource: dict) -> str | None:
-    for c in ((resource.get("code") or {}).get("coding") or []):
+    code = resource.get("code")
+    coding = code.get("coding") if isinstance(code, dict) else None
+    for c in (coding if isinstance(coding, list) else []):
         if isinstance(c, dict) and c.get("system") == _LOINC_SYSTEM:
             return c.get("code")
     return None
 
 
 def _obs_flag(resource: dict) -> str | None:
-    for i in resource.get("interpretation") or []:
-        for c in (i or {}).get("coding") or []:
-            if isinstance(c, dict) and c.get("system") == _INTERPRETATION:
+    # An unscored reading's interpretation is the feed's own, any JSON.
+    for i in labs_timeline._dicts(resource.get("interpretation")):
+        for c in labs_timeline._dicts(i.get("coding")):
+            if c.get("system") == _INTERPRETATION:
                 return c.get("code")
     return None
 
@@ -1018,7 +1022,10 @@ def _plain_value(resource: dict) -> tuple[object, str]:
             return value, unit
         return None, ""
     parts = {}
-    for c in resource.get("component") or []:
+    components = resource.get("component")
+    if not isinstance(components, list):
+        return None, ""
+    for c in components:
         if not isinstance(c, dict):
             return None, ""
         code = _obs_loinc(c)
@@ -1062,14 +1069,25 @@ def _not_evaluated(consumer: dict, bundle: dict) -> list[dict] | None:
             not isinstance(name, str) or not code or _obs_loinc(r) != code
             for name, code, r in zip(names, codes, unscored)):
         return None
-    out = []
+    # One entry per analyte, its latest reading, as _latest_per_analyte does
+    # for scored ones: listing a BP history left the model to order raw
+    # dates and work out a direction itself (QA #1021, #942).
+    groups: dict[str, list[tuple[tuple, dict]]] = {}
     for name, r in zip(names, unscored):
+        date = _obs_date(r)
+        raw = str(r.get("effectiveDateTime") or r.get("issued") or "")
+        groups.setdefault(name, []).append(
+            ((date is not None, date or "", raw if date else ""), r))
+    out = []
+    for name, readings in groups.items():
+        r = sorted(readings, key=lambda x: x[0])[-1][1]
         value, unit = _plain_value(r)
         rng = r.get("referenceRange")
         out.append({"analyte": name, "date": _obs_date(r), "value": value,
                     "unit": unit,
                     "reference_range_in_records": bool(
-                        isinstance(rng, list) and rng)})
+                        isinstance(rng, list) and rng),
+                    "earlier_readings": len(readings) - 1})
     return out
 
 
@@ -1323,15 +1341,24 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # The engine's note gives the check's reason, and for a blood
             # pressure that reason is "carried no number" beside a reading
             # of 138/88: the readings above say it better.
+            # Counted as the rows are, one per test, not per reading.
+            pair = dict(zip(consumer["unevaluated_analytes"],
+                            consumer["unevaluated_codes"]))
             out["consumer_summary"] = {
-                k: v for k, v in out["consumer_summary"].items()
-                if k != "unevaluated_note"}
+                **{k: v for k, v in out["consumer_summary"].items()
+                   if k != "unevaluated_note"},
+                "unevaluated_count": len(not_evaluated),
+                "unevaluated_analytes": [r["analyte"] for r in not_evaluated],
+                "unevaluated_codes": [pair[r["analyte"]]
+                                      for r in not_evaluated]}
             out["note"] =((out["note"] + " ") if out.get("note") else "") + (
                 "This lab answer is INCOMPLETE: "
-                f"{len(not_evaluated)} reading(s) in not_evaluated were not "
+                f"{len(not_evaluated)} test(s) in not_evaluated were not "
                 "scored against a reference range. Zero flagged results here "
                 "means nothing was SCORED as abnormal, not that nothing is "
-                "abnormal. Report the "
+                "abnormal. Each not_evaluated reading is that test's latest; "
+                "earlier_readings are counted, not listed, so give no "
+                "direction from them. Report the "
                 + ("latest readings" if latest is not None else "lines")
                 + " you were given AND, for each not_evaluated reading, give "
                 "its value and date in plain words and say there is no "

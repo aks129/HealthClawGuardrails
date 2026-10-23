@@ -95,8 +95,11 @@ def test_an_unscored_blood_pressure_and_glucose_reach_the_model_plainly(
     chain = Chain(cfg, svc, monkeypatch)
     out = json.loads(_execute_tool(chain.hc, TENANT, "get_labs", {}, [],
                                    surface="web"))
+    # One row per analyte, checked as a list: a dict alone would keep
+    # whichever duplicate came last and pass on storage order (QA #1021).
+    assert sorted(x["analyte"] for x in out["not_evaluated"]) == \
+        ["Blood pressure", "Glucose (blood)"], out["not_evaluated"]
     got = {x["analyte"]: x for x in out["not_evaluated"]}
-    assert set(got) == {"Blood pressure", "Glucose (blood)"}, got
     bp, glucose = got["Blood pressure"], got["Glucose (blood)"]
     assert (bp["value"], bp["unit"]) == ("138/88", "mmHg"), bp
     assert (glucose["value"], glucose["unit"]) == (180, "mg/dL"), glucose
