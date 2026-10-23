@@ -5,7 +5,7 @@ CareAgents used to ship only by a manual `railway up`, and production drifted
 
 | Workflow | Runs | Does |
 |---|---|---|
-| `.github/workflows/careagents-deploy.yml` | every push to `main` touching `careagents/**`, `deploy/careagents/**`, `pyproject.toml` or `uv.lock`; also by hand | stages, stamps, uploads web and worker from the same stage, then waits for `/healthz` to report the build |
+| `.github/workflows/careagents-deploy.yml` | every push to `main` touching `careagents/**`, `deploy/careagents/**`, `pyproject.toml` or `uv.lock`; also by hand | waits for CI to pass on the commit, stages, stamps, uploads web and worker from the same stage, then waits for `/healthz` to report the build |
 | `.github/workflows/careagents-drift.yml` | hourly, and by hand | opens one issue when `careagents.cloud` has been behind the newest CareAgents commit on `main` for more than two hours |
 
 The manual procedure in
@@ -22,21 +22,33 @@ still works and stays the fallback. The workflow follows it step for step.
    edit the environment. If the token is missing, the job skips with a notice.
    Only a true/false check of the secret happens before the upload step, and
    only the upload step receives the token itself.
-2. Downloads the pinned Railway CLI release binary and checks it against a
+2. Waits for CI on the same commit (`scripts/careagents_release.py ci-gate`).
+   `main` does not require a branch to be up to date before it merges, so a
+   `main` commit can be a combination of PRs that CI never tested together.
+   The gate reads the `CI - FHIR MCP Guardrails` push run for `github.sha`
+   with the job's own `GITHUB_TOKEN` (`actions: read`). It continues only if
+   `python-tests`, `postgres-tests`, `node-tests`, `lint`, `secret-scan`,
+   `dependency-audit` and `compliance-gates` all concluded `success`.
+   `playwright-tests` is not required. A failed, skipped or missing required
+   job fails the deploy at once. If CI has no verdict after 40 minutes, the
+   deploy fails too. Either way nothing is uploaded. A manual **Run
+   workflow** waits the same way for CI on the `main` tip it runs. After CI
+   is fixed or re-run green, choose **Re-run all jobs** on the failed deploy.
+3. Downloads the pinned Railway CLI release binary and checks it against a
    pinned sha256 (`RAILWAY_CLI_VERSION`, `RAILWAY_CLI_SHA256`). It does not use
    `npm install`, so no package install scripts run in the job.
-3. Stages the runbook's four files into a fresh directory under
+4. Stages the runbook's four files into a fresh directory under
    `$RUNNER_TEMP`: `pyproject.toml`, `uv.lock`, `careagents/`, and
    `deploy/careagents/Dockerfile` as `Dockerfile`. Runs
    `deploy/careagents/stamp_build.sh` last, and refuses a `-dirty` stamp.
-4. `cd`s into the stage. Runs `railway status --json` and stops unless the
+5. `cd`s into the stage. Runs `railway status --json` and stops unless the
    project `id` is exactly `835e92df-ebaa-4aa1-bfb5-cb1b346d385e`
    (awake-serenity). A `railway up` that does not resolve to a project creates
    a new one. The Actions log is public, so the job prints only the project
    name and never the status output.
-5. Runs `railway up --detach --environment production` for `careagents` and
+6. Runs `railway up --detach --environment production` for `careagents` and
    then for `careagents-worker`, from the same stage.
-6. Polls `https://careagents.cloud/healthz` for up to 15 minutes. It waits until
+7. Polls `https://careagents.cloud/healthz` for up to 15 minutes. It waits until
    `build` equals the stamped sha and `run_workers` is `true`
    (`scripts/careagents_release.py wait`). If that does not happen, the job
    fails.
@@ -101,6 +113,7 @@ alarms overlap but do not conflict.
 
 - **Preferred:** revert the bad commit on `main`. The revert touches CareAgents
   paths, so it deploys through the same workflow and passes the same checks.
+  That includes waiting for CI on the revert, usually 10 to 25 minutes.
 - **Re-run an earlier deploy:** in **Actions → careagents-deploy**, open the
   last good run and choose **Re-run all jobs**. A re-run checks out that run's
   commit, so it stages, stamps and uploads the older build through the same
