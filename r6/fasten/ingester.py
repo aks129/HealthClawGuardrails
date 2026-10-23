@@ -27,6 +27,7 @@ import httpx
 from models import db
 from r6.audit import add_audit_event
 from r6.fasten.models import connection_revoked, tenant_closed
+from r6.log_safety import loggable_id
 from r6.models import RECORD_SOURCES, R6Resource
 
 logger = logging.getLogger(__name__)
@@ -171,7 +172,8 @@ def log_refusal(log, where: str, tenant_id: str, resource: dict,
     different ways (#306).
     """
     log.warning('%s refused a resource: tenant=%s type=%s reason=%s',
-                where, tenant_id, resource.get('resourceType', '?'), result)
+                where, loggable_id(tenant_id),
+                resource.get('resourceType', '?'), result)
 
 
 def _is_fasten_download_host(url: str) -> bool:

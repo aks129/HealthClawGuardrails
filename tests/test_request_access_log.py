@@ -17,6 +17,9 @@ import logging
 
 import pytest
 
+CORR_OK = "0b6f3c1e-5a2d-4c7e-9f10-2d3e4f5a6b7c"
+CORR_BAD = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+
 
 @pytest.fixture
 def probe_client(app):
@@ -97,17 +100,19 @@ def test_default_level_drops_the_success_lines_and_keeps_the_failures(
 def test_request_id_correlation_survives_at_both_levels(
         probe_client, caplog):
     with caplog.at_level(logging.DEBUG, logger="request"):
+        # UUIDs: since FHI-60 the log writes any other caller-sent request
+        # id as a hash (tests/test_request_log_tenant_header.py).
         ok = probe_client.get("/__probe/claim",
-                              headers={"X-Request-Id": "corr-ok"})
+                              headers={"X-Request-Id": CORR_OK})
         bad = probe_client.get("/__probe/boom",
-                               headers={"X-Request-Id": "corr-bad"})
+                               headers={"X-Request-Id": CORR_BAD})
 
-    assert ok.headers["X-Request-Id"] == "corr-ok"
-    assert bad.headers["X-Request-Id"] == "corr-bad"
+    assert ok.headers["X-Request-Id"] == CORR_OK
+    assert bad.headers["X-Request-Id"] == CORR_BAD
 
     lines = _lines(caplog)
-    assert lines["/__probe/claim"][1]["request_id"] == "corr-ok"
-    assert lines["/__probe/boom"][1]["request_id"] == "corr-bad"
+    assert lines["/__probe/claim"][1]["request_id"] == CORR_OK
+    assert lines["/__probe/boom"][1]["request_id"] == CORR_BAD
 
 
 def test_redirects_stay_visible_at_info(probe_client, caplog):
