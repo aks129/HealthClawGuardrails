@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import json
 import datetime
+import logging
+from typing import Callable
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
-from careagents import causes, labs_timeline, llm
+from careagents import causes, labs_timeline, llm, text_self
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
+
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 
@@ -170,6 +174,31 @@ TOOLS = [
          "action_id": {"type": "string"}}, "required": ["action_id"]}},
 ]
 
+#: Offered only in a turn whose account may be texted (text_self.py): the
+#: CARE_ACTIONS_SMS flag admits it, it is not paused, and it has one verified
+#: phone. The model picks a purpose and nothing else; CareAgents writes the
+#: number, the recipient and the words.
+PROPOSE_ACTION_TOOL = {
+    "name": "propose_action",
+    "description": ("Offer to text the person's own phone a short nudge to "
+                    "sign in, for example that their visit prep is ready. "
+                    "This only PROPOSES it: a review card appears and "
+                    "nothing is sent until the person approves it on the "
+                    "review page. A texted yes does not approve. The text "
+                    "is fixed and carries nothing from their records; you "
+                    "choose only its purpose."),
+    "parameters": {"type": "object", "properties": {
+        "purpose": {"type": "string", "enum": list(text_self.PURPOSES)},
+    }, "required": ["purpose"], "additionalProperties": False}}
+
+
+def tools_for_turn(sms_phone: str | None) -> list[dict]:
+    """The tools one turn offers. propose_action only with a number to text;
+    the dispatcher asks again, because a model can call a tool it was not
+    offered."""
+    return [*TOOLS, PROPOSE_ACTION_TOOL] if sms_phone else TOOLS
+
+
 TOOL_LABELS = {
     "get_health_summary": "Reading your records",
     "get_labs": "Interpreting your labs",
@@ -179,6 +208,7 @@ TOOL_LABELS = {
     "appointment_brief": "Preparing your visit brief",
     "start_intake_form": "Preparing your intake form",
     "check_form_status": "Checking your form",
+    "propose_action": "Preparing a text to your phone",
 }
 
 #: TOOL_LABELS on the sample connection, whose records are made up: a status
@@ -192,6 +222,7 @@ SAMPLE_TOOL_LABELS = {
     "appointment_brief": "Preparing the sample visit brief",
     "start_intake_form": "Preparing the sample intake form",
     "check_form_status": "Checking the sample form",
+    "propose_action": "Preparing a text to the linked phone",
 }
 
 
@@ -1191,12 +1222,59 @@ def _empty_summary_note(hc: HealthClawClient, tenant: str,
             "medications or allergies.")
 
 
+def _propose_text(hc: HealthClawClient, tenant: str, args: object,
+                  events: list, agent_id: str, origin: str,
+                  sms_phone: Callable[[], str | None] | None) -> str:
+    """propose_action. Every refusal stages nothing and says so; the number
+    is never in what the model reads back."""
+    def refuse(note):
+        return json.dumps({"error": "not_proposed", "note": note})
+    # Asked now, not when the turn started: the flag, a pause or the
+    # number may have changed, and a model may call a tool it was not
+    # offered at all.
+    phone = sms_phone() if sms_phone else None
+    if not phone:
+        return refuse("Texting is not available for this person. Nothing "
+                      "was sent or staged. If they want texts, they can "
+                      "link their phone in CareAgents.")
+    extra = sorted(set(args) - {"purpose"}) if isinstance(args, dict) else []
+    if not isinstance(args, dict) or extra:
+        # The count only: a name is as model-written as a value, and
+        # either could carry what the model was fed.
+        logger.warning("propose_action refused: %d unexpected argument(s)",
+                       len(extra))
+        return refuse("propose_action takes only a purpose. Nothing was "
+                      "staged.")
+    purpose = args.get("purpose")
+    if purpose not in text_self.PURPOSES:
+        return refuse("purpose must be one of: "
+                      + ", ".join(text_self.PURPOSES) + ". Nothing was staged.")
+    if any(a.get("kind") == "sms" for a in hc.pending_actions(tenant)):
+        return refuse("A text is already waiting for the person's approval. "
+                      "Nothing new was staged; point them to the one that "
+                      "is waiting.")
+    action_id = hc.propose_sms(tenant, phone,
+                               text_self.body_for(purpose, origin))
+    events.append({"type": "card", "kind": "review",
+                   "action_id": action_id, "label": "Text message",
+                   "review_url": f"/review/{agent_id}/{action_id}"})
+    return json.dumps({"action_id": action_id,
+                       "status": "awaiting_confirmation",
+                       "note": text_self.APPROVAL_NOTE + (
+                           " Nothing is sent until the person approves it "
+                           "there. Do not propose another.")})
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
                   surface: str = "", origin: str = "",
-                  arriving: bool = False) -> str:
+                  arriving: bool = False,
+                  sms_phone: Callable[[], str | None] | None = None) -> str:
     on_text = surface in TEXT_SURFACES
     origin = (origin or "").rstrip("/")
+    if name == "propose_action":
+        return _propose_text(hc, tenant, args, events, agent_id, origin,
+                             sms_phone)
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
@@ -1513,14 +1591,18 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
 
 
 def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
-             history: list[dict], user_text: str, *, agent_id: str = ""):
-    """Generator of UI events for one user message. Mutates `history`."""
+             history: list[dict], user_text: str, *, agent_id: str = "",
+             sms_phone: Callable[[], str | None] | None = None):
+    """Generator of UI events for one user message. Mutates `history`.
+    `sms_phone` answers the number propose_action may text, or None; it is
+    asked once here for the tool list and again if the tool is called."""
     _trim_history(history)
     history.append({"role": "user", "content": user_text})
+    tools = tools_for_turn(sms_phone() if sms_phone else None)
     rounds = 0
     while True:
         try:
-            turn = llm.complete(cfg, system, history, TOOLS)
+            turn = llm.complete(cfg, system, history, tools)
         except llm.LLMError as exc:
             yield {"type": "error", "text": failure_text(exc)}
             return
@@ -1547,7 +1629,8 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
             try:
                 result = _execute_tool(hc, tenant, call.name,
                                        call.arguments, side_events,
-                                       agent_id=agent_id)
+                                       agent_id=agent_id,
+                                       sms_phone=sms_phone)
             except HealthClawError as exc:
                 result = tool_error_result(exc)
             history.append({"role": "tool", "tool_call_id": call.id,
@@ -1596,6 +1679,14 @@ def run_turn_to_message(cfg, hc: HealthClawClient, tenant: str, system: str,
             parts.append(ev["text"])
         elif kind == "error":
             return ev.get("text") or GENERIC_FAILURE_TEXT
+        elif kind == "card" and ev.get("kind") == "review" and ev.get("label"):
+            aid = ev.get("action_id", "")
+            link = (f"{base}/review/{agent_id}/{aid}"
+                    if base and agent_id and aid else "")
+            extras.append(
+                f"{ev['label']} waiting for your approval. Only the review "
+                "page approves it"
+                + (f": {link}" if link else ", in the CareAgents app."))
         elif kind == "card" and ev.get("kind") == "review":
             aid = ev.get("action_id", "")
             link = (f"{base}/review/{agent_id}/{aid}"
