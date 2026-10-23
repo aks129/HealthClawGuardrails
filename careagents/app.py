@@ -31,6 +31,7 @@ import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 from markupsafe import Markup, escape
+from sqlalchemy.exc import SQLAlchemyError
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code,
@@ -43,7 +44,7 @@ from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents import beta_signup, causes, errors, feedback, funnel, invites
-from careagents import checkin_wallet
+from careagents import checkin_wallet, text_self
 from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -280,6 +281,28 @@ _CARED_FOR_REVIEW_WORDS = (
 )
 
 
+#: A text (propose_action, or one staged another way) whose number is not
+#: the account's verified phone. Said by the relay's 409 and by the review
+#: page in place of Approve; Decline still works.
+_NOT_YOUR_NUMBER = ("This text is not going to the phone number linked to "
+                    "your account, so it can't be approved here. You can "
+                    "decline it.")
+
+#: The engine approve page's own markup, each reworded once by the relay
+#: for a text to a number that is not the account's. Pinned against
+#: templates/action_approve.html by tests/test_careagents_propose_action.py.
+_NOT_YOUR_NUMBER_PAGE = (
+    ('<div class="form-check mt-2 p-3 bg-body-secondary rounded">',
+     '<div class="form-check mt-2 p-3 bg-body-secondary rounded" hidden>'),
+    ('<div id="review-gate-msg" class="alert alert-secondary" role="alert">',
+     '<div id="review-gate-msg" class="alert alert-warning not-your-number" '
+     'role="alert" '
+     'data-not-your-number>' + _NOT_YOUR_NUMBER + '</div><div hidden>'),
+    ('id="approve-btn" class="btn btn-primary btn-lg" disabled>',
+     'id="approve-btn" class="btn btn-primary btn-lg" disabled hidden>'),
+)
+
+
 def _connection_is_live(ctx: dict) -> bool:
     """Whether an agent context's connection may still reach the tenant's
     requests: not revoked (#215). The one rule for every approval surface,
@@ -401,6 +424,13 @@ def create_app(config: Config | None = None,
     hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
                                     public_base=cfg.healthclaw_public_base)
     svc = accounts or AccountService(cfg)
+    # Spent and expired sign-in links hold a number; ones made before #1004
+    # deleted them are swept here, once per start. Idempotent, and a failure
+    # must not stop the app serving.
+    try:
+        svc.prune_imessage_links()
+    except SQLAlchemyError:
+        logger.warning("imessage link sweep failed at start", exc_info=True)
     # Exposed for deterministic integration tests and process diagnostics.
     # Production Gunicorn never executes this worker object; the systemd/OCI
     # worker service constructs its own clients and calls careagents.worker.
@@ -2987,12 +3017,45 @@ def create_app(config: Config | None = None,
         if not ctx:
             return None
         try:
-            hc.action_status(ctx["tenant"], action_id)
+            action = hc.action_status(ctx["tenant"], action_id)
         except HealthClawError as exc:
             if _engine_said_absent(exc):
                 return None
             raise OwnershipUnknown from exc
-        return ctx
+        # The status rides along, so the text check below reads the same
+        # answer that proved ownership.
+        return dict(ctx, action=action if isinstance(action, dict) else {})
+
+    def _text_not_yours(action):
+        """True for an sms CareAgents will not approve now. Only sms is
+        held to this. It must be what propose_action would have staged for
+        the signed-in account at this moment: text_self.sms_phone_for
+        (CARE_ACTIONS_SMS open for it, not paused, one verified phone)
+        answers this number, `to` is the fixed label, and the words are one
+        of the fixed texts. A text staged by another surface or a raw POST,
+        an iMessage binding changed since, or the flag turned off all
+        refuse. Logs the action id and the reason, never the number or
+        the words."""
+        if action.get("kind") != "sms":
+            return False
+        payload = action.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        acct = current_account()
+        mine = text_self.sms_phone_for(cfg, svc, acct.id, acct.email)
+        if not mine:
+            reason = "no_phone_to_text"
+        elif payload.get("phone") != mine:
+            reason = "number"
+        elif payload.get("to") != text_self.RECIPIENT_LABEL:
+            reason = "label"
+        elif payload.get("body") not in {text_self.body_for(p, cfg.origin)
+                                         for p in text_self.PURPOSES}:
+            reason = "words"
+        else:
+            return False
+        logger.info("text approval refused for action %s: %s",
+                    str(action.get("id") or "")[:64], reason)
+        return True
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
@@ -3084,6 +3147,11 @@ def create_app(config: Config | None = None,
                                      whose=whose)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
+        if _text_not_yours(ctx.get("action") or {}):
+            # "Not your number" in place of Approve; Decline stays. The
+            # submit refuses it as well, before anything is recorded.
+            for old, new in _NOT_YOUR_NUMBER_PAGE:
+                html = html.replace(old, new, 1)
         if sample and whose:
             # The person's own line, as on their chat page, then the
             # approved message about the form, not "your" form.
@@ -3115,17 +3183,24 @@ def create_app(config: Config | None = None,
     @login_required
     def review_submit(agent_id, action_id):
         try:
-            tenant = _agent_owns_action(agent_id, action_id)
+            ctx = _agent_action_context(agent_id, action_id)
         except OwnershipUnknown:
             return jsonify({"error": "review_unavailable",
                             "message": _REVIEW_UNCHECKABLE}), 503
-        if not tenant:
+        if not ctx:
             return jsonify({"error": "not yours"}), 404
+        tenant = ctx["tenant"]
         if svc.is_paused(current_account().id):
             # Before the review is submitted, so nothing is confirmed or
             # executed for a paused account (beta spec 4.6, #856 review F1).
             return jsonify({"error": "records_paused",
                             "message": beta.PAUSED_HUB_TEXT}), 423
+        if _text_not_yours(ctx.get("action") or {}):
+            # BEFORE submit_review: that POST is what writes the consent
+            # record, so a check after it would refuse a text already
+            # approved. Nothing was recorded, so `confirmed` is false.
+            return jsonify({"error": "not_your_number", "confirmed": False,
+                            "message": _NOT_YOUR_NUMBER}), 409
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)

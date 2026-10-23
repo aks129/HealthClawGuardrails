@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from models import db
 from r6.models import R6Resource
 from r6.audit import AuditWriteError, add_audit_event
+from r6.log_safety import loggable_id
 from r6.sdc.intake import intake_questionnaire
 
 logger = logging.getLogger(__name__)
@@ -274,5 +275,5 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
     db.session.commit()
     if skipped:
         logger.info("Seed complete for %s: %d created, %d already present",
-                    tenant_id, created, skipped)
+                    loggable_id(tenant_id), created, skipped)
     return created
