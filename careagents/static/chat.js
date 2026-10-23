@@ -583,7 +583,7 @@
           state.cursor = Math.max(state.cursor, ev.next_cursor || 0);
         } else if (ev.type === "tool") addChip(ev.label);
         else if (ev.type === "card" && ev.kind === "review")
-          addReviewCard(ev.action_id, ev.review_url);
+          addReviewCard(ev.action_id, ev.review_url, ev.label);
         else if (ev.type === "card" && ev.kind === "pdf")
           addPdfCard(ev.url);
         // Drawn once the answer is in (on done), beside its "the full

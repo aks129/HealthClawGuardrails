@@ -444,6 +444,13 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
                 link = f"Your full visit brief: {origin}/brief?agent={agent_id}"
                 if link not in extras:
                     extras.append(link)
+            elif card == "review" and payload.get("label"):
+                # Not a form (propose_action's text): approved on the page,
+                # never by a reply here.
+                extras.append(
+                    f"{payload['label']} waiting for your approval. Only "
+                    f"the review page approves it: {origin}/review/"
+                    f"{agent_id}/{payload.get('action_id', '')}")
             elif card == "review":
                 extras.append(
                     "I've prepared a form for your review — approve each "
@@ -508,11 +515,17 @@ def notify_connected(deps: Deps, account_id: str, handle: str) -> None:
 
 
 def bind_by_code(deps: Deps, handle: str, code: str,
-                 raw: str | None = None) -> tuple[dict, int]:
+                 raw: str | None = None,
+                 received_at: float | None = None) -> tuple[dict, int]:
     """Pair `handle` with the pending surface behind `code`. `raw` is the
     handle as it arrived, so a row bound under it before normalization
-    still counts as bound."""
+    still counts as bound.
+
+    `received_at` is when the code's text arrived. A STOP processed at or
+    after it wins (#1005): nothing is bound and nothing is answered."""
     svc = deps.svc
+    if received_at is None:
+        received_at = time.time()
     if svc.imessage_bind_locked(handle):
         return {"error": "too many attempts", "reply": CODE_LOCKED_TEXT}, 429
     surface = svc.find_surface_by_code(code, kind="imessage")
@@ -521,9 +534,16 @@ def bind_by_code(deps: Deps, handle: str, code: str,
         return {"error": "unknown code", "reply": CODE_FAILED_TEXT}, 404
     outcome = svc.bind_imessage_handle(
         surface["account_id"], handle, pending_surface_id=surface["id"],
-        also=raw)
+        also=raw, issued_at=received_at)
     if outcome == "taken":
         return {"error": "handle taken", "reply": TAKEN_TEXT}, 409
+    if outcome == "expired" and svc.imessage_opted_out(handle):
+        # A STOP that followed the code won: an opted-out number gets
+        # nothing more.
+        return {}, 200
+    if outcome == "expired":
+        # A disconnect raced the bind and deleted its code (#1004).
+        return {"error": "unknown code", "reply": CODE_FAILED_TEXT}, 404
     notify_connected(deps, surface["account_id"], handle)
     return {"ok": True, "reply": WELCOME_TEXT}, 200
 
@@ -612,6 +632,9 @@ def _inbound(deps: Deps, raw_handle: str, text: str,
              transport_block: Callable[[dict], str | None] | None,
              ) -> tuple[dict, int]:
     svc = deps.svc
+    # First: a STOP processed after this moment beats a pairing code in
+    # this text (#1005).
+    received_at = time.time()
     raw = str(raw_handle or "").strip()
     if not raw:
         return {"error": "missing handle"}, 400
@@ -634,7 +657,8 @@ def _inbound(deps: Deps, raw_handle: str, text: str,
     if code:
         if not handle:
             return {"error": "unsupported handle"}, 400
-        return bind_by_code(deps, handle, code, raw=raw)
+        return bind_by_code(deps, handle, code, raw=raw,
+                            received_at=received_at)
 
     if surface is None:
         if not handle:
