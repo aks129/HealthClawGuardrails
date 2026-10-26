@@ -333,6 +333,13 @@ def _connection_is_live(ctx: dict) -> bool:
     return (ctx.get("connection") or {}).get("status") != "revoked"
 
 
+def _brief_as_of(now: datetime | None = None) -> str:
+    """Today as the brief prints it ("Oct 26, 2026"): the day its records
+    were read. UTC, the server's clock, like every other date it stamps."""
+    now = now or datetime.now(timezone.utc)
+    return f"{now:%b} {now.day}, {now.year}"
+
+
 def _parse_care_gaps_status(resource: dict | None) -> str:
     """Whether the screening review ran, from the brief's care-gaps section.
 
@@ -2449,6 +2456,7 @@ def create_app(config: Config | None = None,
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
                                agent_id=agent_id, sections=sections,
+                               as_of=_brief_as_of(),
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),

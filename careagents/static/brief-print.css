@@ -4,16 +4,21 @@
    chrome, and no item split across a page break. The made-up-records banner
    and the footer's "Not medical advice" line are kept: a printed sample
    must still say it is one. */
-:root {
+/* Every selector careagents.css sets the theme tokens on, so a phone in
+   dark mode prints black on white too: its :root:not([data-theme="light"])
+   outranked a bare :root here (#1038 QA F3). Equal specificity, and this
+   sheet loads later, so these win. */
+:root, :root:not([data-theme="light"]), :root[data-theme="dark"] {
+  color-scheme: light;
   --bg: #fff; --surface: #fff; --surface-2: #fff;
   --ink: #000; --ink-soft: #333; --hairline: #999;
   --warn-bg: #fff; --warn-line: #000; --warn-ink: #000;
   --practice-ink: #000; --practice-bg: #fff; --practice-line: #000;
 }
 @page { margin: 16mm 14mm; }
-body { background: #fff; color: #000; font-size: 12pt; min-height: 0;
-  display: block; }
-.topbar, .hub-head-actions, .brief-print, .chat-feedback,
+html, body { background: #fff; }
+body { color: #000; font-size: 12pt; min-height: 0; display: block; }
+.topbar, .hub-head-actions, .brief-tools, .chat-feedback,
 .footer > div:not(.footer-fine) { display: none !important; }
 .hub { max-width: none; padding: 0; }
 .hub-head { display: block; margin: 0 0 12pt; }

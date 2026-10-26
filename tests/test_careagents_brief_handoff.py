@@ -91,8 +91,10 @@ def test_the_brief_can_be_printed(app, svc, monkeypatch):  # noqa: F811
     css = app.test_client().get("/static/brief-print.css")
     text = css.get_data(as_text=True)
     css.close()
-    for hidden in (".hub-head-actions", ".brief-print", ".chat-feedback"):
+    for hidden in (".hub-head-actions", ".brief-tools", ".chat-feedback"):
         assert hidden in text
+    # The date stays on paper.
+    assert "brief-asof" not in text
     # A printed sample must still say it is one.
     assert ".sample-banner { position: static" in text
 
@@ -120,4 +122,16 @@ def test_a_caller_or_engine_failure_still_reads_just_now(  # noqa: F811
     body = _page(app, svc, monkeypatch, brief)
     assert _UNAVAILABLE_COPY in body
     assert "could not be completed" not in body
+
+
+def test_the_brief_says_as_of_when(app, svc, monkeypatch):  # noqa: F811
+    """#1038 F6: the day the records were read, on screen and on paper."""
+    from datetime import datetime, timezone
+
+    from careagents.app import _brief_as_of
+    assert _brief_as_of(datetime(2026, 10, 6, tzinfo=timezone.utc)) == (
+        "Oct 6, 2026")
+    body = _page(app, svc, monkeypatch, {"resourceType": "Basic"})
+    assert f'<div class="hub-sub brief-asof">As of {_brief_as_of()}</div>' \
+        in body
 

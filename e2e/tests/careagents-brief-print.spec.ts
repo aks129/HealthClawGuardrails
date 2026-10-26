@@ -52,6 +52,34 @@ test('the brief fits a 375px phone, prints, and prints without controls',
       `/brief?agent=${encodeURIComponent((await agent.json()).id)}`);
     await expect(page.locator('h1')).toHaveText('Visit brief');
 
+    // Three phone widths: no sideways scroll, and "Visit brief" keeps the
+    // full width and one line, clear of every button (#1038 QA F2). Ends on
+    // 375, the width the rest of this test runs at.
+    for (const width of [320, 390, 375]) {
+      await page.setViewportSize({ width, height: 812 });
+      const m = await page.evaluate(() => {
+        const h1 = document.querySelector('h1')!.getBoundingClientRect();
+        const main = document.querySelector('main.hub')!;
+        const pad = parseFloat(getComputedStyle(main).paddingLeft)
+          + parseFloat(getComputedStyle(main).paddingRight);
+        const hits = [...document.querySelectorAll('.hub-head .pill')]
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && !(r.left >= h1.right
+            || r.top >= h1.bottom || r.bottom <= h1.top
+            || r.right <= h1.left));
+        return { scroll: document.documentElement.scrollWidth,
+                 client: document.documentElement.clientWidth,
+                 h1w: h1.width, h1h: h1.height,
+                 room: main.getBoundingClientRect().width - pad,
+                 overlaps: hits.length };
+      });
+      expect(m.scroll, `${width}px`).toBe(m.client);
+      expect(m.h1w, `${width}px`).toBeGreaterThanOrEqual(m.room - 1);
+      expect(m.h1h, `${width}px: one line`).toBeLessThan(60);
+      expect(m.overlaps, `${width}px`).toBe(0);
+    }
+    await expect(page.locator('.brief-asof')).toHaveText(/^As of \w{3} \d{1,2}, \d{4}$/);
+
     // On the phone: no sideways scroll, and the button is there.
     const w = await page.evaluate(() => ({
       scroll: document.documentElement.scrollWidth,
@@ -97,6 +125,7 @@ test('the brief fits a 375px phone, prints, and prints without controls',
     await expect(page.locator('h1')).toBeVisible();
     await expect(page.locator('.hub-section h2').first()).toBeVisible();
     await expect(page.locator('.footer-fine')).toBeVisible();
+    await expect(page.locator('.brief-asof')).toBeVisible();
     expect(await page.evaluate(
       () => getComputedStyle(document.body).backgroundColor))
       .toBe('rgb(255, 255, 255)');
