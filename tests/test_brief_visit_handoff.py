@@ -136,6 +136,34 @@ def test_dropped_rows_do_not_take_the_ten_slots():
     assert [r.source_id for r in rows] == ["k"]
 
 
+def test_height_and_weight_rows_show_with_their_units():
+    """A height or weight in a body unit is a value, not an empty row.
+    MUTATION: drop the body units from _UNIT_DISPLAY -> both rows vanish."""
+    rows = build_labs([
+        _obs("h-cm", "8302-2", 172.5, "cm", when="2026-09-04"),
+        _obs("h-in", "8302-2", 68, "[in_i]", when="2026-09-03"),
+        _obs("w-kg", "29463-7", 81.2, "kg", when="2026-09-02"),
+        _obs("w-lb", "29463-7", 179, "[lb_av]", when="2026-09-01"),
+    ])
+    values = {r.source_id: (r.label, r.value) for r in rows}
+    assert values == {
+        "h-cm": ("Body height", "172.5 cm (Sep 4, 2026)"),
+        "h-in": ("Body height", "68 in (Sep 3, 2026)"),
+        "w-kg": ("Body weight", "81.2 kg (Sep 2, 2026)"),
+        "w-lb": ("Body weight", "179 lb (Sep 1, 2026)"),
+    }
+
+
+def test_a_body_measure_in_an_unknown_unit_or_free_text_still_never_shows():
+    rows = build_labs([
+        _obs("h", "8302-2", 172, "CM", when="2026-09-04"),     # exact only
+        _obs("w", "29463-7", 81, f"kg {PLANTED}", when="2026-09-03"),
+        dict(_obs("s", "29463-7", when="2026-09-02"),
+             valueString=f"81 kg, {PLANTED}"),
+    ])
+    assert rows == []
+
+
 def test_a_lab_reads_by_its_plain_name_not_loincs_long_name(monkeypatch):
     """Anion gap is in the table; a code only the resolver names gets
     LOINC's specimen and method qualifiers trimmed. MUTATION: label labs with

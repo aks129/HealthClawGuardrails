@@ -255,6 +255,11 @@ _UNIT_DISPLAY = {
     "10*6/uL": "10^6/uL", "10^6/uL": "10^6/uL",
     "fL": "fL", "pg": "pg", "mg/mmol": "mg/mmol", "mg/g": "mg/g",
     "[pH]": "pH", "pH": "pH",
+    # Body measurements. Without them a height or weight had no unit the
+    # brief recognised, so its row read "Result not listed", and once empty
+    # rows were dropped it vanished from the brief (#1038 review).
+    "cm": "cm", "m": "m", "[in_i]": "in", "in": "in",
+    "kg": "kg", "g": "g", "[lb_av]": "lb", "lb": "lb",
 }
 
 
