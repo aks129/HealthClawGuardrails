@@ -44,6 +44,26 @@
   .checkin-question legend { font-weight: 600; padding: 0; overflow-wrap: anywhere; }
   .checkin-question label { display: flex; align-items: center; gap: 6px; min-height: 44px;
     overflow-wrap: anywhere; }
+  /* The website's address inside our heading: set apart, and wraps. */
+  .checkin-pick-origin { font-family: var(--mono); font-size: 0.75em; overflow-wrap: anywhere; }
+  /* One card per set of records: its label, then how and when. A card,
+     not a button like "Don't share anything" below it. */
+  .checkin-pick { display: grid; gap: 8px; margin: 16px 0 16px; }
+  .checkin-set { display: flex; flex-direction: column; align-items: flex-start;
+    width: 100%; min-width: 0; min-height: 48px; padding: 10px 14px; text-align: left;
+    font: inherit; font-weight: 600; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--hairline); border-left: 4px solid var(--accent);
+    border-radius: var(--radius-sm); overflow-wrap: anywhere; cursor: pointer; }
+  .checkin-pick-source { font-weight: 400; font-size: 15px; color: var(--ink-soft); }
+  .checkin-using { color: var(--ink-soft); overflow-wrap: anywhere; margin: 0; }
+  /* The way back sits under the Using line, aligned with it. */
+  .checkin-repick { width: auto; min-height: 44px; margin: 0 0 12px; padding: 0;
+    text-align: left; }
+  /* A calm word, not an error: something changed, nothing went wrong. */
+  .checkin-note { background: var(--surface-2); color: var(--ink);
+    border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+    padding: 10px 14px; margin: 0 0 12px; }
+  h1[tabindex="-1"]:focus { outline: none; }
 </style>
 {% endblock %}
 {% block content %}
@@ -120,9 +140,29 @@
     </section>
     {% endif %}
 
+    {# An account with more than one set of its own records picks one
+       (checkin_wallet.js pickRecords). Each is named by its connection
+       label, how it was connected and when, never its contents. #}
+    <section id="wallet-pick" hidden>
+      {# The address is the browser's report of who asked, set as text. #}
+      <h1 id="wallet-pick-title" tabindex="-1"><span class="checkin-pick-origin"
+        id="wallet-pick-origin"></span> asked for your records.</h1>
+      <p class="setup-sub">You've connected records from more than one
+        place. Which should it see? You still choose each item before
+        anything is sent.</p>
+      <p class="checkin-note" id="wallet-pick-note" role="status" hidden></p>
+      <div class="checkin-pick" id="wallet-pick-list"></div>
+      <button class="btn-secondary btn-block" id="wallet-pick-no">
+        Don't share anything</button>
+      <button class="linkish" id="wallet-pick-close">Close without answering</button>
+    </section>
+
     <section id="wallet-review" hidden>
-      <h1>A website is asking for your health information</h1>
+      <h1 id="wallet-review-title" tabindex="-1">A website is asking for your health information</h1>
       <p class="checkin-origin" id="wallet-origin"></p>
+      {# After a pick: which set this answers from, and a way back. #}
+      <p class="checkin-using" id="wallet-using" hidden></p>
+      <button class="linkish checkin-repick" id="wallet-repick" hidden>Choose different records</button>
       <p class="setup-sub" id="wallet-purpose" hidden></p>
       <p class="setup-sub">Choose what to share. Nothing is shared unless you
         choose it.</p>

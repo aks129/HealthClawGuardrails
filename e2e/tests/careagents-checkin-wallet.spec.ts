@@ -490,7 +490,9 @@ test.describe('check-in wallet', () => {
   for (const [code, words] of [
     ['sample_only', 'only the sample records'],
     ['no_records', 'no records on your account yet'],
-    ['several_records', 'more than one set of records'],
+    // Without the list of sets to pick from (the picker:
+    // careagents-checkin-wallet-pick.spec.ts).
+    ['several_records', 'records from more than one place'],
     ['records_not_ready', "records aren't ready to share yet"],
     ['records_disconnected', 'Your records are disconnected'],
     ['not_your_records', 'Check-in shares your own records'],

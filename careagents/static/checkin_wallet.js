@@ -11,7 +11,11 @@
    record the request names (POST /checkin/wallet/records, a list of type
    names and nothing else: not the request, not the website's origin), and
    answers with the account's own records from the engine's checkin export.
-   The other calls are the existing sign-in endpoints. */
+   An account with more than one set of its own records is told which sets
+   there are, by label, how and when, and the person picks one; the relay is
+   then asked again with that connection's id, which the server checks is
+   one of the account's own. The other calls are the existing sign-in
+   endpoints. */
 import {
   checkWalletResponse, declineAll, serveWebWallet,
 } from "./vendor/smart-health-checkin-client/0.4.4/wallet.js";
@@ -27,7 +31,8 @@ const $ = (id) => document.getElementById(id);
 const card = $("wallet");
 // wallet-test-patient is on the page only when its flag is on.
 const SECTIONS = ["wallet-signin", "wallet-waiting", "wallet-direct",
-  "wallet-test-patient", "wallet-review", "wallet-done"].filter((s) => $(s));
+  "wallet-test-patient", "wallet-pick", "wallet-review", "wallet-done"]
+  .filter((s) => $(s));
 const show = (id) => SECTIONS.forEach((s) => ($(s).hidden = s !== id));
 const err = $("wallet-err");
 // How long "Waiting for the request" waits before it offers a next step.
@@ -198,12 +203,17 @@ function isolate(s, max) {
   return `\u2068${cut}\u2069`;
 }
 
-/* Resolves to {kind: "send", share, answers}, {kind: "declined-all"} or
-   {kind: "closed"}. Every choice starts at "Don't share". */
-function review(request, origin, matches) {
+/* Resolves to {kind: "send", share, answers}, {kind: "declined-all"},
+   {kind: "closed"} or, after a pick, {kind: "back"}. Every choice starts
+   at "Don't share", each time the review is drawn. `using` is the set the
+   person picked (setLine), or null when there was nothing to pick. */
+function review(request, origin, matches, using) {
   // The origin is what the browser reported, shown as a website. Request
   // text is the website's own words: textContent only, never markup.
   $("wallet-origin").textContent = origin;
+  $("wallet-using").textContent = using ? `Using: ${setLine(using)}` : "";
+  $("wallet-using").hidden = !using;
+  $("wallet-repick").hidden = !using;
   const purpose = Object.hasOwn(request, "purpose") ? request.purpose : undefined;
   if (typeof purpose === "string" && purpose) {
     $("wallet-purpose").textContent = `The website says why: ${isolate(purpose, 200)}`;
@@ -291,7 +301,10 @@ function review(request, origin, matches) {
     list.append(li);
   });
   show("wallet-review");
+  // After a pick the screen changed under the person's finger: say so.
+  if (using) $("wallet-review-title").focus();
   return new Promise((resolve) => {
+    $("wallet-repick").onclick = () => resolve({ kind: "back" });
     $("wallet-send").onclick = () => {
       clear();
       const share = {};
@@ -356,12 +369,21 @@ function briefly(title, text) {
 const CANT_SHARE = "The person's wallet couldn't share records this time. They were told why.";
 
 /* The account's records of the kinds the request names, or none when it
-   names none this wallet can answer. Throws the server's fixed code. */
-async function loadRecords(request, unsupportedItems) {
+   names none this wallet can answer. `connectionId` is the set the person
+   picked, if they had to. Throws the server's fixed code, with the sets to
+   pick from on `choices` when there are several. */
+async function loadRecords(request, unsupportedItems, connectionId) {
   const types = requestedTypes(request, unsupportedItems);
   if (!types.length) return prepareRecords({ entry: [] });
-  const res = await post(card.dataset.records, { resource_types: types });
-  if (!res.ok) throw new Error(typeof res.d.error === "string" ? res.d.error : "records");
+  const body = { resource_types: types };
+  if (connectionId) body.connection_id = connectionId;
+  const res = await post(card.dataset.records, body);
+  if (!res.ok) {
+    const e = new Error(typeof res.d.error === "string" ? res.d.error : "records");
+    e.choices = Array.isArray(res.d.choices) ? res.d.choices.filter((c) =>
+      c && typeof c.id === "string" && typeof c.label === "string") : [];
+    throw e;
+  }
   return prepareRecords(res.d);
 }
 
@@ -370,7 +392,9 @@ async function loadRecords(request, unsupportedItems) {
 const NO_RECORDS = {
   no_records: "There are no records on your account yet. Upload or connect your own records first, then start check-in again.",
   sample_only: "Your account has only the sample records, which are made up and can't be shared. Upload or connect your own records first, then start check-in again.",
-  several_records: "Your account holds more than one set of records, and this test version can answer from only one.",
+  // Only if the server's list of sets did not arrive.
+  several_records: "You've connected records from more than one place, and we couldn't list them just now. Start check-in again.",
+  unknown_records: "That set of records isn't available any more. Start check-in again to choose another.",
   no_patient: "We couldn't tell whose records these are, so we didn't send any.",
   too_large: "Your records are too large to send this way.",
   paused: "Sharing records is paused on your account.",
@@ -381,6 +405,84 @@ const NO_RECORDS = {
   not_your_records: "Check-in shares your own records. Upload or connect your own records first.",
   has_records: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
 };
+
+// --- more than one set of records ------------------------------------------
+
+/* "Added Oct 12" in the person's own time zone, from the connection's
+   epoch seconds, with the year only when it is not this one; "" without
+   one. Short, so it fits a phone's line. */
+function addedOn(secs) {
+  if (typeof secs !== "number" || !Number.isFinite(secs)) return "";
+  const d = new Date(secs * 1000);
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return `Added ${d.toLocaleDateString("en-US", opts)}`;
+}
+
+/* How and when a set was connected: the server's fixed phrase and the
+   connect date. Account bookkeeping only, never anything from the
+   records. */
+function setDetail(c) {
+  const how = typeof c.how === "string" ? c.how : "";
+  return [how, addedOn(c.added)].filter(Boolean).join(" · ");
+}
+
+/* A set in one line, as the review names the one in use: the name exactly
+   as the picker showed it, its number included. */
+const setLine = (c) => [c.shown || c.label, setDetail(c)].filter(Boolean).join(" · ");
+
+/* What the picker resolves to for "Close without answering". */
+const CLOSE_PICK = "close";
+
+/* One card per set: its connection label, then how and when. Lines still
+   alike get a number, so no two cards look the same. The page's heading
+   says who asked (pickAsker) and any note (pickNote) before this runs.
+   Resolves to the chosen connection id, null for "Don't share", or
+   CLOSE_PICK. */
+function pickRecords(choices) {
+  const list = $("wallet-pick-list");
+  list.replaceChildren();
+  const seen = {};
+  return new Promise((resolve) => {
+    choices.forEach((c) => {
+      const detail = setDetail(c);
+      const key = `${c.label}\n${detail}`;
+      seen[key] = (seen[key] || 0) + 1;
+      const btn = document.createElement("button");
+      btn.className = "checkin-set";
+      btn.dataset.connection = c.id;
+      const name = document.createElement("span");
+      name.textContent = seen[key] > 1 ? `${c.label} (${seen[key]})` : c.label;
+      c.shown = name.textContent;
+      btn.append(name);
+      if (detail) {
+        const from = document.createElement("span");
+        from.className = "checkin-pick-source";
+        from.textContent = detail;
+        btn.append(from);
+      }
+      btn.onclick = () => resolve(c.id);
+      list.append(btn);
+    });
+    $("wallet-pick-no").onclick = () => resolve(null);
+    $("wallet-pick-close").onclick = () => resolve(CLOSE_PICK);
+    show("wallet-pick");
+    // A new screen: its heading takes focus, so a screen reader says it.
+    $("wallet-pick-title").focus();
+  });
+}
+
+/* The picker's heading names the website by the address the browser
+   reported, as text and set apart, as the review names it. */
+function pickAsker(origin) {
+  $("wallet-pick-origin").textContent = isolate(origin, 200);
+}
+
+/* A line above the sets, or none. */
+function pickNote(text) {
+  $("wallet-pick-note").textContent = text;
+  $("wallet-pick-note").hidden = !text;
+}
 
 // --- the connectathon test patient ----------------------------------------
 
@@ -435,8 +537,19 @@ function start() {
       clearTimeout(late);
       let records;
       let code = "";
+      let choices = [];
       try { records = await loadRecords(request, unsupportedItems); } catch (e) {
         code = e.message;
+        choices = e.choices || [];
+      }
+      // More than one set: the person picks, and may come back to pick
+      // again from the review.
+      let using = null;
+      if (code === "several_records" && choices.length > 1) {
+        pickAsker(origin);
+        const got = await chooseSet(request, unsupportedItems, choices);
+        if (got.kind !== "records") return finish(request, got);
+        ({ records, using, code } = got);
       }
       if (Object.hasOwn(OFFER_TEST, code) && card.dataset.testPatient) {
         if (!(await offerTestPatient(OFFER_TEST[code]))) {
@@ -454,16 +567,18 @@ function start() {
         await untilOk("Couldn't answer", `${why} Tap OK to tell the website.`);
         return { error: CANT_SHARE };
       }
-      const matches = matchItems(request, unsupportedItems, records);
-      const choice = await review(request, origin, matches);
-      if (choice.kind === "closed") {
-        await briefly("Closed", "Nothing was sent. This tab may close on its own.");
-        return { declined: true };
+      let matches = matchItems(request, unsupportedItems, records);
+      let choice = await review(request, origin, matches, using);
+      while (choice.kind === "back") {
+        // Back to the sets; whatever was chosen on the review is dropped,
+        // and the next review starts every item at "Don't share" again.
+        const got = await chooseSet(request, unsupportedItems, choices);
+        if (got.kind !== "records") return finish(request, got);
+        using = got.using;
+        matches = matchItems(request, unsupportedItems, got.records);
+        choice = await review(request, origin, matches, using);
       }
-      if (choice.kind === "declined-all") {
-        await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
-        return { response: declineAll(request) };
-      }
+      if (choice.kind !== "send") return finish(request, choice);
       const response = buildResponse(request, matches, choice.share, choice.answers);
       if (checkWalletResponse(request, response).length) {
         await untilOk("Couldn't answer", "Something went wrong building the answer. Nothing was shared. Tap OK to tell the website.");
@@ -478,6 +593,49 @@ function start() {
     },
   });
   if (!served.opened) show("wallet-direct");
+}
+
+/* The reply for a person who closed, or chose to share nothing. A reason
+   the records could not be read waits for OK, as everywhere. */
+async function finish(request, got) {
+  if (got.kind === "closed") {
+    await briefly("Closed", "Nothing was sent. This tab may close on its own.");
+    return { declined: true };
+  }
+  if (got.kind === "declined-all") {
+    await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
+    return { response: declineAll(request) };
+  }
+  const why = Object.hasOwn(NO_RECORDS, got.code) ? NO_RECORDS[got.code]
+    : "We couldn't read your records just now. Try check-in again in a few minutes.";
+  await untilOk("Couldn't answer", `${why} Tap OK to tell the website.`);
+  return { error: CANT_SHARE };
+}
+
+/* The picker, until the person picks a set the server will answer from.
+   A set removed in the meantime (`unknown_records`) is dropped and the
+   rest shown again, with a word; when none is left, the usual no-records
+   reason. `choices` is shortened in place, so a return to the picker from
+   the review shows only what is left. Resolves to {kind: "records",
+   records, using, code: ""}, {kind: "error", code}, {kind: "closed"} or
+   {kind: "declined-all"}. */
+async function chooseSet(request, unsupportedItems, choices) {
+  pickNote("");
+  for (;;) {
+    const picked = await pickRecords(choices);
+    if (picked === CLOSE_PICK) return { kind: "closed" };
+    if (picked === null) return { kind: "declined-all" };
+    try {
+      const records = await loadRecords(request, unsupportedItems, picked);
+      return { kind: "records", records, code: "",
+        using: choices.find((c) => c.id === picked) };
+    } catch (e) {
+      if (e.message !== "unknown_records") return { kind: "error", code: e.message };
+      choices.splice(choices.findIndex((c) => c.id === picked), 1);
+      if (!choices.length) return { kind: "error", code: "no_records" };
+      pickNote("That one was removed. Choose from what's left.");
+    }
+  }
 }
 
 // Opened directly, not by a check-in page: nothing to sign in for.

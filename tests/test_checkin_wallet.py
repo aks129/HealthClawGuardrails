@@ -248,9 +248,20 @@ def test_the_browser_code_sends_nothing_but_sign_in(wallet):
         "/api/auth/email", "/api/auth/verify"}
     assert re.findall(r"(?<!function )post\((?!\")([^,)]+)", page) == [
         "card.dataset.records", "card.dataset.testPatient"]
-    # The relay is asked for type names and nothing else; the test patient
+    # The relay is asked for type names and, once the person has picked a
+    # set of records, that connection's id: nothing else. The test patient
     # choice sends an empty object.
-    assert "post(card.dataset.records, { resource_types: types })" in page
+    # Every line of loadRecords that names its body, exactly: no bracket
+    # key, Object.assign, spread or other value can be added unseen
+    # (tests/test_checkin_wallet_pick_sec.py pins the rest of the page).
+    load = page[page.index("async function loadRecords"):]
+    load = load[:load.index("return prepareRecords(res.d);")]
+    assert [ln.strip() for ln in load.splitlines()
+            if re.search(r"\bbody\b", ln)] == [
+        "const body = { resource_types: types };",
+        "if (connectionId) body.connection_id = connectionId;",
+        "const res = await post(card.dataset.records, body);",
+    ]
     assert "post(card.dataset.testPatient, {})" in page
 
 
