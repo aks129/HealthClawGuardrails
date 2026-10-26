@@ -1,6 +1,6 @@
 /**
  * QA for #1037 at phone width: a Spanish sample-mode turn, its status line
- * and "Esta respuesta no es correcta", and a hostile heading both live and replayed,
+ * and "Algo no está bien en esta respuesta", and a hostile heading both live and replayed,
  * run by the shipped chat.js AND careagents.css in a real browser at 375px.
  *
  * The fixture mirrors chat.html's structure (.chat-wrap, the sample banner,
@@ -93,7 +93,7 @@ async function ask(page: Page) {
   await page.locator('#box').fill('¿Cómo han cambiado mis análisis?');
   await page.locator('#send').click();
   await expect(page.locator('#log .flag-open'))
-    .toHaveText('Esta respuesta no es correcta', { timeout: 10_000 });
+    .toHaveText('Algo no está bien en esta respuesta', { timeout: 10_000 });
 }
 
 test('a replayed hostile heading stays text at 375px', async ({ page }) => {
@@ -144,7 +144,7 @@ test('a Spanish sample turn fits a 375px phone', async ({ page }) => {
 // QA #1037 F2: the sheet behind the Spanish link was all English,
 // including "Optional. Please don't include health details." on a note
 // that is emailed to the team.
-test('the sheet behind "Esta respuesta no es correcta" is in Spanish',
+test('the sheet behind "Algo no está bien en esta respuesta" is in Spanish',
   async ({ page }) => {
   await open(page);
   await ask(page);

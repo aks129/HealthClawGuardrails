@@ -180,4 +180,4 @@ def test_this_wasnt_right_follows_the_turns_language(got):
     assert got["flag"]["en"] == "This wasn't right"
     assert got["flag"]["none"] == "This wasn't right"
     assert got["flag"]["fr"] == "This wasn't right"
-    assert got["flag"]["es"] == "Esta respuesta no es correcta"
+    assert got["flag"]["es"] == "Algo no está bien en esta respuesta"

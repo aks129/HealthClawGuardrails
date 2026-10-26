@@ -142,17 +142,11 @@ LOWERCASE_ENGLISH = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #1037 R2-F1: lowercase English naming a Spanish surname or place "
-    "reads as Spanish, after an English turn too. Remove with the fix."))
 @pytest.mark.parametrize("text", LOWERCASE_ENGLISH)
 def test_lowercase_english_with_spanish_names_is_not_spanish(text):
     assert routing.conversation_language([ENGLISH, text]) == "en"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #1037 R2-F5: Portuguese typed without ã/õ/ç (or with only é) reads "
-    "as Spanish. Remove with the fix."))
 @pytest.mark.parametrize("text", [
     "Quais sao os meus resultados de exames?",
     "Preciso saber sobre os meus medicamentos",

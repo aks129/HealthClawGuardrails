@@ -366,10 +366,12 @@ def _unaccented(text: str) -> str:
 
 
 #: Common Spanish words that are not also everyday English words ("son",
-#: "a" and "no" are left out), without accents, for turn_language.
+#: "a" and "no" are left out), without accents, for turn_language. Never
+#: the particles in _NAME_PARTICLES: "dr de la rosa" typed in lower case
+#: is English naming someone (QA on #1037).
 _SPANISH_WORDS = frozenset(
-    "que como cual cuales cuando donde porque pero tambien muy hay del los "
-    "las una uno unos unas mis el la y de con es esta estan estoy esto "
+    "que como cual cuales cuando donde porque pero tambien muy hay "
+    "una uno unos unas mis con es esta estan estoy esto me significa "
     "estos tengo tiene tienen necesito puedo puede debo hola gracias sobre "
     "para por mi resultados analisis medicamentos presion azucar sangre "
     "examenes vacunas cita duele fiebre saber revisa favor si se usted "
@@ -391,20 +393,23 @@ _ENGLISH_WORDS = frozenset(
     "make need want wants know see saw said says go going went come "
     "called about again still last next today tomorrow yesterday week "
     "month year time results result labs lab visit".split())
-#: Next to a capitalized word these are part of a name or a place: "Dr. de
-#: la Cruz", "El Paso", "Garcia y Lopez".
+#: Part of a name or a place as often as Spanish: "dr de la cruz", "El
+#: Paso", "Garcia y Lopez". Never counted toward Spanish.
 _NAME_PARTICLES = frozenset("de del la las los el y".split())
 #: A capital after these is a name, not a new sentence: "Dr. Mi-Young".
 _TITLES = frozenset("dr dra mr mrs ms sr sra srta st mt".split())
 #: Portuguese, which must not get Spanish words: it falls back to English.
-_PORTUGUESE = re.compile(r"[\u00e3\u00f5\u00e7]|\b(?:voce|nao|obrigad[oa])\b")
+#: Its own letters, or a word Spanish does not use, typed with or without
+#: accents (matched against the unaccented text too).
+_PORTUGUESE = re.compile(
+    r"[\u00e3\u00f5\u00e7]|\b(?:voce|nao|obrigad[oa]|meus|minhas|quais|"
+    r"preciso|sao|estao|sangue|exames?|tambem)\b")
 _TOKEN = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*|[.!?\u00bf\u00a1]")
 
 
 def _content_words(text: str) -> list[str]:
     """`text`'s words, lowercased, without names and places: a capitalized
-    word that does not start a sentence, and a particle beside any
-    capitalized word."""
+    word that does not start a sentence ("Farmacia Mi Salud")."""
     tokens = _TOKEN.findall(_unaccented(
         unicodedata.normalize("NFKC", text or "")))
     words, starts = [], []
@@ -422,9 +427,6 @@ def _content_words(text: str) -> list[str]:
     for i, w in enumerate(words):
         if capital[i] and not starts[i]:
             continue
-        if w.lower() in _NAME_PARTICLES and any(
-                0 <= j < len(words) and capital[j] for j in (i - 1, i + 1)):
-            continue
         out.append(w.lower())
     return out
 
@@ -441,15 +443,17 @@ def turn_language(text: str) -> str | None:
     the 911 lines are bilingual whatever this says (beta.EMERGENCY_LINE).
 
     Biased toward English: a false positive puts Spanish around an English
-    reader. Names and places are not counted (_content_words). Spanish
-    needs two or more Spanish words outnumbering the English ones, or an
+    reader. Names and places are not counted (_content_words), and the
+    particles de, del, la, las, los, el and y never count. Spanish needs
+    two or more other Spanish words outnumbering the English ones, or an
     opening question or exclamation mark with a Spanish word and no
     English one. Portuguese is English here."""
     t = unicodedata.normalize("NFKC", text or "").casefold()
     if _PORTUGUESE.search(t) or _PORTUGUESE.search(_unaccented(t)):
         return "en"
     words = _content_words(text)
-    es = sum(w in _SPANISH_WORDS for w in words)
+    es = sum(w in _SPANISH_WORDS and w not in _NAME_PARTICLES
+             for w in words)
     en = sum(w in _ENGLISH_WORDS for w in words)
     if es >= 2 and es > en:
         return "es"

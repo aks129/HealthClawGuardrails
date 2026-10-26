@@ -71,7 +71,7 @@ test('a Spanish turn says "This wasn\'t right" in Spanish', async ({ page }) => 
   await expect(page.locator('#log .chip'))
     .toHaveText('Interpretando sus análisis', { timeout: 10_000 });
   await expect(page.locator('#log .flag-open'))
-    .toHaveText('Esta respuesta no es correcta', { timeout: 10_000 });
+    .toHaveText('Algo no está bien en esta respuesta', { timeout: 10_000 });
   await page.locator('#log .flag-open').click();
   await expect(page.locator('#log .flag-note')).toHaveAttribute(
     'placeholder', 'Opcional. Por favor, no incluya datos de salud.');

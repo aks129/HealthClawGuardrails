@@ -157,6 +157,8 @@ def test_english_and_unclear_text_read_as_english(text):
     "La Clinica del Pueblo called about results",
     "\u00a1Thanks!",
     "\u00bfThanks?",
+    # In lower case, as typed on a phone: the particles never count.
+    "appt with dr de la rosa",
 ])
 def test_english_naming_spanish_places_is_clearly_english(text):
     """QA on #1037 F1: names and places are not counted, and a lone opening
@@ -205,7 +207,7 @@ def test_spanish_labels_cover_every_tool():
 @pytest.mark.parametrize("tool, says", [
     ("search_records", "Buscando en sus registros"),
     ("get_labs", "Interpretando sus análisis"),
-    ("get_care_gaps", "Revisando las pruebas preventivas"),
+    ("get_care_gaps", "Revisando los exámenes preventivos"),
 ])
 def test_the_status_lines_seen_live_are_in_spanish(tool, says):
     assert TOOL_LABELS_ES[tool] == says

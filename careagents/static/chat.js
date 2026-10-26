@@ -240,7 +240,7 @@
           done: "Thanks. We'll look at this answer.", errors: FLAG_ERRORS,
           failed: "Something went wrong. Please try again.",
           offline: "Couldn't reach us. Please try again." },
-    es: { open: "Esta respuesta no es correcta",
+    es: { open: "Algo no está bien en esta respuesta",
           ask: "¿Qué estuvo mal en esta respuesta?",
           reason: "Motivo",
           reasons: { wrong: "Incorrecta", confusing: "Confusa",

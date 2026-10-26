@@ -232,7 +232,7 @@ TOOL_LABELS_ES = {
     "get_health_summary": "Leyendo sus registros",
     "get_labs": "Interpretando sus análisis",
     "show_lab_timeline": "Graficando sus resultados a lo largo del tiempo",
-    "get_care_gaps": "Revisando las pruebas preventivas",
+    "get_care_gaps": "Revisando los exámenes preventivos",
     "search_records": "Buscando en sus registros",
     "appointment_brief": "Preparando el resumen de su consulta",
     "start_intake_form": "Preparando su formulario de admisión",
@@ -244,7 +244,7 @@ SAMPLE_TOOL_LABELS_ES = {
     "get_labs": "Interpretando los análisis de ejemplo",
     "show_lab_timeline":
         "Graficando los resultados de ejemplo a lo largo del tiempo",
-    "get_care_gaps": "Revisando las pruebas preventivas",
+    "get_care_gaps": "Revisando los exámenes preventivos",
     "search_records": "Buscando en los registros de ejemplo",
     "appointment_brief": "Preparando el resumen de consulta de ejemplo",
     "start_intake_form": "Preparando el formulario de admisión de ejemplo",
