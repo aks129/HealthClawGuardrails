@@ -178,17 +178,20 @@ def test_the_real_demographic_reason_is_todays(
         "in the records this check can read: ")
 
 
-def test_a_missing_result_reads_as_today(app, client, tenant_id,
-                                          tenant_headers):
+def test_a_missing_result_is_left_off_in_either_voice(app, client, tenant_id,
+                                                      tenant_headers):
+    """It used to read "Result not listed in your records" (or "in these
+    made-up records"). A row with no result tells a clinician nothing, so
+    neither voice lists it (visit brief, 2026-10-26, item 4)."""
     _store(app, {"resourceType": "Observation", "id": "o-empty",
                  "status": "final",
                  "code": {"coding": [{"system": "http://loinc.org",
                                       "code": "4548-4"}]},
                  "effectiveDateTime": "2026-09-01T00:00:00Z"}, tenant_id)
-    real = _strings(_get(client, tenant_headers))
-    assert "Result not listed in your records (Sep 1, 2026)" in real
-    sample = _strings(_get(client, tenant_headers, "?voice=sample"))
-    assert "Result not listed in these made-up records (Sep 1, 2026)" in sample
+    for query in ("", "?voice=sample"):
+        strings = _strings(_get(client, tenant_headers, query))
+        assert not any("Sep 1, 2026" in s for s in strings), query
+        assert not any("not listed" in s for s in strings), query
 
 
 # --- F3: a medicine's name carries its strength -----------------------------

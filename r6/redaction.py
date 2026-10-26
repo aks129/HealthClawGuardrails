@@ -258,11 +258,13 @@ _ATTACHMENT_ONLY_KEYS = (
 # fits. That residual is tracked on #925; consumers that put a unit in front
 # of a model or a person keep their own closed lists, which are the real
 # guard (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
-_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}()#_'\-µ°]{1,24}")
-_LONG_WORD = re.compile(r"[A-Za-zµ°]{9,}")
+# Both micro spellings, U+00B5 and the Greek mu U+03BC, appear in real
+# feeds ("10*3/μL"); the Greek one was blanked as [Redacted] (#1036 QA).
+_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}()#_'\-µμ°]{1,24}")
+_LONG_WORD = re.compile(r"[A-Za-zµμ°]{9,}")
 _LONG_NUMBER = re.compile(r"[0-9]{4,}")
 _LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")
-_LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
+_LETTER_RUN = re.compile(r"[A-Za-zµμ°]+")
 #: Units of letters only, compared case-insensitively. A superset of every
 #: letters-only unit on the consumers' closed lists, or the engine would
 #: blank one before they see it.

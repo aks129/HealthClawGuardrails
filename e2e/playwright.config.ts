@@ -39,6 +39,9 @@ export const CARE_ALLOW_EMAIL = 'e2e-allowlisted@example.test';
 // in twice within the 30-second resend wait gets no new code, so the second
 // sign-in read back the first, already-used one.
 export const CARE_ALLOW_UPLOAD_EMAIL = 'e2e-allowlisted-upload@example.test';
+// A third, for careagents-brief-print.spec.ts: the brief needs an assistant,
+// and an assistant needs a real-record connection this server lets through.
+export const CARE_ALLOW_BRIEF_EMAIL = 'e2e-allowlisted-brief@example.test';
 // The owner of the first CareAgents server (CARE_OWNER_EMAILS), for
 // careagents-admin-testers.spec.ts. Fixed for the same reason: owner
 // addresses are server env.
@@ -163,7 +166,8 @@ export default defineConfig({
         RESEND_API_KEY: '',
         CARE_REAL_RECORDS: 'allowlist',
         CARE_REAL_RECORDS_ALLOWLIST:
-          `${CARE_ALLOW_EMAIL},${CARE_ALLOW_UPLOAD_EMAIL}`,
+          `${CARE_ALLOW_EMAIL},${CARE_ALLOW_UPLOAD_EMAIL},` +
+          `${CARE_ALLOW_BRIEF_EMAIL}`,
         // Fasten key present and the wearables sidecar declared wired, so the
         // ONLY thing between an account and a live real-record tile here is
         // the allowlist. Without these two, `catalog()` would answer "soon"

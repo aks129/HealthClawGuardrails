@@ -660,7 +660,11 @@ def test_the_brief_never_names_a_record_by_an_absence_concept(
         {"system": SNOMED, "code": "44054006"}]})
     [field] = engine.build_problems([mixed])
     assert field.label == engine.UNLABELLED
-    [field] = engine.build_labs([dict(lab, code=mixed["code"])])
+    # With a value: a lab with none is left off the brief (visit brief,
+    # 2026-10-26, item 4), which would make this check vacuous.
+    [field] = engine.build_labs([dict(lab, code=mixed["code"],
+                                      valueQuantity={"value": 5,
+                                                     "unit": "mg/dL"})])
     assert field.label == engine.UNLABELLED
 
 
@@ -699,7 +703,7 @@ def test_a_coded_value_the_brief_cannot_name_is_not_called_missing(
                             lambda s, c: None)
     [field] = engine.build_labs([obs])
     assert field.value.startswith(engine.UNLABELLED)
-    assert engine.RESULT_NOT_LISTED not in field.value
+    assert "not listed" not in field.value
 
 
 def test_real_engine_brief_does_not_list_no_known_allergy_as_a_problem(

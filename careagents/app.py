@@ -333,6 +333,14 @@ def _connection_is_live(ctx: dict) -> bool:
     return (ctx.get("connection") or {}).get("status") != "revoked"
 
 
+def _brief_as_of(now: datetime | None = None) -> str:
+    """The day the brief's records were read, as it prints it ("Oct 26,
+    2026"), in UTC. The fallback without script: brief.js rewrites it in
+    the viewer's own time zone from the same instant (#1038 QA)."""
+    now = now or datetime.now(timezone.utc)
+    return f"{now:%b} {now.day}, {now.year}"
+
+
 def _parse_care_gaps_status(resource: dict | None) -> str:
     """Whether the screening review ran, from the brief's care-gaps section.
 
@@ -2435,6 +2443,8 @@ def create_app(config: Config | None = None,
         if not ctx:
             return redirect(url_for("home"))
         sample = (ctx.get("connection") or {}).get("kind") == "sample"
+        # When the records were read, for the "As of" line.
+        read_at = datetime.now(timezone.utc)
         try:
             # Made-up records ask the engine to word its sentences about
             # "the sample person" (r6/voice.py). A real brief asks as before.
@@ -2449,10 +2459,16 @@ def create_app(config: Config | None = None,
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
                                agent_id=agent_id, sections=sections,
+                               as_of=_brief_as_of(read_at),
+                               as_of_iso=read_at.isoformat(
+                                   timespec="seconds"),
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
                                care_gaps_note=_parse_care_gaps_reason(raw),
+                               care_gaps_demographic=(
+                                   brief_mod.care_gaps_marker(raw, "cause")
+                                   in brief_mod.DEMOGRAPHIC_CAUSES),
                                sample_line=(beta.sample_frame(
                                    hub_view.relation_of(hub_view.person_of(
                                        svc.list_home(acct.id),
@@ -2483,6 +2499,11 @@ def create_app(config: Config | None = None,
             return payload
         if kind == "agent.text":
             return {"type": "text", "text": payload.get("text") or ""}
+        if kind == "agent.lang":
+            # The worker's reading of the turn's language (worker.LANG_EVENT),
+            # for the page's own words. Only a code from a fixed set.
+            lang = payload.get("lang")
+            return {"type": "lang", "lang": lang} if lang == "es" else None
         if kind == "agent.error":
             # The worker's failure text already carries the 911 line; one
             # the engine wrote, or none, gets it here.

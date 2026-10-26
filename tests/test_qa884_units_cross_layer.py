@@ -76,8 +76,10 @@ def test_the_brief_shows_each_number_beside_its_own_unit(
     assert v["qa-creat-si"].startswith("88 umol/L"), v["qa-creat-si"]
     assert v["qa-gluc-si"].startswith("5.4 mmol/L"), v["qa-gluc-si"]
     assert v["qa-a1c-ifcc"].startswith("43 mmol/mol"), v["qa-a1c-ifcc"]
+    # A unit the brief does not recognise shows no number; the row says a
+    # result is on file (#1038 ruling F4).
     for oid in ("qa-chol-case", "qa-ldl-unknown"):
-        assert v[oid].startswith("Result not listed"), (oid, v[oid])
+        assert v[oid].startswith("Result on file"), (oid, v[oid])
     text = json.dumps(v)
     for wrong in ("88 mg/dL", "5.4 mg/dL", "43 %", "190 mg/dL", "100 mg/dL",
                   "MG/DL", "mg/dl/x"):

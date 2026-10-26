@@ -23,7 +23,7 @@ from typing import Callable
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
-from careagents import causes, labs_timeline, llm, text_self
+from careagents import causes, conditions_view, labs_timeline, llm, text_self
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
 
@@ -223,6 +223,33 @@ SAMPLE_TOOL_LABELS = {
     "start_intake_form": "Preparing the sample intake form",
     "check_form_status": "Checking the sample form",
     "propose_action": "Preparing a text to the linked phone",
+}
+
+#: TOOL_LABELS and SAMPLE_TOOL_LABELS for a turn the person wrote in Spanish
+#: (routing.conversation_language): the answer came back in Spanish
+#: (#1017) under English status lines (live, 2026-10-26). "Usted", as beta.EMERGENCY_LINE.
+TOOL_LABELS_ES = {
+    "get_health_summary": "Leyendo sus registros",
+    "get_labs": "Interpretando sus análisis",
+    "show_lab_timeline": "Graficando sus resultados a lo largo del tiempo",
+    "get_care_gaps": "Revisando los exámenes preventivos",
+    "search_records": "Buscando en sus registros",
+    "appointment_brief": "Preparando el resumen de su consulta",
+    "start_intake_form": "Preparando su formulario de admisión",
+    "check_form_status": "Revisando su formulario",
+    "propose_action": "Preparando un mensaje de texto a su teléfono",
+}
+SAMPLE_TOOL_LABELS_ES = {
+    "get_health_summary": "Leyendo los registros de ejemplo",
+    "get_labs": "Interpretando los análisis de ejemplo",
+    "show_lab_timeline":
+        "Graficando los resultados de ejemplo a lo largo del tiempo",
+    "get_care_gaps": "Revisando los exámenes preventivos",
+    "search_records": "Buscando en los registros de ejemplo",
+    "appointment_brief": "Preparando el resumen de consulta de ejemplo",
+    "start_intake_form": "Preparando el formulario de admisión de ejemplo",
+    "check_form_status": "Revisando el formulario de ejemplo",
+    "propose_action": "Preparando un mensaje de texto al teléfono vinculado",
 }
 
 
@@ -1265,6 +1292,28 @@ def _propose_text(hc: HealthClawClient, tenant: str, args: object,
                            "there. Do not propose another.")})
 
 
+def _records(hc: HealthClawClient, tenant: str, rt: str,
+             resolve_ref=None) -> list[dict]:
+    """One record type as the model sees it. Conditions are the current
+    problem list (careagents/conditions_view.py): the engine's full page,
+    resolved entries held back with a note, repeats of a code once, one
+    note for the unreadable ones rather than one each, and no
+    cut at SUMMARY_LIMIT, since the filter already keeps it short."""
+    if rt != "Condition":
+        return _summarize_bundle(hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                                 resolve_ref=resolve_ref)
+    bundle, held_back = conditions_view.current_conditions(
+        hc.search(tenant, rt, {"_count": conditions_view.CONDITION_PAGE}),
+        _coding_key, _withdrawn)
+    out = _summarize_bundle(bundle, limit=conditions_view.CONDITION_PAGE,
+                            resolve_ref=resolve_ref)
+    conditions_view.collapse_unreadable(
+        out, cut=any(i.get("truncated") for i in out))
+    if held_back:
+        out.append(conditions_view.held_back_note())
+    return out
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
                   surface: str = "", origin: str = "",
@@ -1289,8 +1338,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # One failed search used to raise out of the whole tool, and the
             # three that worked went with it.
             try:
-                parts[key] = _summarize_bundle(
-                    hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                parts[key] = _records(
+                    hc, tenant, rt,
                     resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
                                  else None))
             except HealthClawError:
@@ -1502,8 +1551,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps(out)
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
-        return json.dumps(_summarize_bundle(
-            hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+        return json.dumps(_records(
+            hc, tenant, rt,
             resolve_ref=(_medication_resolver(hc, tenant)
                          if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
