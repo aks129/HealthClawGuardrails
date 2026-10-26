@@ -55,7 +55,8 @@ const document = {
   createTextNode: t => new Text(t),
 };
 const code = cutConst('BOLD_OR_ITALIC') + cutConst('LIST_ITEM')
-  + cutConst('HEADING') + cutConst('LINKS') + cutConst('FLAG_OPEN')
+  + cutConst('HEADING') + cutConst('LINKS') + cutConst('FLAG_ERRORS')
+  + cutConst('FLAG_WORDS')
   + cutFn('el') + cutFn('appendLinked') + cutFn('appendInline')
   + cutFn('renderMarkdown') + cutFn('withoutMarkers')
   + 'let rendered = 0; const real = renderMarkdown;'
@@ -179,4 +180,4 @@ def test_this_wasnt_right_follows_the_turns_language(got):
     assert got["flag"]["en"] == "This wasn't right"
     assert got["flag"]["none"] == "This wasn't right"
     assert got["flag"]["fr"] == "This wasn't right"
-    assert got["flag"]["es"] == "Esto no estuvo bien"
+    assert got["flag"]["es"] == "Esta respuesta no es correcta"

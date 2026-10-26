@@ -75,15 +75,17 @@ def _engine_tool_labels(chain):
 def test_a_spanish_sample_turn_round_trips_its_label_on_the_real_engine(
         cfg, svc, monkeypatch):
     """The sample set (never "su/sus"), accent intact, on the wire the
-    browser reads, and the `accepted` language agrees with the worker."""
+    browser reads, and the worker's `lang` event reaches the page (#1037
+    fix round: the language moved from `accepted` to the worker, which
+    reads the conversation's history)."""
     chain, frames = _spanish_sample_turn(
         cfg, svc, monkeypatch, "¿Cuáles son mis análisis más recientes?")
-    accepted = [f for f in frames if f["type"] == "accepted"]
+    langs = [f for f in frames if f["type"] == "lang"]
     tools = [f for f in frames if f["type"] == "tool"]
     texts = [f for f in frames if f["type"] == "text"]
-    assert accepted and accepted[0].get("lang") == "es", frames
+    assert langs == [{"type": "lang", "lang": "es"}], frames
     assert [t["label"] for t in tools] == [SAMPLE_TOOL_LABELS_ES["get_labs"]]
-    assert tools[0]["label"] == "Interpretando los análisis inventados"
+    assert tools[0]["label"] == "Interpretando los análisis de ejemplo"
     assert texts and "análisis" in texts[0]["text"]
     # And what the engine itself stored, not only what was streamed.
     stored = [e for e in _engine_tool_labels(chain)
@@ -98,8 +100,7 @@ def test_an_english_sample_turn_on_the_real_engine_stays_english(
     from careagents.agent import SAMPLE_TOOL_LABELS
     _chain, frames = _spanish_sample_turn(
         cfg, svc, monkeypatch, "What are my most recent labs?")
-    accepted = [f for f in frames if f["type"] == "accepted"]
-    assert accepted and "lang" not in accepted[0]
+    assert not [f for f in frames if f["type"] == "lang"]
     assert [f["label"] for f in frames if f["type"] == "tool"] == [
         SAMPLE_TOOL_LABELS["get_labs"]]
     assert SAMPLE_TOOL_LABELS["get_labs"] != TOOL_LABELS["get_labs"]
@@ -142,10 +143,6 @@ ENGLISH_WITH_SPANISH_NAMES = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #1037 F1: an English sentence naming a Spanish surname or place "
-    "reads as Spanish, so an English reader gets Spanish status lines and "
-    "'Esto no estuvo bien'. Remove this marker with the fix."))
 @pytest.mark.parametrize("text", ENGLISH_WITH_SPANISH_NAMES)
 def test_english_with_spanish_names_reads_as_english(text):
     assert not routing.looks_spanish(text)
@@ -153,11 +150,6 @@ def test_english_with_spanish_names_reads_as_english(text):
 
 # --- the cheerful tone in the composed prompt ---------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #1037 F3: the healthy-habits routine still says 'Celebrate what the "
-    "person keeps doing' (careagents/advisors.py), so the composed prompt "
-    "tells the model both to celebrate and never to praise. Remove this "
-    "marker with the fix."))
 @pytest.mark.parametrize("tone", ["sunny", "calm"])
 def test_no_composed_prompt_asks_the_model_to_celebrate(tone):
     from careagents import advisors

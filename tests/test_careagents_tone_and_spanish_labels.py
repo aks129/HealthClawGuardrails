@@ -7,10 +7,12 @@ lines, and "This wasn't right" in Spanish.
    pinned here), and cheerful stays warm but never praises the person or
    calls anything a win. A saved choice is never changed.
 2. A Spanish question got a Spanish answer (#1017) under English status
-   lines. The turn's language is read once, from the person's latest
-   message (routing.looks_spanish), as #1017's rule reads it: the worker
-   picks the status lines with it, and the chat's `accepted` event carries
-   it for the page.
+   lines. The worker reads the turn's language once, from the person's
+   latest message that says clearly (routing.conversation_language), as
+   #1017's rule reads it. It picks the status lines with it, and says it to
+   the page as an `agent.lang` event, so "This wasn't right" and its sheet
+   follow. Names and places in English ("Dr. de la Cruz") are not Spanish
+   (QA on #1037).
 
 Prompt content only: no live model is called. Synthetic data only.
 """
@@ -18,7 +20,6 @@ Prompt content only: no live model is called. Synthetic data only.
 
 from __future__ import annotations
 
-import json
 import re
 
 import pytest
@@ -107,10 +108,17 @@ def test_cheerful_keeps_its_warmth_and_the_results_rule():
     assert "never call a lab" in voice
 
 
-def test_calm_and_direct_are_unchanged_in_kind():
-    """Only cheerful was toned down: no voice may praise or cheer."""
+def test_no_voice_or_composed_prompt_asks_to_celebrate():
+    """No voice may cheer, and neither may a routine composed with it: the
+    healthy-habits routine said "Celebrate what the person keeps doing" in
+    every tone (QA on #1037 F3)."""
+    from careagents import advisors
     for key, p in personas.PERSONAS.items():
         assert "celebrate" not in p["voice"].lower(), key
+        for routine in [None, *advisors.ADVISORS]:
+            prompt = personas.system_prompt("Juniper", key,
+                                            advisor_key=routine)
+            assert "celebrate" not in prompt.lower(), (key, routine)
 
 
 # --- 2. the turn's language --------------------------------------------------
@@ -141,6 +149,54 @@ def test_english_and_unclear_text_read_as_english(text):
     assert not routing.looks_spanish(text)
 
 
+@pytest.mark.parametrize("text", [
+    "Dr. de la Cruz wants an A1C recheck",
+    "Labs at Del Mar clinic, La Jolla",
+    "Drive from El Paso to Las Cruces",
+    "Saw Dr. Garcia y Lopez at Los Alamos",
+    "La Clinica del Pueblo called about results",
+    "\u00a1Thanks!",
+    "\u00bfThanks?",
+])
+def test_english_naming_spanish_places_is_clearly_english(text):
+    """QA on #1037 F1: names and places are not counted, and a lone opening
+    mark around an English word decides nothing."""
+    assert routing.turn_language(text) == "en"
+
+
+@pytest.mark.parametrize("text", [
+    "s\u00ed", "gracias", "no s\u00e9", "ok", "hola", "",
+])
+def test_a_short_reply_says_too_little_to_tell(text):
+    assert routing.turn_language(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "Voc\u00ea pode ver meus exames?", "N\u00e3o entendi", "obrigado",
+    "Quais s\u00e3o os meus resultados de laborat\u00f3rio?",
+    "Preciso de informa\u00e7\u00e3o sobre a minha press\u00e3o",
+])
+def test_portuguese_falls_back_to_english(text):
+    """QA on #1037 F5: Portuguese is not Spanish."""
+    assert routing.turn_language(text) == "en"
+
+
+@pytest.mark.parametrize("said, lang", [
+    ([SPANISH, "s\u00ed"], "es"),
+    ([SPANISH, "gracias"], "es"),
+    ([SPANISH, "no s\u00e9"], "es"),
+    ([SPANISH, "ok"], "es"),
+    ([ENGLISH, "gracias"], "en"),
+    ([SPANISH, ENGLISH], "en"),
+    ([ENGLISH, SPANISH], "es"),
+    (["s\u00ed"], "en"),
+    ([], "en"),
+])
+def test_a_short_reply_keeps_the_conversations_language(said, lang):
+    """QA on #1037 F4: "s\u00ed" after a Spanish turn stays Spanish."""
+    assert routing.conversation_language(said) == lang
+
+
 def test_spanish_labels_cover_every_tool():
     assert set(TOOL_LABELS_ES) == set(TOOL_LABELS)
     assert set(SAMPLE_TOOL_LABELS_ES) == set(SAMPLE_TOOL_LABELS)
@@ -149,7 +205,7 @@ def test_spanish_labels_cover_every_tool():
 @pytest.mark.parametrize("tool, says", [
     ("search_records", "Buscando en sus registros"),
     ("get_labs", "Interpretando sus análisis"),
-    ("get_care_gaps", "Revisando sus pendientes de atención preventiva"),
+    ("get_care_gaps", "Revisando las pruebas preventivas"),
 ])
 def test_the_status_lines_seen_live_are_in_spanish(tool, says):
     assert TOOL_LABELS_ES[tool] == says
@@ -160,10 +216,13 @@ def test_spanish_sample_labels_never_say_the_records_are_theirs():
     as the tester's own."""
     second = re.compile(r"\b(su|sus|usted|tu|tus)\b", re.IGNORECASE)
     assert not any(second.search(v) for v in SAMPLE_TOOL_LABELS_ES.values())
+    for v in SAMPLE_TOOL_LABELS_ES.values():
+        assert "inventad" not in v and "de muestra" not in v, v
 
 
 def _labels_for(c, fake, agent_id, cfg, svc, monkeypatch, message):
-    """The status lines a turn that reads the labs shows."""
+    """The status lines a turn that reads the labs shows. `fake.events`
+    keeps every run's, so a second turn returns both turns' lines."""
     from careagents import agent as agent_mod
     from careagents.worker import RunWorker
 
@@ -206,30 +265,45 @@ def test_a_spanish_sample_turn_gets_the_made_up_spanish_lines(
                        SPANISH) == [SAMPLE_TOOL_LABELS_ES["get_labs"]]
 
 
-def _accepted(c, agent_id, message):
-    r = c.post("/api/chat", json={"agent_id": agent_id, "message": message,
-                                  "request_id": f"acc-{len(message)}"},
-               buffered=False)
-    try:
-        first = next(iter(r.response))
-    finally:
-        r.close()
-    first = first.decode() if isinstance(first, bytes) else first
-    ev = json.loads(first.split("data: ", 1)[1])
-    assert ev["type"] == "accepted"
-    return ev
-
-
-def test_the_accepted_event_says_a_spanish_turn_is_spanish(
+def test_a_short_spanish_reply_keeps_spanish_status_lines(
         cfg, svc, monkeypatch):
-    _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
-    assert _accepted(c, agent_id, SPANISH).get("lang") == "es"
+    """QA on #1037 F4: "s\u00ed" after a Spanish turn, from the history the
+    worker already reads. Nothing new is stored in CareAgents."""
+    c, fake, agent_id = _real_chat_app(cfg, svc, monkeypatch)
+    _labels_for(c, fake, agent_id, cfg, svc, monkeypatch, SPANISH)
+    assert _labels_for(c, fake, agent_id, cfg, svc, monkeypatch,
+                       "s\u00ed") == [TOOL_LABELS_ES["get_labs"]] * 2
 
 
-def test_the_accepted_event_of_an_english_turn_has_no_language(
+def _lang_events(fake):
+    return [e["payload"] for events in fake.events.values()
+            for e in events if e["type"] == "agent.lang"]
+
+
+def test_the_worker_tells_the_page_a_spanish_turn_is_spanish(
         cfg, svc, monkeypatch):
-    _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
-    assert "lang" not in _accepted(c, agent_id, ENGLISH)
+    c, fake, agent_id = _real_chat_app(cfg, svc, monkeypatch)
+    _labels_for(c, fake, agent_id, cfg, svc, monkeypatch, SPANISH)
+    assert _lang_events(fake) == [{"lang": "es"}]
+
+
+def test_an_english_turn_says_no_language(cfg, svc, monkeypatch):
+    c, fake, agent_id = _real_chat_app(cfg, svc, monkeypatch)
+    _labels_for(c, fake, agent_id, cfg, svc, monkeypatch, ENGLISH)
+    assert _lang_events(fake) == []
+
+
+def test_the_page_gets_only_a_known_language_code(cfg, svc, monkeypatch):
+    """The browser projection passes "es" and drops anything else."""
+    c, fake, agent_id = _real_chat_app(cfg, svc, monkeypatch)
+    _labels_for(c, fake, agent_id, cfg, svc, monkeypatch, SPANISH)
+    [run_id] = list(fake.events)
+    fake._append_run_event(run_id, "agent.lang", {"lang": "<b>x</b>"})
+    r = c.get(f"/api/chat/runs/{run_id}/events",
+              query_string={"agent_id": agent_id, "after": 0})
+    body = r.get_data(as_text=True)
+    assert '"type": "lang", "lang": "es"' in body
+    assert "<b>x</b>" not in body
 
 
 def test_the_911_lines_are_untouched():

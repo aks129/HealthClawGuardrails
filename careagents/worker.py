@@ -161,6 +161,9 @@ _failure_text = agent_failure_text
 #: The run event that says this run's daily turn is already charged. Empty
 #: payload; the browser projection drops event types it does not know.
 CHARGED_EVENT = "agent.charged"
+#: The turn's language when it is Spanish, {"lang": "es"}: for the page's
+#: own words around the answer (chat.js). A language code, never text.
+LANG_EVENT = "agent.lang"
 
 #: The run event that says this failed run's turn was given back. Its
 #: payload is the UTC day the turn was charged on, as CHARGED_EVENT's is.
@@ -476,6 +479,16 @@ class RunWorker:
 
         replay = self.hc.agent_run_events(tenant, run_id, after=0, limit=500)
         events = list(replay.get("events") or [])
+        # The language of the person's latest message, or of the one before
+        # when it says too little ("si", "gracias"): from the history, so a
+        # short reply does not flip the status lines (routing).
+        spanish = routing.conversation_language([
+            m["content"] for m in history
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)]) == "es"
+        if spanish and not any(e.get("type") == LANG_EVENT for e in events):
+            self.hc.append_agent_run_event(
+                run_id, self.worker_id, LANG_EVENT, {"lang": "es"})
         checkpoints = [event for event in events
                        if event.get("type") == "agent.checkpoint"]
         tool_results = {
@@ -561,9 +574,9 @@ class RunWorker:
             run["_refund"]["day"] = day
 
         lead = beta.sample_frame(who) if sample else ""
-        # In Spanish when the person wrote in Spanish: the language of
-        # their latest message, as #1017's rule reads it for the answer.
-        if routing.looks_spanish(user_text):
+        # In Spanish when the person wrote in Spanish, as #1017's rule
+        # reads it for the answer.
+        if spanish:
             labels = SAMPLE_TOOL_LABELS_ES if sample else TOOL_LABELS_ES
         else:
             labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS

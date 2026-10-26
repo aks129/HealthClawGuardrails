@@ -1,6 +1,6 @@
 /**
  * QA for #1037 at phone width: a Spanish sample-mode turn, its status line
- * and "Esto no estuvo bien", and a hostile heading both live and replayed,
+ * and "Esta respuesta no es correcta", and a hostile heading both live and replayed,
  * run by the shipped chat.js AND careagents.css in a real browser at 375px.
  *
  * The fixture mirrors chat.html's structure (.chat-wrap, the sample banner,
@@ -62,7 +62,8 @@ function frame(id: number, ev: Record<string, unknown>) {
 
 // The longest Spanish sample status line, and a long Spanish answer with a
 // heading and a hostile heading.
-const SAMPLE_LABEL = 'Graficando los resultados inventados en el tiempo';
+const SAMPLE_LABEL =
+  'Graficando los resultados de ejemplo a lo largo del tiempo';
 const ANSWER =
   '### Lo que muestran sus análisis de muestra\n'
   + 'Estos registros son inventados. La hemoglobina A1c de muestra fue 6.1% '
@@ -75,11 +76,12 @@ async function open(page: Page) {
     route.fulfill({ contentType: 'text/html', body: FIXTURE_HTML }));
   await page.route('**/api/chat', (route) => {
     const body = frame(0, { type: 'accepted', run_id: 'run-qa1037',
-                            next_cursor: 0, lang: 'es' })
-      + frame(1, { type: 'tool', name: 'show_lab_timeline',
+                            next_cursor: 0 })
+      + frame(1, { type: 'lang', lang: 'es' })
+      + frame(2, { type: 'tool', name: 'show_lab_timeline',
                    label: SAMPLE_LABEL })
-      + frame(2, { type: 'text', text: ANSWER })
-      + frame(3, { type: 'done', status: 'completed' });
+      + frame(3, { type: 'text', text: ANSWER })
+      + frame(4, { type: 'done', status: 'completed' });
     return route.fulfill({ status: 200, contentType: 'text/event-stream',
                            headers: { 'X-CareAgents-Run-ID': 'run-qa1037' },
                            body });
@@ -91,7 +93,7 @@ async function ask(page: Page) {
   await page.locator('#box').fill('¿Cómo han cambiado mis análisis?');
   await page.locator('#send').click();
   await expect(page.locator('#log .flag-open'))
-    .toHaveText('Esto no estuvo bien', { timeout: 10_000 });
+    .toHaveText('Esta respuesta no es correcta', { timeout: 10_000 });
 }
 
 test('a replayed hostile heading stays text at 375px', async ({ page }) => {
@@ -139,12 +141,11 @@ test('a Spanish sample turn fits a 375px phone', async ({ page }) => {
     fullPage: true });
 });
 
-// QA #1037 F2: the sheet behind "Esto no estuvo bien" is all English,
+// QA #1037 F2: the sheet behind the Spanish link was all English,
 // including "Optional. Please don't include health details." on a note
-// that is emailed to the team. Expected to fail until the sheet follows
-// the turn's language; Playwright reports it red once it passes.
-test('the sheet behind "Esto no estuvo bien" is in Spanish', async ({ page }) => {
-  test.fail();
+// that is emailed to the team.
+test('the sheet behind "Esta respuesta no es correcta" is in Spanish',
+  async ({ page }) => {
   await open(page);
   await ask(page);
   await page.locator('#log .flag-open').click();

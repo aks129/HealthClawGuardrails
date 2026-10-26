@@ -4,8 +4,8 @@
  *
  * A Spanish question got a Spanish answer (#1017) under English status
  * lines and an English "This wasn't right". The server now says the turn is
- * Spanish on the `accepted` event and stores Spanish status lines; this
- * pins the page side: the link follows `accepted`, and the chip shows the
+ * Spanish with an `agent.lang` event and stores Spanish status lines; this
+ * pins the page side: the link follows that event, and the chip shows the
  * label it is sent. An answer's "### " line showed as written; it is now a
  * heading, and a hostile one stays text.
  *
@@ -45,13 +45,13 @@ async function answerWith(page: Page, lang: string | null, label: string,
   await page.route(FIXTURE, (route) =>
     route.fulfill({ contentType: 'text/html', body: FIXTURE_HTML }));
   await page.route('**/api/chat', (route) => {
-    const accepted: Record<string, unknown> = {
-      type: 'accepted', run_id: 'run-e2e', next_cursor: 0 };
-    if (lang) accepted.lang = lang;
-    const body = frame(0, accepted)
-      + frame(1, { type: 'tool', name: 'get_labs', label })
-      + frame(2, { type: 'text', text })
-      + frame(3, { type: 'done', status: 'completed' });
+    // The worker's `agent.lang` event, as app.py projects it.
+    const body = frame(0, { type: 'accepted', run_id: 'run-e2e',
+                            next_cursor: 0 })
+      + (lang ? frame(1, { type: 'lang', lang }) : '')
+      + frame(2, { type: 'tool', name: 'get_labs', label })
+      + frame(3, { type: 'text', text })
+      + frame(4, { type: 'done', status: 'completed' });
     return route.fulfill({ status: 200, contentType: 'text/event-stream',
                            headers: { 'X-CareAgents-Run-ID': 'run-e2e' },
                            body });
@@ -71,7 +71,11 @@ test('a Spanish turn says "This wasn\'t right" in Spanish', async ({ page }) => 
   await expect(page.locator('#log .chip'))
     .toHaveText('Interpretando sus análisis', { timeout: 10_000 });
   await expect(page.locator('#log .flag-open'))
-    .toHaveText('Esto no estuvo bien', { timeout: 10_000 });
+    .toHaveText('Esta respuesta no es correcta', { timeout: 10_000 });
+  await page.locator('#log .flag-open').click();
+  await expect(page.locator('#log .flag-note')).toHaveAttribute(
+    'placeholder', 'Opcional. Por favor, no incluya datos de salud.');
+  await expect(page.locator('#log .flag-send')).toHaveText('Enviar');
 });
 
 test('an English turn keeps "This wasn\'t right"', async ({ page }) => {

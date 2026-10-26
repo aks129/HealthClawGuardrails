@@ -226,13 +226,13 @@ SAMPLE_TOOL_LABELS = {
 }
 
 #: TOOL_LABELS and SAMPLE_TOOL_LABELS for a turn the person wrote in Spanish
-#: (routing.looks_spanish): the answer came back in Spanish (#1017) under
-#: English status lines (live, 2026-10-26). "Usted", as beta.EMERGENCY_LINE.
+#: (routing.conversation_language): the answer came back in Spanish
+#: (#1017) under English status lines (live, 2026-10-26). "Usted", as beta.EMERGENCY_LINE.
 TOOL_LABELS_ES = {
     "get_health_summary": "Leyendo sus registros",
     "get_labs": "Interpretando sus análisis",
-    "show_lab_timeline": "Graficando sus resultados en el tiempo",
-    "get_care_gaps": "Revisando sus pendientes de atención preventiva",
+    "show_lab_timeline": "Graficando sus resultados a lo largo del tiempo",
+    "get_care_gaps": "Revisando las pruebas preventivas",
     "search_records": "Buscando en sus registros",
     "appointment_brief": "Preparando el resumen de su consulta",
     "start_intake_form": "Preparando su formulario de admisión",
@@ -240,14 +240,15 @@ TOOL_LABELS_ES = {
     "propose_action": "Preparando un mensaje de texto a su teléfono",
 }
 SAMPLE_TOOL_LABELS_ES = {
-    "get_health_summary": "Leyendo los registros inventados",
-    "get_labs": "Interpretando los análisis inventados",
-    "show_lab_timeline": "Graficando los resultados inventados en el tiempo",
-    "get_care_gaps": "Revisando exámenes de detección y vacunas",
-    "search_records": "Buscando en los registros inventados",
-    "appointment_brief": "Preparando el resumen de consulta de muestra",
-    "start_intake_form": "Preparando el formulario de admisión de muestra",
-    "check_form_status": "Revisando el formulario de muestra",
+    "get_health_summary": "Leyendo los registros de ejemplo",
+    "get_labs": "Interpretando los análisis de ejemplo",
+    "show_lab_timeline":
+        "Graficando los resultados de ejemplo a lo largo del tiempo",
+    "get_care_gaps": "Revisando las pruebas preventivas",
+    "search_records": "Buscando en los registros de ejemplo",
+    "appointment_brief": "Preparando el resumen de consulta de ejemplo",
+    "start_intake_form": "Preparando el formulario de admisión de ejemplo",
+    "check_form_status": "Revisando el formulario de ejemplo",
     "propose_action": "Preparando un mensaje de texto al teléfono vinculado",
 }
 

@@ -465,7 +465,7 @@ const scrolled = [];
 async function fetch(url, opts) { sentBody = opts.body;
   return { ok: true, json: async () => ({ ok: true }) }; }
 const code = cutFn('el') + cutConst('FLAG_REASONS') + cutConst('NOTE_MAX')
-  + cutFn('flagBody') + cutConst('FLAG_ERRORS') + cutConst('FLAG_OPEN')
+  + cutFn('flagBody') + cutConst('FLAG_ERRORS') + cutConst('FLAG_WORDS')
   + cutFn('addFlag')
   + 'return addFlag;';
 const addFlag = new Function('document', 'fetch', 'scroll', code)(

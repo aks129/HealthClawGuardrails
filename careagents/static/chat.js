@@ -229,31 +229,58 @@
     too_long: "That note is too long. Please make it shorter.",
   };
 
-  // The link's words by the turn's language: "es" when the person wrote in
-  // Spanish (the server's `accepted` event, routing.looks_spanish).
-  const FLAG_OPEN = { en: "This wasn't right", es: "Esto no estuvo bien" };
+  // The link's and the sheet's words by the turn's language: "es" when the
+  // worker read the turn as Spanish (its `lang` event, from
+  // routing.conversation_language). The reason codes sent never change.
+  const FLAG_WORDS = {
+    en: { open: "This wasn't right", ask: "What was wrong with this answer?",
+          reason: "Reason", reasons: null, send: "Send", cancel: "Cancel",
+          noteLabel: "Optional note",
+          note: "Optional. Please don't include health details.",
+          done: "Thanks. We'll look at this answer.", errors: FLAG_ERRORS,
+          failed: "Something went wrong. Please try again.",
+          offline: "Couldn't reach us. Please try again." },
+    es: { open: "Esta respuesta no es correcta",
+          ask: "¿Qué estuvo mal en esta respuesta?",
+          reason: "Motivo",
+          reasons: { wrong: "Incorrecta", confusing: "Confusa",
+                     not_what_asked: "No hizo lo que pedí",
+                     unsafe: "Me pareció peligrosa o preocupante",
+                     other: "Otra cosa" },
+          send: "Enviar", cancel: "Cancelar", noteLabel: "Nota opcional",
+          note: "Opcional. Por favor, no incluya datos de salud.",
+          done: "Gracias. Revisaremos esta respuesta.",
+          errors: {
+            rate_limited: "Ha marcado muchas respuestas en esta hora. " +
+              "Inténtelo más tarde.",
+            not_sent: "No pudimos enviarlo ahora. Inténtelo de nuevo.",
+            too_long: "La nota es demasiado larga. Acórtela, por favor." },
+          failed: "Algo salió mal. Inténtelo de nuevo.",
+          offline: "No pudimos conectarnos. Inténtelo de nuevo." },
+  };
 
   // A quiet link under the bubble, beside it rather than inside it, so the
   // answer's own text is untouched. One tap opens a small sheet in place.
   function addFlag(bubble, runId, lang) {
+    const words = FLAG_WORDS[lang === "es" ? "es" : "en"];
     const wrap = el("div", "flag");
-    const open = el("button", "flag-open",
-                    FLAG_OPEN[lang === "es" ? "es" : "en"]);
+    const open = el("button", "flag-open", words.open);
     open.type = "button";
     wrap.appendChild(open);
     bubble.insertAdjacentElement("afterend", wrap);
     open.addEventListener("click", function () {
       open.hidden = true;
       const sheet = el("div", "flag-sheet");
-      sheet.appendChild(el("p", "flag-ask", "What was wrong with this answer?"));
+      sheet.appendChild(el("p", "flag-ask", words.ask));
       const reasons = el("div", "flag-reasons");
       reasons.setAttribute("role", "group");
-      reasons.setAttribute("aria-label", "Reason");
-      const send = el("button", "btn-primary flag-send", "Send");
+      reasons.setAttribute("aria-label", words.reason);
+      const send = el("button", "btn-primary flag-send", words.send);
       send.type = "button"; send.disabled = true;
       let reason = null;
       FLAG_REASONS.forEach(function (pair) {
-        const b = el("button", "flag-reason", pair[1]);
+        const b = el("button", "flag-reason",
+                     words.reasons ? words.reasons[pair[0]] : pair[1]);
         b.type = "button";
         b.setAttribute("aria-pressed", "false");
         b.addEventListener("click", function () {
@@ -268,11 +295,11 @@
       sheet.appendChild(reasons);
       const note = el("textarea", "field flag-note");
       note.rows = 2; note.maxLength = NOTE_MAX;
-      note.setAttribute("aria-label", "Optional note");
-      note.placeholder = "Optional. Please don't include health details.";
+      note.setAttribute("aria-label", words.noteLabel);
+      note.placeholder = words.note;
       sheet.appendChild(note);
       const row = el("div", "flag-actions");
-      const cancel = el("button", "btn-secondary flag-cancel", "Cancel");
+      const cancel = el("button", "btn-secondary flag-cancel", words.cancel);
       cancel.type = "button";
       row.appendChild(send); row.appendChild(cancel);
       sheet.appendChild(row);
@@ -300,14 +327,12 @@
           const d = await r.json().catch(() => ({}));
           if (r.ok && d.ok) {
             wrap.textContent = "";
-            wrap.appendChild(el("p", "flag-done",
-              "Thanks. We'll look at this answer."));
+            wrap.appendChild(el("p", "flag-done", words.done));
             return;
           }
-          status.textContent = FLAG_ERRORS[d.error] ||
-            "Something went wrong. Please try again.";
+          status.textContent = words.errors[d.error] || words.failed;
         } catch (e) {
-          status.textContent = "Couldn't reach us. Please try again.";
+          status.textContent = words.offline;
         }
         send.disabled = false;
       });
@@ -602,9 +627,8 @@
         if (ev.type === "accepted") {
           state.runId = ev.run_id;
           state.cursor = Math.max(state.cursor, ev.next_cursor || 0);
-          // Only the POST that asked says; a reconnect keeps it.
-          if (ev.lang) state.lang = ev.lang;
-        } else if (ev.type === "tool") addChip(ev.label);
+        } else if (ev.type === "lang") state.lang = ev.lang;
+        else if (ev.type === "tool") addChip(ev.label);
         else if (ev.type === "card" && ev.kind === "review")
           addReviewCard(ev.action_id, ev.review_url, ev.label);
         else if (ev.type === "card" && ev.kind === "pdf")
