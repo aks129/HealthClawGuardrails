@@ -61,6 +61,23 @@ test('the brief fits a 375px phone, prints, and prints without controls',
     const print = page.locator('#brief-print');
     await expect(print).toBeVisible();
 
+    // QA #1038: no sideways scroll is not enough. A third pill squeezed the
+    // title column to 33px at 375 (0 at 320): "Visi / brie" under the
+    // button, the subtitle a few letters a line. The title must keep its
+    // width and must not sit under the buttons.
+    const head = await page.evaluate(() => {
+      const h1 = document.querySelector('h1')!.getBoundingClientRect();
+      const btn = document.getElementById('brief-print')!
+        .getBoundingClientRect();
+      const title = document.querySelector('h1')!;
+      return { h1w: h1.width, need: title.scrollWidth,
+               overlap: !(btn.left >= h1.right || btn.top >= h1.bottom
+                          || btn.bottom <= h1.top || btn.right <= h1.left) };
+    });
+    expect.soft(head.need).toBeLessThanOrEqual(Math.ceil(head.h1w));
+    expect.soft(head.h1w).toBeGreaterThanOrEqual(120);
+    expect.soft(head.overlap).toBe(false);
+
     // The browser's dialog is not something a test can drive; that the
     // button calls window.print is.
     await page.evaluate(() => {
@@ -83,4 +100,30 @@ test('the brief fits a 375px phone, prints, and prints without controls',
     expect(await page.evaluate(
       () => getComputedStyle(document.body).backgroundColor))
       .toBe('rgb(255, 255, 255)');
+
+    // QA #1038: "black on white whatever the screen theme was". A phone in
+    // dark mode prints with the dark tokens: careagents.css sets them on
+    // :root:not([data-theme="light"]), which outranks brief-print.css's
+    // bare :root, so grey-on-white text and a near-black page and cards.
+    await page.emulateMedia({ media: 'print', colorScheme: 'dark' });
+    const dark = await page.evaluate(() => {
+      const css = (sel: string, prop: string) => {
+        const el = document.querySelector(sel);
+        return el ? getComputedStyle(el).getPropertyValue(prop) : null;
+      };
+      return {
+        html: css('html', 'background-color'),
+        body: css('body', 'background-color'),
+        sub: css('.hub-sub', 'color'),
+        fine: css('.footer-fine', 'color'),
+        empty: css('.brief-empty', 'color'),
+      };
+    });
+    expect.soft(dark.body).toBe('rgb(255, 255, 255)');
+    expect.soft(['rgb(255, 255, 255)', 'rgba(0, 0, 0, 0)']).toContain(dark.html);
+    for (const c of [dark.sub, dark.fine, dark.empty]) {
+      // #333 or darker: the light-mode print value of --ink-soft.
+      const [r, g, b] = (c ?? '').match(/\d+/g)!.map(Number);
+      expect.soft(Math.max(r, g, b), JSON.stringify(dark)).toBeLessThanOrEqual(51);
+    }
   });
