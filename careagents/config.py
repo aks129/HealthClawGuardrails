@@ -55,6 +55,18 @@ def model_endpoint(url: str | None) -> Url | None:
                path=(u.path or "").rstrip("/") or None)
 
 
+def pharmacy_intake_url(url: str | None) -> str | None:
+    """A pharmacy intake URL as it will be requested, or None unless it is
+    https on a DNS name (not an IP literal or a single label), parsed the
+    way requests parses it (model_endpoint)."""
+    u = model_endpoint(url)
+    if u is None or u.scheme != "https" or "." not in u.host:
+        return None
+    if re.fullmatch(r"[0-9.]+|\[?[0-9a-f:]+\]?", u.host):
+        return None
+    return u.url
+
+
 class ConfigError(RuntimeError):
     pass
 
@@ -228,6 +240,23 @@ class Config:
         # non-sample connection (#973).
         self.checkin_wallet_enabled = e.get(
             "CARE_CHECKIN_WALLET", "").lower() in ("1", "true", "yes", "on")
+        # Share with a pharmacy by text (careagents/pharmacy_share.py): the
+        # person texts PHARMACY, replies YES, and the engine makes a
+        # one-use SMART Health Link that is POSTed to the pharmacy's intake
+        # URL. The link never goes by text. Off unless asked for; on, the
+        # intake URL must be a plain https URL on a named host, or the app
+        # refuses to boot. The engine lets a link carry made-up (HTEST)
+        # records only until KTC_LINK_REAL_RECORDS is set there.
+        self.pharmacy_share = _flag(e, "CARE_PHARMACY_SHARE")
+        raw_intake = (e.get("CARE_PHARMACY_INTAKE_URL")
+                      or "https://rxgenie.us/pharmacy/api/intake").strip()
+        self.pharmacy_intake_url = pharmacy_intake_url(raw_intake) or ""
+        if self.pharmacy_share and not self.pharmacy_intake_url:
+            raise ConfigError(
+                "CARE_PHARMACY_INTAKE_URL must be an https URL on a named "
+                "host, with no userinfo, query or fragment")
+        self.pharmacy_name = (e.get("CARE_PHARMACY_NAME")
+                              or "RX Genie Demo Pharmacy").strip()[:60]
         # The connectathon test patient on the wallet page: an account with
         # no real records can choose one tenant seeded from the synthetic
         # US Core fixture, so a visiting tester has something to share.

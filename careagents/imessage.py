@@ -501,6 +501,10 @@ class Deps:
     #: (account_id, handle) the first time a handle must re-confirm.
     #: Tells the owner.
     on_reverify: Callable[[str, str], None] | None = None
+    #: (surface, ctx, text) -> a sentence, or None to let the text reach
+    #: the assistant. PHARMACY / YES / NO (careagents/pharmacy_share.py),
+    #: set only while CARE_PHARMACY_SHARE is on.
+    pharmacy_share: Callable[[dict, dict, str], str | None] | None = None
 
 
 def link_url(origin: str, token: str) -> str:
@@ -696,6 +700,14 @@ def _inbound(deps: Deps, raw_handle: str, text: str,
             return {"reply": APPROVALS_UNCHECKABLE_TEXT}, 200
         return {"reply": approvals_text(count, deps.origin,
                                         ctx["agent"]["id"])}, 200
+    if deps.pharmacy_share is not None:
+        # The person's own word decides a disclosure, never a model turn.
+        # Before the transport's refusal for the same reason as APPROVALS:
+        # every reply is a fixed sentence with no record content, and the
+        # records go to the pharmacy, not over this line.
+        shared = deps.pharmacy_share(surface, ctx, text)
+        if shared:
+            return {"reply": shared}, 200
     refused = transport_block(ctx) if transport_block else None
     if refused:
         # A transport's own refusal carries the 911 line too.

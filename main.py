@@ -300,6 +300,12 @@ def _register_blueprints(flask_app: Flask) -> None:
 
     flask_app.register_blueprint(shc_blueprint)
 
+    # SMART Health Link files (r6/shl_links.py). Own blueprint, no tenant or
+    # token header: the link id in the path is the credential.
+    from r6.shl_links import shl_blueprint
+
+    flask_app.register_blueprint(shl_blueprint)
+
     from r6.email_inbound import email_blueprint
 
     flask_app.register_blueprint(email_blueprint)

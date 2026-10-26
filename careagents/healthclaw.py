@@ -441,6 +441,66 @@ class HealthClawClient:
                                   r.status_code)
         return r.content
 
+    # --- SMART Health Link for a pharmacy (r6/ktc.py, deliver=link) -------
+
+    def mint_ktc_token(self, tenant: str, resource_types: list) -> str:
+        """A token for one ktc export of exactly these types (Patient among
+        them). Read scope, audience `ktc-export`, 120 seconds, single use;
+        never cached, and it goes from here to the engine and nowhere
+        else."""
+        r = self._send(
+            "POST", f"{self.fhir}/internal/step-up-token",
+            json={"tenant_id": tenant, "purpose": "ktc",
+                  "resource_types": list(resource_types)},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            what="ktc token mint")
+        token = (self._json_object(r, "ktc token mint").get("token")
+                 if r.ok else None)
+        if not isinstance(token, str) or not token:
+            raise HealthClawError(
+                f"ktc token mint failed ({r.status_code})", r.status_code)
+        return token
+
+    #: Engine refusals a caller can act on, by status: a fixed code each.
+    _KTC_LINK_CODES = {403: "not_test_data", 404: "disabled",
+                       413: "too_large", 422: "no_patient",
+                       503: "link_unavailable"}
+
+    def ktc_share_link(self, tenant: str, resource_types: list) -> dict:
+        """$share-bundle profile=ktc, deliver=link, for the tenant's one
+        Patient: the engine encrypts and stores the bundle and answers
+        {link_id, shlink, exp}. Only that comes back; the records stay in
+        the engine. The shlink carries the key: the caller hands it to the
+        receiver and keeps it out of every log, row and text.
+
+        An error carries the status and a fixed code, never the engine's
+        body."""
+        subject = self._find_patient_subject(tenant)
+        if not subject:
+            raise HealthClawError("ktc link has no single patient", 0,
+                                  code="no_patient")
+        token = self.mint_ktc_token(tenant, resource_types)
+        r = self._send(
+            "POST", f"{self.fhir}/$share-bundle",
+            json={"profile": "ktc", "deliver": "link",
+                  "resource_types": list(resource_types),
+                  "patient_id": subject.split("/", 1)[1]},
+            headers={"X-Tenant-Id": tenant, "X-Step-Up-Token": token,
+                     "X-Agent-Id": agent_header()},
+            what="ktc link")
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"ktc link failed ({r.status_code})", r.status_code,
+                code=self._KTC_LINK_CODES.get(r.status_code, ""))
+        body = self._json_object(r, "ktc link")
+        shlink, exp = body.get("shlink"), body.get("exp")
+        if (not isinstance(shlink, str) or not shlink.startswith("shlink:/")
+                or not isinstance(exp, int)):
+            raise HealthClawError("ktc link returned invalid data",
+                                  r.status_code)
+        return {"shlink": shlink, "exp": exp}
+
     def _patient_subject(self, tenant: str) -> str | None:
         """`Patient/<id>` for the tenant's one Patient, else None.
 

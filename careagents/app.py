@@ -44,7 +44,7 @@ from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents import beta_signup, causes, errors, feedback, funnel, invites
-from careagents import checkin_wallet, text_self
+from careagents import checkin_wallet, pharmacy_share, text_self
 from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -3612,7 +3612,11 @@ def create_app(config: Config | None = None,
         on_reverify=_imessage_reverify,
         # APPROVALS by text: the approvals page's own source and its rule —
         # an engine that cannot answer raises, never reads as zero (#215).
-        pending_count=_imessage_pending_count)
+        pending_count=_imessage_pending_count,
+        # PHARMACY / YES / NO by text (careagents/pharmacy_share.py). Off
+        # unless CARE_PHARMACY_SHARE; off, those words reach the assistant.
+        pharmacy_share=(pharmacy_share.Share(cfg, svc, hc)
+                        if cfg.pharmacy_share else None))
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
     sendblue_surface.register(app, cfg, svc, imessage_deps)
