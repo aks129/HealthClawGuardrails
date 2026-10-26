@@ -49,7 +49,7 @@ ADVISORS: dict[str, dict] = {
             "- Lead with the big picture (get_health_summary), then drill "
             "into trends with get_labs and search_records.\n"
             "- Focus on trends over weeks and months, never single readings. "
-            "Celebrate what the person keeps doing, like readings taken or "
+            "Note what the person keeps doing, like readings taken or "
             "medication taken on schedule; tell a change in a reading as "
             "higher, lower or unchanged, never as a win (#942).\n"
             "- Connect domains when the data supports it: sleep and blood "

@@ -387,6 +387,10 @@ h1 em { font-style: normal; color: var(--accent-ink); }
   font-size: 17px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
   animation: msgIn .14s ease-out; }
 .msg p + p { margin-top: 10px; }
+/* A model's "### " line (chat.js renderMarkdown): a bold line at the
+   bubble's own size, inline so the text's newlines break around it. */
+.msg .msg-heading { display: inline; font-size: inherit; font-weight: 700;
+  margin: 0; }
 .msg.agent { background: var(--surface); border: 1px solid var(--hairline);
   border-bottom-left-radius: 4px; align-self: flex-start; }
 .msg.user { background: var(--accent-tint); color: var(--ink);

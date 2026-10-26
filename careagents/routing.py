@@ -365,6 +365,130 @@ def _unaccented(text: str) -> str:
                    and ch not in _INVISIBLE)
 
 
+#: Common Spanish words that are not also everyday English words ("son",
+#: "a" and "no" are left out), without accents, for turn_language. Never
+#: the particles in _NAME_PARTICLES: "dr de la rosa" typed in lower case
+#: is English naming someone (QA on #1037).
+_SPANISH_WORDS = frozenset(
+    "que como cual cuales cuando donde porque pero tambien muy hay "
+    "una uno unos unas mis con es esta estan estoy esto significa "
+    "estos tengo tiene tienen necesito puedo puede debo hola gracias sobre "
+    "para por mi resultados analisis medicamentos presion azucar sangre "
+    "examenes vacunas cita duele fiebre saber revisa favor si se usted "
+    "ustedes nuestro nuestra mucho poco ahora hoy ayer manana tomo tomar "
+    "dolor cabeza todavia entonces bien mal ya quiero pecho siento "
+    "cansado cansada mareo miedo ayuda ayudame tenido sentido explica "
+    "explicame repite medicinas colesterol alta alto preocuparme fue "
+    "ultimo algo malo dime entiendo faltan pastilla doctora dice".split())
+#: English function words and everyday short words. Large on purpose: the
+#: bias is toward English, so an English sentence naming a Spanish place
+#: has plenty here to outweigh what survives the name filter. Not "ok":
+#: it is said in Spanish too, and carries the turn before.
+_ENGLISH_WORDS = frozenset(
+    "the an at from with about my me i is are was were be been being am "
+    "to of for on in and or but if so not what when where which who whom "
+    "whose why how do does did done can could should would will shall may "
+    "might must have has had having it its this that these those there "
+    "here you your yours we our us they them their he him his she her "
+    "hers by up down out over under after before into onto than then too "
+    "very just also any some all each every more most much many few "
+    "please thanks thank yes hi hello hey show tell give get got "
+    "make need want wants know see saw said says go going went come "
+    "called about again still last next today tomorrow yesterday week "
+    "month year time results result labs lab visit".split())
+#: Part of a name or a place as often as Spanish: "dr de la cruz", "El
+#: Paso", "Garcia y Lopez". Never counted toward Spanish.
+_NAME_PARTICLES = frozenset("de del la las los el y".split())
+#: Words in both languages ("me siento", "he tenido", "¿qué come?"): they
+#: count for neither side, so a reply built on them carries the
+#: conversation's language instead of flipping it (QA on #1037).
+_BOTH_LANGUAGES = frozenset("me he come no a son has".split())
+#: A capital after these is a name, not a new sentence: "Dr. Mi-Young".
+_TITLES = frozenset("dr dra mr mrs ms sr sra srta st mt".split())
+#: Portuguese, which must not get Spanish words: it falls back to English.
+#: Its own letters, or a word Spanish does not use, typed with or without
+#: accents (matched against the unaccented text too). Not "preciso": "es
+#: preciso tomar" is Spanish.
+_PORTUGUESE = re.compile(
+    r"[\u00e3\u00f5\u00e7]|\b(?:voce|nao|obrigad[oa]|meus|minhas|quais|"
+    r"sao|estao|sangue|exames?|tambem)\b")
+_TOKEN = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*|[.!?\u00bf\u00a1]")
+
+
+def _content_words(text: str) -> list[str]:
+    """`text`'s words, lowercased, without names and places: a capitalized
+    word that does not start a sentence ("Farmacia Mi Salud")."""
+    tokens = _TOKEN.findall(_unaccented(
+        unicodedata.normalize("NFKC", text or "")))
+    words, starts = [], []
+    start, prev = True, ""
+    for tok in tokens:
+        if tok in ".!?\u00bf\u00a1":
+            # "Dr." is not the end of a sentence.
+            start = not (tok == "." and prev.lower() in _TITLES)
+            continue
+        words.append(tok)
+        starts.append(start)
+        start, prev = False, tok
+    capital = [w[:1].isupper() for w in words]
+    out = []
+    for i, w in enumerate(words):
+        if capital[i] and not starts[i]:
+            continue
+        out.append(w.lower())
+    return out
+
+
+def turn_language(text: str) -> str | None:
+    """"es" when the person clearly wrote this in Spanish, "en" when they
+    clearly did not, None when it says too little to tell ("si",
+    "gracias", "ok"): the caller then carries the turn before
+    (conversation_language).
+
+    The one place a turn's language is read, for the words the page puts
+    around a Spanish answer (status lines, "This wasn't right"). The
+    answer's own language is the model's (personas.REPLY_LANGUAGE), and
+    the 911 lines are bilingual whatever this says (beta.EMERGENCY_LINE).
+
+    Biased toward English: a false positive puts Spanish around an English
+    reader. Names and places are not counted (_content_words), and the
+    particles de, del, la, las, los, el and y never count, nor do words
+    both languages use (me, he, come, no, a, son, has). Spanish needs
+    two or more other Spanish words outnumbering the English ones, or an
+    opening question or exclamation mark with a Spanish word and no
+    English one. Portuguese is English here."""
+    t = unicodedata.normalize("NFKC", text or "").casefold()
+    if _PORTUGUESE.search(t) or _PORTUGUESE.search(_unaccented(t)):
+        return "en"
+    words = [w for w in _content_words(text) if w not in _BOTH_LANGUAGES]
+    es = sum(w in _SPANISH_WORDS and w not in _NAME_PARTICLES
+             for w in words)
+    en = sum(w in _ENGLISH_WORDS for w in words)
+    if es >= 2 and es > en:
+        return "es"
+    if es >= 1 and en == 0 and ("\u00bf" in t or "\u00a1" in t):
+        return "es"
+    if en >= 1:
+        return "en"
+    return None
+
+
+def looks_spanish(text: str) -> bool:
+    """turn_language says Spanish, from this message alone."""
+    return turn_language(text) == "es"
+
+
+def conversation_language(said: list[str]) -> str:
+    """The language of the latest message in `said` (oldest first) that
+    says clearly, so a short "si" or "gracias" keeps the conversation's
+    language. English when none does."""
+    for text in reversed(said):
+        lang = turn_language(text)
+        if lang:
+            return lang
+    return "en"
+
+
 def is_crisis(text: str) -> bool:
     return bool(_CRISIS.search(_unaccented(normalize(text))))
 

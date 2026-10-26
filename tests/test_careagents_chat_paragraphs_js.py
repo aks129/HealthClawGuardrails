@@ -48,7 +48,7 @@ const document = {
   createTextNode: t => new Text(t),
 };
 const code = cutConst('BOLD_OR_ITALIC') + cutConst('LIST_ITEM')
-  + cutConst('LINKS') + cutFn('el') + cutFn('appendLinked')
+  + cutConst('HEADING') + cutConst('LINKS') + cutFn('el') + cutFn('appendLinked')
   + cutFn('appendInline') + cutFn('renderMarkdown')
   + 'return renderMarkdown;';
 const renderMarkdown = new Function('document', code)(document);
