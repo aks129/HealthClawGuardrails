@@ -26,7 +26,7 @@ import logging
 
 import pytest
 
-from careagents import agent, causes, funnel, llm, mail
+from careagents import agent, beta, causes, funnel, llm, mail
 from careagents.healthclaw import HealthClawError, HealthClawUnconfirmed
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _turn, cfg, svc)
@@ -98,8 +98,8 @@ def test_an_engine_that_stays_gone_still_ends_the_stream_once(
     """#219 still holds: three misses in a row end the stream with the
     generic sentence, counted once."""
     frames = _scripted_run(cfg, svc, monkeypatch, ["fail"] * 10)
-    assert frames[-1] == {"type": "error",
-                          "text": agent.GENERIC_FAILURE_TEXT}
+    assert frames[-1] == {"type": "error", "text": beta.with_911(
+        agent.GENERIC_FAILURE_TEXT)}
     assert [f["type"] for f in frames] == ["accepted", "error"]
     assert _today(svc)["run_replay_error"] == 1
 
@@ -272,7 +272,7 @@ def test_a_dead_model_key_says_unavailable_and_tells_the_owner(
     drop the alert_owner call in the worker -> red."""
     frames, _fake = _failed_turn(cfg, svc, monkeypatch, exc, "dead-key")
     errors = [f for f in frames if f["type"] == "error"]
-    assert errors and errors[-1]["text"] == (
+    assert errors and errors[-1]["text"] == beta.with_911(
         "The assistant is unavailable right now; we've been told.")
     assert len(owner_mail) == 1
     to, subject, line = owner_mail[0]
@@ -293,7 +293,7 @@ def test_with_no_owner_address_nobody_claims_to_have_been_told(
     frames, _ = _failed_turn(cfg, svc, monkeypatch,
                              llm.LLMOutOfCredit("billing"), "untold")
     errors = [f for f in frames if f["type"] == "error"]
-    assert errors[-1]["text"] == (
+    assert errors[-1]["text"] == beta.with_911(
         "The assistant is unavailable right now. Please try again later.")
     assert "told" not in errors[-1]["text"]
 

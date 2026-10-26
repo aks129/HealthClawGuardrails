@@ -44,7 +44,7 @@ def _chat_agent(c):
 # --- F1 -----------------------------------------------------------------------
 
 def _menu_passkey_href(page):
-    return re.search(r'<a href="(/auth\?enroll=1[^"]*)">Add a passkey</a>',
+    return re.search(r'<a href="(/auth\?enroll=1[^"]*)">Faster sign-in \(passkey\)</a>',
                      page).group(1)
 
 

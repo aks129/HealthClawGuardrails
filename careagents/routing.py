@@ -137,6 +137,7 @@ Anything else, or if unsure, reply with exactly: {HAIKU_PASS}
 def haiku_passed(text: str) -> bool:
     """Did Haiku hand the question on (HAIKU_PASS)? Normalised both sides,
     so a curly apostrophe is still a pass."""
+    # Exact English: safe only because Spanish never reaches Haiku (classify).
     return normalize(HAIKU_PASS) in normalize(text)
 
 
@@ -149,19 +150,134 @@ CLINICAL_TOOLS = frozenset({
 #: Longer than this is not small talk.
 _MAX_HAIKU_CHARS = 120
 
-#: Crisis and emergency language. Never Haiku, whatever else the message
-#: says. The allowlist already refuses these; this is the rule stated out
-#: loud, so a later template cannot quietly admit one.
-_CRISIS = re.compile(r"|".join([
+#: Self-harm and wanting to die: crisis wording that also earns the 988
+#: line where a fixed sentence answers instead of the model
+#: (beta.emergency_first). Part of _CRISIS below, never a separate list.
+#: Spanish (and Spanglish) is written without accents: is_crisis matches the
+#: text with its accents taken off, so "convulsión" and "convulsion" both
+#: count. Broad stems (morir, urgen) are deliberate: a false positive costs
+#: one Sonnet call, a miss puts the next "ok" after a crisis on Haiku.
+#: Security review of #1017 checked the Spanish against ordinary Spanish.
+#: Pills and drugs by name, for the dose and bottle patterns below: "how
+#: much salt would kill me" is not a dose (security round 8).
+_DRUG = (r"pills?|tablets?|meds|medications?|medicines?|insulin|tylenol|"
+         r"acetaminophen|paracetamol|ibuprofen|advil|aspirin|metformin|"
+         r"opioids?|oxy\w{0,8}|xanax|benzos?|fentanyl|morphine|"
+         r"antidepressants?|sleeping pills|doses?")
+
+#: Not self-harm: "me corto el pelo", "voy a cortarme las uñas".
+_NOT_GROOMING = (r"(?! (?:el |la |las |los |mi |mis )?"
+                 r"(?:pelo|cabello|unas|flequillo|barba))")
+
+_SELF_HARM_PATTERNS = [
     r"suicid", r"kill(?:ing)? my ?self", r"end(?:ing)? (?:it|my life|it all)",
     r"(?:want to|wanna|going to|gonna) die", r"don'?t want to (?:live|be here)",
     r"self.?harm", r"hurt(?:ing)? my ?self", r"cut(?:ting)? my ?self",
-    r"overdos", r"\bod\b", r"can'?t breathe", r"cannot breathe",
+    # 911 and 988 as numbers on their own, never inside a phone number or
+    # a lab value.
+    r"overdos", r"\bod\b", r"(?<![\d-])988(?![\d-])",
+    r"sobredosis",
+    r"muriendo", r"me muero", r"no quiero vivir",
+    r"quitarme la vida", r"acabar con (?:mi vida|todo)", r"terminar con todo",
+    r"hacerme dano", r"me (?:quiero |voy a )?hacer dano", r"lastimarme",
+    r"cortarme" + _NOT_GROOMING, r"me corto" + _NOT_GROOMING,
+    r"me corte" + _NOT_GROOMING, r"me estoy cortando" + _NOT_GROOMING,
+    r"cortandome" + _NOT_GROOMING,
+    r"matar(?:me|se)", r"(?:quiero|kiero|voy a) matar",
+    r"(?<!no )(?:quiero|quisiera|prefiero|deseo) morir",
+    r"ganas de morir", r"kiero morir", r"(?:want to|wanna) morir",
+    r"took (?:a (?:whole )?bottle of|all (?:of )?(?:my|the)) "
+    r"(?:pills|meds|medications?|tablets)",
+    r"better off (?:dead|without me)", r"no reason to live",
+    r"hang(?:ing)? my ?self", r"slit(?:ting)? my (?:wrists?|throat)",
+    r"\bkms\b", r"unalive",
+    r"no vale la pena vivir", r"quiero desaparecer",
+    r"(?:quiero|voy a) colgarme", r"me (?:quiero |voy a )?colgar\b",
+    r"cort\w{0,8} las venas", r"me (?:hice|he hecho) dano", r"me lastime",
+    r"no aguanto mas\b", r"(?:irme|ir) de este mundo",
+    # The live-model check of #1017: answered with 911 and 988 by the
+    # model, missed here. "Kill me" only as a wish or a dose: "this traffic
+    # is going to kill me" is a figure of speech (security round 6).
+    r"(?:want|wish|need) (?:it |them |someone |something )?to kill me",
+    r"kill me now", r"(?:pills?|doses?|amount|many) (?:would|will|to) kill me",
+    r"(?:" + _DRUG + r")\b.{0,30}(?:would|will) it take to kill me",
+    # Security round 7: ideation the narrowed patterns missed.
+    r"wish (?:someone|somebody) would kill me",
+    r"(?:just|please) (?:just )?kill me",
+    r"(?:how much|how many) (?:of (?:my|the|these|those) )?(?:\w+ )?"
+    r"(?:" + _DRUG + r")\b(?: \w+)? (?:would|will|to) kill me",
+    r"(?:would|will|could) (?:\d+|\w+) (?:pills?|tablets?|doses?) kill me",
+    r"(?:wish|want) (?:i was|i were|to be) dead"
+    r"(?! (?:tired|certain|serious|sure|set|wrong|right|last))",
+    r"hope i (?:don'?t|do not|never) wake up"
+    r"(?! (?:late|early|too|on time|in time))",
+    r"want (?:it all|everything) to end(?! (?:well|on|soon|early|by|in))",
+    r"(?:took|swallowed) a (?:whole )?bottle of (?:my |the |\w+ )?"
+    r"(?:" + _DRUG + r")\b",
+    r"(?:too many|overdos\w{0,6})\b.{0,40}\bon purpose",
+    r"(?:pastillas|sobredosis|demasiad\w{0,4}).{0,40}a proposito",
+    r"alguien me mate", r"ojala (?:estuviera|estar) muert",
+    r"ojala no despert(?!\w{0,4} (?:tan|temprano))",
+    r"lethal dose", r"dosis letal", r"cuantas pastillas .{0,20}(?:matar|morir)",
+]
+
+#: Medical emergencies, abuse and being unsafe.
+_URGENT_PATTERNS = [
+    r"can'?t breathe", r"cannot breathe",
     r"can not breathe", r"chest pain", r"heart attack", r"stroke",
-    r"seizure", r"unconscious", r"passed out", r"faint", r"bleeding",
-    r"911", r"988", r"emergenc", r"\bem?r\b", r"ambulance", r"crisis",
-    r"abuse", r"\bunsafe\b",
-]))
+    r"seizure", r"unconscious", r"passed out", r"pass(?:es|ing)? out",
+    r"faint", r"bleeding", r"anaphyla", r"throat (?:is )?(?:closing|swelling)",
+    r"can'?t swallow", r"cannot swallow", r"can not swallow",
+    r"(?<![\d-])911(?![\d-])", r"emergenc", r"\bem?r\b", r"ambulance",
+    r"crisis", r"abuse", r"\bunsafe\b",
+    r"dolor (?:en el|de|del) pecho", r"ambulancia", r"desmay", r"sangrado",
+    r"convulsi", r"derrame", r"infarto",
+    r"(?:no puedo|can.?t|cannot|cuesta|dificultad para|trabajo para) respirar",
+    r"no puedo breath", r"falta (?:el |de )?aire", r"me ahog",
+    r"perd\w{0,8} el conocimiento", r"inconscien",
+    r"no (?:responde|despierta|reacciona) (?:y|ni|cuando|aunque|al)\b",
+    r"(?:no|ni) (?:se )?despierta",
+    r"sangrando", r"sangro", r"mucha sangre", r"perdiendo sangre",
+    r"no (?:siento|puedo mover) (?:el|la|mi) (?:brazo|pierna|cara|mano)",
+    r"mitad del cuerpo", r"cara caida", r"cayo la cara", r"boca torcida",
+    r"no puede hablar", r"habla arrastrada", r"embolia", r"\bictus\b",
+    # Bounded: an unbounded \w* here was quadratic in a long word.
+    r"(?:dolor|duele|presion|opresion|aprieta|arde)\w{0,6}.{0,20}pecho",
+    r"pecho.{0,10}(?:hurts|duele|aprieta)", r"chest duele",
+    r"ataque (?:al corazon|cardiac)", r"paro cardiac", r"epilep",
+    r"urgen", r"abus", r"me pega", r"violencia", r"maltrat",
+    r"no (?:estoy|me siento) segur[oa] (?:en|aqui|con)",
+    r"segur[oa] en (?:mi )?casa", r"anafila", r"cierra la garganta",
+    # Overdose and dying wording that is ambiguous on its own: 911, not 988.
+    r"tome demasiad[oa]s? (?:pastillas|pildoras|tabletas|medicina|"
+    r"medicamento|dosis|ibuprofeno|paracetamol|acetaminofen|insulina|"
+    r"aspirina|tylenol)",
+    r"(?:me )?tome (?:todas|muchas) (?:las |mis )?pastillas",
+    r"un frasco de pastillas", r"(?:voy|va|vamos) a morir",
+    r"(?:short(?:ness)? of|trouble|difficulty|hard to|struggling to) breath",
+    r"not breathing", r"turning blue", r"\bchok(?:e|es|ed|ing)\b",
+    r"(?:face|mouth|smile) (?:is )?droop", r"droop\w{0,4} (?:face|mouth)",
+    r"slurr", r"can'?t feel my (?:arm|leg|face|hand|side)",
+    r"worst headache", r"(?:coughing|vomiting|throwing) (?:up )?blood",
+    r"allergic reaction", r"(?:lips?|tongue|face|throat) (?:are |is )?swell",
+    r"(?:husband|wife|partner|boyfriend|girlfriend|he|she) (?:hits|beats) me",
+    r"not safe at home",
+    r"no respira", r"no respiro", r"ahogando", r"falta (?:la |de )?respiracion",
+    r"(?:vomito|vomitando|toso|tosiendo) sangre", r"peor dolor de cabeza",
+    r"traba la lengua", r"cara dormida", r"me (?:golpea|amenaza)",
+    r"not waking up", r"won'?t wake up", r"unresponsive", r"collaps",
+    r"i'?m dying", r"i am dying", r"(?:can'?t|can not|cannot) breath\b",
+    r"sangra mucho", r"no puedo hablar", r"desplom", r"envenen",
+    # Possibly an accident, not self-harm: 911 only (security round 6).
+    r"(?:took|taken|swallowed) (?:way )?too many",
+    r"too many (?:pills|tablets)\b",
+]
+
+#: Crisis and emergency language. Never Haiku, whatever else the message
+#: says. The allowlist already refuses these; this is the rule stated out
+#: loud, so a later template cannot quietly admit one.
+_CRISIS = re.compile(r"|".join(_SELF_HARM_PATTERNS + _URGENT_PATTERNS))
+_SELF_HARM = re.compile(r"|".join(_SELF_HARM_PATTERNS))
 
 #: Whole messages made only of these words are small talk.
 _SMALL_TALK = frozenset("""
@@ -208,21 +324,178 @@ _TEMPLATES = re.compile(r"|".join(f"(?:{t})" for t in [
 ]))
 
 
+#: Apostrophes read as ': the curly one and the modifier letter (U+02BC),
+#: so "canʼt breathe" is "can't breathe".
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u02bc": "'"})
+
+
 def normalize(text: str) -> str:
-    """NFKC, invisible format characters removed, casefolded.
+    """NFKC, invisible format characters removed, casefolded, whitespace
+    runs collapsed to one space.
 
     NFKC folds fullwidth and other compatibility letters to ASCII, and the
     format characters (zero-width space, joiners, bidi marks) are what split
-    a word so a scan misses it. Anything still not ASCII afterwards (a
+    a word so a scan misses it. A tab or a line break between two words
+    splits a phrase the same way. Anything still not ASCII afterwards (a
     Cyrillic er that looks like p, an emoji) is left for classify to
     refuse."""
     t = unicodedata.normalize("NFKC", text or "")
     t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf")
-    return t.replace("’", "'").casefold().strip()
+    t = re.sub(r"\s+", " ", t.translate(_APOSTROPHES))
+    return t.casefold().strip()
+
+
+#: Marks that sit invisibly inside a word: the combining grapheme joiner,
+#: variation selectors and zero-width characters. Most are category Mn or
+#: Cf already; listed so none can split a crisis word whatever its category.
+_INVISIBLE = frozenset(
+    ["\u034f", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"]
+    + [chr(c) for c in range(0xFE00, 0xFE10)]
+    + [chr(c) for c in range(0xE0100, 0xE01F0)])
+
+
+def _unaccented(text: str) -> str:
+    """`text` with accents and other marks taken off: "desmayé" reads
+    "desmaye", and a combining mark or enclosing circle inside "suicide"
+    no longer splits it. For crisis matching only; classify still refuses
+    non-ASCII text."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text)
+                   if unicodedata.category(ch) not in ("Mn", "Me")
+                   and not unicodedata.combining(ch)
+                   and ch not in _INVISIBLE)
+
+
+#: Common Spanish words that are not also everyday English words ("son",
+#: "a" and "no" are left out), without accents, for turn_language. Never
+#: the particles in _NAME_PARTICLES: "dr de la rosa" typed in lower case
+#: is English naming someone (QA on #1037).
+_SPANISH_WORDS = frozenset(
+    "que como cual cuales cuando donde porque pero tambien muy hay "
+    "una uno unos unas mis con es esta estan estoy esto significa "
+    "estos tengo tiene tienen necesito puedo puede debo hola gracias sobre "
+    "para por mi resultados analisis medicamentos presion azucar sangre "
+    "examenes vacunas cita duele fiebre saber revisa favor si se usted "
+    "ustedes nuestro nuestra mucho poco ahora hoy ayer manana tomo tomar "
+    "dolor cabeza todavia entonces bien mal ya quiero pecho siento "
+    "cansado cansada mareo miedo ayuda ayudame tenido sentido explica "
+    "explicame repite medicinas colesterol alta alto preocuparme fue "
+    "ultimo algo malo dime entiendo faltan pastilla doctora dice".split())
+#: English function words and everyday short words. Large on purpose: the
+#: bias is toward English, so an English sentence naming a Spanish place
+#: has plenty here to outweigh what survives the name filter. Not "ok":
+#: it is said in Spanish too, and carries the turn before.
+_ENGLISH_WORDS = frozenset(
+    "the an at from with about my me i is are was were be been being am "
+    "to of for on in and or but if so not what when where which who whom "
+    "whose why how do does did done can could should would will shall may "
+    "might must have has had having it its this that these those there "
+    "here you your yours we our us they them their he him his she her "
+    "hers by up down out over under after before into onto than then too "
+    "very just also any some all each every more most much many few "
+    "please thanks thank yes hi hello hey show tell give get got "
+    "make need want wants know see saw said says go going went come "
+    "called about again still last next today tomorrow yesterday week "
+    "month year time results result labs lab visit".split())
+#: Part of a name or a place as often as Spanish: "dr de la cruz", "El
+#: Paso", "Garcia y Lopez". Never counted toward Spanish.
+_NAME_PARTICLES = frozenset("de del la las los el y".split())
+#: Words in both languages ("me siento", "he tenido", "¿qué come?"): they
+#: count for neither side, so a reply built on them carries the
+#: conversation's language instead of flipping it (QA on #1037).
+_BOTH_LANGUAGES = frozenset("me he come no a son has".split())
+#: A capital after these is a name, not a new sentence: "Dr. Mi-Young".
+_TITLES = frozenset("dr dra mr mrs ms sr sra srta st mt".split())
+#: Portuguese, which must not get Spanish words: it falls back to English.
+#: Its own letters, or a word Spanish does not use, typed with or without
+#: accents (matched against the unaccented text too). Not "preciso": "es
+#: preciso tomar" is Spanish.
+_PORTUGUESE = re.compile(
+    r"[\u00e3\u00f5\u00e7]|\b(?:voce|nao|obrigad[oa]|meus|minhas|quais|"
+    r"sao|estao|sangue|exames?|tambem)\b")
+_TOKEN = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*|[.!?\u00bf\u00a1]")
+
+
+def _content_words(text: str) -> list[str]:
+    """`text`'s words, lowercased, without names and places: a capitalized
+    word that does not start a sentence ("Farmacia Mi Salud")."""
+    tokens = _TOKEN.findall(_unaccented(
+        unicodedata.normalize("NFKC", text or "")))
+    words, starts = [], []
+    start, prev = True, ""
+    for tok in tokens:
+        if tok in ".!?\u00bf\u00a1":
+            # "Dr." is not the end of a sentence.
+            start = not (tok == "." and prev.lower() in _TITLES)
+            continue
+        words.append(tok)
+        starts.append(start)
+        start, prev = False, tok
+    capital = [w[:1].isupper() for w in words]
+    out = []
+    for i, w in enumerate(words):
+        if capital[i] and not starts[i]:
+            continue
+        out.append(w.lower())
+    return out
+
+
+def turn_language(text: str) -> str | None:
+    """"es" when the person clearly wrote this in Spanish, "en" when they
+    clearly did not, None when it says too little to tell ("si",
+    "gracias", "ok"): the caller then carries the turn before
+    (conversation_language).
+
+    The one place a turn's language is read, for the words the page puts
+    around a Spanish answer (status lines, "This wasn't right"). The
+    answer's own language is the model's (personas.REPLY_LANGUAGE), and
+    the 911 lines are bilingual whatever this says (beta.EMERGENCY_LINE).
+
+    Biased toward English: a false positive puts Spanish around an English
+    reader. Names and places are not counted (_content_words), and the
+    particles de, del, la, las, los, el and y never count, nor do words
+    both languages use (me, he, come, no, a, son, has). Spanish needs
+    two or more other Spanish words outnumbering the English ones, or an
+    opening question or exclamation mark with a Spanish word and no
+    English one. Portuguese is English here."""
+    t = unicodedata.normalize("NFKC", text or "").casefold()
+    if _PORTUGUESE.search(t) or _PORTUGUESE.search(_unaccented(t)):
+        return "en"
+    words = [w for w in _content_words(text) if w not in _BOTH_LANGUAGES]
+    es = sum(w in _SPANISH_WORDS and w not in _NAME_PARTICLES
+             for w in words)
+    en = sum(w in _ENGLISH_WORDS for w in words)
+    if es >= 2 and es > en:
+        return "es"
+    if es >= 1 and en == 0 and ("\u00bf" in t or "\u00a1" in t):
+        return "es"
+    if en >= 1:
+        return "en"
+    return None
+
+
+def looks_spanish(text: str) -> bool:
+    """turn_language says Spanish, from this message alone."""
+    return turn_language(text) == "es"
+
+
+def conversation_language(said: list[str]) -> str:
+    """The language of the latest message in `said` (oldest first) that
+    says clearly, so a short "si" or "gracias" keeps the conversation's
+    language. English when none does."""
+    for text in reversed(said):
+        lang = turn_language(text)
+        if lang:
+            return lang
+    return "en"
 
 
 def is_crisis(text: str) -> bool:
-    return bool(_CRISIS.search(normalize(text)))
+    return bool(_CRISIS.search(_unaccented(normalize(text))))
+
+
+def is_self_harm(text: str) -> bool:
+    """Crisis wording about self-harm or wanting to die (988, not only 911)."""
+    return bool(_SELF_HARM.search(_unaccented(normalize(text))))
 
 
 def classify(text: str) -> int:
@@ -288,10 +561,14 @@ def crisis_in_window(messages: list[dict]) -> bool:
     or "thanks". On Haiku, which sees only that reply (#931 F2), they got a
     cheerful goodbye; Sonnet, with the history, checked they were safe
     (QA #931 Q1, live 3 of 3). The conversation stays on Sonnet instead.
-    Tool results (record content) are not scanned."""
+    Tool results (record content) are not scanned, and neither is the 911
+    line every refusal ends with (beta.EMERGENCY_TRAILER): it is there
+    whatever the person said, so it is no signal."""
+    from careagents.beta import EMERGENCY_TRAILER  # beta imports this module
     return any(
         m.get("role") in ("user", "assistant")
-        and isinstance(m.get("content"), str) and is_crisis(m["content"])
+        and isinstance(m.get("content"), str)
+        and is_crisis(m["content"].replace(EMERGENCY_TRAILER, ""))
         for m in messages)
 
 

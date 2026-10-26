@@ -85,6 +85,9 @@ def _brief_to_extension(result: BriefResult) -> list[dict]:
     if result.care_gaps_reason:
         care_gap_state.append(
             {"url": "reason", "valueString": result.care_gaps_reason})
+    if result.care_gaps_cause:
+        care_gap_state.append(
+            {"url": "cause", "valueString": result.care_gaps_cause})
 
     return [
         _section("problems", result.problems),

@@ -306,7 +306,9 @@ def test_first_turn_with_a_failed_engine_search_says_it_could_not_read(
     failed = []
 
     def get(url, params=None, headers=None, timeout=None):
-        if url.endswith("/r6/fhir/Condition") and not params and not failed:
+        # The list search, not the record count (`_summary=count`).
+        if url.endswith("/r6/fhir/Condition") \
+                and "_summary" not in (params or {}) and not failed:
             failed.append(url)
             r = requests.Response()
             r.status_code = 503
@@ -661,17 +663,22 @@ def _plant_conditions(chain, n):
         R6Resource.query.filter_by(tenant_id=TENANT,
                                    resource_type="Condition").delete()
         for i in range(n):
+            # A distinct code each: repeats of one code are one condition
+            # in the default view (careagents/conditions_view.py).
             res = {"resourceType": "Condition", "id": f"fa-cond-{i}",
                    "subject": {"reference": "Patient/demo-patient-rivera"},
                    "code": {"coding": [{"system": "http://snomed.info/sct",
-                                        "code": "44054006"}]}}
+                                        "code": str(900_000 + i)}]}}
             db.session.add(R6Resource("Condition", json.dumps(res),
                                       resource_id=res["id"],
                                       tenant_id=TENANT))
         db.session.commit()
 
 
-@pytest.mark.parametrize("n,shown,cut", [(19, 19, False), (60, 50, True)])
+# Conditions are fetched at the engine's ceiling of 200, so 60 is no longer
+# cut at the default page of 50; past 200 the list still reads as cut.
+@pytest.mark.parametrize("n,shown,cut", [(19, 19, False), (60, 60, False),
+                                         (230, 200, True)])
 def test_a_long_problem_list_on_the_real_engine(
         cfg, svc, monkeypatch, n, shown, cut):  # noqa: F811
     chain = Chain(cfg, svc, monkeypatch)

@@ -28,7 +28,8 @@
         <a id="trust-pill" href="/safety">How we keep you safe</a>
         {# A first sign-in skips the passkey prompt; it waits here, and
            comes back to this chat (`agent`). #}
-        {% if offer_passkey %}<a href="/auth?enroll=1&amp;agent={{ agent_id }}">Add a passkey</a>{% endif %}
+        {% if offer_passkey %}<a href="/auth?enroll=1&amp;agent={{ agent_id }}">Faster sign-in (passkey)</a>{% endif %}
+        <a href="/settings">Settings</a>
         <form method="post" action="/logout">
           <button type="submit">Sign out</button>
         </form>

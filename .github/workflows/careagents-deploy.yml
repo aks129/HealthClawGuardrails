@@ -1,0 +1,156 @@
+name: careagents-deploy
+
+# Deploys CareAgents (web + worker) on every merge to main that can change what
+# it runs. Before this, CareAgents shipped only by a manual `railway up` and
+# production drifted 22 commits behind main. Procedure and traps:
+# docs/runbooks/careagents-auto-deploy.md, which follows "Stage the build" and
+# "Deploy and confirm it worked" in docs/runbooks/careagents-durable-worker.md.
+# Nothing ships until CI has passed on the same commit (the CI gate step).
+#
+# Pause: disable this workflow in the Actions tab. Without the RAILWAY_TOKEN
+# environment secret it skips with a notice instead of failing.
+
+on:
+  push:
+    branches: [main]
+    # The image's whole build context (deploy/careagents/Dockerfile).
+    paths:
+      - "careagents/**"
+      - "deploy/careagents/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+# actions: read lets the CI gate list ci.yml's runs and jobs for this commit.
+permissions:
+  contents: read
+  actions: read
+
+# Never cancel a running deploy: a cancelled run can leave web and worker on
+# different uploads. GitHub keeps at most one run PENDING behind it, so the
+# newest pending run wins and older pending ones are cancelled before they
+# start. That is fine, because each run deploys its own (newer) main commit.
+concurrency:
+  group: careagents-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # A convenience only: this line lives in the file on the ref being run, so
+    # a branch can delete it. The real guard is the environment below, whose
+    # deployment branch policy (set server-side by the owner) admits main only
+    # and which holds RAILWAY_TOKEN as an environment secret.
+    if: github.ref == 'refs/heads/main'
+    environment: careagents-production
+    runs-on: ubuntu-latest
+    # Up to 60 minutes waiting for CI (a merge burst has queued CI for 15
+    # minutes ahead of a 33-minute postgres run), then the upload and up to
+    # 15 minutes for /healthz. A job timeout mid-upload splits web and worker,
+    # so this leaves room for all of it.
+    timeout-minutes: 90
+    env:
+      RAILWAY_CLI_VERSION: "5.63.1"
+      # sha256 of railway-v5.63.1-x86_64-unknown-linux-musl.tar.gz, from the
+      # release's published asset digest. Bump both together.
+      RAILWAY_CLI_SHA256: cbb559de44cd304cf9d6598a4ea77575035a0e6e3215370bb3b105b8f48235cc
+      RAILWAY_PROJECT_ID: 835e92df-ebaa-4aa1-bfb5-cb1b346d385e
+      RAILWAY_ENVIRONMENT: production
+    steps:
+      # Only a boolean leaves the secrets context here, never the token.
+      - name: Check for the deploy token
+        id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.RAILWAY_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::notice::RAILWAY_TOKEN is not set in the careagents-production environment; skipping the CareAgents deploy. See docs/runbooks/careagents-auto-deploy.md."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # No later step needs git auth (stamp_build.sh runs only local git), so
+      # the checkout leaves no token in .git/config.
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.skip == 'false'
+        with:
+          persist-credentials: false
+
+      # main does not require a branch to be up to date before merging, so
+      # this commit can be a combination of PRs CI never tested together.
+      # Wait for ci.yml's push run on this exact sha (a manual run included)
+      # and ship only if every required job succeeded. Failed, skipped or
+      # missing, or no verdict within 60 minutes: fail here, before any
+      # railway step. The required list lives in the script (REQUIRED_CI_JOBS).
+      - name: Wait for CI to pass on this commit
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/careagents_release.py ci-gate --sha "$GITHUB_SHA" --timeout 3600
+
+      # The release binary, checksum-verified, rather than `npm install -g`:
+      # no install scripts, no unpinned transitive packages, and no token in
+      # this step's environment either way.
+      - name: Install the Railway CLI
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          ASSET="railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$ASSET" \
+            "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/$ASSET"
+          echo "${RAILWAY_CLI_SHA256}  $RUNNER_TEMP/$ASSET" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$ASSET" -C "$RUNNER_TEMP/bin" railway
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/railway" --version
+
+      # The runbook's stage, verbatim: these four, then the stamp LAST so a
+      # stale BUILD_SHA copied in with careagents/ is overwritten. Staged under
+      # RUNNER_TEMP, outside the checkout, so no .gitignore can drop the marker.
+      - name: Stage the build
+        id: stage
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          STAGE="$(mktemp -d "$RUNNER_TEMP/careagents-stage.XXXXXX")"
+          cp pyproject.toml uv.lock "$STAGE/"
+          cp -R careagents "$STAGE/"
+          cp deploy/careagents/Dockerfile "$STAGE/Dockerfile"
+          ./deploy/careagents/stamp_build.sh "$STAGE"
+          BUILD="$(head -n 1 "$STAGE/careagents/BUILD_SHA")"
+          case "$BUILD" in
+            *-dirty|"") echo "::error::stamp is '$BUILD'; refusing to ship it"; exit 1;;
+          esac
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      # The only step that sees the token. `cd` into the stage, never
+      # `railway up <path>`. Fail closed unless the token resolves to the real
+      # project by ID: an unlinked `railway up` creates a brand-new project
+      # (runbook, first run). This log is public, so only the project name is
+      # printed, never the status JSON (it lists services, volumes and ids).
+      - name: Upload web and worker from the same stage
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          STAGE: ${{ steps.stage.outputs.stage }}
+        run: |
+          cd "$STAGE"
+          railway status --json > "$RUNNER_TEMP/status.json"
+          PROJECT_NAME="$(python3 -c '
+          import json, os, sys
+          status = json.load(open(sys.argv[1]))
+          if status.get("id") != os.environ["RAILWAY_PROJECT_ID"]:
+              sys.exit("the token does not resolve to the CareAgents project; not uploading")
+          print(status.get("name", ""))
+          ' "$RUNNER_TEMP/status.json")"
+          rm -f "$RUNNER_TEMP/status.json"
+          echo "deploying to project $PROJECT_NAME"
+          railway up --service careagents        --environment "$RAILWAY_ENVIRONMENT" --detach --no-gitignore
+          railway up --service careagents-worker --environment "$RAILWAY_ENVIRONMENT" --detach --no-gitignore
+
+      # The finish line: the web service reports this exact build and a worker
+      # is draining. A successful upload proves neither.
+      - name: Wait for production to report this build
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          BUILD: ${{ steps.stage.outputs.build }}
+        run: python3 scripts/careagents_release.py wait --sha "$BUILD" --timeout 900

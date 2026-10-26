@@ -236,8 +236,8 @@ class Config:
             "CARE_PEOPLE", "").lower() in ("1", "true", "yes", "on")
         # SMART Health Check-in web wallet (careagents/checkin_wallet.py).
         # Off unless asked for: off, its routes are never registered and
-        # answer 404. While on, it answers only from the synthetic test
-        # patient, never from an account's records (FHI-54).
+        # answer 404. While on, it answers from the account holder's own one
+        # non-sample connection (#973).
         self.checkin_wallet_enabled = e.get(
             "CARE_CHECKIN_WALLET", "").lower() in ("1", "true", "yes", "on")
         # Share with a pharmacy by text (careagents/pharmacy_share.py): the
@@ -257,6 +257,13 @@ class Config:
                 "host, with no userinfo, query or fragment")
         self.pharmacy_name = (e.get("CARE_PHARMACY_NAME")
                               or "RX Genie Demo Pharmacy").strip()[:60]
+        # The connectathon test patient on the wallet page: an account with
+        # no real records can choose one tenant seeded from the synthetic
+        # US Core fixture, so a visiting tester has something to share.
+        # Off unless asked for; needs CARE_CHECKIN_WALLET too.
+        self.checkin_test_patient_enabled = e.get(
+            "CARE_CHECKIN_TEST_PATIENT", "").lower() in (
+                "1", "true", "yes", "on")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on
@@ -281,6 +288,21 @@ class Config:
         self.real_records_allowlist = frozenset(
             x.strip().lower()
             for x in (e.get("CARE_REAL_RECORDS_ALLOWLIST") or "").split(",")
+            if x.strip())
+        # The chat's propose_action tool: a fixed text to the account's own
+        # verified iMessage number, approved only on the review page.
+        # Shaped like CARE_REAL_RECORDS: `off`, `allowlist` (account emails
+        # in CARE_ACTIONS_SMS_ALLOWLIST) or `on`. Unset is `off`: a deploy
+        # that forgets it must not start texting people.
+        self.actions_sms = (
+            e.get("CARE_ACTIONS_SMS") or "off").strip().lower()
+        if self.actions_sms not in ("off", "allowlist", "on"):
+            raise ConfigError(
+                "CARE_ACTIONS_SMS must be one of off, allowlist, on "
+                f"(got {self.actions_sms!r})")
+        self.actions_sms_allowlist = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_ACTIONS_SMS_ALLOWLIST") or "").split(",")
             if x.strip())
         # Sole public hostname (#264, D7). When set, a request whose Host
         # header differs is answered 308 to the same path and query on this
@@ -550,6 +572,16 @@ class Config:
         u = self._model_endpoint
         return (u is not None and u.scheme == "https"
                 and u.host in (_VETTED_MODEL_HOSTS | self.extra_model_hosts))
+
+    def actions_sms_open_for(self, email) -> bool:
+        """May this account be offered propose_action? See CARE_ACTIONS_SMS
+        above. The allowlist is read only in `allowlist` mode."""
+        if self.actions_sms == "on":
+            return True
+        if self.actions_sms == "allowlist":
+            email = (email or "").strip().lower()
+            return bool(email) and email in self.actions_sms_allowlist
+        return False
 
     def real_records_open_for(self, email, invited=None) -> bool:
         """May this account START a real-record connection? See

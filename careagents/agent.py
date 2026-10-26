@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import json
 import datetime
+import logging
+from typing import Callable
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
-from careagents import causes, labs_timeline, llm
+from careagents import causes, conditions_view, labs_timeline, llm, text_self
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
+
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 
@@ -124,7 +128,8 @@ TOOLS = [
      "description": ("Show a CHART of how a lab value has changed over time. "
                      "Use for any 'timeline', 'trend', 'over time', 'history' "
                      "or 'has it improved' question about a lab (cholesterol, "
-                     "LDL, HDL, triglycerides, A1c, glucose). The chart "
+                     "LDL, HDL, triglycerides, A1c, glucose) or blood "
+                     "pressure. The chart "
                      "appears in the conversation, so describe what it shows "
                      "rather than listing every number."),
      "parameters": {"type": "object", "properties": {
@@ -169,6 +174,31 @@ TOOLS = [
          "action_id": {"type": "string"}}, "required": ["action_id"]}},
 ]
 
+#: Offered only in a turn whose account may be texted (text_self.py): the
+#: CARE_ACTIONS_SMS flag admits it, it is not paused, and it has one verified
+#: phone. The model picks a purpose and nothing else; CareAgents writes the
+#: number, the recipient and the words.
+PROPOSE_ACTION_TOOL = {
+    "name": "propose_action",
+    "description": ("Offer to text the person's own phone a short nudge to "
+                    "sign in, for example that their visit prep is ready. "
+                    "This only PROPOSES it: a review card appears and "
+                    "nothing is sent until the person approves it on the "
+                    "review page. A texted yes does not approve. The text "
+                    "is fixed and carries nothing from their records; you "
+                    "choose only its purpose."),
+    "parameters": {"type": "object", "properties": {
+        "purpose": {"type": "string", "enum": list(text_self.PURPOSES)},
+    }, "required": ["purpose"], "additionalProperties": False}}
+
+
+def tools_for_turn(sms_phone: str | None) -> list[dict]:
+    """The tools one turn offers. propose_action only with a number to text;
+    the dispatcher asks again, because a model can call a tool it was not
+    offered."""
+    return [*TOOLS, PROPOSE_ACTION_TOOL] if sms_phone else TOOLS
+
+
 TOOL_LABELS = {
     "get_health_summary": "Reading your records",
     "get_labs": "Interpreting your labs",
@@ -178,6 +208,7 @@ TOOL_LABELS = {
     "appointment_brief": "Preparing your visit brief",
     "start_intake_form": "Preparing your intake form",
     "check_form_status": "Checking your form",
+    "propose_action": "Preparing a text to your phone",
 }
 
 #: TOOL_LABELS on the sample connection, whose records are made up: a status
@@ -191,6 +222,34 @@ SAMPLE_TOOL_LABELS = {
     "appointment_brief": "Preparing the sample visit brief",
     "start_intake_form": "Preparing the sample intake form",
     "check_form_status": "Checking the sample form",
+    "propose_action": "Preparing a text to the linked phone",
+}
+
+#: TOOL_LABELS and SAMPLE_TOOL_LABELS for a turn the person wrote in Spanish
+#: (routing.conversation_language): the answer came back in Spanish
+#: (#1017) under English status lines (live, 2026-10-26). "Usted", as beta.EMERGENCY_LINE.
+TOOL_LABELS_ES = {
+    "get_health_summary": "Leyendo sus registros",
+    "get_labs": "Interpretando sus análisis",
+    "show_lab_timeline": "Graficando sus resultados a lo largo del tiempo",
+    "get_care_gaps": "Revisando los exámenes preventivos",
+    "search_records": "Buscando en sus registros",
+    "appointment_brief": "Preparando el resumen de su consulta",
+    "start_intake_form": "Preparando su formulario de admisión",
+    "check_form_status": "Revisando su formulario",
+    "propose_action": "Preparando un mensaje de texto a su teléfono",
+}
+SAMPLE_TOOL_LABELS_ES = {
+    "get_health_summary": "Leyendo los registros de ejemplo",
+    "get_labs": "Interpretando los análisis de ejemplo",
+    "show_lab_timeline":
+        "Graficando los resultados de ejemplo a lo largo del tiempo",
+    "get_care_gaps": "Revisando los exámenes preventivos",
+    "search_records": "Buscando en los registros de ejemplo",
+    "appointment_brief": "Preparando el resumen de consulta de ejemplo",
+    "start_intake_form": "Preparando el formulario de admisión de ejemplo",
+    "check_form_status": "Revisando el formulario de ejemplo",
+    "propose_action": "Preparando un mensaje de texto al teléfono vinculado",
 }
 
 
@@ -890,16 +949,19 @@ _ANALYTE_KEY = {code: a["key"] for a in labs_timeline.ANALYTES
 
 
 def _obs_loinc(resource: dict) -> str | None:
-    for c in ((resource.get("code") or {}).get("coding") or []):
+    code = resource.get("code")
+    coding = code.get("coding") if isinstance(code, dict) else None
+    for c in (coding if isinstance(coding, list) else []):
         if isinstance(c, dict) and c.get("system") == _LOINC_SYSTEM:
             return c.get("code")
     return None
 
 
 def _obs_flag(resource: dict) -> str | None:
-    for i in resource.get("interpretation") or []:
-        for c in (i or {}).get("coding") or []:
-            if isinstance(c, dict) and c.get("system") == _INTERPRETATION:
+    # An unscored reading's interpretation is the feed's own, any JSON.
+    for i in labs_timeline._dicts(resource.get("interpretation")):
+        for c in labs_timeline._dicts(i.get("coding")):
+            if c.get("system") == _INTERPRETATION:
                 return c.get("code")
     return None
 
@@ -987,7 +1049,10 @@ def _plain_value(resource: dict) -> tuple[object, str]:
             return value, unit
         return None, ""
     parts = {}
-    for c in resource.get("component") or []:
+    components = resource.get("component")
+    if not isinstance(components, list):
+        return None, ""
+    for c in components:
         if not isinstance(c, dict):
             return None, ""
         code = _obs_loinc(c)
@@ -1031,14 +1096,25 @@ def _not_evaluated(consumer: dict, bundle: dict) -> list[dict] | None:
             not isinstance(name, str) or not code or _obs_loinc(r) != code
             for name, code, r in zip(names, codes, unscored)):
         return None
-    out = []
+    # One entry per analyte, its latest reading, as _latest_per_analyte does
+    # for scored ones: listing a BP history left the model to order raw
+    # dates and work out a direction itself (QA #1021, #942).
+    groups: dict[str, list[tuple[tuple, dict]]] = {}
     for name, r in zip(names, unscored):
+        date = _obs_date(r)
+        raw = str(r.get("effectiveDateTime") or r.get("issued") or "")
+        groups.setdefault(name, []).append(
+            ((date is not None, date or "", raw if date else ""), r))
+    out = []
+    for name, readings in groups.items():
+        r = sorted(readings, key=lambda x: x[0])[-1][1]
         value, unit = _plain_value(r)
         rng = r.get("referenceRange")
         out.append({"analyte": name, "date": _obs_date(r), "value": value,
                     "unit": unit,
                     "reference_range_in_records": bool(
-                        isinstance(rng, list) and rng)})
+                        isinstance(rng, list) and rng),
+                    "earlier_readings": len(readings) - 1})
     return out
 
 
@@ -1173,12 +1249,81 @@ def _empty_summary_note(hc: HealthClawClient, tenant: str,
             "medications or allergies.")
 
 
+def _propose_text(hc: HealthClawClient, tenant: str, args: object,
+                  events: list, agent_id: str, origin: str,
+                  sms_phone: Callable[[], str | None] | None) -> str:
+    """propose_action. Every refusal stages nothing and says so; the number
+    is never in what the model reads back."""
+    def refuse(note):
+        return json.dumps({"error": "not_proposed", "note": note})
+    # Asked now, not when the turn started: the flag, a pause or the
+    # number may have changed, and a model may call a tool it was not
+    # offered at all.
+    phone = sms_phone() if sms_phone else None
+    if not phone:
+        return refuse("Texting is not available for this person. Nothing "
+                      "was sent or staged. If they want texts, they can "
+                      "link their phone in CareAgents.")
+    extra = sorted(set(args) - {"purpose"}) if isinstance(args, dict) else []
+    if not isinstance(args, dict) or extra:
+        # The count only: a name is as model-written as a value, and
+        # either could carry what the model was fed.
+        logger.warning("propose_action refused: %d unexpected argument(s)",
+                       len(extra))
+        return refuse("propose_action takes only a purpose. Nothing was "
+                      "staged.")
+    purpose = args.get("purpose")
+    if purpose not in text_self.PURPOSES:
+        return refuse("purpose must be one of: "
+                      + ", ".join(text_self.PURPOSES) + ". Nothing was staged.")
+    if any(a.get("kind") == "sms" for a in hc.pending_actions(tenant)):
+        return refuse("A text is already waiting for the person's approval. "
+                      "Nothing new was staged; point them to the one that "
+                      "is waiting.")
+    action_id = hc.propose_sms(tenant, phone,
+                               text_self.body_for(purpose, origin))
+    events.append({"type": "card", "kind": "review",
+                   "action_id": action_id, "label": "Text message",
+                   "review_url": f"/review/{agent_id}/{action_id}"})
+    return json.dumps({"action_id": action_id,
+                       "status": "awaiting_confirmation",
+                       "note": text_self.APPROVAL_NOTE + (
+                           " Nothing is sent until the person approves it "
+                           "there. Do not propose another.")})
+
+
+def _records(hc: HealthClawClient, tenant: str, rt: str,
+             resolve_ref=None) -> list[dict]:
+    """One record type as the model sees it. Conditions are the current
+    problem list (careagents/conditions_view.py): the engine's full page,
+    resolved entries held back with a note, repeats of a code once, one
+    note for the unreadable ones rather than one each, and no
+    cut at SUMMARY_LIMIT, since the filter already keeps it short."""
+    if rt != "Condition":
+        return _summarize_bundle(hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                                 resolve_ref=resolve_ref)
+    bundle, held_back = conditions_view.current_conditions(
+        hc.search(tenant, rt, {"_count": conditions_view.CONDITION_PAGE}),
+        _coding_key, _withdrawn)
+    out = _summarize_bundle(bundle, limit=conditions_view.CONDITION_PAGE,
+                            resolve_ref=resolve_ref)
+    conditions_view.collapse_unreadable(
+        out, cut=any(i.get("truncated") for i in out))
+    if held_back:
+        out.append(conditions_view.held_back_note())
+    return out
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
                   surface: str = "", origin: str = "",
-                  arriving: bool = False) -> str:
+                  arriving: bool = False,
+                  sms_phone: Callable[[], str | None] | None = None) -> str:
     on_text = surface in TEXT_SURFACES
     origin = (origin or "").rstrip("/")
+    if name == "propose_action":
+        return _propose_text(hc, tenant, args, events, agent_id, origin,
+                             sms_phone)
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
@@ -1193,8 +1338,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # One failed search used to raise out of the whole tool, and the
             # three that worked went with it.
             try:
-                parts[key] = _summarize_bundle(
-                    hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                parts[key] = _records(
+                    hc, tenant, rt,
                     resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
                                  else None))
             except HealthClawError:
@@ -1245,15 +1390,24 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # The engine's note gives the check's reason, and for a blood
             # pressure that reason is "carried no number" beside a reading
             # of 138/88: the readings above say it better.
+            # Counted as the rows are, one per test, not per reading.
+            pair = dict(zip(consumer["unevaluated_analytes"],
+                            consumer["unevaluated_codes"]))
             out["consumer_summary"] = {
-                k: v for k, v in out["consumer_summary"].items()
-                if k != "unevaluated_note"}
+                **{k: v for k, v in out["consumer_summary"].items()
+                   if k != "unevaluated_note"},
+                "unevaluated_count": len(not_evaluated),
+                "unevaluated_analytes": [r["analyte"] for r in not_evaluated],
+                "unevaluated_codes": [pair[r["analyte"]]
+                                      for r in not_evaluated]}
             out["note"] =((out["note"] + " ") if out.get("note") else "") + (
                 "This lab answer is INCOMPLETE: "
-                f"{len(not_evaluated)} reading(s) in not_evaluated were not "
+                f"{len(not_evaluated)} test(s) in not_evaluated were not "
                 "scored against a reference range. Zero flagged results here "
                 "means nothing was SCORED as abnormal, not that nothing is "
-                "abnormal. Report the "
+                "abnormal. Each not_evaluated reading is that test's latest; "
+                "earlier_readings are counted, not listed, so give no "
+                "direction from them. Report the "
                 + ("latest readings" if latest is not None else "lines")
                 + " you were given AND, for each not_evaluated reading, give "
                 "its value and date in plain words and say there is no "
@@ -1397,8 +1551,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps(out)
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
-        return json.dumps(_summarize_bundle(
-            hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+        return json.dumps(_records(
+            hc, tenant, rt,
             resolve_ref=(_medication_resolver(hc, tenant)
                          if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
@@ -1486,14 +1640,18 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
 
 
 def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
-             history: list[dict], user_text: str, *, agent_id: str = ""):
-    """Generator of UI events for one user message. Mutates `history`."""
+             history: list[dict], user_text: str, *, agent_id: str = "",
+             sms_phone: Callable[[], str | None] | None = None):
+    """Generator of UI events for one user message. Mutates `history`.
+    `sms_phone` answers the number propose_action may text, or None; it is
+    asked once here for the tool list and again if the tool is called."""
     _trim_history(history)
     history.append({"role": "user", "content": user_text})
+    tools = tools_for_turn(sms_phone() if sms_phone else None)
     rounds = 0
     while True:
         try:
-            turn = llm.complete(cfg, system, history, TOOLS)
+            turn = llm.complete(cfg, system, history, tools)
         except llm.LLMError as exc:
             yield {"type": "error", "text": failure_text(exc)}
             return
@@ -1520,7 +1678,8 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
             try:
                 result = _execute_tool(hc, tenant, call.name,
                                        call.arguments, side_events,
-                                       agent_id=agent_id)
+                                       agent_id=agent_id,
+                                       sms_phone=sms_phone)
             except HealthClawError as exc:
                 result = tool_error_result(exc)
             history.append({"role": "tool", "tool_call_id": call.id,
@@ -1569,6 +1728,14 @@ def run_turn_to_message(cfg, hc: HealthClawClient, tenant: str, system: str,
             parts.append(ev["text"])
         elif kind == "error":
             return ev.get("text") or GENERIC_FAILURE_TEXT
+        elif kind == "card" and ev.get("kind") == "review" and ev.get("label"):
+            aid = ev.get("action_id", "")
+            link = (f"{base}/review/{agent_id}/{aid}"
+                    if base and agent_id and aid else "")
+            extras.append(
+                f"{ev['label']} waiting for your approval. Only the review "
+                "page approves it"
+                + (f": {link}" if link else ", in the CareAgents app."))
         elif kind == "card" and ev.get("kind") == "review":
             aid = ev.get("action_id", "")
             link = (f"{base}/review/{agent_id}/{aid}"

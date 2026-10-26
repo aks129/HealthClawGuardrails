@@ -378,10 +378,19 @@ h1 em { font-style: normal; color: var(--accent-ink); }
   position: sticky; top: 0; z-index: 5; }
 .chat-log { flex: 1; overflow-y: auto; padding: 20px 0; display: flex;
   flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+/* Scrolled, a message was cut flush against the banner's bottom edge and
+   read as the banner lying over it (10-20 patient walk). A gap and an
+   edge of its own show the log scrolls under a line, not under the note. */
+.sample-banner + .chat-log { margin-top: 8px;
+  border-top: 1px solid var(--hairline); }
 .msg { max-width: min(65ch, 88%); padding: 12px 16px; border-radius: var(--radius);
   font-size: 17px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
   animation: msgIn .14s ease-out; }
 .msg p + p { margin-top: 10px; }
+/* A model's "### " line (chat.js renderMarkdown): a bold line at the
+   bubble's own size, inline so the text's newlines break around it. */
+.msg .msg-heading { display: inline; font-size: inherit; font-weight: 700;
+  margin: 0; }
 .msg.agent { background: var(--surface); border: 1px solid var(--hairline);
   border-bottom-left-radius: 4px; align-self: flex-start; }
 .msg.user { background: var(--accent-tint); color: var(--ink);
@@ -992,6 +1001,11 @@ textarea:focus-visible {
    breaks where it must. */
 .hub-head > div { min-width: 0; }
 .hub-sub { overflow-wrap: anywhere; }
+/* The address under Settings and Your hub on one line: broken mid-word it
+   read as "example.co / m" (10-20 patient walk). The whole of it is in the
+   title. */
+.hub-sub.hub-email { white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
 /* The surfaces list is one column at every width now. */
 @media (max-width: 480px) {
   .surface-row { grid-template-columns: 1fr; }
@@ -1114,6 +1128,26 @@ textarea:focus-visible {
 .testers-table tr.is-stuck td { background: var(--warn-bg); }
 .testers-stuck { color: var(--warn-ink); font-weight: 700; }
 .testers-method { color: var(--ink-soft); font-family: var(--sans); }
+.testers-you { font-size: 13px; font-weight: 700; color: var(--accent-ink); }
+/* The Morning block: one line of counts, then one card per stuck tester. */
+.morning-loop { margin: 0 0 4px; font-size: 17px; line-height: 1.6; }
+.morning-step { white-space: nowrap; }
+.morning-loop .num { font-family: var(--mono); font-weight: 700;
+  font-variant-numeric: tabular-nums; }
+.morning-arrow { color: var(--ink-soft); }
+.morning-side { margin: 0 0 4px; font-size: 15px; color: var(--ink-soft); }
+.morning-side .num { font-family: var(--mono); font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--ink); }
+.morning-h { margin: 16px 0 8px; font-size: 17px; }
+.morning-needs { list-style: none; margin: 0; padding: 0; }
+.morning-need { background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: 12px; padding: 12px; margin: 0 0 8px; }
+.morning-who { display: flex; flex-direction: column; gap: 2px;
+  overflow-wrap: anywhere; }
+.morning-nudge { display: flex; gap: 8px; align-items: center;
+  margin-top: 8px; }
+.morning-nudge-text { flex: 1; font-size: 15px; }
+.morning-copy { min-height: 44px; flex: none; }
 
 /* --- the hub around outcomes (hub critique 2026-10) ---------------------- */
 /* Waiting for your OK follows Ask your assistant now, so it needs the

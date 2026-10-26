@@ -246,10 +246,15 @@ class HealthClawClient:
         self._tokens[tenant] = (token, time.time())
         return token
 
-    def seed(self, tenant: str) -> int:
+    def seed(self, tenant: str, bundle: dict | None = None) -> int:
+        """Seed the built-in sample, or `bundle` when given (the check-in
+        test patient, careagents/checkin_wallet.py)."""
+        body = {"tenant_id": tenant}
+        if bundle is not None:
+            body["bundle"] = bundle
         r = self._send(
             "POST", f"{self.fhir}/internal/seed",
-            json={"tenant_id": tenant},
+            json=body,
             headers={"X-Tenant-Id": tenant,
                      "X-Internal-Secret": self.mint_secret},
             what="seed")
@@ -611,6 +616,29 @@ class HealthClawClient:
             "payload": {"to": "Intake portal",
                         "questionnaire": "healthclaw-intake",
                         "body": "new patient intake"}},
+            headers=h, what="propose")
+        aid = self._json_object(r, "propose").get("id") if r.ok else None
+        if not aid:
+            raise HealthClawError(f"propose failed ({r.status_code})",
+                                  r.status_code)
+        r = self._send("POST", f"{self.actions}/{aid}/commit", headers=h,
+                       what="commit")
+        if r.status_code != 202:
+            raise HealthClawError(f"commit failed ({r.status_code})",
+                                  r.status_code)
+        return aid
+
+    def propose_sms(self, tenant: str, phone: str, body: str) -> str:
+        """Stage a text to the person's own phone (careagents/text_self.py)
+        and submit it for approval, as start_form_action does. Every field
+        is the caller's, never the model's; `to` is the fixed label, so the
+        number stays out of the engine's audit details."""
+        from careagents.text_self import RECIPIENT_LABEL
+        h = self._headers(tenant)
+        r = self._send("POST", f"{self.actions}/propose", json={
+            "kind": "sms",
+            "payload": {"to": RECIPIENT_LABEL, "phone": phone,
+                        "body": body}},
             headers=h, what="propose")
         aid = self._json_object(r, "propose").get("id") if r.ok else None
         if not aid:

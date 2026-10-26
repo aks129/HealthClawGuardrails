@@ -105,3 +105,47 @@ def test_every_snomed_label_is_for_a_code_the_product_meets():
     orphans = sorted(snomed_codes - _codes_the_product_can_meet())
     assert not orphans, (
         f"SNOMED labels for codes nothing in the product carries: {orphans}")
+
+
+#: The SNOMED encounter, examination and screening concepts the brief keeps
+#: off its conditions list (r6/terminology.py _SNOMED_ENCOUNTER), each with
+#: the fully specified name tx.fhir.org's $lookup returned on 2026-10-26.
+#: The semantic tag is the evidence: every one is a procedure, not a
+#: disorder or finding. A new id needs its FSN looked up and recorded here.
+_ENCOUNTER_FSN = {
+    "268565007": "Adult health examination (procedure)",
+    "185349003": "Encounter for check up (procedure)",
+    "162673000": "General examination of patient (procedure)",
+    "410620009": "Well child visit (procedure)",
+    "86013001": ("Periodic reevaluation and management of healthy "
+                 "individual (procedure)"),
+    "390906007": "Follow-up encounter (procedure)",
+    "308335008": "Patient encounter procedure (procedure)",
+    "185389009": "Follow-up visit (procedure)",
+    "185317003": "Telephone encounter (procedure)",
+    "439708006": "Home visit (procedure)",
+    "4525004": "Emergency department patient visit (procedure)",
+    "11429006": "Consultation (procedure)",
+    "281036007": "Follow-up consultation (procedure)",
+    "270427003": "Patient-initiated encounter (procedure)",
+    "448337001": "Telemedicine consultation with patient (procedure)",
+    "185345009": "Encounter for symptom (procedure)",
+    "171207006": "Depression screening (procedure)",
+    "268547008": "Screening for malignant neoplasm of breast (procedure)",
+}
+
+
+def test_every_snomed_encounter_concept_is_a_recorded_procedure():
+    """The sibling of the guard above, for the encounter list: no id is
+    dropped from a conditions list unless its FSN was looked up and is a
+    procedure. MUTATION: add a disorder id (44054006) to _SNOMED_ENCOUNTER
+    -> red."""
+    from r6.terminology import _SNOMED_ENCOUNTER, _VISIT_LABELS
+    assert set(_SNOMED_ENCOUNTER) == set(_ENCOUNTER_FSN)
+    for code, fsn in _ENCOUNTER_FSN.items():
+        assert re.fullmatch(r"[1-9][0-9]{5,17}", code), code
+        assert fsn.endswith("(procedure)"), (code, fsn)
+    # A visit is named by SNOMED only from the same verified list.
+    visit_codes = {c for s, c in _VISIT_LABELS if s == SNOMED}
+    assert visit_codes <= set(_ENCOUNTER_FSN), (
+        visit_codes - set(_ENCOUNTER_FSN))

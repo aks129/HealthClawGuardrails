@@ -246,8 +246,10 @@ def test_the_daily_limit_429_says_hours_and_offers_tell_us(
                                   "request_id": "tell-2"})
     assert r.status_code == 429
     body = r.get_json()
+    from careagents import beta
     assert re.fullmatch(r"You've used today's messages\. More in "
-                        r"(about \d{1,2} hours?|under an hour)\.",
+                        r"(about \d{1,2} hours?|under an hour)\.\n\n"
+                        + re.escape(beta.EMERGENCY_TRAILER),
                         body["message"])
     if shutil.which("node") is None:
         pytest.skip("node is not installed")

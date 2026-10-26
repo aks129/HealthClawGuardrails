@@ -49,10 +49,14 @@
   }
 
   // Model markdown, minimal subset: **bold**, *italic*, "- " / "* " / "1. "
-  // list lines, line breaks. Built from text nodes and fixed elements only,
-  // so nothing the model writes is ever parsed as HTML.
+  // list lines, "# " to "###### " heading lines, line breaks. Built from
+  // text nodes and fixed elements only, so nothing the model writes is ever
+  // parsed as HTML.
   const BOLD_OR_ITALIC = /\*\*([^*\n]+)\*\*|\*(\S[^*\n]*?)\*/g;
   const LIST_ITEM = /^\s*(?:[-*]|(\d+)\.)\s+(.*)$/;
+  // Every level is one small <h3>: a chat bubble is no place for a
+  // page-size heading. A space after the hashes, so "#1 thing" is text.
+  const HEADING = /^\s*#{1,6}\s+(.*)$/;
 
   // Two fixed links, never anything the model chooses: the contact address
   // and "your hub". The href is ours; the text node is the matched words.
@@ -91,7 +95,8 @@
     const lines = text.split("\n");
     let list = null;
     lines.forEach(function (line, i) {
-      const item = LIST_ITEM.exec(line);
+      const heading = HEADING.exec(line);
+      const item = !heading && LIST_ITEM.exec(line);
       if (item) {
         const kind = item[1] ? "ol" : "ul";
         if (!list || list.tagName.toLowerCase() !== kind) {
@@ -104,7 +109,15 @@
         return;
       }
       list = null;
-      appendInline(node, line);
+      if (heading) {
+        // Inline in the bubble (careagents.css), so the newline below
+        // breaks after it as after any line.
+        const h = el("h3", "msg-heading");
+        appendInline(h, heading[1]);
+        node.appendChild(h);
+      } else {
+        appendInline(node, line);
+      }
       const next = lines[i + 1];
       // A newline, not a <br>: .msg is white-space: pre-wrap, so it draws
       // the same break, and it stays in textContent, so a screen reader or
@@ -118,7 +131,8 @@
   // text without the emphasis markers, so they never flash on screen.
   function withoutMarkers(text) {
     return text.replace(/\*\*([^*\n]+)\*\*/g, "$1")
-      .replace(/\*(\S[^*\n]*?)\*/g, "$1");
+      .replace(/\*(\S[^*\n]*?)\*/g, "$1")
+      .replace(/^\s*#{1,6}\s+/gm, "");
   }
 
   // A 429 is two different limits (#862). The burst limiter sends only an
@@ -147,25 +161,38 @@
   // and texted answer with it; only that exact leading copy is dropped,
   // only while the banner is on this page, and never down to nothing
   // (careagents/beta.py under_banner does the same for the history).
+  // A crisis answer carries it at its end, so it never comes before the
+  // 911 guidance (worker._finish); that copy, or one between paragraphs,
+  // a paragraph of its own, is dropped the same way.
   function withoutFrame(text) {
     const banner = document.querySelector(".sample-banner");
     const frame = banner ? banner.textContent.trim() : "";
-    if (!frame || text.indexOf(frame + "\n\n") !== 0) return text;
-    const rest = text.slice(frame.length + 2);
+    if (!frame) return text;
+    let rest = "";
+    const inline = "\n\n" + frame + "\n\n";
+    if (text.indexOf(frame + "\n\n") === 0) {
+      rest = text.slice(frame.length + 2);
+    } else if (text.indexOf(inline) > 0) {
+      rest = text.replace(inline, "\n\n");
+    } else if (text.length > frame.length + 2
+               && text.slice(-(frame.length + 2)) === "\n\n" + frame) {
+      rest = text.slice(0, -(frame.length + 2));
+    }
     return rest.trim() ? rest : text;
   }
 
   // `runId` alone marks a model's answer, which then gets "This wasn't
-  // right" under it once it has finished typing. With `failed` (an error
-  // code) the bubble is a failure, and gets "Report a problem" instead.
-  function addAgentText(text, runId, failed) {
+  // right" under it once it has finished typing, in the turn's `lang`.
+  // With `failed` (an error code) the bubble is a failure, and gets
+  // "Report a problem" instead.
+  function addAgentText(text, runId, failed, lang) {
     text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
       renderMarkdown(m, text);
       if (failed) addReport(m, runId, failed);
-      else if (runId) addFlag(m, runId);
+      else if (runId) addFlag(m, runId, lang);
       scroll();
     });
   }
@@ -202,26 +229,58 @@
     too_long: "That note is too long. Please make it shorter.",
   };
 
+  // The link's and the sheet's words by the turn's language: "es" when the
+  // worker read the turn as Spanish (its `lang` event, from
+  // routing.conversation_language). The reason codes sent never change.
+  const FLAG_WORDS = {
+    en: { open: "This wasn't right", ask: "What was wrong with this answer?",
+          reason: "Reason", reasons: null, send: "Send", cancel: "Cancel",
+          noteLabel: "Optional note",
+          note: "Optional. Please don't include health details.",
+          done: "Thanks. We'll look at this answer.", errors: FLAG_ERRORS,
+          failed: "Something went wrong. Please try again.",
+          offline: "Couldn't reach us. Please try again." },
+    es: { open: "Algo no está bien en esta respuesta",
+          ask: "¿Qué estuvo mal en esta respuesta?",
+          reason: "Motivo",
+          reasons: { wrong: "Incorrecta", confusing: "Confusa",
+                     not_what_asked: "No hizo lo que pedí",
+                     unsafe: "Me pareció peligrosa o preocupante",
+                     other: "Otra cosa" },
+          send: "Enviar", cancel: "Cancelar", noteLabel: "Nota opcional",
+          note: "Opcional. Por favor, no incluya datos de salud.",
+          done: "Gracias. Revisaremos esta respuesta.",
+          errors: {
+            rate_limited: "Ha marcado muchas respuestas en esta hora. " +
+              "Inténtelo más tarde.",
+            not_sent: "No pudimos enviarlo ahora. Inténtelo de nuevo.",
+            too_long: "La nota es demasiado larga. Acórtela, por favor." },
+          failed: "Algo salió mal. Inténtelo de nuevo.",
+          offline: "No pudimos conectarnos. Inténtelo de nuevo." },
+  };
+
   // A quiet link under the bubble, beside it rather than inside it, so the
   // answer's own text is untouched. One tap opens a small sheet in place.
-  function addFlag(bubble, runId) {
+  function addFlag(bubble, runId, lang) {
+    const words = FLAG_WORDS[lang === "es" ? "es" : "en"];
     const wrap = el("div", "flag");
-    const open = el("button", "flag-open", "This wasn't right");
+    const open = el("button", "flag-open", words.open);
     open.type = "button";
     wrap.appendChild(open);
     bubble.insertAdjacentElement("afterend", wrap);
     open.addEventListener("click", function () {
       open.hidden = true;
       const sheet = el("div", "flag-sheet");
-      sheet.appendChild(el("p", "flag-ask", "What was wrong with this answer?"));
+      sheet.appendChild(el("p", "flag-ask", words.ask));
       const reasons = el("div", "flag-reasons");
       reasons.setAttribute("role", "group");
-      reasons.setAttribute("aria-label", "Reason");
-      const send = el("button", "btn-primary flag-send", "Send");
+      reasons.setAttribute("aria-label", words.reason);
+      const send = el("button", "btn-primary flag-send", words.send);
       send.type = "button"; send.disabled = true;
       let reason = null;
       FLAG_REASONS.forEach(function (pair) {
-        const b = el("button", "flag-reason", pair[1]);
+        const b = el("button", "flag-reason",
+                     words.reasons ? words.reasons[pair[0]] : pair[1]);
         b.type = "button";
         b.setAttribute("aria-pressed", "false");
         b.addEventListener("click", function () {
@@ -236,11 +295,11 @@
       sheet.appendChild(reasons);
       const note = el("textarea", "field flag-note");
       note.rows = 2; note.maxLength = NOTE_MAX;
-      note.setAttribute("aria-label", "Optional note");
-      note.placeholder = "Optional. Please don't include health details.";
+      note.setAttribute("aria-label", words.noteLabel);
+      note.placeholder = words.note;
       sheet.appendChild(note);
       const row = el("div", "flag-actions");
-      const cancel = el("button", "btn-secondary flag-cancel", "Cancel");
+      const cancel = el("button", "btn-secondary flag-cancel", words.cancel);
       cancel.type = "button";
       row.appendChild(send); row.appendChild(cancel);
       sheet.appendChild(row);
@@ -268,14 +327,12 @@
           const d = await r.json().catch(() => ({}));
           if (r.ok && d.ok) {
             wrap.textContent = "";
-            wrap.appendChild(el("p", "flag-done",
-              "Thanks. We'll look at this answer."));
+            wrap.appendChild(el("p", "flag-done", words.done));
             return;
           }
-          status.textContent = FLAG_ERRORS[d.error] ||
-            "Something went wrong. Please try again.";
+          status.textContent = words.errors[d.error] || words.failed;
         } catch (e) {
-          status.textContent = "Couldn't reach us. Please try again.";
+          status.textContent = words.offline;
         }
         send.disabled = false;
       });
@@ -291,7 +348,8 @@
     const text = bubble.textContent;
     BOLD_OR_ITALIC.lastIndex = 0;
     if (!BOLD_OR_ITALIC.test(text) &&
-        !text.split("\n").some((line) => LIST_ITEM.test(line))) return;
+        !text.split("\n").some((line) => LIST_ITEM.test(line) ||
+                                         HEADING.test(line))) return;
     renderMarkdown(bubble, text);
   }
 
@@ -569,9 +627,10 @@
         if (ev.type === "accepted") {
           state.runId = ev.run_id;
           state.cursor = Math.max(state.cursor, ev.next_cursor || 0);
-        } else if (ev.type === "tool") addChip(ev.label);
+        } else if (ev.type === "lang") state.lang = ev.lang;
+        else if (ev.type === "tool") addChip(ev.label);
         else if (ev.type === "card" && ev.kind === "review")
-          addReviewCard(ev.action_id, ev.review_url);
+          addReviewCard(ev.action_id, ev.review_url, ev.label);
         else if (ev.type === "card" && ev.kind === "pdf")
           addPdfCard(ev.url);
         // Drawn once the answer is in (on done), beside its "the full
@@ -581,7 +640,8 @@
         else if (ev.type === "card" && ev.kind === "lab-timeline")
           addLabTimelineCard(ev.topic || "");
         else if (ev.type === "text") {
-          typing.remove(); addAgentText(ev.text, state.runId);
+          typing.remove();
+          addAgentText(ev.text, state.runId, null, state.lang);
         } else if (ev.type === "error") {
           // Terminal, exactly like `done`. Every producer of an error frame
           // ends the run on it: agent.py returns after each one, and the SSE
@@ -635,6 +695,9 @@
     const requestId = (window.crypto && window.crypto.randomUUID)
       ? window.crypto.randomUUID()
       : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    // The last sentence a 503 refusing this turn carried (it ends with the
+    // 911 line): shown instead of "Connection hiccup" once retries run out.
+    let refusalText = "";
 
     try {
       const state = { runId: null, cursor: 0, done: false };
@@ -668,6 +731,24 @@
               addLimitFeedback();
             return;
           }
+          // A chat turn the server could not take carries its sentence and
+          // a 911 line (app.py, _with_emergency). Crisis wording is said at
+          // once. Any other is retried silently, as a blip usually passes,
+          // and said instead of "Connection hiccup" if the retries run out.
+          // Only for the POST that asked: a reconnect to a run in progress
+          // keeps its own retries.
+          if (resp.status === 503 && !state.runId) {
+            const refusal = await resp.clone().json().catch(() => ({}));
+            if (refusal && typeof refusal.message === "string"
+                && refusal.message) {
+              if (refusal.emergency === true) {
+                typing.remove();
+                addAgentText(refusal.message);
+                return;
+              }
+              refusalText = refusal.message;
+            }
+          }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
           const responseRunId = resp.headers.get("X-CareAgents-Run-ID");
           if (responseRunId) state.runId = responseRunId;
@@ -688,7 +769,10 @@
       if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
-      addAgentText("Connection hiccup — try that again.", null, "connection");
+      if (refusalText) addAgentText(refusalText, null, "connection");
+      // No server sentence reached the page, so it adds the 911 line itself
+      // (beta.EMERGENCY_TRAILER): this is all a hard outage shows.
+      else addAgentText("Connection hiccup — try that again.\n\nIf this is an emergency, call 911. Si es una emergencia, llame al 911.", null, "connection");
       showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();

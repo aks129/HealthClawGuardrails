@@ -31,10 +31,11 @@ import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 from markupsafe import Markup, escape
+from sqlalchemy.exc import SQLAlchemyError
 
-from careagents.accounts import (AccountService, AuthError, MailError,
-                                 MailUnconfirmed, new_binding_code,
-                                 secret_matches)
+from careagents.accounts import (RESEND_COOLDOWN, AccountService, AuthError,
+                                 MailError, MailUnconfirmed,
+                                 new_binding_code, secret_matches)
 from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
 from careagents import security_headers, sendblue_surface
@@ -43,7 +44,7 @@ from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents import beta_signup, causes, errors, feedback, funnel, invites
-from careagents import checkin_wallet, pharmacy_share
+from careagents import checkin_wallet, pharmacy_share, text_self
 from careagents import checkins
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -57,8 +58,72 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: Session key: the page a signed-out person asked for, so the sign-in that
+#: follows ends there and not on the hub (beta feedback, 2026-10-22).
+_AFTER_SIGN_IN = "after_sign_in"
+#: When it was parked. Honoured for _AFTER_SIGN_IN_TTL seconds only, so a
+#: page parked for one sign-in never takes over a hub visit later (#1016).
+_AFTER_SIGN_IN_AT = "after_sign_in_at"
+_AFTER_SIGN_IN_TTL = 15 * 60
+#: One-shot: a parked page was dropped for its age, so the hub says why it
+#: opened instead (patient walk of #1016).
+_AFTER_SIGN_IN_STALE = "after_sign_in_stale"
+#: Longer than any page here; the cookie that carries it is small.
+_AFTER_SIGN_IN_MAX = 512
+
+
+def _local_target(raw) -> str | None:
+    """`raw` if it is a path on this site, else None. A path starts with a
+    single "/" and holds only visible ASCII: no "//" or "\\" a browser reads
+    as another host, no scheme, no whitespace or control character."""
+    if (not isinstance(raw, str) or not 1 <= len(raw) <= _AFTER_SIGN_IN_MAX
+            or not raw.startswith("/") or raw.startswith("//")
+            or "\\" in raw or not all(33 <= ord(c) <= 126 for c in raw)):
+        return None
+    return raw
+
+
+def _tapped_target(req) -> str | None:
+    """The page as it was tapped, still percent-encoded, so %3F stays part
+    of the path rather than coming back as a query. From the server's raw
+    request line where it gives one, else Flask's decoded full path."""
+    raw = req.environ.get("RAW_URI") or req.environ.get("REQUEST_URI")
+    if isinstance(raw, str):
+        path = raw.split("?", 1)[0]
+        query = req.query_string.decode("latin-1")
+        target = _local_target(f"{path}?{query}" if query else path)
+        if target:
+            return target
+    return _local_target(req.full_path.rstrip("?"))
+
+
+def _parked_state(sess) -> tuple[str | None, bool]:
+    """(the parked page if it is on this site and still fresh, whether a
+    page on this site was there but too old). Only age makes it "too old":
+    a missing or unusable time is no page at all, said nothing about."""
+    target = _local_target(sess.get(_AFTER_SIGN_IN))
+    at = sess.get(_AFTER_SIGN_IN_AT)
+    if (target is None or not isinstance(at, (int, float))
+            or isinstance(at, bool)):
+        return None, False
+    age = time.time() - at
+    if 0 <= age <= _AFTER_SIGN_IN_TTL:
+        return target, False
+    return None, age > _AFTER_SIGN_IN_TTL
+
+
+def _parked_target(sess) -> str | None:
+    """The parked page if it is on this site and still fresh, else None."""
+    return _parked_state(sess)[0]
+
+
 #: What the hub says when HealthClaw cannot be reached to set up or
 #: refresh records: a sentence and what to do, never "service unavailable".
+#: The burst limit's sentence. chat.js shows its own copy (PACE_TEXT) for
+#: a 429 that carries no message; this one is sent only when crisis wording
+#: needs the emergency line ahead of it. Pinned equal by a test.
+PACE_TEXT = "You've hit the pace limit for now \u2014 give it a few minutes."
+
 RECORDS_DOWN_TEXT = ("We couldn't reach the records service just now. "
                      "Please try again in a minute.")
 #: What a link session is told when it reaches for more than the sample.
@@ -142,6 +207,24 @@ CHART_FOOTNOTE = ("This chart is not a diagnosis. Each result is compared "
                   "with typical adult ranges, and ranges differ by lab, age "
                   "and sex. If your lab report shows a different range, go "
                   "by your lab's range.")
+#: Where nothing on the chart was scored (blood pressure: the engine has no
+#: range for it), the range sentence above would be untrue (QA #1021).
+CHART_FOOTNOTE_UNSCORED = ("This chart is not a diagnosis. These readings "
+                           "were not compared with any range; your clinician "
+                           "can say what they mean for you.")
+#: Scored and unscored series on one card.
+CHART_FOOTNOTE_MIXED = (CHART_FOOTNOTE + " Readings shown in grey were not "
+                        "compared with any range.")
+
+
+def _chart_footnote(series: list[dict]) -> str:
+    """The footnote that is true of these points: one is scored when it
+    carries the engine's flag rather than IND. Decided per point, not per
+    series, so a lone grey dot on a ranged series is captioned too."""
+    scored = [r.get("flag") != "IND" for s in series for r in s["readings"]]
+    if scored and not any(scored):
+        return CHART_FOOTNOTE_UNSCORED
+    return CHART_FOOTNOTE if all(scored) else CHART_FOOTNOTE_MIXED
 
 # FHIR R4 §3.2 SHALL support `application/fhir+json`; the two legacy
 # variants ride the same accept-list so a real FHIR client, a plain-JSON
@@ -221,11 +304,41 @@ _CARED_FOR_REVIEW_WORDS = (
 )
 
 
+#: A text (propose_action, or one staged another way) whose number is not
+#: the account's verified phone. Said by the relay's 409 and by the review
+#: page in place of Approve; Decline still works.
+_NOT_YOUR_NUMBER = ("This text is not going to the phone number linked to "
+                    "your account, so it can't be approved here. You can "
+                    "decline it.")
+
+#: The engine approve page's own markup, each reworded once by the relay
+#: for a text to a number that is not the account's. Pinned against
+#: templates/action_approve.html by tests/test_careagents_propose_action.py.
+_NOT_YOUR_NUMBER_PAGE = (
+    ('<div class="form-check mt-2 p-3 bg-body-secondary rounded">',
+     '<div class="form-check mt-2 p-3 bg-body-secondary rounded" hidden>'),
+    ('<div id="review-gate-msg" class="alert alert-secondary" role="alert">',
+     '<div id="review-gate-msg" class="alert alert-warning not-your-number" '
+     'role="alert" '
+     'data-not-your-number>' + _NOT_YOUR_NUMBER + '</div><div hidden>'),
+    ('id="approve-btn" class="btn btn-primary btn-lg" disabled>',
+     'id="approve-btn" class="btn btn-primary btn-lg" disabled hidden>'),
+)
+
+
 def _connection_is_live(ctx: dict) -> bool:
     """Whether an agent context's connection may still reach the tenant's
     requests: not revoked (#215). The one rule for every approval surface,
     the web pages and APPROVALS by text alike."""
     return (ctx.get("connection") or {}).get("status") != "revoked"
+
+
+def _brief_as_of(now: datetime | None = None) -> str:
+    """The day the brief's records were read, as it prints it ("Oct 26,
+    2026"), in UTC. The fallback without script: brief.js rewrites it in
+    the viewer's own time zone from the same instant (#1038 QA)."""
+    now = now or datetime.now(timezone.utc)
+    return f"{now:%b} {now.day}, {now.year}"
 
 
 def _parse_care_gaps_status(resource: dict | None) -> str:
@@ -335,6 +448,9 @@ def create_app(config: Config | None = None,
 
     app.jinja_env.filters["contact_links"] = contact_links
     app.jinja_env.filters["chat_links"] = chat_links
+    # The resend wait, for the delete dialog's code step to count down as
+    # /auth does (10-20 patient walk).
+    app.jinja_env.globals["resend_wait"] = RESEND_COOLDOWN
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),
@@ -342,6 +458,13 @@ def create_app(config: Config | None = None,
     hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
                                     public_base=cfg.healthclaw_public_base)
     svc = accounts or AccountService(cfg)
+    # Spent and expired sign-in links hold a number; ones made before #1004
+    # deleted them are swept here, once per start. Idempotent, and a failure
+    # must not stop the app serving.
+    try:
+        svc.prune_imessage_links()
+    except SQLAlchemyError:
+        logger.warning("imessage link sweep failed at start", exc_info=True)
     # Exposed for deterministic integration tests and process diagnostics.
     # Production Gunicorn never executes this worker object; the systemd/OCI
     # worker service constructs its own clients and calls careagents.worker.
@@ -477,6 +600,13 @@ def create_app(config: Config | None = None,
                 if request.path.startswith("/api/") or request.path.startswith(
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
+                # A page, not a form post: the sign-in that follows comes
+                # back here (/home resumes it), so a tapped link is not lost.
+                target = _tapped_target(request)
+                if (request.method == "GET" and target
+                        and request.path != "/home"):
+                    session[_AFTER_SIGN_IN] = target
+                    session[_AFTER_SIGN_IN_AT] = time.time()
                 return redirect(url_for("auth"))
             # The engine's audit trail names the account that asked
             # (one assistant per person spec, section 6.2).
@@ -510,6 +640,8 @@ def create_app(config: Config | None = None,
         # and without it the person lands on the hub, not the request (#846).
         consent_req = session.get("consent_req")
         imessage_link = session.get("imessage_link")
+        after_sign_in, after_sign_in_stale = _parked_state(session)
+        after_sign_in_at = session.get(_AFTER_SIGN_IN_AT)
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
@@ -520,6 +652,12 @@ def create_app(config: Config | None = None,
         # an id, not the token, and spent only after this sign-in.
         if isinstance(imessage_link, str):
             session["imessage_link"] = imessage_link
+        # The page a signed-out tap asked for, resumed once by /home.
+        if after_sign_in:
+            session[_AFTER_SIGN_IN] = after_sign_in
+            session[_AFTER_SIGN_IN_AT] = after_sign_in_at
+        elif after_sign_in_stale:
+            session[_AFTER_SIGN_IN_STALE] = True
 
     # --- pages ---------------------------------------------------------------
 
@@ -577,12 +715,30 @@ def create_app(config: Config | None = None,
                                         else ""),
                                imessage_pending=bool(
                                    session.get("imessage_link")),
+                               # A page tapped while signed out is waiting:
+                               # say so, and go straight there after the
+                               # code (patient walk of #1016). Not while a
+                               # consent request or texted link waits: /home
+                               # sends those first and drops the page.
+                               resume=(_parked_target(session) is not None
+                                       and not session.get("consent_req")
+                                       and not session.get("imessage_link")),
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
     @app.get("/home")
     @login_required
     def home():
+        # The page tapped while signed out is taken now, whatever wins
+        # below: fresh, it is followed once after the steps that come
+        # first; when one of those wins it is dropped, so it never takes
+        # over a later, unrelated visit to the hub.
+        after_sign_in, stale = _parked_state(session)
+        session.pop(_AFTER_SIGN_IN, None)
+        session.pop(_AFTER_SIGN_IN_AT, None)
+        # Dropped for its age, here or at sign-in: the hub says why it
+        # opened instead, once. Not when a step below wins.
+        stale = session.pop(_AFTER_SIGN_IN_STALE, None) is True or stale
         # A consent request that was waiting on sign-in resumes here, once.
         pending_req = session.pop("consent_req", None)
         if pending_req:
@@ -590,6 +746,10 @@ def create_app(config: Config | None = None,
         # So does a texted sign-in link: bind the handle it came from.
         if session.get("imessage_link"):
             return redirect(url_for("imessage_link_claim"))
+        # Then the tapped page. The page itself checks the account owns
+        # what it names.
+        if after_sign_in:
+            return redirect(after_sign_in)
         acct = current_account()
         data = svc.list_home(acct.id)
         view = hub_view.build(data, time.time())
@@ -608,6 +768,7 @@ def create_app(config: Config | None = None,
             connectors.catalog(cfg, real_records=real_open), real_open)
         return render_template(
             "home.html", me=acct,
+            stale_link_note=stale,
             connect_next=_connect_next(acct, view, menu, real_open, paused),
             # A confirm-link session connects only after a code (#920 F1):
             # the card says so and goes to /auth (#934 QA F1).
@@ -860,9 +1021,11 @@ def create_app(config: Config | None = None,
             # Not an enumeration oracle: this branch turns only on the codes
             # already requested for this address, and their wrong guesses —
             # states requesters created — never on whether an account exists.
-            # start_email_code touches ca_email_tokens alone; accounts are
-            # created at verify. The genuine-send and wait responses are
-            # byte-identical for an address with an account and one without.
+            # start_email_code reads ca_accounts only to choose the email's
+            # wording; the account's existence never reaches this answer, and
+            # accounts are created at verify. The genuine-send and wait
+            # responses are byte-identical for an address with an account and
+            # one without (tests/test_careagents_walk_10_20_security.py).
             return jsonify({"sent": False, "reason": "cooldown",
                             "retry_after": retry_after})
         return jsonify({"sent": True})
@@ -880,7 +1043,11 @@ def create_app(config: Config | None = None,
         # Nothing connected yet: the records come first, and the passkey
         # waits (it is in the chat's menu), so auth.js skips its prompt.
         return jsonify({"ok": True, "has_passkey": svc.has_passkey(acct.id),
-                        "first_run": not svc.has_connections(acct.id)})
+                        "first_run": not svc.has_connections(acct.id),
+                        # After the code only, so this says nothing to
+                        # someone who doesn't hold the inbox (10-20 walk).
+                        "new_account": bool(getattr(acct, "new_account",
+                                                    False))})
 
     # --- WebAuthn (biometric) ------------------------------------------------
 
@@ -2276,6 +2443,8 @@ def create_app(config: Config | None = None,
         if not ctx:
             return redirect(url_for("home"))
         sample = (ctx.get("connection") or {}).get("kind") == "sample"
+        # When the records were read, for the "As of" line.
+        read_at = datetime.now(timezone.utc)
         try:
             # Made-up records ask the engine to word its sentences about
             # "the sample person" (r6/voice.py). A real brief asks as before.
@@ -2290,10 +2459,16 @@ def create_app(config: Config | None = None,
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
                                agent_id=agent_id, sections=sections,
+                               as_of=_brief_as_of(read_at),
+                               as_of_iso=read_at.isoformat(
+                                   timespec="seconds"),
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
                                care_gaps_note=_parse_care_gaps_reason(raw),
+                               care_gaps_demographic=(
+                                   brief_mod.care_gaps_marker(raw, "cause")
+                                   in brief_mod.DEMOGRAPHIC_CAUSES),
                                sample_line=(beta.sample_frame(
                                    hub_view.relation_of(hub_view.person_of(
                                        svc.list_home(acct.id),
@@ -2324,9 +2499,16 @@ def create_app(config: Config | None = None,
             return payload
         if kind == "agent.text":
             return {"type": "text", "text": payload.get("text") or ""}
+        if kind == "agent.lang":
+            # The worker's reading of the turn's language (worker.LANG_EVENT),
+            # for the page's own words. Only a code from a fixed set.
+            lang = payload.get("lang")
+            return {"type": "lang", "lang": lang} if lang == "es" else None
         if kind == "agent.error":
-            return {"type": "error",
-                    "text": payload.get("text") or GENERIC_FAILURE_TEXT}
+            # The worker's failure text already carries the 911 line; one
+            # the engine wrote, or none, gets it here.
+            return {"type": "error", "text": beta.with_911(
+                payload.get("text") or GENERIC_FAILURE_TEXT)}
         return None
 
     def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
@@ -2380,17 +2562,48 @@ def create_app(config: Config | None = None,
         WORKERS_NOT_READY: "run_workers_unavailable",
     }
 
-    def _refuse_turn_without_workers(state: str):
+    def _refuse_turn_without_workers(state: str, text: str = ""):
         """The 503 body for a chat turn no worker can be promised to run.
 
         The patient-facing sentence is the same in every failure state,
         because it is true in all of them. Only the machine-readable code
-        differs.
+        differs. It carries the 911 line (_with_emergency), and chat.js
+        shows it instead of retrying.
         """
-        return jsonify({
-            "error": _REFUSAL_CODES.get(state, "run_workers_unavailable"),
+        return _chat_unavailable(
+            _REFUSAL_CODES.get(state, "run_workers_unavailable"), text)
+
+    def _chat_unavailable(code: str, text: str):
+        """A 503 for a chat turn that could not be taken: the store, the
+        run queue or the workers. One sentence for all of them."""
+        return jsonify(_with_emergency({
+            "error": code,
             "message": "Chat is temporarily unavailable. Try again soon.",
-        }), 503
+        }, text)), 503
+
+    def _with_emergency(body: dict, text: str) -> dict:
+        """`body` with its sentence carrying the 911 line (beta.with_911):
+        led by it, and marked `emergency`, when `text` reads as a crisis;
+        followed by it otherwise. The sentence defaults to the pace
+        sentence chat.js shows for a 429 that carries none."""
+        sentence = body.get("message") or PACE_TEXT
+        said = beta.with_911(sentence, text)
+        if said.startswith(beta.EMERGENCY_LINE):
+            return {**body, "message": said, "emergency": True}
+        return {**body, "message": said}
+
+    def _run_said_anything(tenant: str, run_id: str,
+                           account_id: str | None) -> bool:
+        """Whether a run left the person any text or failure sentence, read
+        from its first event, so a resumed stream does not say it twice.
+        A read that fails counts as nothing said."""
+        try:
+            with acting_for(account_id):
+                page = hc.agent_run_events(tenant, run_id, after=0, limit=500)
+        except HealthClawError:
+            return False
+        return any(e.get("type") in ("agent.text", "agent.error")
+                   for e in page.get("events") or [])
 
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
                     account_id: str | None = None):
@@ -2441,7 +2654,8 @@ def create_app(config: Config | None = None,
                 funnel.safely(funnel.count_issue, svc.session,
                               "run_replay_error")
                 yield "data: " + json.dumps({
-                    "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
+                    "type": "error",
+                    "text": beta.with_911(GENERIC_FAILURE_TEXT)}) + "\n\n"
                 return
             misses = 0
             events = page.get("events") or []
@@ -2457,6 +2671,14 @@ def create_app(config: Config | None = None,
             if len(events) >= 100:
                 continue
             status = page.get("status")
+            if status == "failed" and not _run_said_anything(
+                    tenant, run_id, account_id):
+                # A run the engine failed itself (swept past its deadline
+                # before a worker claimed it) has no answer at all: without
+                # this the page showed nothing. Generic, with the 911 line.
+                yield "data: " + json.dumps({
+                    "type": "error",
+                    "text": beta.with_911(GENERIC_FAILURE_TEXT)}) + "\n\n"
             if status in ("completed", "failed", "cancelled",
                           "waiting_for_human"):
                 done = {"type": "done", "status": status,
@@ -2494,10 +2716,11 @@ def create_app(config: Config | None = None,
         if workers != WORKERS_READY:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.ENGINE_UNAVAILABLE)
-            return _refuse_turn_without_workers(workers)
+            return _refuse_turn_without_workers(workers, text)
         if not _allow_turn(acct.id):
             funnel.safely(funnel.count_issue, svc.session, "rate_limited")
-            return jsonify({"error": "rate_limited"}), 429
+            return jsonify(_with_emergency({"error": "rate_limited"},
+                                           text)), 429
         # A turn the worker will refuse (paused, or terms not accepted; beta
         # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
         # a model, so the day's allowance does not stop it here.
@@ -2517,7 +2740,8 @@ def create_app(config: Config | None = None,
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": beta.daily_limit_text(),
+                    # Always the 911 line; first for crisis wording.
+                    "message": beta.with_911(beta.daily_limit_text(), text),
                 }), 429
 
         tenant = ctx["tenant"]
@@ -2534,14 +2758,14 @@ def create_app(config: Config | None = None,
         if created is None or not user_message_id:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.ENGINE_UNAVAILABLE)
-            return jsonify({"error": "message store unavailable"}), 503
+            return _chat_unavailable("message store unavailable", text)
         try:
             run = hc.create_agent_run(
                 tenant, user_message_id, cfg.run_deadline_seconds)
         except HealthClawError as exc:
             funnel.safely(funnel.count_chat_error, svc.session,
                           causes.cause_of(exc))
-            return jsonify({"error": "run queue unavailable"}), 503
+            return _chat_unavailable("run queue unavailable", text)
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(
@@ -2640,11 +2864,10 @@ def create_app(config: Config | None = None,
         except HealthClawError:
             return jsonify({"error": "labs unavailable"}), 502
         keys = labs_timeline_mod.keys_for_topic(request.args.get("topic"))
-        return jsonify({
-            "series": labs_timeline_mod.build_series(labs.get("bundle") or {},
-                                                     keys),
-            "disclaimer": CHART_FOOTNOTE,
-        })
+        series = labs_timeline_mod.build_series(labs.get("bundle") or {},
+                                                keys)
+        return jsonify({"series": series,
+                        "disclaimer": _chart_footnote(series)})
 
     # --- pending approvals (#215) --------------------------------------------
 
@@ -2890,12 +3113,45 @@ def create_app(config: Config | None = None,
         if not ctx:
             return None
         try:
-            hc.action_status(ctx["tenant"], action_id)
+            action = hc.action_status(ctx["tenant"], action_id)
         except HealthClawError as exc:
             if _engine_said_absent(exc):
                 return None
             raise OwnershipUnknown from exc
-        return ctx
+        # The status rides along, so the text check below reads the same
+        # answer that proved ownership.
+        return dict(ctx, action=action if isinstance(action, dict) else {})
+
+    def _text_not_yours(action):
+        """True for an sms CareAgents will not approve now. Only sms is
+        held to this. It must be what propose_action would have staged for
+        the signed-in account at this moment: text_self.sms_phone_for
+        (CARE_ACTIONS_SMS open for it, not paused, one verified phone)
+        answers this number, `to` is the fixed label, and the words are one
+        of the fixed texts. A text staged by another surface or a raw POST,
+        an iMessage binding changed since, or the flag turned off all
+        refuse. Logs the action id and the reason, never the number or
+        the words."""
+        if action.get("kind") != "sms":
+            return False
+        payload = action.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        acct = current_account()
+        mine = text_self.sms_phone_for(cfg, svc, acct.id, acct.email)
+        if not mine:
+            reason = "no_phone_to_text"
+        elif payload.get("phone") != mine:
+            reason = "number"
+        elif payload.get("to") != text_self.RECIPIENT_LABEL:
+            reason = "label"
+        elif payload.get("body") not in {text_self.body_for(p, cfg.origin)
+                                         for p in text_self.PURPOSES}:
+            reason = "words"
+        else:
+            return False
+        logger.info("text approval refused for action %s: %s",
+                    str(action.get("id") or "")[:64], reason)
+        return True
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
@@ -2987,6 +3243,11 @@ def create_app(config: Config | None = None,
                                      whose=whose)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
+        if _text_not_yours(ctx.get("action") or {}):
+            # "Not your number" in place of Approve; Decline stays. The
+            # submit refuses it as well, before anything is recorded.
+            for old, new in _NOT_YOUR_NUMBER_PAGE:
+                html = html.replace(old, new, 1)
         if sample and whose:
             # The person's own line, as on their chat page, then the
             # approved message about the form, not "your" form.
@@ -3018,17 +3279,24 @@ def create_app(config: Config | None = None,
     @login_required
     def review_submit(agent_id, action_id):
         try:
-            tenant = _agent_owns_action(agent_id, action_id)
+            ctx = _agent_action_context(agent_id, action_id)
         except OwnershipUnknown:
             return jsonify({"error": "review_unavailable",
                             "message": _REVIEW_UNCHECKABLE}), 503
-        if not tenant:
+        if not ctx:
             return jsonify({"error": "not yours"}), 404
+        tenant = ctx["tenant"]
         if svc.is_paused(current_account().id):
             # Before the review is submitted, so nothing is confirmed or
             # executed for a paused account (beta spec 4.6, #856 review F1).
             return jsonify({"error": "records_paused",
                             "message": beta.PAUSED_HUB_TEXT}), 423
+        if _text_not_yours(ctx.get("action") or {}):
+            # BEFORE submit_review: that POST is what writes the consent
+            # record, so a check after it would refuse a text already
+            # approved. Nothing was recorded, so `confirmed` is false.
+            return jsonify({"error": "not_your_number", "confirmed": False,
+                            "message": _NOT_YOUR_NUMBER}), 409
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
@@ -3544,9 +3812,12 @@ def create_app(config: Config | None = None,
             # assistant switched to real records mid-run, by kind or by a
             # move to a new tenant (where the run lookup would fail and the
             # relay retry forever), gets the pointer and nothing of the run.
+            # A refusal: it carries the 911 line (the message is not at
+            # hand here, so the line follows).
             return jsonify({"run_id": run_id,
-                            "reply": sendblue_surface.real_records_text(
-                                cfg.origin)})
+                            "reply": beta.with_911(
+                                sendblue_surface.real_records_text(
+                                    cfg.origin))})
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
             if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):

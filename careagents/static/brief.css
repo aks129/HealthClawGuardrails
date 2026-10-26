@@ -1,0 +1,11 @@
+/* The visit brief on screen. On a phone the header stacks: the title and
+   the Print button take the full width, and the way back sits under them.
+   Side by side, the pills squeezed "Visit brief" to a few letters a line
+   (#1038 QA F2). */
+.brief-asof { font-size: 15px; }
+.brief-tools { margin-top: 12px; }
+.brief-tools:has(> [hidden]:only-child) { display: none; }
+@media (max-width: 560px) {
+  .page-brief .hub-head { flex-direction: column; align-items: stretch;
+    gap: 12px; }
+}

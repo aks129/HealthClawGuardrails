@@ -240,15 +240,18 @@ def test_the_browser_code_sends_nothing_but_sign_in(wallet):
             assert banned not in src, banned
     assert "fetch(" not in answer
     # One fetch, inside the POST helper; its only callers are the sign-in
-    # endpoints and the records relay, which the page's data-records names.
+    # endpoints, the records relay (data-records) and the test patient
+    # choice (data-test-patient).
     assert page.count("fetch(") == 1
     assert set(re.findall(r'post\("([^"]+)"', page)) == {
         "/webauthn/login/options", "/webauthn/login/verify",
         "/api/auth/email", "/api/auth/verify"}
     assert re.findall(r"(?<!function )post\((?!\")([^,)]+)", page) == [
-        "card.dataset.records"]
-    # The relay is asked for type names and nothing else.
+        "card.dataset.records", "card.dataset.testPatient"]
+    # The relay is asked for type names and nothing else; the test patient
+    # choice sends an empty object.
     assert "post(card.dataset.records, { resource_types: types })" in page
+    assert "post(card.dataset.testPatient, {})" in page
 
 
 # --- the library, vendored -----------------------------------------------------------

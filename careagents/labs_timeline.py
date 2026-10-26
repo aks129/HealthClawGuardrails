@@ -44,9 +44,22 @@ ANALYTES = [
     {"key": "glucose", "name": "Glucose", "codes": ["2345-7"], "unit": "mg/dL"},
 ]
 
+#: Blood pressure, charted as its two parts. A reading arrives either as a
+#: panel whose components carry the parts, or as one Observation per part.
+#: Kept out of ANALYTES because the MCP App reads only top-level values and
+#: cannot draw a panel; pinning BP there would claim a parity that is not
+#: real (tests/test_labs_timeline.py).
+BP_PANELS = frozenset({"85354-9", "55284-4"})
+BP_PARTS = [
+    {"key": "systolic", "name": "Systolic blood pressure",
+     "codes": ["8480-6"], "unit": "mm[Hg]"},
+    {"key": "diastolic", "name": "Diastolic blood pressure",
+     "codes": ["8462-4"], "unit": "mm[Hg]"},
+]
+
 #: Each analyte's usual UCUM unit, for when a reading's own coded unit is
 #: missing. Never the reading's free-text `unit`.
-KNOWN_UNITS = {a["key"]: a["unit"] for a in ANALYTES}
+KNOWN_UNITS = {a["key"]: a["unit"] for a in ANALYTES + BP_PARTS}
 
 #: Units a lab reading may carry to the model or the browser: exact,
 #: case-sensitive tokens. A closed list: any other string, however
@@ -68,6 +81,10 @@ UCUM_ALLOWED = frozenset({
     "/[HPF]", "/[LPF]", "s", "ms", "mm/h", "mm/[Hg]", "cm[H2O]",
     "mg/(24.h)", "ng/mL{FEU}", "mg/g{creat}", "K/uL", "x10E3/uL",
     "x10E6/uL", "fl",
+    # Thousands per microlitre as feeds spell it; the engine scores each
+    # as 10*3/uL (r6/labs/interpret.py _EQUIVALENT_UNITS, #1036 QA F1).
+    # Only exact equivalents, each listed by exact spelling.
+    "thou/uL", "10*3/\u00b5L", "10*3/\u03bcL", "10E3/uL", "x10^9/L",
 })
 
 
@@ -104,6 +121,9 @@ _TOPICS = {
     "diabetes": ["a1c", "glucose"],
     "glucose": ["glucose"],
     "sugar": ["glucose", "a1c"],
+    "blood pressure": ["systolic", "diastolic"],
+    "systolic": ["systolic"],
+    "diastolic": ["diastolic"],
 }
 
 
@@ -128,10 +148,20 @@ def keys_for_topic(topic: str | None) -> list[str] | None:
     return hits
 
 
+def _dicts(value: object) -> list[dict]:
+    """The objects in a list, or none. A feed can put any JSON where FHIR
+    says list-of-objects; that row is skipped, never raised on (#1021)."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, dict)]
+
+
 def _loinc_of(resource: dict) -> str | None:
-    for coding in ((resource.get("code") or {}).get("coding") or []):
-        if isinstance(coding, dict) and coding.get("system") == LOINC \
-                and coding.get("code"):
+    code = resource.get("code")
+    if not isinstance(code, dict):
+        return None
+    for coding in _dicts(code.get("coding")):
+        if coding.get("system") == LOINC and coding.get("code"):
             return str(coding["code"])
     return None
 
@@ -146,9 +176,9 @@ def _flag_of(resource: dict) -> str:
     Never computed here. A second opinion on a reference range is how a
     patient ends up seeing a different verdict from the one we audited.
     """
-    for concept in (resource.get("interpretation") or []):
-        for coding in ((concept or {}).get("coding") or []):
-            if isinstance(coding, dict) and coding.get("code"):
+    for concept in _dicts(resource.get("interpretation")):
+        for coding in _dicts(concept.get("coding")):
+            if coding.get("code"):
                 # An unscored reading keeps the feed's own interpretation,
                 # whose code can be any text (#922): only a flag passes.
                 code = coding["code"]
@@ -197,7 +227,7 @@ def build_series(interpret_bundle: dict,
     wanted = None if keys is None else set(keys)
 
     series = []
-    for analyte in ANALYTES:
+    for analyte in ANALYTES + BP_PARTS:
         if wanted is not None and analyte["key"] not in wanted:
             continue
         codes = set(analyte["codes"])
@@ -205,9 +235,21 @@ def build_series(interpret_bundle: dict,
         withheld = 0
         for entry in entries:
             resource = (entry or {}).get("resource") or {}
-            if _loinc_of(resource) not in codes:
+            # The reading's own values, or, inside a BP panel, the
+            # component that is this part. The date is the panel's.
+            if _loinc_of(resource) in codes:
+                source = resource
+            elif _loinc_of(resource) in BP_PANELS:
+                source = next(
+                    (c for c in _dicts(resource.get("component"))
+                     if _loinc_of(c) in codes), None)
+                if source is None:
+                    continue
+            else:
                 continue
-            quantity = resource.get("valueQuantity") or {}
+            quantity = source.get("valueQuantity") or {}
+            if not isinstance(quantity, dict):
+                continue
             value = quantity.get("value")
             # No number, no point. Defaulting a missing value to 0 would put
             # a clinical claim nobody made onto a chart.
@@ -228,7 +270,9 @@ def build_series(interpret_bundle: dict,
                 "date": _date_of(resource),
                 "value": value,
                 "unit": unit,
-                "flag": _flag_of(resource),
+                # A component's own flag, never its panel's: a panel
+                # flagged high says nothing about which part was.
+                "flag": _flag_of(source),
             })
         if not readings and not (keep_withheld and withheld):
             continue

@@ -22,6 +22,13 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_imessage import (
     HDRS, OTHER_EMAIL, PHONE, _acct_id, _inbound, _pair, _run)
 
+
+def _pointer(origin: str) -> str:
+    """The real-records pointer as sent: a refusal, so it carries the 911
+    line (beta.with_911, #1017)."""
+    from careagents import beta
+    return beta.with_911(sendblue_surface.real_records_text(origin))
+
 CANARY = "Zzyzx Canarywood"            # a fixture name; never real
 OTHER_PHONE = "+15550100999"
 
@@ -64,7 +71,7 @@ def test_move_to_real_then_relay_inbound_queues_nothing(
     before = len(hc.runs)
     r = _inbound(c, PHONE, "what are my meds?")
     assert r.get_json() == {
-        "reply": sendblue_surface.real_records_text(cfg.origin)}
+        "reply": _pointer(cfg.origin)}
     assert len(hc.runs) == before
 
 
@@ -83,7 +90,7 @@ def test_a_run_queued_on_sample_is_not_answered_after_a_move_to_real(
     # The agent's current connection is checked before the run lookup, so
     # the person is told to open the app, and nothing of the run is read.
     assert r.status_code == 200
-    assert r.get_json()["reply"] == sendblue_surface.real_records_text(
+    assert r.get_json()["reply"] == _pointer(
         cfg.origin)
     assert "sample words" not in r.get_data(as_text=True)
 
@@ -160,7 +167,7 @@ def test_any_kind_but_exact_sample_is_held_back_on_relay_and_telegram(
         s.get(Connection, s.get(Agent, agent_id).connection_id).kind = kind
     before = len(hc.runs)
     assert _inbound(c, PHONE, "hi").get_json() == {
-        "reply": sendblue_surface.real_records_text(cfg.origin)}
+        "reply": _pointer(cfg.origin)}
     assert len(hc.runs) == before
     assert c.post("/api/surfaces/telegram",
                   json={"agent_id": agent_id}).status_code == 409

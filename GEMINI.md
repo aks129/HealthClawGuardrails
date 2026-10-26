@@ -11,7 +11,8 @@ tools; the guardrails run **server-side**, so nothing you do here can bypass the
   plain-language summary), `fhir_stats`, `fhir_lastn`, `questionnaire_populate`,
   `curatr_evaluate`, `context_get`.
 - **Write** (require a step-up token AND explicit human confirmation):
-  `fhir_commit_write`, `action_commit`, `shl_generate`, `questionnaire_extract`.
+  `fhir_commit_write`, `action_commit`, `questionnaire_extract`. (`shl_generate`
+  is off by default and not listed.)
 
 ## How to behave
 

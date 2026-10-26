@@ -19,10 +19,11 @@ import uuid
 from datetime import datetime, timezone
 
 from careagents import beta, causes, checkins, funnel, llm, routing
-from careagents import tester_terms
+from careagents import tester_terms, text_self
 from careagents.accounts import AccountService
-from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
-                              TOOL_LABELS, TOOLS,
+from careagents.agent import (GENERIC_FAILURE_TEXT, MAX_TOOL_ROUNDS,
+                              SAMPLE_TOOL_LABELS, SAMPLE_TOOL_LABELS_ES,
+                              TOOL_LABELS, TOOL_LABELS_ES, tools_for_turn,
                               failure_text as agent_failure_text,
                               records_arriving,
                               tool_error_result as agent_tool_error_result,
@@ -93,14 +94,16 @@ def _drop_echo(text: str, lead: str) -> str:
     advice, no clinical word, short). The rest of the answer is untouched."""
     lead_sentences = {_plain(s) for s in re.split(r"(?<=[.!?])\s+", lead)}
     first, sep, rest = text.partition("\n\n")
-    sentences = re.split(r"(?<=[.!?])\s+", first.strip())
-    while sentences:
-        s = _plain(sentences[0])
+    # Sentences with the whitespace after each kept, so what stays keeps
+    # its own line breaks: the 911 and 988 lines are two lines (#1017).
+    parts = re.split(r"(?<=[.!?])(\s+)", first.strip())
+    while parts:
+        s = _plain(parts[0])
         if not s or s in lead_sentences or _disclaimer_only(s):
-            sentences.pop(0)
+            del parts[:2]
             continue
         break
-    first = " ".join(sentences)
+    first = "".join(parts)
     return (first + sep + rest if first else rest).strip()
 
 
@@ -128,6 +131,11 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed
 
 
+def _said(run: dict) -> str:
+    """The person's message on a claimed run, for beta.emergency_first."""
+    return str((run.get("message") or {}).get("text") or "")
+
+
 def _error_class(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name and name[0].isalpha() else "WorkerError"
@@ -153,6 +161,9 @@ _failure_text = agent_failure_text
 #: The run event that says this run's daily turn is already charged. Empty
 #: payload; the browser projection drops event types it does not know.
 CHARGED_EVENT = "agent.charged"
+#: The turn's language when it is Spanish, {"lang": "es"}: for the page's
+#: own words around the answer (chat.js). A language code, never text.
+LANG_EVENT = "agent.lang"
 
 #: The run event that says this failed run's turn was given back. Its
 #: payload is the UTC day the turn was charged on, as CHARGED_EVENT's is.
@@ -275,8 +286,8 @@ class RunWorker:
                 self._refund(refund)
                 # This worker failed it, so this worker answers. When the
                 # engine got there first it wrote the answer itself.
-                self._answer_failed_turn(run, _failure_text(
-                    RunDeadlineExceeded()))
+                self._answer_failed_turn(run, beta.with_911(
+                    _failure_text(RunDeadlineExceeded()), _said(run)))
             except HealthClawError:
                 # The authoritative heartbeat may already have committed the
                 # same terminal deadline transition and revoked this lease.
@@ -305,8 +316,9 @@ class RunWorker:
             if causes.needs_owner(exc):
                 funnel.safely(funnel.alert_owner, self.accounts.session,
                               self.cfg, cause)
-            text = _failure_text(exc,
-                                 owner_told=bool(self.cfg.owner_emails))
+            text = beta.with_911(
+                _failure_text(exc, owner_told=bool(self.cfg.owner_emails)),
+                _said(run))
             refund = self._mark_refund(run)
             try:
                 self.hc.append_agent_run_event(
@@ -419,7 +431,8 @@ class RunWorker:
         if blocked:
             # Before any record read and before any model call (beta spec
             # 4.3 and 4.6). The run still ends normally, with this sentence.
-            self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
+            self._finish(run, {"text": beta.with_911(blocked, user_text),
+                               "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
         if (context["connection"].get("kind") != "sample"
@@ -440,7 +453,7 @@ class RunWorker:
                 logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
         # Made-up records answer as made-up, on every surface: the prompt
-        # says whose they are, and the answer opens with beta.SAMPLE_FRAME.
+        # says whose they are, and the answer ends with beta.SAMPLE_FRAME.
         sample = context["connection"].get("kind") == "sample"
         # The engine tags each run with the surface its message arrived on;
         # a text thread gets the texting style (careagents/personas.py).
@@ -466,6 +479,16 @@ class RunWorker:
 
         replay = self.hc.agent_run_events(tenant, run_id, after=0, limit=500)
         events = list(replay.get("events") or [])
+        # The language of the person's latest message, or of the one before
+        # when it says too little ("si", "gracias"): from the history, so a
+        # short reply does not flip the status lines (routing).
+        spanish = routing.conversation_language([
+            m["content"] for m in history
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)]) == "es"
+        if spanish and not any(e.get("type") == LANG_EVENT for e in events):
+            self.hc.append_agent_run_event(
+                run_id, self.worker_id, LANG_EVENT, {"lang": "es"})
         checkpoints = [event for event in events
                        if event.get("type") == "agent.checkpoint"]
         tool_results = {
@@ -539,7 +562,10 @@ class RunWorker:
             allowed, _used = self.accounts.claim_daily_turn(
                 context["account_id"], self.cfg.chat_turns_per_day, day=day)
             if not allowed:
-                self._finish(run, {"text": beta.daily_limit_text(),
+                # The current message only, as at admission: the model's
+                # own "not urgent" must not lead an ordinary limit with 911.
+                self._finish(run, {"text": beta.with_911(
+                                       beta.daily_limit_text(), user_text),
                                    "checkpoint_id": "daily_limit"},
                              emitted, heartbeat)
                 return
@@ -548,7 +574,26 @@ class RunWorker:
             run["_refund"]["day"] = day
 
         lead = beta.sample_frame(who) if sample else ""
-        labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
+        # In Spanish when the person wrote in Spanish, as #1017's rule
+        # reads it for the answer.
+        if spanish:
+            labels = SAMPLE_TOOL_LABELS_ES if sample else TOOL_LABELS_ES
+        else:
+            labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
+
+        def sms_phone() -> str | None:
+            return text_self.sms_phone_for(
+                self.cfg, self.accounts, context["account_id"],
+                context.get("email") or "")
+        # Built per turn: propose_action is offered only with a number to
+        # text, and _execute_tool asks again when it is called.
+        phone_now = sms_phone()
+        offered = tools_for_turn(phone_now)
+        if (phone_now is None and not context.get("paused")
+                and self.cfg.actions_sms_open_for(context.get("email") or "")):
+            # Open to this account, but no phone to text: the model says
+            # how to link one instead of promising a text (design 9).
+            prompt = f"{prompt}\n\n{text_self.LINK_PHONE_NOTE}"
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
             self._mark(context["account_id"], "first_answer")
@@ -564,7 +609,7 @@ class RunWorker:
                     for call in ((checkpoints[-1].get("payload") or {}).get(
                         "tool_calls") or []))) else None
             if pending_checkpoint is None:
-                tools = TOOLS if round_number < MAX_TOOL_ROUNDS else []
+                tools = offered if round_number < MAX_TOOL_ROUNDS else []
                 turn = llm.complete(self.cfg, prompt, history, tools)
                 # The provider call may outlive the lease or hard deadline.
                 # Never checkpoint or persist a late result after the
@@ -572,16 +617,23 @@ class RunWorker:
                 heartbeat.check()
                 self._check_deadline(run)
                 round_number += 1
+                declined = getattr(turn, "stop_reason", "") == "refusal"
                 checkpoint_id = f"round-{round_number}"
                 pending_checkpoint = {
                     "checkpoint_id": checkpoint_id,
                     "round": round_number,
-                    "text": turn.text,
-                    "tool_calls": [
+                    # A decline's partial words are what it declined:
+                    # never kept, shown or sent back to the model (#1017).
+                    "text": (llm.REFUSAL_TEXT if declined else turn.text),
+                    # "refusal" when the model declined (#1017): _finish
+                    # gives a decline the 911 line.
+                    "stop_reason": "refusal" if declined else "",
+                    # A decline means stop: no tool it asked for runs.
+                    "tool_calls": [] if declined else [
                         {"id": call.id, "name": call.name,
                          "arguments": call.arguments}
                         for call in turn.tool_calls],
-                    "raw_tool_calls": turn.raw_tool_calls,
+                    "raw_tool_calls": [] if declined else turn.raw_tool_calls,
                     # Caps the advisor per turn across a recovered run too
                     # (careagents/routing.py advisor_used).
                     "advisor_calls": getattr(turn, "advisor_calls", 0),
@@ -595,13 +647,16 @@ class RunWorker:
                 # later failure no longer gives the turn back.
                 run["_refund"]["answered"] = True
                 history.append({
-                    "role": "assistant", "content": turn.text,
+                    "role": "assistant",
+                    "content": pending_checkpoint["text"],
                     "tool_calls": pending_checkpoint["tool_calls"],
-                    "_openai_tool_calls": turn.raw_tool_calls,
+                    "_openai_tool_calls": pending_checkpoint["raw_tool_calls"],
                     "advisor_calls": pending_checkpoint["advisor_calls"],
                 })
 
             calls = pending_checkpoint.get("tool_calls") or []
+            if pending_checkpoint.get("stop_reason") == "refusal":
+                calls = []          # a decline means stop, a replayed one too
             if not calls:
                 self._finish(run, pending_checkpoint, emitted, heartbeat,
                              lead=lead)
@@ -615,7 +670,8 @@ class RunWorker:
                 result_event = tool_results.get(call_id)
                 if result_event is None:
                     result_event = self._execute_durable_tool(
-                        run, call, emitted, labels, arriving=arriving)
+                        run, call, emitted, labels, arriving=arriving,
+                        sms_phone=sms_phone)
                     tool_results[call_id] = result_event
                 history.append({"role": "tool", "tool_call_id": call_id,
                                 "content": result_event.get("content") or "{}"})
@@ -625,7 +681,8 @@ class RunWorker:
     def _execute_durable_tool(self, run: dict, call: dict,
                               emitted: set[tuple[str, str]],
                               labels: dict = TOOL_LABELS,
-                              arriving: bool = False) -> dict:
+                              arriving: bool = False,
+                              sms_phone=None) -> dict:
         run_id = str(run["id"])
         tenant = str(run["tenant_id"])
         provider_call_id = str(call["id"])
@@ -664,7 +721,8 @@ class RunWorker:
                     self.hc, tenant, tool_name, arguments, side_events,
                     agent_id=str(run.get("agent_id") or ""),
                     surface=str(run.get("surface") or ""),
-                    origin=self.cfg.origin, arriving=arriving)
+                    origin=self.cfg.origin, arriving=arriving,
+                    sms_phone=sms_phone)
             except HealthClawError as exc:
                 content = agent_tool_error_result(exc)
             envelope = {"content": content, "ui_events": side_events}
@@ -712,18 +770,43 @@ class RunWorker:
     def _finish(self, run: dict, checkpoint: dict,
                 emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat,
                 lead: str = "") -> None:
-        """`lead` opens a model's answer on its own line (the sample's
+        """`lead` closes a model's answer on its own line (the sample's
         SAMPLE_FRAME). The checkpoint keeps the model's text alone, so a
         replayed run adds it once, here."""
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
-        text = str(checkpoint.get("text") or "").strip() or "…"
+        text = str(checkpoint.get("text") or "").strip()
+        said = _said(run)
+        if (checkpoint.get("stop_reason") == "refusal"
+                or text == llm.REFUSAL_TEXT):
+            # The model declined: a refusal like any other, and likeliest
+            # after self-harm wording. The signal is the stop reason; the
+            # exact sentence is the fallback for checkpoints written before
+            # it was kept. Whatever the model wrote before it stopped is
+            # dropped: the fixed sentence only, with 911 and 988 first for
+            # a crisis, else the 911 line after it.
+            text = beta.with_911(llm.REFUSAL_TEXT, said)
+        elif not text:
+            # An empty answer is a failure, not an answer of "…".
+            text = beta.with_911(GENERIC_FAILURE_TEXT, said)
         if lead:
             # The line is in the stored history, so a model may already
             # open with it on a later turn. Say it once. A real answer
             # (no lead) is never touched.
-            text = f"{lead}\n\n{_drop_echo(text, lead) or '…'}"
+            body = _drop_echo(text, lead) or "…"
+            # The model sees the line closing every earlier answer and may
+            # close with it too: any copy that is a paragraph of its own
+            # goes, so the line is said once (security round 8).
+            body = "\n\n".join(
+                p for p in body.split("\n\n")
+                if p.strip() != lead).strip() or "…"
+            # At the end of every answer, never ahead of anything in it:
+            # the #1015 live run read "Nothing here is about you." before
+            # "call 911", and no word list can say which answers carry
+            # 911 guidance (#1017). The web shows it in the banner above
+            # instead (beta.under_banner, chat.js withoutFrame).
+            text = f"{body}\n\n{lead}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
         # HealthClaw owns the final fencing transaction. A client-side

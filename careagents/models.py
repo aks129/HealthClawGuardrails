@@ -1012,8 +1012,11 @@ def make_engine(url: str):
         # gap between a successful ping and the query. One round trip per
         # checkout is the cost; the alternative is a 500 nobody can retry into.
         pool_kwargs = {"pool_pre_ping": True, "pool_recycle": 300}
+    # hide_parameters: a database error otherwise writes its bound values
+    # (emails, handles) into str(exc) and tracebacks, and so into the log
+    # (FHI-60).
     engine = create_engine(url, connect_args=connect_args, future=True,
-                           **pool_kwargs)
+                           hide_parameters=True, **pool_kwargs)
     _create_tables(engine)
     _ensure_columns(engine)
     _ensure_usage_day_unique(engine)

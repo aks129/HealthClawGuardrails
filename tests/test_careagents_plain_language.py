@@ -101,14 +101,14 @@ def test_a_lab_value_never_carries_upstream_free_text():
     label it by, so the engine drops it. The brief route already strips it
     through apply_redaction; this is the engine not depending on that."""
     from r6.brief.engine import build_labs
-    [field] = build_labs([{
+    # Nothing left to show, so no row at all (visit brief, 2026-10-26, item
+    # 4); it used to read "Result not listed in your records".
+    assert build_labs([{
         "resourceType": "Observation", "id": "o1",
         "code": {"coding": [{"system": "http://loinc.org",
                              "code": "4548-4"}]},
         "valueString": "Jane Doe: positive, see note",
-        "effectiveDateTime": "2026-09-01T08:00:00Z"}])
-    assert "Jane" not in field.value
-    assert field.value == "Result not listed in your records (Sep 1, 2026)"
+        "effectiveDateTime": "2026-09-01T08:00:00Z"}]) == []
 
 
 def test_no_upstream_text_or_display_reaches_the_brief():
@@ -176,7 +176,12 @@ def test_a_blood_pressure_panel_shows_its_numbers():
     assert field.value == "120/80 mmHg (Oct 6, 2026)"
 
 
-NOT_LISTED = "Result not listed in your records"
+#: Not shown: no number can be, so the row is left off the brief (visit
+#: brief, 2026-10-26, item 4). It used to read "Result not listed".
+NOT_LISTED = None
+#: A number in a unit the brief does not recognise: the row stays, the
+#: number does not (#1038 ruling F4).
+ON_FILE = "Result on file \u2014 see your record"
 A1C, CREATININE, GLUCOSE = "4548-4", "2160-0", "2345-7"
 UCUM = "http://unitsofmeasure.org"
 
@@ -200,9 +205,9 @@ UCUM = "http://unitsofmeasure.org"
     # QA F1: a unit the reading did not state is never attached. These two
     # rows used to read "6.1 %": the A1c's usual unit on a reading that
     # said something else.
-    (A1C, {"value": 6.1, "system": UCUM, "code": "mmol/molX"}, NOT_LISTED),
-    (CREATININE, {"value": 88, "unit": "micromoles per litre"}, NOT_LISTED),
-    (GLUCOSE, {"value": 5.4, "unit": "MMOL/L"}, NOT_LISTED),   # exact only
+    (A1C, {"value": 6.1, "system": UCUM, "code": "mmol/molX"}, ON_FILE),
+    (CREATININE, {"value": 88, "unit": "micromoles per litre"}, ON_FILE),
+    (GLUCOSE, {"value": 5.4, "unit": "MMOL/L"}, ON_FILE),   # exact only
     # No unit and no code at all: the analyte's usual unit (QA's rule).
     (A1C, {"value": 6.1}, "6.1 %"),
     (CREATININE, {"value": 1.1}, "1.1 mg/dL"),
@@ -213,10 +218,14 @@ def test_a_lab_value_shows_only_the_unit_the_reading_stated(loinc, vq,
     unit when it is an exact allowlist token; the analyte's usual unit only
     when the reading stated none; otherwise not shown."""
     from r6.brief.engine import build_labs
-    [field] = build_labs([{
+    fields = build_labs([{
         "resourceType": "Observation", "id": "o1",
         "code": {"coding": [{"system": "http://loinc.org", "code": loinc}]},
         "valueQuantity": vq, "effectiveDateTime": "2026-09-01"}])
+    if shown is NOT_LISTED:
+        assert fields == []
+        return
+    [field] = fields
     assert field.value == f"{shown} (Sep 1, 2026)"
 
 
@@ -231,7 +240,8 @@ def test_a_blood_pressure_in_an_unknown_unit_is_not_listed():
                              "code": "85354-9"}]},
         "component": [comp("8480-6", 16), comp("8462-4", 10.7)],
         "effectiveDateTime": "2026-10-06"}])
-    assert field.value == f"{NOT_LISTED} (Oct 6, 2026)"
+    assert field.value == f"{ON_FILE} (Oct 6, 2026)"
+    assert "16" not in field.value and "kPa" not in field.value
 
 
 @pytest.mark.parametrize("bad", ["2026-00-15", "2026-13-01", "2026-09-00",
@@ -281,7 +291,9 @@ def test_a_failed_turn_leaves_an_answer_in_the_history(
         pass
     rows = [row for rows in fake.logged.values() for row in rows]
     assert [row["role"] for row in rows] == ["user", "assistant"]
-    assert rows[1]["content"] == agent_mod.GENERIC_FAILURE_TEXT
+    from careagents import beta
+    assert rows[1]["content"] == beta.with_911(
+        agent_mod.GENERIC_FAILURE_TEXT)
     assert "model fell over" not in rows[1]["content"]
     # Replayed, the run writes it once.
     assert rows[1]["reply_to"] == rows[0]["id"]

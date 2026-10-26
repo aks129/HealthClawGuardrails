@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import datetime as _dt
 
+from careagents import routing
+
 #: Stage 1 is "up to 25" invited testers (spec section 2). Counted over
 #: active invites. The environment allowlist is not counted: it is the
 #: operator's own short list and predates the table.
@@ -55,8 +57,64 @@ def daily_limit_text(now: _dt.datetime | None = None) -> str:
     return f"{DAILY_LIMIT_TEXT} More {when}."
 
 
+#: Ahead of a fixed sentence that answers instead of the model (the day's
+#: limit, paused, terms, a failed turn) when what the person said reads as
+#: a crisis. Without it "chest pain" at the limit got only "You've used
+#: today's messages" (QA on #1017). English and Spanish: no model writes it.
+EMERGENCY_LINE = ("If this is an emergency, call 911 now. "
+                  "Si es una emergencia, llame al 911 ahora.")
+#: Added for self-harm or wanting to die (routing.is_self_harm).
+SELF_HARM_LINE = ("If you are thinking about hurting yourself, call or text "
+                  "988. Si está pensando en hacerse daño, llame o envíe un "
+                  "mensaje de texto al 988.")
+
+
+def emergency_first(reply: str, *said: str) -> str:
+    """`reply` led by EMERGENCY_LINE (and SELF_HARM_LINE) when anything in
+    `said` is crisis wording; otherwise `reply` exactly. Never instead of
+    the reply: the limit, pause or failure still stands."""
+    if not any(routing.is_crisis(s) for s in said if s):
+        return reply
+    lead = EMERGENCY_LINE
+    if any(routing.is_self_harm(s) for s in said if s):
+        lead += "\n" + SELF_HARM_LINE
+    if reply.startswith(lead):
+        return reply
+    # A failed turn led by this is no longer one of errors.FAILURE_TEXTS,
+    # so collapse_failed_turns keeps it on the page: a wall of failures is
+    # shown once, but never by hiding the emergency line.
+    return f"{lead}\n\n{reply}"
+
+
+#: After every refusal or failure that is not led by EMERGENCY_LINE
+#: (security re-review of #1017): the word list decides only whether the
+#: line comes first, never whether there is one.
+EMERGENCY_TRAILER = ("If this is an emergency, call 911. "
+                     "Si es una emergencia, llame al 911.")
+
+
+def with_911(reply: str, said: str = "") -> str:
+    """A refusal or failure `reply` that always carries a 911 line: led by
+    emergency_first's lines when `said`, the person's current message
+    only, reads as a crisis, else followed by EMERGENCY_TRAILER. `said` is
+    empty where the message is not at hand. Never echoes `said`."""
+    led = emergency_first(reply, said)
+    if led != reply or reply.startswith(EMERGENCY_LINE):
+        return led
+    if reply.endswith(EMERGENCY_TRAILER):
+        return reply
+    return f"{reply}\n\n{EMERGENCY_TRAILER}"
+
+
+def without_trailer(text: str) -> str:
+    """`text` without with_911's trailing line, for code that recognises a
+    fixed sentence by its words (errors.collapse_failed_turns)."""
+    tail = "\n\n" + EMERGENCY_TRAILER
+    return text[:-len(tail)] if text.endswith(tail) else text
+
+
 #: The sample connection's one line: the banner on its chat page, and the
-#: opening line of every answer the worker finishes on it, web and text
+#: closing line of every answer the worker finishes on it, web and text
 #: alike. A tester read a sample creatinine rise, dated today and worded
 #: "your", as her own result and stopped (2026-10-08 patient walk).
 SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
@@ -67,7 +125,7 @@ def sample_frame(who: str = "") -> str:
     """The sample line for these records. `who` is hub.relation_of the
     person they stand in for ("your parent"), empty for the holder's own:
     Mom's chat said "not yours" to someone asking about Mom (FHI-44). The
-    line opens every answer, so the model reads it back as history: the
+    line closes every answer, so the model reads it back as history: the
     relationship only, never the nickname."""
     if not who:
         return SAMPLE_FRAME
@@ -84,13 +142,26 @@ def under_banner(text: str, frame: str = SAMPLE_FRAME) -> str:
 
     The holder's SAMPLE_FRAME goes by the same rule in every chat: answers
     stored before sample_frame named the person open with it, and it would
-    show under Mom's banner (QA and security review of #952, L1)."""
+    show under Mom's banner (QA and security review of #952, L1).
+
+    A crisis answer carries the line at its end, never before the 911
+    guidance (worker._finish); a copy between paragraphs is dropped too,
+    whatever the answer's shape. That copy of this
+    chat's own `frame`, a paragraph of its own, is dropped the same way
+    (chat.js withoutFrame); the holder's older line only ever led."""
     for line in dict.fromkeys((frame, SAMPLE_FRAME)):
         lead = line + "\n\n"
         rest = text[len(lead):] if text.startswith(lead) else ""
         if rest.strip():
             return rest
-    return text
+    inline, tail = "\n\n" + frame + "\n\n", "\n\n" + frame
+    if text.find(inline) > 0:
+        rest = text.replace(inline, "\n\n", 1)
+    elif text.endswith(tail):
+        rest = text[:-len(tail)]
+    else:
+        rest = ""
+    return rest if rest.strip() else text
 
 
 #: What a real-record assistant answers while its connection's consent is

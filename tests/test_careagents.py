@@ -544,10 +544,10 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
 
 
 def sample_framed(text: str) -> str:
-    """An answer as `_chat_app`'s sample connection finishes it: opened by
+    """An answer as `_chat_app`'s sample connection finishes it: closed by
     the made-up-records line (tests/test_careagents_sample_framing.py)."""
     from careagents import beta
-    return f"{beta.SAMPLE_FRAME}\n\n{text}"
+    return f"{text}\n\n{beta.SAMPLE_FRAME}"
 
 
 def test_log_message_sends_explicit_agent_and_conversation_identity():
@@ -1566,7 +1566,9 @@ def test_a_stream_that_fails_mid_run_says_so_instead_of_going_quiet(
               for line in body.splitlines() if line.startswith("data: ")]
     assert response.status_code == 200
     assert frames[0]["type"] == "accepted"
-    assert frames[-1] == {"type": "error", "text": GENERIC_FAILURE_TEXT}
+    from careagents import beta
+    assert frames[-1] == {"type": "error",
+                          "text": beta.with_911(GENERIC_FAILURE_TEXT)}
     assert len(frames) == 2, (
         f"the error frame must be terminal, got {frames}")
     assert "OperationalError" not in body and "db-7" not in body
@@ -2259,7 +2261,7 @@ class FakeClient:
         # client in tests/test_careagents_pharmacy_share.py.
         return {"shlink": "shlink:/fake", "exp": 0}
 
-    def seed(self, tenant):
+    def seed(self, tenant, bundle=None):
         return 7
 
     def search(self, tenant, resource_type, params=None):
@@ -2282,6 +2284,11 @@ class FakeClient:
 
     def start_form_action(self, tenant):
         return "act-1"
+
+    def propose_sms(self, tenant, phone, body):
+        self.proposed_sms = getattr(self, "proposed_sms", []) + [
+            {"tenant": tenant, "phone": phone, "body": body}]
+        return "act-sms"
 
     def pending_actions(self, tenant):
         return [{"id": "act-1", "kind": "form-fill", "to": None,
@@ -4459,8 +4466,8 @@ def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
     d = second.get_json()
     assert d["error"] == "daily_limit_reached" and d["limit"] == 1
     # Tells the user when, not just no, and in hours (#864).
-    assert re.search(r"More in (about \d+ hours?|under an hour)\.$",
-                     d["message"])
+    assert re.search(r"More in (about \d+ hours?|under an hour)\.\n\n"
+                     r"If this is an emergency, call 911\.", d["message"])
 
 
 # --- consent gate (real records only) ----------------------------------------

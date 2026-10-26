@@ -171,3 +171,82 @@ def test_the_analyte_table_matches_the_mcp_app():
     assert js == py, (
         "the chat card and the MCP App disagree about which LOINC codes make "
         "up an analyte; one surface will silently plot fewer readings")
+
+
+# --- blood pressure ------------------------------------------------------
+#
+# QA 2026-10-22: the chart opened for "blood pressure" said "No readings for
+# that test" on the sample records, which hold a BP reading. The topic named
+# no analyte, and no analyte read a panel's components.
+
+def _bp(sys_value, dia_value, date="2026-01-01", code="85354-9",
+        unit="mmHg"):
+    parts = []
+    for part, value in (("8480-6", sys_value), ("8462-4", dia_value)):
+        parts.append({"code": {"coding": [{"system": LOINC, "code": part}]},
+                      "valueQuantity": {"value": value, "unit": unit}})
+    return {"resource": {"resourceType": "Observation",
+                         "code": {"coding": [{"system": LOINC, "code": code}]},
+                         "effectiveDateTime": date, "component": parts}}
+
+
+def test_a_blood_pressure_question_narrows_to_its_two_parts():
+    """MUTATION: drop "blood pressure" from the topics -> red."""
+    assert keys_for_topic("blood pressure") == ["systolic", "diastolic"]
+    assert keys_for_topic("how is my blood pressure?") == \
+        ["systolic", "diastolic"]
+    assert keys_for_topic("systolic") == ["systolic"]
+    # An unmatched topic still matches nothing.
+    assert keys_for_topic("my knee") == []
+
+
+def test_a_bp_panel_is_charted_as_systolic_and_diastolic():
+    """MUTATION: read only top-level valueQuantity -> red. A panel keeps
+    its numbers in its components. Both panel codes count (#343's rule:
+    an analyte is a code set)."""
+    series = build_series(_bundle(
+        _bp(142, 91, "2026-05-01"),
+        _bp(138, 88, "2026-02-01", code="55284-4")),
+        keys_for_topic("blood pressure"))
+    assert [s["name"] for s in series] == \
+        ["Systolic blood pressure", "Diastolic blood pressure"]
+    systolic, diastolic = series
+    assert [(r["date"], r["value"]) for r in systolic["readings"]] == \
+        [("2026-02-01", 138), ("2026-05-01", 142)]
+    assert [r["value"] for r in diastolic["readings"]] == [88, 91]
+    assert systolic["unit"] == "mmHg"
+    assert systolic["trend_plottable"] is True
+
+
+def test_a_standalone_systolic_reading_is_charted():
+    """Some feeds (and r6/wearables/mapper.py) send each part on its own."""
+    series = build_series(_bundle(_obs("8480-6", 131, unit="mm[Hg]")),
+                          ["systolic"])
+    assert series[0]["readings"][0]["value"] == 131
+
+
+def test_a_part_inside_some_other_panel_is_not_blood_pressure():
+    """MUTATION: accept an 8480-6 component under any code -> red."""
+    assert build_series(_bundle(_bp(142, 91, code="2093-3")),
+                        ["systolic", "diastolic"]) == []
+
+
+def test_a_bp_part_with_an_unrecognised_unit_is_dropped():
+    """The #884 rule holds for components too: no unit we recognise, no
+    number."""
+    assert build_series(_bundle(_bp(142, 91, unit="call me")),
+                        ["systolic", "diastolic"]) == []
+
+
+def test_a_bp_part_is_indeterminate_unless_flagged():
+    """The engine does not score blood pressure; nothing here calls a
+    reading normal or high on its behalf."""
+    series = build_series(_bundle(_bp(182, 121)), ["systolic"])
+    assert series[0]["readings"][0]["flag"] == "IND"
+
+
+def test_blood_pressure_is_not_in_the_pinned_analyte_table():
+    """The MCP App reads only top-level values, so it cannot draw a panel.
+    BP stays out of ANALYTES until it can, rather than being pinned as
+    shared when it is not."""
+    assert not {"8480-6", "8462-4"} & {c for a in ANALYTES for c in a["codes"]}

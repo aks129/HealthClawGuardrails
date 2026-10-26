@@ -73,7 +73,7 @@ def test_a_worker_turn_after_the_bump_answers_the_terms_sentence(
     monkeypatch.setattr(fake, "recent_messages",
                         lambda *a, **k: pytest.fail("stale consent read records"))
     RunWorker(cfg, fake, svc, "terms-worker").run_once()
-    assert _texts(fake, run_id) == [beta.TERMS_TEXT]
+    assert _texts(fake, run_id) == [beta.with_911(beta.TERMS_TEXT)]
 
 
 def test_accepting_again_lets_the_next_turn_reach_the_model(

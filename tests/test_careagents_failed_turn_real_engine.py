@@ -58,7 +58,8 @@ def test_a_failed_turn_is_answered_once_in_the_engine_transcript(
     rows = _rows(chain)
     assert [r[0] for r in rows] == ["user", "assistant"], rows
     user, answer = rows
-    assert answer[1] == GENERIC_FAILURE_TEXT
+    from careagents import beta
+    assert answer[1] == beta.with_911(GENERIC_FAILURE_TEXT)
     assert "Jane" not in answer[1] and "outage" not in answer[1]
     # The engine accepted reply_to and the request id charset.
     assert answer[2] == user[4]

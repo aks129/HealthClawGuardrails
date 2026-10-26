@@ -16,7 +16,7 @@
        is in front of the person rather than a dead end after the tap.
        The code goes to this account's own address; home.js uses it. #}
     <div class="delete-code-step" id="delete-code-step"
-         data-email="{{ me.email }}">
+         data-email="{{ me.email }}" data-resend-wait="{{ resend_wait }}">
       <p class="delete-warn" id="delete-code-why">To delete, we'll email you
         a code first. You opened CareAgents from the link in our email, and
         deleting needs a code sign-in.</p>

@@ -121,8 +121,8 @@ afterAll(() => {
   closeMCPServerForTests();
 });
 
-function initialize(authorization?: string) {
-  const req = request(app).post("/mcp").set("Host", CANONICAL_HOST);
+function initialize(authorization?: string, target: Parameters<typeof request>[0] = app) {
+  const req = request(target).post("/mcp").set("Host", CANONICAL_HOST);
   if (authorization) req.set("Authorization", authorization);
   return req.send({
     jsonrpc: "2.0",
@@ -456,34 +456,69 @@ describe("the limiter runs before the credential check", () => {
   // limiter sat after that check, an unauthenticated flood would reach Flask
   // once per request. Past the limit this server must answer alone.
   const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
+  // Each test makes over a hundred sequential requests, and on a busy machine
+  // they failed in two ways that had nothing to do with the limiter.
+  // - They took longer than jest's default 5 s. The test timed out, and its
+  //   loop, never cancelled, kept spending requests in the next test. A longer
+  //   timeout alone would let a slow run cross the limiter's 60 s window and
+  //   reset the count, so the clock stands still: nothing here depends on
+  //   elapsed time. One server and a silenced request log also halve the run.
+  // - request(app) listens on [::] and dials 127.0.0.1. On macOS another
+  //   process can bind 127.0.0.1 on that same port and take the request: a
+  //   preflight came back 401, which this app never answers to an OPTIONS.
+  //   One server bound to 127.0.0.1 itself cannot be shadowed that way.
+  const SLOW_LOOP_TIMEOUT_MS = 60_000;
+  let server: http.Server;
+  let nowSpy: jest.SpyInstance<number, []>;
+  let errorSpy: jest.SpyInstance;
+
+  beforeAll(async () => {
+    server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  beforeEach(() => {
+    const frozen = Date.now();
+    nowSpy = jest.spyOn(Date, "now").mockImplementation(() => frozen);
+    errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
 
   it("a caller past the limit is refused without an introspection call", async () => {
     // Flask answers "not a live token", so every one of these costs a call:
     // a distinct token each time, since a repeated one is remembered (#675).
     introspection = { active: false };
     for (let i = 0; i < RATE_LIMIT_MAX; i++) {
-      const res = await initialize(`Bearer not-a-token-this-server-knows-${i}`);
+      const res = await initialize(`Bearer not-a-token-this-server-knows-${i}`, server);
       expect(res.status).toBe(401);
     }
     const spent = introspections().length;
     expect(spent).toBe(RATE_LIMIT_MAX);
 
-    const refused = await initialize("Bearer not-a-token-this-server-knows");
+    const refused = await initialize("Bearer not-a-token-this-server-knows", server);
     expect(refused.status).toBe(429);
     expect(introspections().length).toBe(spent);
-  });
+  }, SLOW_LOOP_TIMEOUT_MS);
 
   it("preflight does not consume the allowance", async () => {
     for (let i = 0; i < RATE_LIMIT_MAX + 5; i++) {
-      const res = await request(app)
+      const res = await request(server)
         .options("/mcp")
         .set("Host", CANONICAL_HOST)
         .set("Origin", "https://claude.ai");
       expect(res.status).toBe(204);
     }
-    const after = await initialize(`Bearer ${OAUTH_TOKEN}`);
+    const after = await initialize(`Bearer ${OAUTH_TOKEN}`, server);
     expect(after.status).toBe(200);
-  });
+  }, SLOW_LOOP_TIMEOUT_MS);
 });
 
 describe("a rejected token is remembered (#675)", () => {

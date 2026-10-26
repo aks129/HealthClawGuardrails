@@ -23,6 +23,13 @@ from tests.test_careagents_sendblue import (
 from tests.test_careagents_sendblue import _pair as _sb_pair
 
 
+def _pointer(origin: str) -> str:
+    """The real-records pointer as sent: a refusal, so it carries the 911
+    line (beta.with_911, #1017)."""
+    from careagents import beta
+    return beta.with_911(sendblue_surface.real_records_text(origin))
+
+
 @pytest.fixture
 def on_cfg(cfg):  # noqa: F811
     return Config(env=_env(cfg, SENDBLUE_REAL_RECORDS="1"))
@@ -55,7 +62,7 @@ def test_sendblue_answers_a_real_agent_with_the_flag_on(
     # The worker's own consent check may answer it; the transport does not
     # hold it back.
     assert len(fake.sent) == 1 and fake.sent[0][0] == SB_PHONE
-    assert fake.sent[0][1] != sendblue_surface.real_records_text(
+    assert fake.sent[0][1] != _pointer(
         on_cfg.origin)
 
 
@@ -68,7 +75,7 @@ def test_the_relay_still_refuses_a_real_agent_with_the_flag_on(
     r = _inbound(c, PHONE, "how is my a1c?")
     assert r.status_code == 200
     assert r.get_json() == {
-        "reply": sendblue_surface.real_records_text(on_cfg.origin)}
+        "reply": _pointer(on_cfg.origin)}
     assert len(hc.runs) == runs_before
 
 
@@ -82,7 +89,7 @@ def test_the_relay_still_withholds_a_mid_run_switch_with_the_flag_on(
     _make_real(on_svc, agent_id)
     body = c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
                  query_string={"handle": PHONE}).get_json()
-    assert body["reply"] == sendblue_surface.real_records_text(on_cfg.origin)
+    assert body["reply"] == _pointer(on_cfg.origin)
     assert "6.1" not in str(body)
 
 

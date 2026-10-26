@@ -707,8 +707,13 @@ def _payload_for(code: int) -> dict:
     ns = argparse.Namespace(timeout=1.0, json=False, json_out=None,
                             expect_sha=["a" * 40], expect_flask_sha=[])
     real_run, real_parse = prod_watch.run, argparse.ArgumentParser.parse_args
+    # `run` is stubbed, so the module-level completeness register would keep
+    # whatever an earlier test left there and `hard_ok` would depend on test
+    # order (#1044). Pin it to a run that observed every check.
+    saved_completeness = dict(prod_watch.completeness)
     written = {}
     try:
+        prod_watch.completeness.update(complete=True, missing=[], unreadable=[])
         prod_watch.run = lambda *a, **k: code
         argparse.ArgumentParser.parse_args = lambda self, *a, **k: ns
         ns.json_out = str(tmp := Path(tempfile.mkdtemp()) / "s.json")
@@ -716,6 +721,8 @@ def _payload_for(code: int) -> dict:
         written = _json.loads(Path(tmp).read_text())
     finally:
         prod_watch.run, argparse.ArgumentParser.parse_args = real_run, real_parse
+        prod_watch.completeness.clear()
+        prod_watch.completeness.update(saved_completeness)
     return written
 
 

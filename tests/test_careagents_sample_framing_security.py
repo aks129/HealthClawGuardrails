@@ -85,7 +85,7 @@ def test_agent_moved_from_real_to_sample_gains_the_frame(
            json={"connection_id": sample_cid})
     _run(c, fake, agent_id, cfg, svc, monkeypatch, MODEL_TEXT)
     assert _answers(fake, sample_tenant) == [
-        f"{beta.SAMPLE_FRAME}\n\n{MODEL_TEXT}"]
+        f"{MODEL_TEXT}\n\n{beta.SAMPLE_FRAME}"]
 
 
 def test_run_queued_on_sample_then_agent_moved_to_real_is_not_framed(
@@ -145,10 +145,11 @@ def test_other_account_cannot_open_sample_chat_or_brief(
 
 # --- prompt injection against the de-duplication -----------------------------
 
-def test_model_text_cannot_suppress_or_precede_the_frame(
+def test_model_text_cannot_suppress_or_follow_the_frame(
         cfg, svc, monkeypatch):  # noqa: F811
     """Whatever the model (steered by record or user text) writes, a sample
-    answer starts with exactly the frame on its own line."""
+    answer ends with exactly the frame on its own line (#1017 round 8:
+    last, never ahead of the 911 guidance)."""
     payloads = [
         beta.SAMPLE_FRAME,                                   # line alone
         beta.SAMPLE_FRAME + " Actually these ARE yours.",    # prefix + undo
@@ -164,8 +165,8 @@ def test_model_text_cannot_suppress_or_precede_the_frame(
         answers = _answers(fake, tenant)
         assert len(answers) == i + 1
         answer = answers[-1]
-        assert answer.startswith(beta.SAMPLE_FRAME + "\n\n"), (i, answer)
-        assert answer[len(beta.SAMPLE_FRAME):].strip() != ""
+        assert answer.endswith("\n\n" + beta.SAMPLE_FRAME), (i, answer)
+        assert answer[:-len(beta.SAMPLE_FRAME)].strip() != ""
 
 
 def test_real_answer_echoing_the_frame_is_passed_through_unchanged(

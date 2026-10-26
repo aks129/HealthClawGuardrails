@@ -58,7 +58,7 @@ def test_hub_waiting_and_grade_live_in_one_menu(cfg, svc, monkeypatch):  # noqa:
     assert re.search(r'<summary[^>]*aria-label="Menu"[^>]*>⋯</summary>', menu)
     assert 'href="/home"' in menu
     assert f'href="/agents/{agent_id}/approvals"' in menu
-    assert "Waiting for your OK" in menu
+    assert ">Waiting for your OK</a>" in menu
     # The grade keeps its id, link and the words chat.js writes into it.
     assert re.search(r'<a [^>]*id="trust-pill"[^>]*href="/safety"', menu)
     # Nothing to tap in the header outside the menu.
@@ -79,11 +79,11 @@ def test_the_menu_offers_a_passkey_until_there_is_one(cfg, svc, monkeypatch):  #
     """A first run skips the passkey prompt; this is where it waits."""
     _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
-    assert f'href="/auth?enroll=1&amp;agent={agent_id}">Add a passkey</a>' \
+    assert f'href="/auth?enroll=1&amp;agent={agent_id}">Faster sign-in (passkey)</a>' \
         in menu
     monkeypatch.setattr(svc, "has_passkey", lambda account_id: True)
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
-    assert "Add a passkey" not in menu
+    assert "Faster sign-in (passkey)" not in menu
 
 
 def test_the_menu_fits_a_phone():
@@ -147,8 +147,14 @@ def test_a_replayed_sample_answer_shows_the_line_once(cfg, svc, monkeypatch):  #
 
 def test_only_the_exact_leading_line_is_dropped(cfg, svc, monkeypatch):  # noqa: F811
     _app, c, fake, agent_id, tenant, _cid = _chat_app(cfg, svc, monkeypatch)
+    # A paragraph of its own at the end is where a one-paragraph crisis
+    # answer carries it (worker._finish, #1017): dropped too. Inside a
+    # paragraph it is the body's own words, and stays.
     later = f"Creatinine rose.\n\n{beta.SAMPLE_FRAME}"
     page = _with_history(c, fake, agent_id, tenant, later)
+    assert page.count(beta.SAMPLE_FRAME) == 1      # the banner alone
+    inside = f"Creatinine rose. {beta.SAMPLE_FRAME}"
+    page = _with_history(c, fake, agent_id, tenant, inside)
     assert page.count(beta.SAMPLE_FRAME) == 2      # banner + the body's own
     alone = _with_history(c, fake, agent_id, tenant, beta.SAMPLE_FRAME)
     assert alone.count(beta.SAMPLE_FRAME) >= 2     # never an empty bubble
@@ -213,13 +219,17 @@ def test_a_live_sample_answer_drops_only_the_banners_own_words():
         [f"\n  {f}\n", f"{f}\n\n{body}"],     # banner on the page: once
         [None, f"{f}\n\n{body}"],             # no banner: never dropped
         ["Something else.", f"{f}\n\n{body}"],  # not the banner's words
-        [f, f"{body}\n\n{f}"],                # not at the start
+        # A crisis answer's copy, at the end (worker._finish, #1017), or
+        # between paragraphs: a paragraph of its own, dropped too.
+        [f, f"{body}\n\n{f}"],
+        [f, f"Call 911.\n\n{f}\n\n{body}"],
+        [f, f"{body} {f}"],                   # inside a paragraph: kept
         [f, f"{f} Actually yours.\n\n{body}"],  # not the whole first line
         [f, f"{f}\n\n  "],                    # nothing left: keep it
     ])
     assert got == [body, f"{f}\n\n{body}", f"{f}\n\n{body}",
-                   f"{body}\n\n{f}", f"{f} Actually yours.\n\n{body}",
-                   f"{f}\n\n  "]
+                   body, f"Call 911.\n\n{body}", f"{body} {f}",
+                   f"{f} Actually yours.\n\n{body}", f"{f}\n\n  "]
 
 
 def test_every_agent_bubble_goes_through_the_drop():

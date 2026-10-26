@@ -66,7 +66,8 @@ def test_a_menu_number_is_charged_like_any_turn(
                         or beta.DAILY_LIMIT_TEXT)
     fake.sent.clear()
     _hook(c, "3", handle="num-cap")
-    assert seen and fake.sent == [(PHONE, beta.DAILY_LIMIT_TEXT)]
+    assert seen and fake.sent == [
+        (PHONE, beta.with_911(beta.DAILY_LIMIT_TEXT))]
     assert _queued_texts(hc) == []
 
 

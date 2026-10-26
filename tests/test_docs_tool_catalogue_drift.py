@@ -44,6 +44,18 @@ def _privileged_names() -> set[str]:
     return set(re.findall(r'"([^"]+)"', m.group(1)))
 
 
+def _flag_gated_names() -> set[str]:
+    """Tools withheld unless an env flag turns them on (off by default)."""
+    src = TOOLS_TS.read_text(encoding="utf-8")
+    m = re.search(r'SHL_GENERATE_TOOL_NAME\s*=\s*"([^"]+)"', src)
+    assert m, "SHL_GENERATE_TOOL_NAME not found — did tools.ts move?"
+    return {m.group(1)}
+
+
+def _withheld_names() -> set[str]:
+    return _privileged_names() | _flag_gated_names()
+
+
 def _doc_section() -> str:
     body = DOC.read_text(encoding="utf-8")
     m = _TOOLS_SECTION.search(body + "\n## ")
@@ -68,8 +80,8 @@ def test_docs_do_not_offer_tools_the_server_withholds():
     useful — but it must not appear in the Read/Write/shim inventory lines,
     which read as "here is what you can call".
     """
-    privileged = _privileged_names()
-    assert privileged, "expected at least one privileged tool"
+    privileged = _withheld_names()
+    assert privileged, "expected at least one withheld tool"
 
     # Exempt by MEANING, not by line shape. An earlier version of this guard
     # whitelisted the prefixes "Read"/"Write"/"ChatGPT-connector", so adding a
@@ -77,7 +89,7 @@ def test_docs_do_not_offer_tools_the_server_withholds():
     # was pinned to the formatting of the day it was written. Any paragraph
     # that does not explain the withholding is an inventory paragraph.
     explains = re.compile(r"withheld|privileged|PRIVILEGED|not appear|"
-                          r"withholding", re.I)
+                          r"withholding|off by default", re.I)
 
     leaked = set()
     for para in re.split(r"\n\s*\n", _doc_section()):
@@ -89,14 +101,14 @@ def test_docs_do_not_offer_tools_the_server_withholds():
     assert not leaked, (
         "mcp-generic.md offers withheld tools as callable: "
         + ", ".join(leaked)
-        + " — these are in PRIVILEGED_TOOL_NAMES and never appear in a "
-          "hosted client's tools/list.")
+        + " — these are withheld (PRIVILEGED_TOOL_NAMES or off by default) "
+          "and never appear in a hosted client's tools/list.")
 
 
 def test_the_documented_count_matches_what_a_hosted_client_sees():
-    served = len(_manifest_names() - _privileged_names())
+    served = len(_manifest_names() - _withheld_names())
     m = re.search(r"serves \*\*(\d+)\*\*", _doc_section())
     assert m, "mcp-generic.md no longer states how many tools are served"
     assert int(m.group(1)) == served, (
         f"docs say a hosted deployment serves {m.group(1)}; catalogue minus "
-        f"privileged is {served}")
+        f"withheld is {served}")

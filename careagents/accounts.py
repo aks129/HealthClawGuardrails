@@ -18,6 +18,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import func, or_, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -35,7 +36,8 @@ from careagents.models import (NICKNAME_MAX, RELATIONSHIPS, Account,
                                ActivityDay, Agent, Connection, EmailToken,
                                Grant, ImessageHandleState, ImessageLink,
                                Passkey, Person, RealRecordInvite, RefundDay,
-                               SendblueMessage, Surface, UsageDay, make_engine,
+                               SendblueMessage, Surface, UsageDay,
+                               VoiceUsageDay, make_engine,
                                make_session_factory, now)
 from careagents.models import REFUNDS_PER_DAY
 
@@ -189,8 +191,14 @@ class AccountService:
         until another may be requested: the resend wait, or a per-address cap
         on codes or on wrong guesses. A wait is not a failure, but it is not a
         send either, and the caller must not report one it never observed
-        (#262). Every branch reads ca_email_tokens alone, so the answer is the
-        same whether or not the address has an account.
+        (#262). The returned wait turns on ca_email_tokens alone, so the
+        answer is the same whether or not the address has an account.
+
+        ca_accounts is read only to choose the email's wording: "login" for
+        an address that has an account, `purpose` (a new account) otherwise.
+        The mail goes to the inbox alone, whose owner already knows, and the
+        account's existence never reaches the HTTP answer, which stays
+        byte-identical (tests/test_careagents_walk_10_20_security.py).
         """
         email = email.strip().lower()
         if "@" not in email or len(email) > 255:
@@ -212,6 +220,8 @@ class AccountService:
              .filter(self._same_inbox(email), EmailToken.used.is_(False))
              .update({"used": True}, synchronize_session=False))
             code = f"{secrets.randbelow(CODE_MAX):08d}"
+            if s.query(Account.id).filter_by(email=email).first():
+                purpose = "login"
             # Sent to the address as typed; counted against its inbox.
             tok = EmailToken(email=email, code_hash=self._hash(code),
                              purpose=purpose, exp=now() + CODE_TTL,
@@ -299,6 +309,9 @@ class AccountService:
                 acct.last_login_method = "email_code"
                 s.flush()
                 result = _detach(acct)
+                # Said after the code, never before it: the code request's
+                # answer must not tell an account apart (10-20 walk).
+                result.new_account = made
         if error:
             raise AuthError(error)
         if made:
@@ -1007,7 +1020,8 @@ class AccountService:
                 return False
             people = {c.person_id}
             for agent in s.query(Agent).filter_by(connection_id=conn_id).all():
-                s.query(Surface).filter_by(agent_id=agent.id).delete()
+                _drop_surfaces(s, s.query(Surface).filter_by(
+                    agent_id=agent.id).all())
                 people.add(agent.person_id)
                 s.delete(agent)
             # A grant outlives its connection as a record of what was shared
@@ -1038,9 +1052,18 @@ class AccountService:
             acct = s.get(Account, account_id)
             if acct is None:
                 return False
-            # People last: connections and agents point at them.
+            # Sign-in links texted to the account's messaging numbers carry
+            # the number itself, so they go too. The per-number STOP flag
+            # and counters stay: keyed by a hash, not the number, and a STOP
+            # must outlive the account that sent it.
+            _drop_surfaces(s, s.query(Surface).filter_by(
+                account_id=account_id).all())
+            # People last: connections and agents point at them. Every
+            # table with a foreign key to ca_accounts is listed here
+            # (tests/test_careagents_account_delete_voice.py enumerates them).
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay, RefundDay, ActivityDay, signins.SignInDay, Person):
+                          UsageDay, RefundDay, ActivityDay, VoiceUsageDay,
+                          signins.SignInDay, Person):
                 s.query(model).filter_by(account_id=account_id).delete()
             # Its invite link (a foreign key here) and funnel row go too.
             invites.delete_for_account(s, acct)
@@ -1327,7 +1350,8 @@ class AccountService:
                                          account_id=account_id).first()
             if a is None:
                 return False
-            s.query(Surface).filter_by(agent_id=agent_id).delete()
+            _drop_surfaces(s, s.query(Surface).filter_by(
+                agent_id=agent_id).all())
             s.delete(a)
             s.flush()
             self._release_person_agent(s, a.person_id)
@@ -1389,6 +1413,8 @@ class AccountService:
                  if a.person_id else None)
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
                     "account_id": a.account_id,
+                    # For flags kept by account email (CARE_ACTIONS_SMS).
+                    "email": acct.email if acct else "",
                     "connection": _conn_dict(conn),
                     "person": ({"kind": p.kind, "relationship": p.relation}
                                if p else {"kind": "self"}),
@@ -1452,10 +1478,18 @@ class AccountService:
     def bind_imessage_handle(self, account_id: str, handle: str,
                              pending_surface_id: str | None = None,
                              welcome: bool = False,
-                             also: str | None = None) -> str:
-        """Bind a handle to an account: "connected", "confirmed" or
-        "taken". "confirmed" is the sign-in link re-confirming a handle
+                             also: str | None = None,
+                             issued_at: float | None = None) -> str:
+        """Bind a handle to an account: "connected", "confirmed", "taken"
+        or "expired". "confirmed" is the sign-in link re-confirming a handle
         already bound here (#871): nothing new was connected.
+
+        A STOP always wins (#1005). `issued_at` is when the sign-in link
+        being claimed was minted: an opt-out at or after it refuses the
+        bind as "expired" and stays. The handle's state row is locked
+        first, here and in imessage_stop, so a STOP racing the bind on
+        Postgres either lands before it and is seen, or waits and then
+        unbinds what it bound.
 
         A handle is bound to at most one account. Bound elsewhere, nothing
         changes until that binding is undone (STOP, or disconnect on the
@@ -1469,14 +1503,28 @@ class AccountService:
         """
         try:
             return self._bind_imessage_handle(
-                account_id, handle, pending_surface_id, welcome, also)
+                account_id, handle, pending_surface_id, welcome, also,
+                issued_at)
         except IntegrityError:
             return "taken"
+        except (StaleDataError, ObjectDeletedError):
+            # A delete that does not take the handle's lock (an account,
+            # agent or connection going) removed a row this bind was
+            # changing (#1004): nothing was bound. Text again for a fresh
+            # link. STOP and disconnect wait on the lock instead (#1005).
+            # Those deletes can still deadlock against a bind on Postgres;
+            # that OperationalError is not caught here and the request
+            # fails with nothing bound.
+            return "expired"
 
     def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
-                              welcome, also) -> str:
+                              welcome, also, issued_at) -> str:
         names = {h for h in (handle, also) if h}
         with self.session() as s:
+            st = self._locked_handle_state(s, handle)
+            if (issued_at is not None and st.opted_out_at is not None
+                    and st.opted_out_at >= issued_at):
+                return "expired"
             bound = (s.query(Surface)
                      .filter(Surface.kind == "imessage",
                              Surface.handle.in_(names),
@@ -1500,8 +1548,7 @@ class AccountService:
                 x = Surface(account_id=account_id, kind="imessage",
                             agent_id=first.id if first else None)
                 s.add(x)
-            for old in bound:
-                s.delete(old)
+            _drop_surfaces(s, bound)
             # Deleted before the new row takes the handle, or the unique
             # index sees both at once.
             s.flush()
@@ -1512,7 +1559,6 @@ class AccountService:
             x.welcome_due = 1 if welcome else 0
             x.verified_at = x.last_inbound_at = now()
             x.reverify_notified_at = None
-            st = self._handle_state(s, handle)
             st.opted_out_at = None
             return "connected"
 
@@ -1551,6 +1597,30 @@ class AccountService:
             s.execute(update(Surface).where(Surface.id == surface_id)
                       .values(last_inbound_at=now()))
 
+    def verified_phone(self, account_id: str,
+                       reverify_seconds: float) -> str | None:
+        """The account's own phone number as E.164, or None: from an active
+        iMessage binding whose handle is a number (an Apple ID email does
+        not count) and is not due to re-confirm. Keyed on the account, not
+        an agent. Two different numbers is no number: which one the person
+        meant is not ours to guess."""
+        from careagents.imessage import normalize_handle, reverify_due
+        with self.session() as s:
+            rows = (s.query(Surface)
+                    .filter(Surface.account_id == account_id,
+                            Surface.kind == "imessage",
+                            Surface.status == "active").all())
+            surfaces = [_surf_dict(x) | _reverify_fields(x) for x in rows]
+        numbers = set()
+        for x in surfaces:
+            handle = normalize_handle(x.get("handle"))
+            if not handle or "@" in handle:
+                continue
+            if reverify_due(x, now(), reverify_seconds):
+                continue
+            numbers.add(handle)
+        return numbers.pop() if len(numbers) == 1 else None
+
     def imessage_mark_reverify(self, surface_id: str,
                                verified_at: float | None) -> bool:
         """True once per re-verification: the first time it is required.
@@ -1577,13 +1647,26 @@ class AccountService:
                                            kind="imessage")
             if surface_id is not None:
                 q = q.filter_by(id=surface_id, status="active")
+            # State rows locked before the surfaces are deleted, in the
+            # order a bind takes them, so the two cannot deadlock (#1005).
+            # The rows are read again once the locks are held: a bind that
+            # held one may have replaced the row first read.
+            locked: dict = {}
             rows = q.all()
+            while True:
+                handles = sorted({x.handle for x in rows
+                                  if x.status == "active" and x.handle}
+                                 - locked.keys())
+                if not handles:
+                    break
+                for h in handles:
+                    locked[h] = self._locked_handle_state(s, h, create=False)
+                rows = q.populate_existing().all()
             for x in rows:
-                if x.status == "active" and x.handle:
-                    st = s.get(ImessageHandleState, _handle_key(x.handle))
-                    if st is not None:
-                        st.link_count, st.link_window_start = 0, None
-                s.delete(x)
+                st = locked.get(x.handle) if x.status == "active" else None
+                if st is not None:
+                    st.link_count, st.link_window_start = 0, None
+            _drop_surfaces(s, rows)
             return len(rows)
 
     def _handle_state(self, s, handle: str) -> ImessageHandleState:
@@ -1595,20 +1678,53 @@ class AccountService:
             s.add(st)
         return st
 
+    def _locked_handle_state(self, s, handle: str,
+                             create: bool = True) -> ImessageHandleState | None:
+        """The handle's state row, locked for this transaction, and read
+        fresh, so an opt-out committed while the lock was awaited is seen
+        (#1005). Postgres locks the row (FOR UPDATE). SQLite drops FOR
+        UPDATE, so a write that changes nothing takes its database write
+        lock first, and a racing writer waits for the commit before it
+        reads (as _lock_codes does).
+
+        The first-ever row is inserted in a savepoint: a racing insert of
+        the same handle waits on it, fails on the primary key, and then
+        reads and locks the row the other one committed."""
+        key = _handle_key(handle)
+        if self.engine.dialect.name == "sqlite":
+            s.execute(update(ImessageHandleState)
+                      .where(ImessageHandleState.handle_key == key)
+                      .values(handle_key=ImessageHandleState.handle_key))
+
+        def read():
+            return (s.query(ImessageHandleState).filter_by(handle_key=key)
+                    .with_for_update().populate_existing().first())
+        st = read()
+        if st is None and create:
+            try:
+                with s.begin_nested():
+                    st = ImessageHandleState(handle_key=key, fail_count=0,
+                                             link_count=0)
+                    s.add(st)
+            except IntegrityError:
+                st = read()
+        return st
+
     def imessage_stop(self, handle: str, also: str | None = None) -> bool:
         """Unbind the handle (and the raw spelling `also`, for a row bound
-        before normalization), void its unused sign-in links, and remember
+        before normalization), delete its sign-in links, and remember
         the STOP. True if this is news: not already opted out."""
         names = list({h for h in (handle, also) if h})
         with self.session() as s:
-            s.query(Surface).filter(
+            # Locked first, as a bind does (#1005): a bind already holding
+            # it commits, and the deletes below then see what it bound.
+            st = self._locked_handle_state(s, handle)
+            _drop_surfaces(s, s.query(Surface).filter(
                 Surface.kind == "imessage", Surface.handle.in_(names),
-                Surface.status == "active").delete(synchronize_session=False)
-            s.query(ImessageLink).filter(
-                ImessageLink.handle.in_(names),
-                ImessageLink.used_at.is_(None)).update(
-                    {"used_at": now()}, synchronize_session=False)
-            st = self._handle_state(s, handle)
+                Surface.status == "active").all())
+            # Deleted, not stamped: a link row holds the number, and a
+            # missing link is refused like a used one (#1004).
+            _drop_links(s, names)
             first = st.opted_out_at is None
             st.opted_out_at = st.opted_out_at or now()
             return first
@@ -1648,7 +1764,10 @@ class AccountService:
                                          WINDOW_SECONDS, hash_token,
                                          new_link_token)
         with self.session() as s:
-            st = self._handle_state(s, handle)
+            # The state row first, as STOP takes it, then the links: in the
+            # other order the two deadlock (#1005).
+            st = self._locked_handle_state(s, handle)
+            _prune_links(s)
             if (not st.link_window_start
                     or now() - st.link_window_start >= WINDOW_SECONDS):
                 st.link_window_start, st.link_count = now(), 0
@@ -1671,12 +1790,21 @@ class AccountService:
             return link.id if link else None
 
     def void_imessage_link(self, link_id: str) -> None:
-        """Spend a link without binding anything ("No, this isn't mine")."""
+        """Spend a link without binding anything ("No, this isn't mine").
+        Deleted, since it holds a number nobody bound (#1004); a missing
+        link is refused like a used one."""
         with self.session() as s:
-            s.execute(update(ImessageLink)
-                      .where(ImessageLink.id == link_id,
-                             ImessageLink.used_at.is_(None))
-                      .values(used_at=now()))
+            s.query(ImessageLink).filter(
+                ImessageLink.id == link_id,
+                ImessageLink.used_at.is_(None)).delete(
+                    synchronize_session=False)
+
+    def prune_imessage_links(self) -> int:
+        """Delete used and expired sign-in links whose number is not bound
+        (#1004). Idempotent; runs on every link issue, and once at app
+        start (careagents/app.py create_app) for rows made before."""
+        with self.session() as s:
+            return _prune_links(s)
 
     def imessage_link_handle(self, link_id: str) -> str | None:
         """The handle a live link would bind, for the confirm page."""
@@ -1691,6 +1819,10 @@ class AccountService:
         "connected", "confirmed", "taken" or "expired". Spent exactly
         once."""
         with self.session() as s:
+            link = s.get(ImessageLink, link_id)
+            if link is None:
+                return "expired"
+            handle, issued_at = link.handle, link.created_at
             res = s.execute(update(ImessageLink)
                             .where(ImessageLink.id == link_id,
                                    ImessageLink.used_at.is_(None),
@@ -1698,8 +1830,8 @@ class AccountService:
                             .values(used_at=now()))
             if res.rowcount != 1:
                 return "expired"
-            handle = s.get(ImessageLink, link_id).handle
-        return self.bind_imessage_handle(account_id, handle, welcome=True)
+        return self.bind_imessage_handle(account_id, handle, welcome=True,
+                                         issued_at=issued_at)
 
     def get_surface(self, surface_id: str) -> dict | None:
         """An active surface by id, with its account, or None."""
@@ -1845,6 +1977,39 @@ def secret_matches(provided: str, expected: str) -> bool:
 
 def _handle_key(handle: str) -> str:
     return hashlib.sha256(handle.encode()).hexdigest()
+
+
+def _drop_links(s, handles) -> None:
+    """Delete every sign-in link texted to `handles`: each row holds the
+    number itself (#1004)."""
+    handles = [h for h in handles if h]
+    if handles:
+        s.query(ImessageLink).filter(ImessageLink.handle.in_(handles)).delete(
+            synchronize_session=False)
+
+
+def _drop_surfaces(s, rows) -> None:
+    """Delete surfaces, and with an iMessage one the links texted to its
+    number. Every path that deletes or replaces an iMessage surface comes
+    here, or account delete can no longer find the number (#1004)."""
+    _drop_links(s, [x.handle for x in rows if x.kind == "imessage"])
+    for x in rows:
+        s.delete(x)
+    # Now, before the caller deletes the agent: Surface has no relationship
+    # to Agent, so the flush would not order the two, and Postgres enforces
+    # the foreign key.
+    s.flush()
+
+
+def _prune_links(s) -> int:
+    """Delete used or expired links whose number is not bound now. A bound
+    number's spent link goes when the binding does (_drop_surfaces)."""
+    bound = s.query(Surface.handle).filter(Surface.kind == "imessage",
+                                           Surface.status == "active",
+                                           Surface.handle.isnot(None))
+    return s.query(ImessageLink).filter(
+        or_(ImessageLink.used_at.isnot(None), ImessageLink.exp <= now()),
+        ImessageLink.handle.notin_(bound)).delete(synchronize_session=False)
 
 
 def new_binding_code() -> str:

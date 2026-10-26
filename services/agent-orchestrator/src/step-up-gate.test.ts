@@ -61,7 +61,10 @@ describe("step-up gate follows the declared tier", () => {
 
   beforeEach(() => {
     mockFetch.mockReset();
-    tools = new FHIRTools("http://localhost:5000/r6/fhir", { allowPrivileged: true });
+    tools = new FHIRTools("http://localhost:5000/r6/fhir", {
+      allowPrivileged: true,
+      enableShlGenerate: true,
+    });
     writeTierNames = tools
       .getToolSchemas()
       .filter((t) => t.tier === "write")

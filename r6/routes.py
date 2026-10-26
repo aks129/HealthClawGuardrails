@@ -36,6 +36,7 @@ from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
+from r6.log_safety import loggable_id, payload_shape, vendor_request_id
 from r6.discovery_paths import (_is_exempt_discovery_path,
                                 refuse_resource_rule_on_exempt_path)
 from r6.resource_ids import refuse_malformed_resource_id
@@ -1875,6 +1876,9 @@ _CONNECT_DIAGNOSTIC_MAX_BYTES = 4096
 #: this must not become the one unaudited, unredacted write path into our logs.
 _CONNECT_DIAGNOSTIC_FORBIDDEN = ('resourceType', 'entry', 'identifier')
 
+#: The field names fasten_connect.html sends: the only keys the log names.
+_CONNECT_DIAGNOSTIC_KEYS = frozenset({'event_type', 'error', 'request_id'})
+
 
 @r6_blueprint.route('/internal/connect-diagnostic', methods=['POST'])
 def record_connect_diagnostic():
@@ -1902,22 +1906,25 @@ def record_connect_diagnostic():
         # what it rejected reflects the caller's string.
         return jsonify({'error': 'diagnostic payload too large'}), 413
 
+    # Unauthenticated: the tenant is hashed and the payload never written
+    # (FHI-60). The patient sees Fasten's request id on the connect page.
     try:
         tenant = tenant_from_request(sources=(TenantSource.HEADER,)).id
     except TenantRejected:
-        tenant = 'unknown'  # a malformed header is not logged verbatim
+        tenant = None  # absent or malformed: logged as '-'
     if any(key in payload for key in _CONNECT_DIAGNOSTIC_FORBIDDEN):
         logger.warning(
             'connect-diagnostic refused: payload carries record-shaped keys '
-            '(tenant=%s)', tenant)
+            '(tenant=%s)', loggable_id(tenant))
         return jsonify({'error': 'diagnostic payload rejected'}), 422
 
     reference = f'ccd_{uuid.uuid4().hex[:12]}'
     # WARNING, not INFO: this is a user-visible failure of the product's front
     # door, and it needs to be greppable in the same pass as an outage.
     logger.warning(
-        'connect-diagnostic %s tenant=%s payload=%s',
-        reference, tenant, raw)
+        'connect-diagnostic %s tenant=%s request_id=%s %s', reference,
+        loggable_id(tenant), vendor_request_id(payload.get('request_id')),
+        payload_shape(payload, raw, _CONNECT_DIAGNOSTIC_KEYS))
     return jsonify({'reference': reference}), 202
 
 
@@ -2032,13 +2039,14 @@ def purge_tenant_route():
             detail='tenant data purged on request',
         )
         db.session.commit()
-    except Exception:
+    except Exception as exc:
         db.session.rollback()
-        logger.exception('tenant purge failed for %s', tenant_id)
+        logger.error('tenant purge failed for %s: %s', loggable_id(tenant_id),
+                     type(exc).__name__)
         return jsonify({'error': 'purge failed', 'deleted': False}), 500
 
     total = purge_summary(deleted)
-    logger.info('tenant purge complete: %s rows for %s', total, tenant_id)
+    logger.info('tenant purge complete: %s rows for %s', total, loggable_id(tenant_id))
     return jsonify({
         'tenant_id': tenant_id,
         'deleted': True,
@@ -2071,8 +2079,9 @@ def fasten_revoke_route():
     from r6.fasten.revoke import revoke_tenant
     try:
         return jsonify(revoke_tenant(tenant_id)), 200
-    except Exception:
-        logger.exception('fasten revoke failed for %s', tenant_id)
+    except Exception as exc:
+        logger.error('fasten revoke failed for %s: %s', loggable_id(tenant_id),
+                     type(exc).__name__)
         return jsonify({'error': 'revoke failed', 'revoked': False}), 500
 
 
@@ -2082,8 +2091,8 @@ def seed_tenant():
     Seed a tenant with a realistic Patient + Observations + Condition bundle
     for live MCP testing.
 
-    Re-seeding with the BUILT-IN set is a no-op: every built-in resource
-    carries a stable id and the seed skips what is already present (#457).
+    Re-seeding with the BUILT-IN set adds only what is missing: each built-in
+    resource has a stable id and the seed skips what is already present (#457).
     A caller-supplied `bundle` is different — resources in it without an
     `id` still get a generated one and are appended, because a caller
     posting their own data is asking for new rows.
@@ -2137,7 +2146,7 @@ def seed_tenant():
         'created_count': count,
         'step_up_token': token,
         'note': ('Use step_up_token for write operations. Re-seeding the built-in '
-                 'set is a no-op; supply a bundle to add resources.')
+                 'set adds only what is missing; a bundle adds resources.')
     }), 201
 
 
@@ -2359,7 +2368,7 @@ def ingest_bundle():
             logger.warning(
                 'ingest-bundle entry %d failed (tenant=%s correlation=%s '
                 'exc_class=%s)',
-                idx, tenant_id, correlation_id, type(exc).__name__)
+                idx, loggable_id(tenant_id), correlation_id, type(exc).__name__)
             errors.append({'index': idx, 'resourceType': rtype,
                            'code': 'ingest_error',
                            'correlation_id': correlation_id,
@@ -2408,7 +2417,7 @@ def ingest_bundle():
         db.session.rollback()
         logger.warning('ingest-bundle commit failed (tenant=%s '
                        'correlation=%s exc_class=%s)',
-                       tenant_id, correlation_id, type(exc).__name__)
+                       loggable_id(tenant_id), correlation_id, type(exc).__name__)
         return jsonify({'error': 'commit_failed',
                         'correlation_id': correlation_id,
                         'ingested': 0, 'skipped': skipped, 'failed': failed,

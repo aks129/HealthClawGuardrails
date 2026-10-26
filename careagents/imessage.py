@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import quote, unquote
 
+from careagents import beta
 from careagents.agent import GENERIC_FAILURE_TEXT
 
 #: A texted sign-in link works once, for this long.
@@ -298,7 +299,10 @@ FINAL_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "waiting_for_human"})
 
 def timeout_text(origin: str) -> str:
-    return f"That took too long. Please try again or open {_host(origin)}."
+    """The Sendblue deliverer's answer for a run nobody finished. The
+    person's message is not at hand there, so the 911 line follows."""
+    return beta.with_911(
+        f"That took too long. Please try again or open {_host(origin)}.")
 
 
 # Markdown the model may still write on a text surface. Only at a line's
@@ -363,11 +367,14 @@ def _break_long(paragraph: str, limit: int) -> list[str]:
     return pieces
 
 
-def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
-    """A reply as texts of at most TEXT_PART_LIMIT characters, cut at
-    paragraph breaks where it can, in order. At most MAX_TEXT_PARTS; a
-    longer answer ends by pointing to the web chat, where the whole answer
-    is."""
+#: The sample's made-up-records line as the worker writes it, for the holder
+#: or for someone they care for (beta.sample_frame).
+_SAMPLE_FRAME_LINE = re.compile(
+    re.escape(beta.SAMPLE_FRAME) + "|These are made-up records\\. Nothing "
+    "here is about [^\\n]{1,60}, or about you\\.")
+
+
+def _chunks(text: str) -> list[str]:
     chunks: list[str] = []
     for paragraph in (p.strip() for p in text.split("\n\n")):
         if not paragraph:
@@ -377,13 +384,40 @@ def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
                 chunks[-1] += "\n\n" + piece
             else:
                 chunks.append(piece)
+    return chunks
+
+
+def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
+    """A reply as texts of at most TEXT_PART_LIMIT characters, cut at
+    paragraph breaks where it can, in order. At most MAX_TEXT_PARTS; a
+    longer answer ends by pointing to the web chat, where the whole answer
+    is.
+
+    A sample answer's made-up-records line (the worker ends every sample
+    answer with it, #1017) always closes the last text: the body is cut
+    to make room for it, never the line itself. A card's link that came
+    after it (run_reply) moves ahead of it."""
+    paragraphs = [p.strip() for p in text.split("\n\n")]
+    frame = ""
+    for i in range(len(paragraphs) - 1, -1, -1):
+        if _SAMPLE_FRAME_LINE.fullmatch(paragraphs[i]):
+            frame = paragraphs.pop(i)
+            break
+    body = _chunks("\n\n".join(paragraphs))
+    chunks = list(body)
+    if frame:
+        if chunks and len(chunks[-1]) + 2 + len(frame) <= TEXT_PART_LIMIT:
+            chunks[-1] += "\n\n" + frame
+        else:
+            chunks.append(frame)
     if len(chunks) <= MAX_TEXT_PARTS:
         return chunks or [text]
     tail = (f"The rest is in your chat: {origin}/chat?agent={agent_id}"
             if agent_id else f"The rest is in your chat at {origin}")
-    last = _break_long(chunks[MAX_TEXT_PARTS - 1],
-                       TEXT_PART_LIMIT - len(tail) - 2)[0]
-    return [*chunks[:MAX_TEXT_PARTS - 1], f"{last}\n\n{tail}"]
+    closing = [tail, frame] if frame else [tail]
+    room = TEXT_PART_LIMIT - sum(len(s) + 2 for s in closing)
+    last = _break_long(body[MAX_TEXT_PARTS - 1], room)[0]
+    return [*body[:MAX_TEXT_PARTS - 1], "\n\n".join([last, *closing])]
 
 
 def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
@@ -410,6 +444,13 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
                 link = f"Your full visit brief: {origin}/brief?agent={agent_id}"
                 if link not in extras:
                     extras.append(link)
+            elif card == "review" and payload.get("label"):
+                # Not a form (propose_action's text): approved on the page,
+                # never by a reply here.
+                extras.append(
+                    f"{payload['label']} waiting for your approval. Only "
+                    f"the review page approves it: {origin}/review/"
+                    f"{agent_id}/{payload.get('action_id', '')}")
             elif card == "review":
                 extras.append(
                     "I've prepared a form for your review — approve each "
@@ -424,8 +465,12 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
                     f"{quote(action_id, safe='')}" if action_id else
                     "Your intake form is ready in your CareAgents chat.")
         elif kind == "agent.error":
-            parts.append(payload.get("text") or GENERIC_FAILURE_TEXT)
-    return "\n\n".join([*parts, *extras]).strip() or (
+            # The worker's failure text already carries the 911 line; one
+            # the engine wrote, or none (a run swept past its deadline
+            # before any worker claimed it), gets it here.
+            parts.append(beta.with_911(
+                payload.get("text") or GENERIC_FAILURE_TEXT))
+    return "\n\n".join([*parts, *extras]).strip() or beta.with_911(
         GENERIC_FAILURE_TEXT + " Please try again.")
 
 
@@ -474,11 +519,17 @@ def notify_connected(deps: Deps, account_id: str, handle: str) -> None:
 
 
 def bind_by_code(deps: Deps, handle: str, code: str,
-                 raw: str | None = None) -> tuple[dict, int]:
+                 raw: str | None = None,
+                 received_at: float | None = None) -> tuple[dict, int]:
     """Pair `handle` with the pending surface behind `code`. `raw` is the
     handle as it arrived, so a row bound under it before normalization
-    still counts as bound."""
+    still counts as bound.
+
+    `received_at` is when the code's text arrived. A STOP processed at or
+    after it wins (#1005): nothing is bound and nothing is answered."""
     svc = deps.svc
+    if received_at is None:
+        received_at = time.time()
     if svc.imessage_bind_locked(handle):
         return {"error": "too many attempts", "reply": CODE_LOCKED_TEXT}, 429
     surface = svc.find_surface_by_code(code, kind="imessage")
@@ -487,9 +538,16 @@ def bind_by_code(deps: Deps, handle: str, code: str,
         return {"error": "unknown code", "reply": CODE_FAILED_TEXT}, 404
     outcome = svc.bind_imessage_handle(
         surface["account_id"], handle, pending_surface_id=surface["id"],
-        also=raw)
+        also=raw, issued_at=received_at)
     if outcome == "taken":
         return {"error": "handle taken", "reply": TAKEN_TEXT}, 409
+    if outcome == "expired" and svc.imessage_opted_out(handle):
+        # A STOP that followed the code won: an opted-out number gets
+        # nothing more.
+        return {}, 200
+    if outcome == "expired":
+        # A disconnect raced the bind and deleted its code (#1004).
+        return {"error": "unknown code", "reply": CODE_FAILED_TEXT}, 404
     notify_connected(deps, surface["account_id"], handle)
     return {"ok": True, "reply": WELCOME_TEXT}, 200
 
@@ -544,6 +602,12 @@ def ask_to_reverify(deps: Deps, surface: dict, word: str | None
     return sign_in_reply(deps, handle, word)
 
 
+#: How much of a text is read for crisis wording when a fixed sentence
+#: answers it. A crisis said only past this point is missed; a too-long
+#: text is still read up to here.
+CRISIS_SCAN_CHARS = 4000
+
+
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
                    request_id: str | None = None,
                    conversation_id: str | None = None,
@@ -552,8 +616,29 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     """One inbound text, from any transport. See the module docstring.
 
     `transport_block(ctx)` lets a transport refuse a turn for its own
-    reasons: a sentence answered instead, and no run is queued."""
+    reasons: a sentence answered instead, and no run is queued.
+
+    Every fixed sentence sent back (the day's limit, busy, unavailable, too
+    long, a sign-in link, a refusal) leads with beta.emergency_first's
+    911 line when the text reads as a crisis, and a refusal that does not
+    ends with it (beta.with_911). Silence stays silence: an opted-out
+    number gets no reply at all."""
+    body, status = _inbound(deps, raw_handle, text, request_id,
+                            conversation_id, transport_block)
+    if isinstance(body.get("reply"), str):
+        body["reply"] = beta.emergency_first(
+            body["reply"], (text or "")[:CRISIS_SCAN_CHARS])
+    return body, status
+
+
+def _inbound(deps: Deps, raw_handle: str, text: str,
+             request_id: str | None, conversation_id: str | None,
+             transport_block: Callable[[dict], str | None] | None,
+             ) -> tuple[dict, int]:
     svc = deps.svc
+    # First: a STOP processed after this moment beats a pairing code in
+    # this text (#1005).
+    received_at = time.time()
     raw = str(raw_handle or "").strip()
     if not raw:
         return {"error": "missing handle"}, 400
@@ -576,7 +661,8 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     if code:
         if not handle:
             return {"error": "unsupported handle"}, 400
-        return bind_by_code(deps, handle, code, raw=raw)
+        return bind_by_code(deps, handle, code, raw=raw,
+                            received_at=received_at)
 
     if surface is None:
         if not handle:
@@ -624,28 +710,35 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
             return {"reply": shared}, 200
     refused = transport_block(ctx) if transport_block else None
     if refused:
-        return {"reply": refused}, 200
+        # A transport's own refusal carries the 911 line too.
+        return {"reply": beta.with_911(
+            refused, (text or "")[:CRISIS_SCAN_CHARS])}, 200
     # A bare 1-6 answers the menu in HELP and the welcome. Mapped here,
     # before admission, so it is admitted and charged as the question.
     text = menu_question(text) or text
     if not text:
         return {"error": "empty message"}, 400
+
+    def refusal(sentence: str) -> str:
+        # Every refusal carries the 911 line (beta.with_911).
+        return beta.with_911(sentence, text[:CRISIS_SCAN_CHARS])
+
     if len(text) > 2000:
         return {"error": "message must be 1-2000 characters",
-                "reply": TOO_LONG_TEXT}, 400
+                "reply": refusal(TOO_LONG_TEXT)}, 400
     if not deps.workers_ready():
         return {"error": "run_workers_unavailable",
-                "reply": UNAVAILABLE_TEXT}, 503
+                "reply": refusal(UNAVAILABLE_TEXT)}, 503
     if not deps.allow_turn(surface["account_id"]):
-        return {"reply": busy_text(deps.burst_window_seconds)}, 200
+        return {"reply": refusal(busy_text(deps.burst_window_seconds))}, 200
     blocked = deps.admission_block(surface["account_id"], ctx)
     if blocked:
-        return {"reply": blocked}, 200
+        return {"reply": refusal(blocked)}, 200
     try:
         run = deps.queue_turn(ctx, text, request_id, conversation_id)
     except deps.queue_error:
         return {"error": "run queue unavailable",
-                "reply": UNAVAILABLE_TEXT}, 503
+                "reply": refusal(UNAVAILABLE_TEXT)}, 503
     body = {"run_id": run["id"], "status": run.get("status"),
             "duplicate": bool(run.get("duplicate"))}
     if svc.take_imessage_welcome(surface["id"]):

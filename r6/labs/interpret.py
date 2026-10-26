@@ -85,6 +85,7 @@ LOINC_RANGES = {
 
 
 LOINC_SYSTEM = "http://loinc.org"
+UCUM_SYSTEM = "http://unitsofmeasure.org"
 
 
 #: Why a result could not be decided. Grouped by the report layer into what
@@ -94,6 +95,75 @@ UNKNOWN_ANALYTE = "unknown-analyte"        #: no reference range for this code
 NO_NUMERIC_VALUE = "no-numeric-value"      #: nothing to compare
 UNIT_MISMATCH = "unit-mismatch"            #: units differ from the range's
 RANGE_NOT_ASSERTED = "range-not-asserted"  #: one-sided lab range, wrong side
+
+
+#: Spellings of one blood-count unit, thousands per microlitre, that real
+#: feeds send for the same quantity. 10*9/L belongs here because it is the
+#: same number: a microlitre is 10^-6 L, so 10^3/uL = 10^9/L exactly. Only
+#: exact equivalents, keyed after `_count_key` folds case, spaces and the
+#: two micro signs (safe within this closed family: none of its spellings
+#: has a prefix whose case changes it); anything else is compared through
+#: `_unit_key`, so a true mismatch (10*6/uL, /uL, 10*3/mL) still refuses
+#: to score.
+_COUNT_PER_UL = "10*3/uL"
+_EQUIVALENT_UNITS = {k: _COUNT_PER_UL for k in (
+    "10*3/ul", "10^3/ul", "10e3/ul", "x10*3/ul", "x10^3/ul", "x10e3/ul",
+    "k/ul", "thou/ul",
+    "10*9/l", "10^9/l", "10e9/l", "x10*9/l", "x10^9/l", "x10e9/l")}
+
+_MICRO = (("\u00b5", "u"), ("\u03bc", "u"))
+
+#: Case folds that are safe in a mixed-case unit, because the capital and
+#: the small letter name one thing: L and l are both the litre, mEq is
+#: written meq, and Hg appears only as mercury.
+_SAFE_FOLDS = (("L", "l"), ("Eq", "eq"), ("Hg", "hg"))
+#: Spellings of one unit written two ways, compared after folding.
+_UNIT_ALIASES = (("{1.73_m2}", "1.73m2"), ("mm[hg]", "mmhg"))
+
+
+def _count_key(unit):
+    key = "".join(unit.split())
+    for micro, u in _MICRO:
+        key = key.replace(micro, u)
+    return key.lower()
+
+
+def _unit_key(unit):
+    """A unit folded for comparison, case-sensitive by default: in UCUM m
+    is milli and M mega, p pico and P peta, so "mmol/L" and "Mmol/L" stay
+    apart. Case is folded whole only when the unit is all capitals, which
+    is UCUM's case-insensitive form ("MG/DL", "MMOL/L"). Otherwise only
+    the safe folds above, either micro sign as u, no spaces, and the
+    aliases: "mEq/L" and "meq/L", "mg/dl" and "mg/dL" are one unit."""
+    key = "".join(unit.split())
+    for micro, u in _MICRO:
+        key = key.replace(micro, u)
+    if key.upper() == key:
+        key = key.lower()
+    else:
+        for capital, small in _SAFE_FOLDS:
+            key = key.replace(capital, small)
+    for alias, plain in _UNIT_ALIASES:
+        key = key.replace(alias, plain)
+    return key
+
+
+def _canonical_unit(unit):
+    """The one spelling an equivalent count unit compares as; any other
+    unit, or a non-string, unchanged."""
+    if not isinstance(unit, str):
+        return unit
+    return _EQUIVALENT_UNITS.get(_count_key(unit), unit)
+
+
+def _same_unit(a, b):
+    """One unit in two spellings: the same after `_unit_key`, or two
+    spellings of thousands per microlitre. Anything else, including a
+    non-string, only when equal."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return a == b
+    return _unit_key(a) == _unit_key(b) \
+        or _canonical_unit(a) == _canonical_unit(b)
 
 
 # The write API stores what it is given, so any field may hold a string, a
@@ -141,7 +211,7 @@ def _resource_range(obs, value_unit):
         if not all(b is None or _is_number(b) for b in (low, high)):
             continue  # a bound that is not a number cannot be compared
         units = [q.get("unit") for q in (low_q, high_q) if q.get("unit")]
-        if any(value_unit and u != value_unit for u in units):
+        if any(value_unit and not _same_unit(u, value_unit) for u in units):
             continue  # unit-inconsistent lab range — don't trust it
         return low, high
     return None
@@ -191,16 +261,31 @@ def interpret_observation(obs, patient=None):
         return _indeterminate(analyte, loinc, value, unit, "unknown analyte",
                               UNKNOWN_ANALYTE)
 
+    # The coded UCUM unit is the computable one; `unit` is display text. A
+    # feed that writes "K/uL" beside a code of "/uL" sent a number 1000x the
+    # display's, so a disagreement is never scored. With no coded unit the
+    # display is all there is (as r6/labs/trend.py `_unit` reads it).
+    coded = vq.get("code") if vq.get("system") == UCUM_SYSTEM else None
+    coded = coded if isinstance(coded, str) and coded.strip() else None
+    if coded is not None and unit not in (None, "") \
+            and not _same_unit(unit, coded):
+        return _indeterminate(analyte, loinc, value, unit,
+                              f"unit {unit!r} disagrees with its coded "
+                              f"unit {coded!r}", UNIT_MISMATCH)
+    if unit in (None, ""):
+        unit = coded
+    measured = coded if coded is not None else unit
+
     crit_low, crit_high = entry.get("crit_low"), entry.get("crit_high")
 
-    resource_rng = _resource_range(obs, unit)
+    resource_rng = _resource_range(obs, measured)
     if resource_rng is not None:
         low, high = resource_rng
         source, note = "resource", "used the performing lab's reference range"
     else:
         # Table fallback requires a confirmed matching unit — an absent or
         # mismatched unit is indeterminate, never a guessed normal.
-        if unit != entry["unit"]:
+        if not _same_unit(measured, entry["unit"]):
             return _indeterminate(analyte, loinc, value, unit,
                                   f"unit {unit!r} != expected {entry['unit']!r}",
                                   UNIT_MISMATCH)
@@ -218,7 +303,7 @@ def interpret_observation(obs, patient=None):
     # TABLE's bound on that side, we cannot honestly call it normal — and we
     # won't invent an H/L from a range the lab didn't assert. Indeterminate.
     if flag == "N" and source == "resource" and (low is None) != (high is None) \
-            and unit == entry["unit"]:
+            and _same_unit(measured, entry["unit"]):
         t_low, t_high = _apply_sex(entry, patient)
         crosses_missing_side = (
             (high is None and t_high is not None and value > t_high)

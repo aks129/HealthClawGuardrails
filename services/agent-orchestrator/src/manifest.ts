@@ -46,7 +46,9 @@ export interface ToolManifest {
  * `allowPrivileged: true` on purpose: the manifest is the *catalogue*, not one
  * transport's view of it. Consumers that need the hosted view subtract
  * `PRIVILEGED_TOOL_NAMES` themselves — that is exactly what the Python drift
- * guard does to check the documented "serves N tools" number.
+ * guard does to check the documented "serves N tools" number. The same holds
+ * for `enableShlGenerate: true`: shl_generate is off by default on every
+ * server, and the drift guard subtracts it too.
  *
  * The base URL is irrelevant to schema generation (no tool is executed here);
  * it only has to be a well-formed URL for the constructor.
@@ -54,6 +56,7 @@ export interface ToolManifest {
 export function buildToolManifest(): ToolManifest {
   const tools = new FHIRTools("http://localhost:5000/r6/fhir", {
     allowPrivileged: true,
+    enableShlGenerate: true,
   }).getMCPToolSchemas();
   return { source: MANIFEST_SOURCE, tool_count: tools.length, tools };
 }
