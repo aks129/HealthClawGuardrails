@@ -157,3 +157,41 @@ test('the sheet behind "Esta respuesta no es correcta" is in Spanish',
   expect(placeholder).not.toContain("Please don't include health details");
   await expect(page.locator('#log .flag-send')).not.toHaveText('Send');
 });
+
+// QA #1037 fix round: the Spanish sheet at 375px. Its reasons are longer
+// than the English ones ("Me pareció peligrosa o preocupante"), so every
+// button, the note and Enviar must stay on screen, and the note's warning
+// must be the Spanish one, word for word.
+test('the Spanish sheet fits a 375px phone', async ({ page }) => {
+  await open(page);
+  await ask(page);
+  await page.locator('#log .flag-open').click();
+  await expect(page.locator('#log .flag-ask'))
+    .toHaveText('¿Qué estuvo mal en esta respuesta?');
+  await expect(page.locator('#log .flag-reason')).toHaveText([
+    'Incorrecta', 'Confusa', 'No hizo lo que pedí',
+    'Me pareció peligrosa o preocupante', 'Otra cosa']);
+  await expect(page.locator('#log .flag-note')).toHaveAttribute(
+    'placeholder', 'Opcional. Por favor, no incluya datos de salud.');
+  await expect(page.locator('#log .flag-reasons'))
+    .toHaveAttribute('aria-label', 'Motivo');
+  const w = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(w.scroll).toBe(w.client);
+  for (const el of await page.locator(
+      '#log .flag-reason, #log .flag-note, #log .flag-send, #log .flag-cancel')
+      .all()) {
+    const box = await el.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+  }
+  await page.locator('#log .flag-reason').nth(3).click();
+  await expect(page.locator('#log .flag-send')).toBeEnabled();
+  await expect(page.locator('#log .flag-send')).toBeInViewport();
+  await page.screenshot({
+    path: (process.env.QA1037_SHOT || 'test-results/qa1037.png')
+      .replace(/\.png$/, '-sheet.png') });
+});
