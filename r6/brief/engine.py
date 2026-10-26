@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from r6 import terminology
 from r6.labs.interpret import LOINC_RANGES
 from r6.safe_read import as_dict, codes, is_number
-from r6.voice import PATIENT, SAMPLE
+from r6.voice import PATIENT
 
 
 @dataclass
@@ -103,9 +103,6 @@ MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
 #: out is the directions, Dosage.text, which is free text from the source
 #: system (#884 QA F3). No "your", so it reads the same on sample records.
 DOSE_NOT_LISTED = "How to take it isn't shown here."
-RESULT_NOT_LISTED = "Result not listed in your records"
-#: RESULT_NOT_LISTED about a made-up sample person (r6/voice.py).
-SAMPLE_RESULT_NOT_LISTED = "Result not listed in these made-up records"
 
 
 #: SNOMED "no known allergy" (716186003 and its descendants) and "patient
@@ -130,7 +127,7 @@ def _only_absences(resource: dict) -> bool:
             and all(_is_absence(c) for c in codings))
 
 
-def _concept_label(concept) -> str | None:
+def _concept_label(concept, lookup=None) -> str | None:
     """The server's name for a CodeableConcept, looked up by code in
     r6/terminology.py, or None.
 
@@ -138,14 +135,17 @@ def _concept_label(concept) -> str | None:
     puts patient names in, and CLAUDE.md forbids carrying them. The route
     redacts first, which strips both and writes back table labels; the
     engine does not lean on that (#884 QA F3), so it reads only the codes.
+    `lookup` is which of terminology's code-keyed readers names it, by
+    default `terminology.lookup` (read at call time, so a test can stub it).
     """
+    lookup = lookup or terminology.lookup
     if not isinstance(concept, dict):
         return None
     if _names_an_absence(concept):
         return None
     for coding in concept.get("coding") or []:
         if isinstance(coding, dict):
-            label = terminology.lookup(coding.get("system"), coding.get("code"))
+            label = lookup(coding.get("system"), coding.get("code"))
             if label:
                 return label
     return None
@@ -160,14 +160,14 @@ def _has_code(concept) -> bool:
         for c in concept.get("coding") or [])
 
 
-def _code_text(resource: dict) -> str:
+def _code_text(resource: dict, lookup=None) -> str:
     """Best human-readable label from a FHIR code element.
 
     Three outcomes, never two: a label we can stand behind, a code we hold
     but cannot name, or nothing recorded.
     """
     code = resource.get("code") or resource.get("medicationCodeableConcept") or {}
-    label = _concept_label(code)
+    label = _concept_label(code, lookup)
     if label:
         return label
     if _has_code(code):
@@ -366,14 +366,29 @@ def _medication_display(resource: dict) -> str:
     return MEDICINE_UNNAMED
 
 
+def _visit_kind(enc: dict) -> str:
+    """What kind of visit, by code: its type, then its class. Every visit
+    read "Visit" (visit brief, 2026-10-26, item 5): real feeds type a visit with a local or CPT
+    code the label table does not name, but nearly all carry a class.
+    `class` is a Coding in R4 and a list of CodeableConcepts in R5/R6."""
+    concepts = [t for t in enc.get("type") or [] if isinstance(t, dict)]
+    cls = enc.get("class")
+    if isinstance(cls, dict):
+        concepts.append({"coding": [cls]} if "code" in cls else cls)
+    elif isinstance(cls, list):
+        concepts.extend(c for c in cls if isinstance(c, dict))
+    for concept in concepts:
+        label = (_concept_label(concept, terminology.visit_label)
+                 or _concept_label(concept))
+        if label:
+            return label
+    return ""
+
+
 def _encounter_display(enc: dict) -> str:
     """Human-readable label for an Encounter: the visit type by code, never
     its upstream text."""
-    type_text = ""
-    for t in enc.get("type", []):
-        type_text = _concept_label(t) or ""
-        if type_text:
-            break
+    type_text = _visit_kind(enc)
     period = enc.get("period", {})
     date = _date_display(
         period.get("start") or enc.get("meta", {}).get("lastUpdated", ""))
@@ -387,15 +402,76 @@ def _encounter_display(enc: dict) -> str:
 _ACTIVE_CONDITION_STATUSES = {"active", "recurrence", "relapse"}
 
 
+def _codings(resource: dict) -> list[tuple[str, str]]:
+    """(canonical system, code) for each coding of `resource.code`."""
+    out = []
+    for coding in as_dict(resource.get("code")).get("coding") or []:
+        if not isinstance(coding, dict):
+            continue
+        code = coding.get("code")
+        if isinstance(code, (str, int)) and not isinstance(code, bool) \
+                and str(code).strip():
+            out.append((terminology.canonical_system(coding.get("system")),
+                        str(code).strip()))
+    return out
+
+
+def _onset_key(resource: dict) -> str:
+    """The raw onset, for ordering repeats of one condition. ISO dates sort
+    as strings; an entry with no onset sorts before any that has one."""
+    onset = (resource.get("onsetDateTime")
+             or as_dict(resource.get("onsetPeriod")).get("start")
+             or resource.get("recordedDate") or "")
+    return onset if isinstance(onset, str) else ""
+
+
+def _names_a_visit(resource: dict) -> bool:
+    """Coded as an encounter, examination or screening (ICD-10-CM Z00-Z13,
+    the SNOMED concepts in r6/terminology.py), and as nothing else. Shown as
+    a condition, "Adult health examination: Active since ..." told a
+    clinician the person has a check-up (visit brief, 2026-10-26, item 2)."""
+    codings = _codings(resource)
+    return bool(codings) and all(
+        terminology.is_encounter_concept(s, c) for s, c in codings)
+
+
+def _latest_of_each(conditions: list[tuple[dict, str]]) -> list[dict]:
+    """One entry per condition: entries sharing a code and a clinical status
+    are one problem written down more than once, and the most recent onset
+    stands for them. One condition was listed three times (visit brief,
+    2026-10-26, item 1). An entry with no code is never merged; nothing says
+    it is the same one."""
+    best: dict[int, tuple[dict, str]] = {}
+    owner: dict[tuple, int] = {}
+    for i, (c, status) in enumerate(conditions):
+        keys = [(status, *k) for k in _codings(c)]
+        prior = next((owner[k] for k in keys if k in owner), None)
+        if prior is None:
+            best[i] = (c, status)
+            slot = i
+        else:
+            slot = prior
+            if _onset_key(c) > _onset_key(best[slot][0]):
+                best[slot] = (c, status)
+        for k in keys:
+            owner.setdefault(k, slot)
+    return [best[i][0] for i in sorted(best)]
+
+
 def build_problems(conditions: list[dict]) -> list[BriefField]:
     """Active problem list from Condition resources."""
-    out = []
+    active = []
     for c in conditions:
         status = (c.get("clinicalStatus") or {}).get("coding", [{}])[0].get(
             "code", ""
         )
         if status not in _ACTIVE_CONDITION_STATUSES or _only_absences(c):
             continue
+        if _names_a_visit(c):
+            continue
+        active.append((c, status))
+    out = []
+    for c in _latest_of_each(active):
         label = _code_text(c)
         onset = _onset_display(c)
         value = f"Active{f' since {onset}' if onset else ''}"
@@ -435,7 +511,10 @@ _MAX_LABS = 10
 
 def build_labs(observations: list[dict],
                voice: str = PATIENT) -> list[BriefField]:
-    """Most recent lab results from Observation resources (capped at 10)."""
+    """Most recent lab results from Observation resources (capped at 10).
+
+    Only results with a value are listed. `voice` worded the "result not
+    listed" row, which is gone; it is kept so callers need not change."""
 
     def _sort_key(obs: dict) -> str:
         return (
@@ -448,13 +527,19 @@ def build_labs(observations: list[dict],
     sorted_obs = sorted((o for o in observations if not _only_absences(o)),
                         key=_sort_key, reverse=True)
     out = []
-    for obs in sorted_obs[:_MAX_LABS]:
-        label = _code_text(obs)
+    for obs in sorted_obs:
+        if len(out) >= _MAX_LABS:
+            break
         value = _obs_value(obs)
-        date = _effective_display(obs)
         if not value:
-            value = (SAMPLE_RESULT_NOT_LISTED if voice == SAMPLE
-                     else RESULT_NOT_LISTED)
+            # A row with no result tells a clinician nothing and pushed real
+            # results out of the ten slots (visit brief, 2026-10-26, item
+            # 4). Dropped here, not after the cap.
+            continue
+        # LOINC's long name made plain ("Anion gap", not "Anion gap in
+        # Serum or Plasma by calculation"), still keyed by code.
+        label = _code_text(obs, terminology.lab_label)
+        date = _effective_display(obs)
         display_value = value + (f" ({date})" if date else "")
         out.append(BriefField(
             label=label,
@@ -487,6 +572,11 @@ def build_lab_trends(trend_lines: list[dict]) -> list[BriefField]:
     return out
 
 
+#: The consumer lines the care-gaps section lists: what is due, and what the
+#: check could not decide for an eligible person. Never `up_to_date`.
+_GAP_LINE_STATUSES = ("due", "indeterminate")
+
+
 def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     """Open preventive-care gaps from the $care-gaps output.
 
@@ -516,10 +606,20 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     # `lines` carries due AND up-to-date; this section is gaps only. Listing
     # an up-to-date screening under "care gaps" tells a patient to chase one
     # they have already had.
+    #
+    # An `indeterminate` line is kept too. The producer writes one only for a
+    # screening the person is eligible for and the check could not decide
+    # (colorectal: stool tests are not read), and its message says so and
+    # says to ask. Dropping it left a review that ran with no items and an
+    # unavailable status, which the page read as "We couldn't check your
+    # screenings just now" while the chat answered from the same lines
+    # (visit brief, 2026-10-26, item 3). Due first, then the undecided.
     lines = consumer.get("lines") or []
+    lines = sorted((ln for ln in lines if isinstance(ln, dict)),
+                   key=lambda ln: ln.get("status") != "due")
     out = []
     for item in lines:
-        if not isinstance(item, dict) or item.get("status") != "due":
+        if item.get("status") not in _GAP_LINE_STATUSES:
             continue
         out.append(BriefField(
             label=item.get("title") or "Screening",

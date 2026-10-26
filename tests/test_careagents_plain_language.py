@@ -101,14 +101,14 @@ def test_a_lab_value_never_carries_upstream_free_text():
     label it by, so the engine drops it. The brief route already strips it
     through apply_redaction; this is the engine not depending on that."""
     from r6.brief.engine import build_labs
-    [field] = build_labs([{
+    # Nothing left to show, so no row at all (visit brief, 2026-10-26, item
+    # 4); it used to read "Result not listed in your records".
+    assert build_labs([{
         "resourceType": "Observation", "id": "o1",
         "code": {"coding": [{"system": "http://loinc.org",
                              "code": "4548-4"}]},
         "valueString": "Jane Doe: positive, see note",
-        "effectiveDateTime": "2026-09-01T08:00:00Z"}])
-    assert "Jane" not in field.value
-    assert field.value == "Result not listed in your records (Sep 1, 2026)"
+        "effectiveDateTime": "2026-09-01T08:00:00Z"}]) == []
 
 
 def test_no_upstream_text_or_display_reaches_the_brief():
@@ -176,7 +176,9 @@ def test_a_blood_pressure_panel_shows_its_numbers():
     assert field.value == "120/80 mmHg (Oct 6, 2026)"
 
 
-NOT_LISTED = "Result not listed in your records"
+#: Not shown: no number can be, so the row is left off the brief (visit
+#: brief, 2026-10-26, item 4). It used to read "Result not listed".
+NOT_LISTED = None
 A1C, CREATININE, GLUCOSE = "4548-4", "2160-0", "2345-7"
 UCUM = "http://unitsofmeasure.org"
 
@@ -213,10 +215,14 @@ def test_a_lab_value_shows_only_the_unit_the_reading_stated(loinc, vq,
     unit when it is an exact allowlist token; the analyte's usual unit only
     when the reading stated none; otherwise not shown."""
     from r6.brief.engine import build_labs
-    [field] = build_labs([{
+    fields = build_labs([{
         "resourceType": "Observation", "id": "o1",
         "code": {"coding": [{"system": "http://loinc.org", "code": loinc}]},
         "valueQuantity": vq, "effectiveDateTime": "2026-09-01"}])
+    if shown is NOT_LISTED:
+        assert fields == []
+        return
+    [field] = fields
     assert field.value == f"{shown} (Sep 1, 2026)"
 
 
@@ -225,13 +231,12 @@ def test_a_blood_pressure_in_an_unknown_unit_is_not_listed():
     comp = lambda code, v: {  # noqa: E731
         "code": {"coding": [{"system": "http://loinc.org", "code": code}]},
         "valueQuantity": {"value": v, "unit": "kPa?"}}
-    [field] = build_labs([{
+    assert build_labs([{
         "resourceType": "Observation", "id": "bp",
         "code": {"coding": [{"system": "http://loinc.org",
                              "code": "85354-9"}]},
         "component": [comp("8480-6", 16), comp("8462-4", 10.7)],
-        "effectiveDateTime": "2026-10-06"}])
-    assert field.value == f"{NOT_LISTED} (Oct 6, 2026)"
+        "effectiveDateTime": "2026-10-06"}]) == []
 
 
 @pytest.mark.parametrize("bad", ["2026-00-15", "2026-13-01", "2026-09-00",

@@ -1,0 +1,32 @@
+/* The visit brief on paper, for the clinician the person hands it to.
+   Linked with media="print" from brief.html only, so nothing here can move
+   the screen layout. Black on white whatever the screen theme was, no app
+   chrome, and no item split across a page break. The made-up-records banner
+   and the footer's "Not medical advice" line are kept: a printed sample
+   must still say it is one. */
+:root {
+  --bg: #fff; --surface: #fff; --surface-2: #fff;
+  --ink: #000; --ink-soft: #333; --hairline: #999;
+  --warn-bg: #fff; --warn-line: #000; --warn-ink: #000;
+  --practice-ink: #000; --practice-bg: #fff; --practice-line: #000;
+}
+@page { margin: 16mm 14mm; }
+body { background: #fff; color: #000; font-size: 12pt; min-height: 0;
+  display: block; }
+.topbar, .hub-head-actions, .brief-print, .chat-feedback,
+.footer > div:not(.footer-fine) { display: none !important; }
+.hub { max-width: none; padding: 0; }
+.hub-head { display: block; margin: 0 0 12pt; }
+.hub-head h1 { font-size: 20pt; }
+.beta-banner.sample-banner { position: static; border: 1pt solid #000; }
+.hub-section, .brief-alert { margin-top: 14pt; }
+.hub-section h2, .brief-alert h2 { font-size: 14pt; break-after: avoid; }
+.brief-section { border: 0; border-radius: 0; overflow: visible; }
+.brief-field { break-inside: avoid; padding: 5pt 0; }
+.brief-label { font-size: 12pt; }
+.brief-value, .brief-labs .brief-value, .brief-empty { font-size: 11pt;
+  color: #000; }
+.brief-source { font-size: 9pt; }
+.brief-alert { border-radius: 0; break-inside: avoid; }
+.footer { margin-top: 16pt; padding: 0; border: 0; font-size: 9pt; }
+a { color: #000; text-decoration: none; }
