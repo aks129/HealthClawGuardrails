@@ -23,7 +23,7 @@ from typing import Callable
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
-from careagents import causes, labs_timeline, llm, text_self
+from careagents import causes, conditions_view, labs_timeline, llm, text_self
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import NO_TREND_VERDICT
 
@@ -1265,6 +1265,25 @@ def _propose_text(hc: HealthClawClient, tenant: str, args: object,
                            "there. Do not propose another.")})
 
 
+def _records(hc: HealthClawClient, tenant: str, rt: str,
+             resolve_ref=None) -> list[dict]:
+    """One record type as the model sees it. Conditions are the current
+    problem list (careagents/conditions_view.py): the engine's full page,
+    resolved entries held back and counted, repeats of a code once, and no
+    cut at SUMMARY_LIMIT, since the filter already keeps it short."""
+    if rt != "Condition":
+        return _summarize_bundle(hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                                 resolve_ref=resolve_ref)
+    bundle, held_back = conditions_view.current_conditions(
+        hc.search(tenant, rt, {"_count": conditions_view.CONDITION_PAGE}),
+        _coding_key, _withdrawn)
+    out = _summarize_bundle(bundle, limit=conditions_view.CONDITION_PAGE,
+                            resolve_ref=resolve_ref)
+    if held_back:
+        out.append(conditions_view.held_back_note(held_back))
+    return out
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list, agent_id: str = "",
                   surface: str = "", origin: str = "",
@@ -1289,8 +1308,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             # One failed search used to raise out of the whole tool, and the
             # three that worked went with it.
             try:
-                parts[key] = _summarize_bundle(
-                    hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+                parts[key] = _records(
+                    hc, tenant, rt,
                     resolve_ref=(med_resolver if rt in _MEDICATION_TYPES
                                  else None))
             except HealthClawError:
@@ -1502,8 +1521,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps(out)
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
-        return json.dumps(_summarize_bundle(
-            hc.search(tenant, rt), limit=SUMMARY_LIMIT,
+        return json.dumps(_records(
+            hc, tenant, rt,
             resolve_ref=(_medication_resolver(hc, tenant)
                          if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
