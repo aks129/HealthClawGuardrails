@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Visit brief — CareAgents{% endblock %}
 {% block bodyclass %}page-brief{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='brief.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='brief-print.css') }}" media="print">{% endblock %}
 {% block content %}
 <main class="hub">{# Sample records only: the chat's line, at the top and
      sticky, and every line below says whose records these are. The engine
@@ -18,6 +20,13 @@
          is record jargon to a person on a phone (#877). The engine still
          sends both; this page does not show them. #}
       <div class="hub-sub">{% if sample_line %}A snapshot of these made-up records, to show what a visit brief looks like.{% else %}A snapshot of your records to bring to your visit.{% endif %}</div>
+      {# The day the records were read for this page, on screen and on
+         paper, so a clinician knows how current it is (#1038 F6). #}
+      <div class="hub-sub brief-asof" data-as-of="{{ as_of_iso }}">As of {{ as_of }}</div>
+      {# Under the title, not beside it: a third pill beside it squeezed
+         "Visit brief" to 33px on a phone (#1038 QA F2). Shown by brief.js;
+         the browser's print dialog also saves a PDF. #}
+      <div class="brief-tools"><button type="button" class="pill brief-print" id="brief-print" hidden>Print or save</button></div>
     </div>
     <div class="hub-head-actions">
       <a class="pill" href="/chat?agent={{ agent_id|urlencode }}">← chat</a>
@@ -125,6 +134,10 @@
       </div>
       {% endfor %}
     </div>
+    {% elif not care_gaps_ok and care_gaps_demographic and care_gaps_note %}
+    {# The review ran and the record lacks a date of birth or sex: the
+       engine's sentence says which, which "just now" did not (#1038 F5). #}
+    <p class="brief-empty">{{ care_gaps_note }}{% if not sample_line %} Ask your doctor which screenings you are due for.{% endif %}</p>
     {% elif not care_gaps_ok %}
     <p class="brief-empty">{% if sample_line %}We couldn't check the sample person's screenings just now.{% else %}We couldn't check your screenings just now. Ask your doctor which ones you are due for.{% endif %}</p>
     {% else %}
@@ -155,4 +168,5 @@
      one screen read as filler (#884 G7). #}
   <p class="chat-feedback">Something confusing? <a href="/feedback">Tell us</a>.</p>
 </main>
+<script src="{{ url_for('static', filename='brief.js') }}"></script>
 {% endblock %}

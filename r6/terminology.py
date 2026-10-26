@@ -113,6 +113,22 @@ _LABELS: dict[tuple[str, str], str] = {
     (LOINC, "2132-9"): "Vitamin B12",
     (LOINC, "2498-4"): "Iron",
     (LOINC, "2276-4"): "Ferritin",
+    # The rest of a basic and comprehensive metabolic panel. Without them the
+    # visit brief showed the resolver's LOINC long name ("Anion gap in Serum
+    # or Plasma by calculation").
+    (LOINC, "33037-3"): "Anion gap",
+    (LOINC, "1863-0"): "Anion gap",
+    (LOINC, "10466-1"): "Anion gap",
+    (LOINC, "3097-3"): "BUN/creatinine ratio",
+    (LOINC, "10834-0"): "Globulin",
+    (LOINC, "1759-0"): "Albumin/globulin ratio",
+    (LOINC, "48642-3"): "Estimated GFR",
+    (LOINC, "48643-1"): "Estimated GFR",
+    (LOINC, "62238-1"): "Estimated GFR",
+    (LOINC, "98979-8"): "Estimated GFR",
+    # "INR in Platelet poor plasma by Coagulation assay" (tx.fhir.org
+    # $lookup, 2026-10-26).
+    (LOINC, "6301-6"): "INR",
 
     # --- LOINC: hematology --------------------------------------------------
     (LOINC, "718-7"): "Hemoglobin",
@@ -450,6 +466,140 @@ def absence_text(system, code) -> str | None:
     """The qualified entry text for an absence concept, else None."""
     key = _absence_key(system, code)
     return _ABSENCE_TEXT.get(key) if key else None
+
+
+#: ICD-10-CM Z00-Z13: encounters for examination and screening. They say why
+#: a visit happened, not what the person has, so a problem list that carries
+#: them is not a list of conditions. Z23, "Encounter for immunization", is
+#: the same kind of code and already in the table above.
+_ICD10_ENCOUNTER = re.compile(r"Z(?:0\d|1[0-3]|23)")
+
+#: SNOMED CT encounter, examination and screening concepts that real feeds
+#: write onto a problem list. Each is a procedure in SNOMED's own hierarchy
+#: (tx.fhir.org $lookup FSN, 2026-10-26), not a disorder or finding. A closed
+#: list: there is no local SNOMED hierarchy to ask, and a concept missing here
+#: stays a condition rather than being guessed away.
+_SNOMED_ENCOUNTER = frozenset({
+    "268565007",  # Adult health examination (procedure)
+    "185349003",  # Encounter for check up (procedure)
+    "162673000",  # General examination of patient (procedure)
+    "410620009",  # Well child visit (procedure)
+    "86013001",   # Periodic reevaluation and management of healthy individual
+    "390906007",  # Follow-up encounter (procedure)
+    "308335008",  # Patient encounter procedure (procedure)
+    "185389009",  # Follow-up visit (procedure)
+    "185317003",  # Telephone encounter (procedure)
+    "439708006",  # Home visit (procedure)
+    "4525004",    # Emergency department patient visit (procedure)
+    "11429006",   # Consultation (procedure)
+    "281036007",  # Follow-up consultation (procedure)
+    "270427003",  # Patient-initiated encounter (procedure)
+    "448337001",  # Telemedicine consultation with patient (procedure)
+    "185345009",  # Encounter for symptom (procedure)
+    "171207006",  # Depression screening (procedure)
+    "268547008",  # Screening for malignant neoplasm of breast (procedure)
+})
+
+
+def is_encounter_concept(system, code) -> bool:
+    """True for a code that names a visit, an examination or a screening
+    rather than a condition: ICD-10-CM Z00-Z13 (and Z23), and the SNOMED
+    concepts above. Keyed by code only; an unknown code is not one."""
+    if isinstance(code, bool) or not isinstance(code, (str, int)):
+        return False
+    system, code = canonical_system(system), str(code).strip().upper()
+    if system == ICD10:
+        return bool(_ICD10_ENCOUNTER.match(code))
+    if system == SNOMED:
+        return code in _SNOMED_ENCOUNTER
+    return False
+
+
+#: LOINC's long names carry the property in brackets, the method after "by"
+#: and the specimen after "in". A person needs the analyte. The specimen is
+#: dropped only when it is blood, serum or plasma, the default a reader
+#: assumes; "Protein in Urine" keeps its specimen, which changes the meaning.
+_LOINC_PROPERTY = re.compile(r"\s*\[[^\]]*\]")
+_LOINC_METHOD = re.compile(r"\s+by\s+.*$", re.IGNORECASE)
+_LOINC_BLOOD = re.compile(
+    r"\s+in\s+(?:(?:Serum|Plasma|Blood)(?:,\s*|\s+or\s+)?)+"
+    r"(?:\s+(?:Serum|Plasma|Blood))?\s*$",
+    re.IGNORECASE)
+
+
+def plain_lab_name(name: str) -> str:
+    """A LOINC long name as a person reads it: "Anion gap in Serum or Plasma
+    by calculation" is "Anion gap". Works on a terminology service's name
+    for a code, never on upstream text."""
+    if not isinstance(name, str):
+        return ""
+    out = _LOINC_PROPERTY.sub("", name)
+    out = _LOINC_METHOD.sub("", out)
+    out = _LOINC_BLOOD.sub("", out)
+    return " ".join(out.split()) or name.strip()
+
+
+def lab_label(system, code) -> str | None:
+    """`lookup`, with a LOINC name the table does not carry made plain. The
+    table's own labels are already plain and are returned as written."""
+    label = lookup(system, code)
+    if label is None or canonical_system(system) != LOINC:
+        return label
+    key = (LOINC, str(code).strip())
+    return label if key in _LABELS else plain_lab_name(label)
+
+
+#: What kind of visit an Encounter was, keyed by code. Kept apart from
+#: _LABELS: these are words for a visit list, not names a coding should
+#: carry as its `display` everywhere (label_codings).
+_ACT = _HL7 + "v3-ActCode"
+_CPT = "http://www.ama-assn.org/go/cpt"
+_VISIT_LABELS: dict[tuple[str, str], str] = {
+    # Encounter.class, v3-ActCode.
+    (_ACT, "AMB"): "Office visit",
+    (_ACT, "EMER"): "Emergency visit",
+    (_ACT, "IMP"): "Hospital stay",
+    (_ACT, "ACUTE"): "Hospital stay",
+    (_ACT, "NONAC"): "Hospital stay",
+    (_ACT, "OBSENC"): "Hospital observation",
+    (_ACT, "SS"): "Same-day procedure",
+    (_ACT, "VR"): "Video visit",
+    (_ACT, "HH"): "Home visit",
+    (_ACT, "FLD"): "Visit outside the office",
+    # SNOMED encounter types (the procedure concepts above).
+    (SNOMED, "185349003"): "Check-up",
+    (SNOMED, "268565007"): "Check-up",
+    (SNOMED, "162673000"): "Check-up",
+    (SNOMED, "86013001"): "Check-up",
+    (SNOMED, "410620009"): "Well-child visit",
+    (SNOMED, "390906007"): "Follow-up visit",
+    (SNOMED, "185389009"): "Follow-up visit",
+    (SNOMED, "281036007"): "Follow-up visit",
+    (SNOMED, "185317003"): "Phone visit",
+    (SNOMED, "448337001"): "Video visit",
+    (SNOMED, "439708006"): "Home visit",
+    (SNOMED, "4525004"): "Emergency visit",
+    (SNOMED, "11429006"): "Consultation",
+}
+# CPT evaluation-and-management ranges, in our own words for each range (not
+# the code set's descriptors).
+_VISIT_LABELS.update({(_CPT, str(c)): "Office visit"
+                      for c in (*range(99202, 99206), *range(99211, 99216))})
+_VISIT_LABELS.update({(_CPT, str(c)): "Preventive visit"
+                      for c in (*range(99381, 99388), *range(99391, 99398))})
+_VISIT_LABELS.update({(_CPT, str(c)): "Emergency visit"
+                      for c in range(99281, 99286)})
+_VISIT_LABELS.update({(_CPT, str(c)): "Hospital stay"
+                      for c in (*range(99221, 99224), *range(99231, 99234))})
+_VISIT_LABELS.update({(_CPT, str(c)): "Phone visit"
+                      for c in range(99441, 99444)})
+
+
+def visit_label(system, code) -> str | None:
+    """A plain word for a kind of visit, by code, or None."""
+    if isinstance(code, bool) or not isinstance(code, (str, int)):
+        return None
+    return _VISIT_LABELS.get((canonical_system(system), str(code).strip()))
 
 
 def unlabelled_codes(limit: int = 50) -> list[tuple[tuple[str, str], int]]:

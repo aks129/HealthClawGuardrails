@@ -294,7 +294,7 @@ class TestPartialRecords:
 
     def test_labs_capped_at_ten(self):
         observations = [
-            _observation(f"o-{i}", f"Lab {i}", i, "unit",
+            _observation(f"o-{i}", f"Lab {i}", i, "mg/dL",
                          f"2026-0{(i % 9) + 1}-01T00:00:00Z")
             for i in range(15)
         ]

@@ -59,6 +59,11 @@ class CareGapsSection:
     fields: list[BriefField] = field(default_factory=list)
     status: str = CARE_GAPS_UNAVAILABLE
     reason: str = CARE_GAPS_REASON_NO_RESULT
+    #: The review's own code for what it could not decide (the consumer
+    #: summary's `unevaluated`, e.g. "birth-date-unavailable"), or "". Lets
+    #: a page tell "the record lacks a date of birth" from "we could not
+    #: run" without matching prose (#1038 QA F5).
+    cause: str = ""
 
 
 @dataclass
@@ -75,6 +80,7 @@ class BriefResult:
     # because nothing ran. These two say which.
     care_gaps_status: str = CARE_GAPS_UNAVAILABLE
     care_gaps_reason: str = CARE_GAPS_REASON_NO_RESULT
+    care_gaps_cause: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +109,13 @@ MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
 #: out is the directions, Dosage.text, which is free text from the source
 #: system (#884 QA F3). No "your", so it reads the same on sample records.
 DOSE_NOT_LISTED = "How to take it isn't shown here."
-RESULT_NOT_LISTED = "Result not listed in your records"
-#: RESULT_NOT_LISTED about a made-up sample person (r6/voice.py).
-SAMPLE_RESULT_NOT_LISTED = "Result not listed in these made-up records"
+#: A result with a number in a unit the brief does not recognise. The
+#: number is not shown (R884-1: only an allowlisted unit is ever paired with
+#: one), but the row stays, so a clinician knows the test was done (#1038
+#: ruling F4). A result with no value at all is still left off.
+RESULT_ON_FILE = "Result on file \u2014 see your record"
+#: RESULT_ON_FILE about a made-up sample person (r6/voice.py).
+SAMPLE_RESULT_ON_FILE = "Result on file \u2014 see these made-up records"
 
 
 #: SNOMED "no known allergy" (716186003 and its descendants) and "patient
@@ -130,7 +140,7 @@ def _only_absences(resource: dict) -> bool:
             and all(_is_absence(c) for c in codings))
 
 
-def _concept_label(concept) -> str | None:
+def _concept_label(concept, lookup=None) -> str | None:
     """The server's name for a CodeableConcept, looked up by code in
     r6/terminology.py, or None.
 
@@ -138,14 +148,17 @@ def _concept_label(concept) -> str | None:
     puts patient names in, and CLAUDE.md forbids carrying them. The route
     redacts first, which strips both and writes back table labels; the
     engine does not lean on that (#884 QA F3), so it reads only the codes.
+    `lookup` is which of terminology's code-keyed readers names it, by
+    default `terminology.lookup` (read at call time, so a test can stub it).
     """
+    lookup = lookup or terminology.lookup
     if not isinstance(concept, dict):
         return None
     if _names_an_absence(concept):
         return None
     for coding in concept.get("coding") or []:
         if isinstance(coding, dict):
-            label = terminology.lookup(coding.get("system"), coding.get("code"))
+            label = lookup(coding.get("system"), coding.get("code"))
             if label:
                 return label
     return None
@@ -160,14 +173,14 @@ def _has_code(concept) -> bool:
         for c in concept.get("coding") or [])
 
 
-def _code_text(resource: dict) -> str:
+def _code_text(resource: dict, lookup=None) -> str:
     """Best human-readable label from a FHIR code element.
 
     Three outcomes, never two: a label we can stand behind, a code we hold
     but cannot name, or nothing recorded.
     """
     code = resource.get("code") or resource.get("medicationCodeableConcept") or {}
-    label = _concept_label(code)
+    label = _concept_label(code, lookup)
     if label:
         return label
     if _has_code(code):
@@ -234,9 +247,10 @@ def _effective_display(resource: dict) -> str:
 #: The units the brief recognises, each mapped to how it reads. A closed
 #: list of exact, case-sensitive tokens, as careagents/agent.py keeps for
 #: the model (R875-3): any other string, however unit-shaped, could be a
-#: word, so it is never shown (R884-1). Every value here is itself a key,
-#: so only an exact allowlist token ever reaches the page. UCUM's bracket
-#: forms read as their plain spelling; both spellings are accepted.
+#: word, so it is never shown (R884-1). Every value here is a fixed string
+#: from this table, so nothing the record wrote ever reaches the page.
+#: UCUM's bracket forms read as their plain spelling; both spellings are
+#: accepted.
 _UNIT_DISPLAY = {
     # US conventional
     "mg/dL": "mg/dL", "g/dL": "g/dL", "ng/mL": "ng/mL", "pg/mL": "pg/mL",
@@ -251,10 +265,20 @@ _UNIT_DISPLAY = {
     "%": "%", "U/L": "U/L", "[IU]/L": "IU/L", "IU/L": "IU/L",
     "mm[Hg]": "mmHg", "mmHg": "mmHg",
     "mL/min/{1.73_m2}": "mL/min/1.73m2", "mL/min/1.73m2": "mL/min/1.73m2",
-    "10*3/uL": "10^3/uL", "10^3/uL": "10^3/uL",
+    "10*3/uL": "K/µL", "K/uL": "K/µL", "x10E3/uL": "K/µL",
+    "10^3/uL": "K/µL",
     "10*6/uL": "10^6/uL", "10^6/uL": "10^6/uL",
     "fL": "fL", "pg": "pg", "mg/mmol": "mg/mmol", "mg/g": "mg/g",
     "[pH]": "pH", "pH": "pH",
+    # Body measurements. Without them a height or weight had no unit the
+    # brief recognised, so its row read "Result not listed", and once empty
+    # rows were dropped it vanished from the brief (#1038 review).
+    "cm": "cm", "m": "m", "[in_i]": "in", "in": "in",
+    "kg": "kg", "g": "g", "[lb_av]": "lb", "lb": "lb",
+    # Thyroid and anticoagulation results (#1038 ruling F4). INR has no
+    # unit; UCUM writes it as the annotation {INR}.
+    "uIU/mL": "uIU/mL", "m[IU]/L": "mIU/L", "mIU/L": "mIU/L",
+    "{INR}": "INR",
 }
 
 
@@ -295,13 +319,17 @@ def _unit(vq: dict, analyte_codes) -> str | None:
 
 def _obs_value(obs: dict) -> str:
     """Human-readable value + unit from an Observation: a finite number and
-    the unit it stated, or "" (the caller says the result is not listed)."""
+    the unit it stated; RESULT_ON_FILE for a number in a unit the brief does
+    not recognise; or "" when there is no value (the caller drops the row).
+    """
     if "valueQuantity" in obs:
         vq = as_dict(obs["valueQuantity"])
         value = _number(vq.get("value"))
-        unit = _unit(vq, codes(obs.get("code")))
-        if value is None or unit is None:
+        if value is None:
             return ""
+        unit = _unit(vq, codes(obs.get("code")))
+        if unit is None:
+            return RESULT_ON_FILE
         return f"{value} {unit}".strip()
     # No valueString branch. It is free text from the source system with no
     # code to label it by, so nothing here can stand behind it (#877). The
@@ -324,8 +352,9 @@ _KNOWN_UNITS = {_SYSTOLIC: "mm[Hg]", _DIASTOLIC: "mm[Hg]"}
 
 
 def _blood_pressure(obs: dict) -> str:
-    """"120/80 mmHg" from a panel's components, or "" (#884 G7: the row
-    showed a date and no numbers)."""
+    """"120/80 mmHg" from a panel's components (#884 G7: the row showed a
+    date and no numbers), RESULT_ON_FILE when a reading is in a unit the
+    brief does not recognise, or ""."""
     values = {}
     unit = ""
     for comp in obs.get("component") or []:
@@ -340,7 +369,8 @@ def _blood_pressure(obs: dict) -> str:
             if key in comp_codes:
                 comp_unit = _unit(vq, [key])
                 if comp_unit is None:
-                    return ""       # a unit we do not recognise: not shown
+                    # A unit we do not recognise: no number is shown.
+                    return RESULT_ON_FILE
                 values[key] = value
                 unit = unit or comp_unit
     if _SYSTOLIC not in values or _DIASTOLIC not in values:
@@ -366,14 +396,29 @@ def _medication_display(resource: dict) -> str:
     return MEDICINE_UNNAMED
 
 
+def _visit_kind(enc: dict) -> str:
+    """What kind of visit, by code: its type, then its class. Every visit
+    read "Visit" (visit brief, 2026-10-26, item 5): real feeds type a visit with a local or CPT
+    code the label table does not name, but nearly all carry a class.
+    `class` is a Coding in R4 and a list of CodeableConcepts in R5/R6."""
+    concepts = [t for t in enc.get("type") or [] if isinstance(t, dict)]
+    cls = enc.get("class")
+    if isinstance(cls, dict):
+        concepts.append({"coding": [cls]} if "code" in cls else cls)
+    elif isinstance(cls, list):
+        concepts.extend(c for c in cls if isinstance(c, dict))
+    for concept in concepts:
+        label = (_concept_label(concept, terminology.visit_label)
+                 or _concept_label(concept))
+        if label:
+            return label
+    return ""
+
+
 def _encounter_display(enc: dict) -> str:
     """Human-readable label for an Encounter: the visit type by code, never
     its upstream text."""
-    type_text = ""
-    for t in enc.get("type", []):
-        type_text = _concept_label(t) or ""
-        if type_text:
-            break
+    type_text = _visit_kind(enc)
     period = enc.get("period", {})
     date = _date_display(
         period.get("start") or enc.get("meta", {}).get("lastUpdated", ""))
@@ -387,18 +432,141 @@ def _encounter_display(enc: dict) -> str:
 _ACTIVE_CONDITION_STATUSES = {"active", "recurrence", "relapse"}
 
 
+def _codings(resource: dict) -> list[tuple[str, str]]:
+    """(canonical system, code) for each coding of `resource.code`."""
+    out = []
+    for coding in as_dict(resource.get("code")).get("coding") or []:
+        if not isinstance(coding, dict):
+            continue
+        code = coding.get("code")
+        if isinstance(code, (str, int)) and not isinstance(code, bool) \
+                and str(code).strip():
+            out.append((terminology.canonical_system(coding.get("system")),
+                        str(code).strip()))
+    return out
+
+
+#: Code systems that say a code is missing, not what the condition is.
+_NOT_A_CODE_SYSTEMS = frozenset({
+    terminology._HL7 + "v3-NullFlavor",
+    terminology._HL7 + "data-absent-reason",
+})
+
+
+def _identity(resource: dict) -> frozenset | None:
+    """Every real coding of the entry, as one set, or None when it has none.
+
+    The WHOLE set, not one preferred coding: a feed can map a problem to a
+    broad SNOMED parent such as 363346000 "Malignant neoplastic disease" and
+    put the site in ICD-10-CM, so lung and breast cancer share a SNOMED code
+    and differ only in the ICD (#1038 QA R2-1). Two entries are one problem
+    only when every code matches. When in doubt the brief shows a duplicate;
+    it never hides a condition. A coding with no system, or a null flavour
+    or data-absent reason, names nothing and is left out of the set.
+    """
+    real = frozenset((s, c) for s, c in _codings(resource)
+                     if s and s not in _NOT_A_CODE_SYSTEMS)
+    return real or None
+
+
+def _onset_key(resource: dict) -> str:
+    """The raw onset, for ordering repeats of one condition. ISO dates sort
+    as strings; an entry with no onset sorts before any that has one."""
+    onset = (resource.get("onsetDateTime")
+             or as_dict(resource.get("onsetPeriod")).get("start")
+             or resource.get("recordedDate") or "")
+    return onset if isinstance(onset, str) else ""
+
+
+def _names_a_visit(resource: dict) -> bool:
+    """Coded as an encounter, examination or screening (ICD-10-CM Z00-Z13,
+    the SNOMED concepts in r6/terminology.py), and as nothing else. Shown as
+    a condition, "Adult health examination: Active since ..." told a
+    clinician the person has a check-up (visit brief, 2026-10-26, item 2)."""
+    codings = _codings(resource)
+    return bool(codings) and all(
+        terminology.is_encounter_concept(s, c) for s, c in codings)
+
+
+def _earlier_onset(mine: str, theirs: str) -> bool:
+    """True when `mine` should stand for the group over `theirs`: the earlier
+    date, compared at the precision both share; on a tie there ("2019" and
+    "2019-05-01"), the more precise one, so the row keeps a date it can show
+    (#1038 QA R2-2). An onset beats none."""
+    if not mine:
+        return False
+    if not theirs:
+        return True
+    a, b = mine[:10], theirs[:10]
+    common = min(len(a), len(b))
+    if a[:common] != b[:common]:
+        return a[:common] < b[:common]
+    return len(a) > len(b)
+
+
+def _first_of_each(conditions: list[tuple[dict, str]]
+                   ) -> list[tuple[dict, str]]:
+    """One entry per condition: entries whose full set of real codings
+    (`_identity`) and clinical status match are one problem written down
+    more than once (visit brief, 2026-10-26, item 1: one condition listed
+    three times).
+
+    The EARLIEST onset stands for them: "Active since" the first time it was
+    recorded is the date a clinician wants (#1038 ruling). Only an exact key
+    match merges, so nothing chains from one entry to another, and an entry
+    with no real coding is never merged.
+    """
+    kept: list[tuple[dict, str]] = []
+    slot: dict[tuple, int] = {}
+    for c, status in conditions:
+        ident = _identity(c)
+        if ident is None:
+            kept.append((c, status))
+            continue
+        key = (status, ident)
+        if key not in slot:
+            slot[key] = len(kept)
+            kept.append((c, status))
+            continue
+        if _earlier_onset(_onset_key(c), _onset_key(kept[slot[key]][0])):
+            kept[slot[key]] = (c, status)
+    return kept
+
+
+#: verificationStatus codes that say the entry is not a condition the
+#: person has. Dropped before the repeats are merged, so a refuted entry
+#: can never date a real one (#1038 QA R2-3).
+_NOT_THE_PERSONS = frozenset({"refuted", "entered-in-error"})
+
+#: How a row names its clinical status. A recurrence beside an active row
+#: of the same condition reads as what it is, not as a duplicate (R2-4).
+_STATUS_WORD = {"active": "Active", "recurrence": "Recurrence",
+                "relapse": "Relapse"}
+
+
+def _verification(resource: dict) -> set[str]:
+    return {c.get("code") for c in
+            as_dict(resource.get("verificationStatus")).get("coding") or []
+            if isinstance(c, dict)}
+
+
 def build_problems(conditions: list[dict]) -> list[BriefField]:
     """Active problem list from Condition resources."""
-    out = []
+    active = []
     for c in conditions:
         status = (c.get("clinicalStatus") or {}).get("coding", [{}])[0].get(
             "code", ""
         )
         if status not in _ACTIVE_CONDITION_STATUSES or _only_absences(c):
             continue
+        if _names_a_visit(c) or _verification(c) & _NOT_THE_PERSONS:
+            continue
+        active.append((c, status))
+    out = []
+    for c, status in _first_of_each(active):
         label = _code_text(c)
         onset = _onset_display(c)
-        value = f"Active{f' since {onset}' if onset else ''}"
+        value = f"{_STATUS_WORD[status]}{f' since {onset}' if onset else ''}"
         out.append(BriefField(
             label=label,
             value=value,
@@ -435,7 +603,10 @@ _MAX_LABS = 10
 
 def build_labs(observations: list[dict],
                voice: str = PATIENT) -> list[BriefField]:
-    """Most recent lab results from Observation resources (capped at 10)."""
+    """Most recent lab results from Observation resources (capped at 10).
+
+    Only results with a value are listed. `voice` words RESULT_ON_FILE
+    about the sample person on made-up records."""
 
     def _sort_key(obs: dict) -> str:
         return (
@@ -448,13 +619,21 @@ def build_labs(observations: list[dict],
     sorted_obs = sorted((o for o in observations if not _only_absences(o)),
                         key=_sort_key, reverse=True)
     out = []
-    for obs in sorted_obs[:_MAX_LABS]:
-        label = _code_text(obs)
+    for obs in sorted_obs:
+        if len(out) >= _MAX_LABS:
+            break
         value = _obs_value(obs)
-        date = _effective_display(obs)
         if not value:
-            value = (SAMPLE_RESULT_NOT_LISTED if voice == SAMPLE
-                     else RESULT_NOT_LISTED)
+            # A row with no result tells a clinician nothing and pushed real
+            # results out of the ten slots (visit brief, 2026-10-26, item
+            # 4). Dropped here, not after the cap.
+            continue
+        if value == RESULT_ON_FILE and voice == SAMPLE:
+            value = SAMPLE_RESULT_ON_FILE
+        # LOINC's long name made plain ("Anion gap", not "Anion gap in
+        # Serum or Plasma by calculation"), still keyed by code.
+        label = _code_text(obs, terminology.lab_label)
+        date = _effective_display(obs)
         display_value = value + (f" ({date})" if date else "")
         out.append(BriefField(
             label=label,
@@ -487,6 +666,11 @@ def build_lab_trends(trend_lines: list[dict]) -> list[BriefField]:
     return out
 
 
+#: The consumer lines the care-gaps section lists: what is due, and what the
+#: check could not decide for an eligible person. Never `up_to_date`.
+_GAP_LINE_STATUSES = ("due", "indeterminate")
+
+
 def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     """Open preventive-care gaps from the $care-gaps output.
 
@@ -516,10 +700,20 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     # `lines` carries due AND up-to-date; this section is gaps only. Listing
     # an up-to-date screening under "care gaps" tells a patient to chase one
     # they have already had.
+    #
+    # An `indeterminate` line is kept too. The producer writes one only for a
+    # screening the person is eligible for and the check could not decide
+    # (colorectal: stool tests are not read), and its message says so and
+    # says to ask. Dropping it left a review that ran with no items and an
+    # unavailable status, which the page read as "We couldn't check your
+    # screenings just now" while the chat answered from the same lines
+    # (visit brief, 2026-10-26, item 3). Due first, then the undecided.
     lines = consumer.get("lines") or []
+    lines = sorted((ln for ln in lines if isinstance(ln, dict)),
+                   key=lambda ln: ln.get("status") != "due")
     out = []
     for item in lines:
-        if not isinstance(item, dict) or item.get("status") != "due":
+        if item.get("status") not in _GAP_LINE_STATUSES:
             continue
         out.append(BriefField(
             label=item.get("title") or "Screening",
@@ -536,10 +730,12 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     # than one, reaches this section: the route declares the caller reason
     # and the note says which.
     if consumer.get("unevaluated"):
+        cause = consumer.get("unevaluated")
         return CareGapsSection(
             fields=out, status=CARE_GAPS_UNAVAILABLE,
             reason=consumer.get("unevaluated_note")
-            or CARE_GAPS_REASON_NO_RESULT)
+            or CARE_GAPS_REASON_NO_RESULT,
+            cause=cause if isinstance(cause, str) else "")
 
     return CareGapsSection(fields=out, status=CARE_GAPS_OK, reason="")
 
@@ -596,4 +792,5 @@ def generate_brief(
         visits=build_visits(encounters),
         care_gaps_status=gaps.status,
         care_gaps_reason=gaps.reason,
+        care_gaps_cause=gaps.cause,
     )
