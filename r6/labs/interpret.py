@@ -100,37 +100,60 @@ RANGE_NOT_ASSERTED = "range-not-asserted"  #: one-sided lab range, wrong side
 #: Spellings of one blood-count unit, thousands per microlitre, that real
 #: feeds send for the same quantity. 10*9/L belongs here because it is the
 #: same number: a microlitre is 10^-6 L, so 10^3/uL = 10^9/L exactly. Only
-#: exact equivalents, keyed after `_unit_key` folds case, spaces and the two
-#: micro signs; anything else is compared as stored, so a true mismatch
-#: (10*6/uL, /uL, 10*3/mL) still refuses to score.
+#: exact equivalents, keyed after `_count_key` folds case, spaces and the
+#: two micro signs (safe within this closed family: none of its spellings
+#: has a prefix whose case changes it); anything else is compared through
+#: `_unit_key`, so a true mismatch (10*6/uL, /uL, 10*3/mL) still refuses
+#: to score.
 _COUNT_PER_UL = "10*3/uL"
 _EQUIVALENT_UNITS = {k: _COUNT_PER_UL for k in (
     "10*3/ul", "10^3/ul", "10e3/ul", "x10*3/ul", "x10^3/ul", "x10e3/ul",
     "k/ul", "thou/ul",
     "10*9/l", "10^9/l", "10e9/l", "x10*9/l", "x10^9/l", "x10e9/l")}
 
+_MICRO = (("\u00b5", "u"), ("\u03bc", "u"))
 
-#: Spellings of one UCUM annotation that feeds write without its braces.
-_UNIT_ALIASES = (("{1.73_m2}", "1.73m2"),)
+#: Case folds that are safe in a mixed-case unit, because the capital and
+#: the small letter name one thing: L and l are both the litre, mEq is
+#: written meq, and Hg appears only as mercury.
+_SAFE_FOLDS = (("L", "l"), ("Eq", "eq"), ("Hg", "hg"))
+#: Spellings of one unit written two ways, compared after folding.
+_UNIT_ALIASES = (("{1.73_m2}", "1.73m2"), ("mm[hg]", "mmhg"))
+
+
+def _count_key(unit):
+    key = "".join(unit.split())
+    for micro, u in _MICRO:
+        key = key.replace(micro, u)
+    return key.lower()
 
 
 def _unit_key(unit):
-    """A unit folded for comparison: no spaces, either micro sign as u,
-    lower case, and the aliases above. "mEq/L" and "meq/L", "mg/dl" and
-    "mg/dL" are one unit spelled two ways."""
-    key = "".join(unit.split()).replace("\u00b5", "u").replace(
-        "\u03bc", "u").lower()
+    """A unit folded for comparison, case-sensitive by default: in UCUM m
+    is milli and M mega, p pico and P peta, so "mmol/L" and "Mmol/L" stay
+    apart. Case is folded whole only when the unit is all capitals, which
+    is UCUM's case-insensitive form ("MG/DL", "MMOL/L"). Otherwise only
+    the safe folds above, either micro sign as u, no spaces, and the
+    aliases: "mEq/L" and "meq/L", "mg/dl" and "mg/dL" are one unit."""
+    key = "".join(unit.split())
+    for micro, u in _MICRO:
+        key = key.replace(micro, u)
+    if key.upper() == key:
+        key = key.lower()
+    else:
+        for capital, small in _SAFE_FOLDS:
+            key = key.replace(capital, small)
     for alias, plain in _UNIT_ALIASES:
         key = key.replace(alias, plain)
     return key
 
 
 def _canonical_unit(unit):
-    """The one spelling an equivalent unit compares as; any other unit, or
-    a non-string, unchanged."""
+    """The one spelling an equivalent count unit compares as; any other
+    unit, or a non-string, unchanged."""
     if not isinstance(unit, str):
         return unit
-    return _EQUIVALENT_UNITS.get(_unit_key(unit), unit)
+    return _EQUIVALENT_UNITS.get(_count_key(unit), unit)
 
 
 def _same_unit(a, b):

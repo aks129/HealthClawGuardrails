@@ -18,15 +18,10 @@ import pytest
 
 from r6.labs.interpret import _same_unit, interpret_observation
 
-_XFAIL = pytest.mark.xfail(strict=True, reason=(
-    "#1036 round 3 QA: _unit_key folds m/M, p/P. Remove this marker when "
-    "case is folded only where UCUM allows it."))
-
 
 #: Mixed case, so not UCUM's all-capitals case-insensitive form: the capital
 #: is a prefix. ("MU/L" in capitals alone is ambiguous: case-insensitive
 #: UCUM reads it as milli-units, case-sensitive as mega-units.)
-@_XFAIL
 @pytest.mark.parametrize("a,b", [
     ("mU/mL", "MU/mL"), ("mIU/mL", "MIU/mL"), ("mmol/L", "Mmol/L"),
     ("pmol/L", "Pmol/L"), ("ms", "Ms"), ("mg", "Mg"), ("mm/h", "Mm/h"),
@@ -42,7 +37,6 @@ def _obs(loinc, value, unit):
             "valueQuantity": {"value": value, "unit": unit}}
 
 
-@_XFAIL
 @pytest.mark.parametrize("loinc,value,unit", [
     ("2823-3", 6.8, "Mmol/L"),   # megamole per litre
     ("2345-7", 250, "Mg/dL"),    # megagram per decilitre

@@ -116,6 +116,19 @@ def test_spelling_fold_never_joins_two_units(display, code):
     assert interpret_observation(o)["indeterminate_reason"] == UNIT_MISMATCH
 
 
+@pytest.mark.parametrize("a,b,same", [
+    ("mm[Hg]", "mmHg", True), ("MM[HG]", "mm[Hg]", True),
+    ("U/L", "u/L", True),        # all capitals: UCUM's case-insensitive form
+    ("U/mL", "u/mL", False),     # mixed case: u is the atomic mass unit
+    ("K/uL", "k/ul", True),      # the closed count family folds case
+    ("10*3/mL", "10*3/ML", True),    # all capitals folds
+    ("10*3/mL", "10*3/Ml", False),   # mixed case: Ml is a megalitre
+])
+def test_case_folds_only_where_ucum_allows(a, b, same):
+    from r6.labs.interpret import _same_unit
+    assert _same_unit(a, b) is same
+
+
 def test_a_code_from_another_system_is_not_a_unit():
     o = _obs(PLATELETS, 250, "K/uL")
     o["valueQuantity"].update({"system": "urn:x", "code": "/uL"})
