@@ -52,8 +52,9 @@ def _condition(cid, system, code, onset, status="active"):
 
 # --- 1. duplicates ---------------------------------------------------------
 
-def test_repeated_problem_list_entries_collapse_to_the_most_recent_onset():
-    """MUTATION: drop the dedupe -> three hypertension rows."""
+def test_repeated_problem_list_entries_collapse_to_the_earliest_onset():
+    """MUTATION: drop the dedupe -> three hypertension rows. The earliest
+    onset stands for them (#1038 ruling)."""
     rows = build_problems([
         _condition("c1", ICD10, "I10", "2019-02-01"),
         _condition("c2", ICD10, "I10", "2023-07-15"),
@@ -64,8 +65,8 @@ def test_repeated_problem_list_entries_collapse_to_the_most_recent_onset():
     assert labels.count(
         "High blood pressure (essential hypertension)") == 1, labels
     htn = next(r for r in rows if r.source_id in ("c1", "c2", "c3"))
-    assert htn.source_id == "c2"
-    assert htn.value == "Active since Jul 2023"
+    assert htn.source_id == "c1"
+    assert htn.value == "Active since Feb 2019"
     assert "High cholesterol (hyperlipidemia)" in labels
     assert all(PLANTED not in r.label for r in rows)
 
@@ -76,6 +77,31 @@ def test_dedupe_keeps_a_different_clinical_status_apart():
         _condition("c2", ICD10, "I10", "2023-07-15", status="recurrence"),
     ])
     assert len(rows) == 2
+
+
+def test_codings_that_name_nothing_never_merge():
+    """No system, a null flavour or a data-absent reason is not an identity
+    (#1038 QA F1)."""
+    nf = "http://terminology.hl7.org/CodeSystem/v3-NullFlavor"
+    dar = "http://terminology.hl7.org/CodeSystem/data-absent-reason"
+    rows = build_problems([
+        _condition("a", "", "X", "2020-01-01"),
+        _condition("b", "", "X", "2021-01-01"),
+        _condition("c", nf, "UNK", "2020-01-01"),
+        _condition("d", nf, "UNK", "2021-01-01"),
+        _condition("e", dar, "unknown", "2020-01-01"),
+        _condition("f", dar, "unknown", "2021-01-01"),
+    ])
+    assert [r.source_id for r in rows] == ["a", "b", "c", "d", "e", "f"]
+
+
+def test_an_entry_with_an_onset_stands_over_one_without():
+    rows = build_problems([
+        dict(_condition("n", ICD10, "I10", ""), onsetDateTime=None),
+        _condition("o", ICD10, "I10", "2022-03-01"),
+    ])
+    assert [(r.source_id, r.value) for r in rows] == [
+        ("o", "Active since Mar 2022")]
 
 
 def test_uncoded_entries_are_not_merged():

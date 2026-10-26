@@ -421,6 +421,31 @@ def _codings(resource: dict) -> list[tuple[str, str]]:
     return out
 
 
+#: Code systems that say a code is missing, not what the condition is.
+_NOT_A_CODE_SYSTEMS = frozenset({
+    terminology._HL7 + "v3-NullFlavor",
+    terminology._HL7 + "data-absent-reason",
+})
+
+
+def _identity(resource: dict) -> tuple[str, str] | None:
+    """The ONE coding that says which condition this is, or None.
+
+    SNOMED when the entry has it, else ICD-10-CM, else the first coding with
+    a real system. One coding, not any: a specific SNOMED concept often sits
+    beside a coarse ICD-10 roll-up, so non-small cell and small cell lung
+    cancer share C34.90 and are still two diseases (#1038 QA F1). A coding
+    with no system, or a null flavour or data-absent reason, names nothing.
+    """
+    real = [(s, c) for s, c in _codings(resource)
+            if s and s not in _NOT_A_CODE_SYSTEMS]
+    for system in (terminology.SNOMED, terminology.ICD10):
+        for s, c in real:
+            if s == system:
+                return s, c
+    return real[0] if real else None
+
+
 def _onset_key(resource: dict) -> str:
     """The raw onset, for ordering repeats of one condition. ISO dates sort
     as strings; an entry with no onset sorts before any that has one."""
@@ -440,27 +465,34 @@ def _names_a_visit(resource: dict) -> bool:
         terminology.is_encounter_concept(s, c) for s, c in codings)
 
 
-def _latest_of_each(conditions: list[tuple[dict, str]]) -> list[dict]:
-    """One entry per condition: entries sharing a code and a clinical status
-    are one problem written down more than once, and the most recent onset
-    stands for them. One condition was listed three times (visit brief,
-    2026-10-26, item 1). An entry with no code is never merged; nothing says
-    it is the same one."""
-    best: dict[int, tuple[dict, str]] = {}
-    owner: dict[tuple, int] = {}
-    for i, (c, status) in enumerate(conditions):
-        keys = [(status, *k) for k in _codings(c)]
-        prior = next((owner[k] for k in keys if k in owner), None)
-        if prior is None:
-            best[i] = (c, status)
-            slot = i
-        else:
-            slot = prior
-            if _onset_key(c) > _onset_key(best[slot][0]):
-                best[slot] = (c, status)
-        for k in keys:
-            owner.setdefault(k, slot)
-    return [best[i][0] for i in sorted(best)]
+def _first_of_each(conditions: list[tuple[dict, str]]) -> list[dict]:
+    """One entry per condition: entries whose identity coding (`_identity`)
+    and clinical status match are one problem written down more than once
+    (visit brief, 2026-10-26, item 1: one condition listed three times).
+
+    The EARLIEST onset stands for them: "Active since" the first time it was
+    recorded is the date a clinician wants (#1038 ruling). An entry with an
+    onset beats one without. Only an exact key match merges, so nothing
+    chains from one entry to another, and an entry with no identity coding
+    is never merged.
+    """
+    kept: list[dict] = []
+    slot: dict[tuple, int] = {}
+    for c, status in conditions:
+        ident = _identity(c)
+        if ident is None:
+            kept.append(c)
+            continue
+        key = (status, *ident)
+        if key not in slot:
+            slot[key] = len(kept)
+            kept.append(c)
+            continue
+        held = kept[slot[key]]
+        mine, theirs = _onset_key(c), _onset_key(held)
+        if mine and (not theirs or mine < theirs):
+            kept[slot[key]] = c
+    return kept
 
 
 def build_problems(conditions: list[dict]) -> list[BriefField]:
@@ -476,7 +508,7 @@ def build_problems(conditions: list[dict]) -> list[BriefField]:
             continue
         active.append((c, status))
     out = []
-    for c in _latest_of_each(active):
+    for c in _first_of_each(active):
         label = _code_text(c)
         onset = _onset_display(c)
         value = f"Active{f' since {onset}' if onset else ''}"
