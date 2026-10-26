@@ -1278,9 +1278,10 @@ def _records(hc: HealthClawClient, tenant: str, rt: str,
     bundle, held_back = conditions_view.current_conditions(
         hc.search(tenant, rt, {"_count": conditions_view.CONDITION_PAGE}),
         _coding_key, _withdrawn)
-    out = conditions_view.collapse_unreadable(_summarize_bundle(
-        bundle, limit=conditions_view.CONDITION_PAGE,
-        resolve_ref=resolve_ref))
+    out = _summarize_bundle(bundle, limit=conditions_view.CONDITION_PAGE,
+                            resolve_ref=resolve_ref)
+    conditions_view.collapse_unreadable(
+        out, cut=any(i.get("truncated") for i in out))
     if held_back:
         out.append(conditions_view.held_back_note())
     return out

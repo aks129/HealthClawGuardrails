@@ -135,11 +135,6 @@ def _coded(rid, codings):
     return res
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1039 fix-round QA: two problems that share one ICD/SNOMED code but "
-    "differ in others are merged, and the dropped one's other diagnosis "
-    "leaves the list with no truncation marker. Remove this marker when "
-    "only records with the same identity codes merge."))
 @pytest.mark.parametrize("older,newer,must_show", [
     # ICD-10-CM multiple coding: a combined problem carries the CKD code
     # too, and a separate CKD problem is newer. The combined record is

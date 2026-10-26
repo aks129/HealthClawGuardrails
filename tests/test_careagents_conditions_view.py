@@ -125,12 +125,24 @@ def test_repeats_of_one_code_collapse_to_the_newest():
     assert _ids(out) == ["new", "other"] and out["total"] == 2
 
 
-def test_a_shared_coding_makes_a_repeat_across_systems():
+def test_the_same_set_of_codes_is_a_repeat_across_spellings():
+    both = _cond("a", "38341003")
+    both["code"]["coding"].append({"system": ICD10, "code": "I10"})
+    # The same two codes, SNOMED written as its OID and in the other order.
+    again = _cond("b", "I10", system=ICD10)
+    again["code"]["coding"].append(
+        {"system": "urn:oid:2.16.840.1.113883.6.96", "code": "38341003"})
+    assert _ids(_view(both, again)[0]) == ["a"]
+
+
+def test_sharing_one_code_is_not_a_repeat():
+    # {SNOMED, ICD} beside {ICD} alone and {SNOMED} alone: three problems
+    # as far as the codes say; merging would drop one's other diagnosis.
     both = _cond("a", "38341003")
     both["code"]["coding"].append({"system": ICD10, "code": "I10"})
     icd_only = _cond("b", "I10", system=ICD10)
     snomed_oid = _cond("c", "38341003", system="urn:oid:2.16.840.1.113883.6.96")
-    assert _ids(_view(both, icd_only, snomed_oid)[0]) == ["a"]
+    assert _ids(_view(both, icd_only, snomed_oid)[0]) == ["a", "b", "c"]
 
 
 def test_uncoded_records_are_never_merged():
@@ -269,6 +281,16 @@ def test_prompt_budget_for_a_full_page_of_unreadable_conditions(make):
     assert sum("note" in i for i in items) == 1
     assert "200 in all" in items[0]["note"]
     assert len(payload) < 22_500, len(payload)
+
+
+def test_unreadable_count_on_a_cut_list_says_at_least():
+    hc = _FakeHC(Condition=_bundle(_unlabeled("a", "20000001"),
+                                   _unlabeled("b", "20000002"), total=400))
+    items = json.loads(_execute_tool(hc, "t", "search_records",
+                                     {"resource_type": "Condition"}, []))
+    assert any(i.get("truncated") for i in items)
+    assert "(at least 2)" in items[0]["note"]
+    assert "in all" not in items[0]["note"]
 
 
 def test_one_unreadable_condition_keeps_its_own_note():

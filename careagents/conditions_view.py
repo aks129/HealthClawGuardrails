@@ -63,12 +63,14 @@ IDENTITY_SYSTEMS = frozenset({
 })
 
 
-def _keys(res: dict, coding_key: Callable) -> set:
-    """The record's codings that name a condition (IDENTITY_SYSTEMS)."""
+def _identity(res: dict, coding_key: Callable) -> frozenset:
+    """The record's codes that name a condition (IDENTITY_SYSTEMS), as one
+    set. Empty when it has none: nothing says which problem it is."""
     code = res.get("code")
     codings = code.get("coding") if isinstance(code, dict) else None
-    return {k for k in map(coding_key, codings if isinstance(codings, list)
-                           else []) if k and k[0] in IDENTITY_SYSTEMS}
+    return frozenset(k for k in map(coding_key, codings
+                                    if isinstance(codings, list) else [])
+                     if k and k[0] in IDENTITY_SYSTEMS)
 
 
 def current_conditions(bundle: dict, coding_key: Callable,
@@ -78,11 +80,15 @@ def current_conditions(bundle: dict, coding_key: Callable,
 
     - Withdrawn (entered in error, refuted): out, and not counted; such a
       record says nothing about the person.
-    - Not current: out, and counted only when its code is not also current
-      (a resolved episode of a condition that is back is not history).
+    - Not current: out, and counted only when its codes are not also
+      current (a resolved episode of a condition that is back is not
+      history).
     - A repeat of a condition already kept: out. Two records are one
-      condition only when they share a code from IDENTITY_SYSTEMS; a record
-      with none is never a repeat, since nothing says which problem it is.
+      condition only when their SETS of IDENTITY_SYSTEMS codes are equal
+      and not empty. Sharing one code is not enough: an older problem
+      coded {type 2 diabetes, CKD} beside a newer {CKD} are two, and
+      merging them dropped the diabetes (#1039 QA). A record with no such
+      code is never a repeat, since nothing says which problem it is.
 
     "Newest" is the engine's order, `-_lastUpdated`: when the record last
     reached the engine (ingest time), not when the condition began. The
@@ -93,28 +99,30 @@ def current_conditions(bundle: dict, coding_key: Callable,
     entries = bundle.get("entry") if isinstance(bundle, dict) else None
     entries = entries if isinstance(entries, list) else []
     kept, seen, removed = [], set(), 0
-    held: list[set] = []
+    held: list[frozenset] = []
     for entry in entries:
         res = entry.get("resource") if isinstance(entry, dict) else None
         if not isinstance(res, dict) or res.get("resourceType") != "Condition":
             kept.append(entry)
             continue
-        keys = _keys(res, coding_key)
+        keys = _identity(res, coding_key)
         if withdrawn(res):
             removed += 1
         elif not_current(res):
             removed += 1
             held.append(keys)
-        elif keys & seen:
+        elif keys and keys in seen:
             removed += 1
         else:
-            seen |= keys
+            if keys:
+                seen.add(keys)
             kept.append(entry)
     held_back, held_seen = 0, set()
     for keys in held:
-        if keys and keys & (seen | held_seen):
+        if keys and (keys in seen or keys in held_seen):
             continue
-        held_seen |= keys
+        if keys:
+            held_seen.add(keys)
         held_back += 1
     out = {**bundle, "entry": kept}
     stated = bundle.get("total")
@@ -141,14 +149,15 @@ def held_back_note() -> dict:
     }
 
 
-def collapse_unreadable(items: list[dict]) -> list[dict]:
+def collapse_unreadable(items: list[dict], cut: bool = False) -> list[dict]:
     """One note for the unreadable conditions of each kind, not one each.
 
     Every unreadable item carries a sentence of about 330 characters, so
     200 of them came to about 67k characters. Each item stays, so it is
     still a real record and never absent; the first of a kind carries the
     note, with how many share it, and the rest carry none. A single item
-    keeps its own note unchanged."""
+    keeps its own note unchanged. On a cut list the rest may hold more, so
+    the number is "at least", never "in all"."""
     for kind, note in (("uncoded", _UNCODED_NOTE),
                        ("unlabeled", _UNLABELED_NOTE)):
         group = [i for i in items if i.get("unreadable")
@@ -157,18 +166,19 @@ def collapse_unreadable(items: list[dict]) -> list[dict]:
             continue
         for i in group:
             i.pop("note", None)
-        group[0]["note"] = note.format(n=len(group))
+        group[0]["note"] = note.format(
+            n=f"at least {len(group)}" if cut else f"{len(group)} in all")
     return items
 
 
 _UNLABELED_NOTE = (
-    "This entry and the others marked unreadable ({n} in all) have no "
+    "This entry and the others marked unreadable ({n}) have no "
     "readable name here. Say plainly that their doctor can say what they "
     "are. Each is still a real record, never absent. Do not guess what they "
     "are or suggest they could be serious, and never say you can't rule "
     "anything out.")
 _UNCODED_NOTE = (
-    "This entry and the others marked uncoded ({n} in all) were sent by "
+    "This entry and the others marked uncoded ({n}) were sent by "
     "the source as free text with no standard code, and free text is "
     "removed for privacy. Each is still a real record, never absent; "
     "suggest confirming the details with the clinician.")
