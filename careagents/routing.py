@@ -371,12 +371,15 @@ def _unaccented(text: str) -> str:
 #: is English naming someone (QA on #1037).
 _SPANISH_WORDS = frozenset(
     "que como cual cuales cuando donde porque pero tambien muy hay "
-    "una uno unos unas mis con es esta estan estoy esto me significa "
+    "una uno unos unas mis con es esta estan estoy esto significa "
     "estos tengo tiene tienen necesito puedo puede debo hola gracias sobre "
     "para por mi resultados analisis medicamentos presion azucar sangre "
     "examenes vacunas cita duele fiebre saber revisa favor si se usted "
     "ustedes nuestro nuestra mucho poco ahora hoy ayer manana tomo tomar "
-    "dolor cabeza todavia entonces bien mal ya quiero".split())
+    "dolor cabeza todavia entonces bien mal ya quiero pecho siento "
+    "cansado cansada mareo miedo ayuda ayudame tenido sentido explica "
+    "explicame repite medicinas colesterol alta alto preocuparme fue "
+    "ultimo algo malo dime entiendo faltan pastilla doctora dice".split())
 #: English function words and everyday short words. Large on purpose: the
 #: bias is toward English, so an English sentence naming a Spanish place
 #: has plenty here to outweigh what survives the name filter. Not "ok":
@@ -396,14 +399,19 @@ _ENGLISH_WORDS = frozenset(
 #: Part of a name or a place as often as Spanish: "dr de la cruz", "El
 #: Paso", "Garcia y Lopez". Never counted toward Spanish.
 _NAME_PARTICLES = frozenset("de del la las los el y".split())
+#: Words in both languages ("me siento", "he tenido", "¿qué come?"): they
+#: count for neither side, so a reply built on them carries the
+#: conversation's language instead of flipping it (QA on #1037).
+_BOTH_LANGUAGES = frozenset("me he come no a son has".split())
 #: A capital after these is a name, not a new sentence: "Dr. Mi-Young".
 _TITLES = frozenset("dr dra mr mrs ms sr sra srta st mt".split())
 #: Portuguese, which must not get Spanish words: it falls back to English.
 #: Its own letters, or a word Spanish does not use, typed with or without
-#: accents (matched against the unaccented text too).
+#: accents (matched against the unaccented text too). Not "preciso": "es
+#: preciso tomar" is Spanish.
 _PORTUGUESE = re.compile(
     r"[\u00e3\u00f5\u00e7]|\b(?:voce|nao|obrigad[oa]|meus|minhas|quais|"
-    r"preciso|sao|estao|sangue|exames?|tambem)\b")
+    r"sao|estao|sangue|exames?|tambem)\b")
 _TOKEN = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*|[.!?\u00bf\u00a1]")
 
 
@@ -444,14 +452,15 @@ def turn_language(text: str) -> str | None:
 
     Biased toward English: a false positive puts Spanish around an English
     reader. Names and places are not counted (_content_words), and the
-    particles de, del, la, las, los, el and y never count. Spanish needs
+    particles de, del, la, las, los, el and y never count, nor do words
+    both languages use (me, he, come, no, a, son, has). Spanish needs
     two or more other Spanish words outnumbering the English ones, or an
     opening question or exclamation mark with a Spanish word and no
     English one. Portuguese is English here."""
     t = unicodedata.normalize("NFKC", text or "").casefold()
     if _PORTUGUESE.search(t) or _PORTUGUESE.search(_unaccented(t)):
         return "en"
-    words = _content_words(text)
+    words = [w for w in _content_words(text) if w not in _BOTH_LANGUAGES]
     es = sum(w in _SPANISH_WORDS and w not in _NAME_PARTICLES
              for w in words)
     en = sum(w in _ENGLISH_WORDS for w in words)

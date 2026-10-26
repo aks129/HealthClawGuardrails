@@ -72,10 +72,6 @@ SPANISH_READ_AS_ENGLISH = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #1037 R3-F4: a short Spanish reply with 'me', 'he' or 'come' (on "
-    "both lists) or 'preciso' (a Portuguese marker) reads as English and "
-    "flips a Spanish conversation. Remove with the fix."))
 @pytest.mark.parametrize("text", SPANISH_READ_AS_ENGLISH)
 def test_a_short_spanish_reply_never_flips_a_spanish_conversation(text):
     assert routing.conversation_language([SPANISH, text]) == "es"
