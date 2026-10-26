@@ -132,6 +132,13 @@ def test_the_brief_says_as_of_when(app, svc, monkeypatch):  # noqa: F811
     assert _brief_as_of(datetime(2026, 10, 6, tzinfo=timezone.utc)) == (
         "Oct 6, 2026")
     body = _page(app, svc, monkeypatch, {"resourceType": "Basic"})
-    assert f'<div class="hub-sub brief-asof">As of {_brief_as_of()}</div>' \
-        in body
+    # The read instant, for brief.js to show in the viewer's time zone, and
+    # the UTC date as the no-script fallback.
+    import re
+    m = re.search(r'<div class="hub-sub brief-asof" data-as-of="([^"]+)">'
+                  r'As of ([^<]+)</div>', body)
+    assert m, "no As of line"
+    instant = datetime.fromisoformat(m.group(1))
+    assert instant.tzinfo is not None
+    assert m.group(2) == _brief_as_of(instant)
 

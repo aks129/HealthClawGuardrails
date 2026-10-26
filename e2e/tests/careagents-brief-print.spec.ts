@@ -29,7 +29,10 @@ const PHONE = {
 // Its own address, so the sign-in limiter, which keys on X-Real-IP with no
 // edge in front, never counts this spec against another (TEST-NET-3,
 // RFC 5737).
+// A time zone 14 hours from UTC, so the "As of" line is checked in the
+// viewer's zone, not the server's.
 test.use({ baseURL: CARE_ALLOW_BASE_URL, ...PHONE,
+           timezoneId: 'Pacific/Kiritimati',
            extraHTTPHeaders: { 'X-Real-IP': '203.0.113.31' } });
 
 type Printed = { printed: number };
@@ -79,6 +82,14 @@ test('the brief fits a 375px phone, prints, and prints without controls',
       expect(m.overlaps, `${width}px`).toBe(0);
     }
     await expect(page.locator('.brief-asof')).toHaveText(/^As of \w{3} \d{1,2}, \d{4}$/);
+    // The viewer's local date for the instant the server read the records.
+    const asOf = await page.locator('.brief-asof').evaluate((el) => ({
+      shown: el.textContent,
+      local: 'As of ' + new Date(el.getAttribute('data-as-of')!)
+        .toLocaleDateString('en-US',
+          { month: 'short', day: 'numeric', year: 'numeric' }),
+    }));
+    expect(asOf.shown).toBe(asOf.local);
 
     // On the phone: no sideways scroll, and the button is there.
     const w = await page.evaluate(() => ({

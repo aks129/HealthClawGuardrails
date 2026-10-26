@@ -334,8 +334,9 @@ def _connection_is_live(ctx: dict) -> bool:
 
 
 def _brief_as_of(now: datetime | None = None) -> str:
-    """Today as the brief prints it ("Oct 26, 2026"): the day its records
-    were read. UTC, the server's clock, like every other date it stamps."""
+    """The day the brief's records were read, as it prints it ("Oct 26,
+    2026"), in UTC. The fallback without script: brief.js rewrites it in
+    the viewer's own time zone from the same instant (#1038 QA)."""
     now = now or datetime.now(timezone.utc)
     return f"{now:%b} {now.day}, {now.year}"
 
@@ -2442,6 +2443,8 @@ def create_app(config: Config | None = None,
         if not ctx:
             return redirect(url_for("home"))
         sample = (ctx.get("connection") or {}).get("kind") == "sample"
+        # When the records were read, for the "As of" line.
+        read_at = datetime.now(timezone.utc)
         try:
             # Made-up records ask the engine to word its sentences about
             # "the sample person" (r6/voice.py). A real brief asks as before.
@@ -2456,7 +2459,9 @@ def create_app(config: Config | None = None,
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
                                agent_id=agent_id, sections=sections,
-                               as_of=_brief_as_of(),
+                               as_of=_brief_as_of(read_at),
+                               as_of_iso=read_at.isoformat(
+                                   timespec="seconds"),
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
