@@ -125,6 +125,57 @@ def test_distinct_uncoded_conditions_are_not_merged(chain, monkeypatch,
     assert sum(1 for i in conds if i.get("type") == "Condition") == 5, conds
 
 
+ICD10CM = "http://hl7.org/fhir/sid/icd-10-cm"
+
+
+def _coded(rid, codings):
+    res = _cond(rid, "0")
+    res["code"] = {"coding": [dict(c, display=CANARY) for c in codings],
+                   "text": CANARY}
+    return res
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "#1039 fix-round QA: two problems that share one ICD/SNOMED code but "
+    "differ in others are merged, and the dropped one's other diagnosis "
+    "leaves the list with no truncation marker. Remove this marker when "
+    "only records with the same identity codes merge."))
+@pytest.mark.parametrize("older,newer,must_show", [
+    # ICD-10-CM multiple coding: a combined problem carries the CKD code
+    # too, and a separate CKD problem is newer. The combined record is
+    # dropped and diabetes goes with it. (On a live feed the combined
+    # concept is E11.22 or SNOMED 771000119108, labelled when the
+    # terminology resolver is on; 44054006 stands in with a static label.)
+    ([{"system": SNOMED, "code": "44054006"},
+      {"system": ICD10CM, "code": "N18.9"}],
+     [{"system": ICD10CM, "code": "N18.9"}],
+     "Type 2 diabetes mellitus"),
+], ids=["combined-problem-plus-ckd"])
+def test_a_shared_code_does_not_hide_another_diagnosis(
+        chain, monkeypatch, older, newer, must_show):
+    tenant = "ca-qa-1039-shared"
+    monkeypatch.setenv("PUBLIC_TENANTS", f"test-tenant,{tenant}")
+    _plant(chain, tenant, [_coded("older", older), _coded("newer", newer)])
+    payload = _execute_tool(chain.hc, tenant, "search_records",
+                            {"resource_type": "Condition"}, [])
+    assert "QZXQA1039" not in payload
+    conds = json.loads(payload)
+    named = [i.get("name") for i in conds if i.get("type") == "Condition"]
+    assert must_show in named, conds
+
+
+def test_repeats_with_the_same_codes_still_merge(chain, monkeypatch):
+    # Control for the fix: the visit-after-visit repeat the PR targets.
+    tenant = "ca-qa-1039-repeat"
+    monkeypatch.setenv("PUBLIC_TENANTS", f"test-tenant,{tenant}")
+    same = [{"system": SNOMED, "code": "44054006"},
+            {"system": ICD10CM, "code": "E11.9"}]
+    _plant(chain, tenant, [_coded(f"r{i}", same) for i in range(4)])
+    conds = json.loads(_execute_tool(chain.hc, tenant, "search_records",
+                                     {"resource_type": "Condition"}, []))
+    assert [i.get("type") for i in conds] == ["Condition"], conds
+
+
 def test_a_tenant_past_one_page_still_reads_as_cut(chain, monkeypatch):
     """30 current conditions written first, then 200 resolved ones: the
     engine's page (newest 200) holds only the resolved. Nothing current is
