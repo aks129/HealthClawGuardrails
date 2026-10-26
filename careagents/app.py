@@ -2453,6 +2453,9 @@ def create_app(config: Config | None = None,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
                                care_gaps_note=_parse_care_gaps_reason(raw),
+                               care_gaps_demographic=(
+                                   brief_mod.care_gaps_marker(raw, "cause")
+                                   in brief_mod.DEMOGRAPHIC_CAUSES),
                                sample_line=(beta.sample_frame(
                                    hub_view.relation_of(hub_view.person_of(
                                        svc.list_home(acct.id),

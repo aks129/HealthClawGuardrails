@@ -14,8 +14,6 @@ now"). A strict xfail goes red when the gap is FIXED; remove the marker then
 
 import json
 
-import pytest
-
 from r6.brief.engine import (
     CARE_GAPS_UNAVAILABLE,
     build_care_gaps,
@@ -140,14 +138,13 @@ def _brief_for(patient):
         "sourceId": f.source_id})} for f in section.fields]
     sub.append({"url": "status", "valueString": section.status})
     sub.append({"url": "reason", "valueString": section.reason})
+    # The wire shape gained `cause` with the F5 fix (r6/brief/routes.py).
+    if section.cause:
+        sub.append({"url": "cause", "valueString": section.cause})
     return section, {"resourceType": "Basic", "extension": [
         {"url": _CARE_GAPS_SECTION, "extension": sub}]}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #1038: pre-existing, named in the PR's Known limits. With no date "
-    "of birth every rule is undecided, no line is produced, and the page "
-    "drops the engine's reason for 'couldn't check just now'."))
 def test_missing_birth_date_says_why_not_just_now(app, svc,  # noqa: F811
                                                   monkeypatch):
     section, brief = _brief_for(

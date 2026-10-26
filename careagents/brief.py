@@ -17,6 +17,15 @@ SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
 # shared.
 CARE_GAPS_OK = "ok"
 
+#: The care-gaps `cause` codes that mean the review ran and the RECORD lacks
+#: a date of birth or sex: r6/caregaps/report.py's demographic reasons,
+#: mirrored for the same reason as CARE_GAPS_OK and held equal by
+#: tests/test_careagents_brief_handoff.py. On these the page shows the
+#: engine's own sentence, not "We couldn't check your screenings just now"
+#: (#1038 QA F5).
+DEMOGRAPHIC_CAUSES = frozenset({
+    "birth-date-unavailable", "sex-unavailable", "demographics-unavailable"})
+
 
 def parse_sections(resource: dict) -> dict[str, list[dict]]:
     """Deserialize a FHIR Basic AppointmentBrief into section→field lists.

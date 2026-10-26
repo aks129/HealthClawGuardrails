@@ -59,6 +59,11 @@ class CareGapsSection:
     fields: list[BriefField] = field(default_factory=list)
     status: str = CARE_GAPS_UNAVAILABLE
     reason: str = CARE_GAPS_REASON_NO_RESULT
+    #: The review's own code for what it could not decide (the consumer
+    #: summary's `unevaluated`, e.g. "birth-date-unavailable"), or "". Lets
+    #: a page tell "the record lacks a date of birth" from "we could not
+    #: run" without matching prose (#1038 QA F5).
+    cause: str = ""
 
 
 @dataclass
@@ -75,6 +80,7 @@ class BriefResult:
     # because nothing ran. These two say which.
     care_gaps_status: str = CARE_GAPS_UNAVAILABLE
     care_gaps_reason: str = CARE_GAPS_REASON_NO_RESULT
+    care_gaps_cause: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -694,10 +700,12 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     # than one, reaches this section: the route declares the caller reason
     # and the note says which.
     if consumer.get("unevaluated"):
+        cause = consumer.get("unevaluated")
         return CareGapsSection(
             fields=out, status=CARE_GAPS_UNAVAILABLE,
             reason=consumer.get("unevaluated_note")
-            or CARE_GAPS_REASON_NO_RESULT)
+            or CARE_GAPS_REASON_NO_RESULT,
+            cause=cause if isinstance(cause, str) else "")
 
     return CareGapsSection(fields=out, status=CARE_GAPS_OK, reason="")
 
@@ -754,4 +762,5 @@ def generate_brief(
         visits=build_visits(encounters),
         care_gaps_status=gaps.status,
         care_gaps_reason=gaps.reason,
+        care_gaps_cause=gaps.cause,
     )

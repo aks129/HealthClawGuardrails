@@ -128,6 +128,10 @@
       </div>
       {% endfor %}
     </div>
+    {% elif not care_gaps_ok and care_gaps_demographic and care_gaps_note %}
+    {# The review ran and the record lacks a date of birth or sex: the
+       engine's sentence says which, which "just now" did not (#1038 F5). #}
+    <p class="brief-empty">{{ care_gaps_note }}{% if not sample_line %} Ask your doctor which screenings you are due for.{% endif %}</p>
     {% elif not care_gaps_ok %}
     <p class="brief-empty">{% if sample_line %}We couldn't check the sample person's screenings just now.{% else %}We couldn't check your screenings just now. Ask your doctor which ones you are due for.{% endif %}</p>
     {% else %}

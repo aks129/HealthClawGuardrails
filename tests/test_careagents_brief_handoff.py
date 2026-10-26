@@ -95,3 +95,29 @@ def test_the_brief_can_be_printed(app, svc, monkeypatch):  # noqa: F811
         assert hidden in text
     # A printed sample must still say it is one.
     assert ".sample-banner { position: static" in text
+
+
+def test_the_demographic_causes_match_the_engine():
+    """CareAgents imports nothing from the engine, so it mirrors the codes;
+    this holds the mirror equal to r6/caregaps/report.py."""
+    from careagents.brief import DEMOGRAPHIC_CAUSES
+    from r6.caregaps.report import _DEMOGRAPHIC_REASONS, _UNKNOWN_DEMOGRAPHICS
+    engine = {code for code, _ in _DEMOGRAPHIC_REASONS.values()}
+    engine.add(_UNKNOWN_DEMOGRAPHICS[0])
+    assert DEMOGRAPHIC_CAUSES == engine
+
+
+def test_a_caller_or_engine_failure_still_reads_just_now(  # noqa: F811
+        app, svc, monkeypatch):  # noqa: F811
+    """Only a demographic cause quotes the reason; a review that never ran
+    keeps today's message (tests/test_careagents_brief_partial.py)."""
+    brief = {"resourceType": "Basic", "extension": [{
+        "url": _CARE_GAPS_SECTION, "extension": [
+            {"url": "status", "valueString": "unavailable"},
+            {"url": "reason", "valueString": "the screening review could "
+                                             "not be completed"},
+            {"url": "cause", "valueString": "no-patient"}]}]}
+    body = _page(app, svc, monkeypatch, brief)
+    assert _UNAVAILABLE_COPY in body
+    assert "could not be completed" not in body
+
