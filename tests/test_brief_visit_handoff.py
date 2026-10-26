@@ -360,3 +360,77 @@ def test_a_review_that_ran_shows_what_it_could_not_check(
     assert status == CARE_GAPS_UNAVAILABLE
     assert [f["label"] for f in fields] == ["Colorectal cancer screening"]
     assert fields[0]["value"].startswith("We could not check whether you")
+
+
+# --- #1038 QA round 2 --------------------------------------------------------
+
+def _verified(cond, code):
+    return dict(cond, verificationStatus={"coding": [{
+        "system": "http://terminology.hl7.org/CodeSystem/"
+                  "condition-ver-status", "code": code}]})
+
+
+def test_a_refuted_or_mistaken_entry_never_dates_a_real_one():
+    """R2-3. MUTATION: drop the verificationStatus filter -> the row reads
+    "Active since Jan 2010"."""
+    rows = build_problems([
+        _verified(_condition("ref", ICD10, "I10", "2010-01-01"), "refuted"),
+        _verified(_condition("eie", ICD10, "I10", "2012-01-01"),
+                  "entered-in-error"),
+        _verified(_condition("real", ICD10, "I10", "2023-04-01"),
+                  "confirmed"),
+    ])
+    assert [(r.source_id, r.value) for r in rows] == [
+        ("real", "Active since Apr 2023")]
+
+
+def test_a_refuted_entry_alone_is_not_listed():
+    assert build_problems([_verified(
+        _condition("ref", ICD10, "I10", "2010-01-01"), "refuted")]) == []
+
+
+def test_a_recurrence_says_so_beside_the_active_row():
+    """R2-4: two rows for one condition, and each says which it is."""
+    rows = build_problems([
+        _condition("a", ICD10, "I10", "2019-02-01"),
+        _condition("r", ICD10, "I10", "2024-06-01", status="recurrence"),
+        _condition("l", ICD10, "E11.9", "2022-01-01", status="relapse"),
+    ])
+    assert [r.value for r in rows] == [
+        "Active since Feb 2019", "Recurrence since Jun 2024",
+        "Relapse since Jan 2022"]
+
+
+def test_entries_merge_only_on_the_identical_set_of_codes():
+    """R2-1: the same SNOMED code beside different ICD-10 codes is two rows;
+    the identical set is one. A no-system coding does not count."""
+    rows = build_problems([
+        {**_condition("a", SCT, "44054006", "2020-01-01"),
+         "code": {"coding": [{"system": SCT, "code": "44054006"},
+                             {"system": ICD10, "code": "E11.9"},
+                             {"code": "local-1"}]}},
+        {**_condition("b", SCT, "44054006", "2018-01-01"),
+         "code": {"coding": [{"system": ICD10, "code": "E11.9"},
+                             {"system": SCT, "code": "44054006"}]}},
+        {**_condition("c", SCT, "44054006", "2017-01-01"),
+         "code": {"coding": [{"system": SCT, "code": "44054006"},
+                             {"system": ICD10, "code": "E11.8"}]}},
+    ])
+    assert [(r.source_id, r.value) for r in rows] == [
+        ("b", "Active since Jan 2018"), ("c", "Active since Jan 2017")]
+
+
+def test_inr_reads_plainly():
+    """LOINC 6301-6, labelled "INR" (tx.fhir.org: "INR in Platelet poor
+    plasma by Coagulation assay"), with its {INR} unit."""
+    assert terminology.lookup(LOINC, "6301-6") == "INR"
+    [row] = build_labs([_obs("inr", "6301-6", 1.1, "{INR}")])
+    assert (row.label, row.value) == ("INR", "1.1 INR (Sep 1, 2026)")
+
+
+def test_both_spellings_of_thousands_per_microlitre_read_the_same():
+    rows = build_labs([_obs("a", "6690-2", 6.4, "10*3/uL", when="2026-09-02"),
+                       _obs("b", "6690-2", 6.5, "10^3/uL")])
+    assert [r.value.split(" (")[0] for r in rows] == [
+        "6.4 K/\u00b5L", "6.5 K/\u00b5L"]
+

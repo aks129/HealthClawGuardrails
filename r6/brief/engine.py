@@ -266,7 +266,7 @@ _UNIT_DISPLAY = {
     "mm[Hg]": "mmHg", "mmHg": "mmHg",
     "mL/min/{1.73_m2}": "mL/min/1.73m2", "mL/min/1.73m2": "mL/min/1.73m2",
     "10*3/uL": "K/µL", "K/uL": "K/µL", "x10E3/uL": "K/µL",
-    "10^3/uL": "10^3/uL",
+    "10^3/uL": "K/µL",
     "10*6/uL": "10^6/uL", "10^6/uL": "10^6/uL",
     "fL": "fL", "pg": "pg", "mg/mmol": "mg/mmol", "mg/g": "mg/g",
     "[pH]": "pH", "pH": "pH",
@@ -453,22 +453,20 @@ _NOT_A_CODE_SYSTEMS = frozenset({
 })
 
 
-def _identity(resource: dict) -> tuple[str, str] | None:
-    """The ONE coding that says which condition this is, or None.
+def _identity(resource: dict) -> frozenset | None:
+    """Every real coding of the entry, as one set, or None when it has none.
 
-    SNOMED when the entry has it, else ICD-10-CM, else the first coding with
-    a real system. One coding, not any: a specific SNOMED concept often sits
-    beside a coarse ICD-10 roll-up, so non-small cell and small cell lung
-    cancer share C34.90 and are still two diseases (#1038 QA F1). A coding
-    with no system, or a null flavour or data-absent reason, names nothing.
+    The WHOLE set, not one preferred coding: a feed can map a problem to a
+    broad SNOMED parent such as 363346000 "Malignant neoplastic disease" and
+    put the site in ICD-10-CM, so lung and breast cancer share a SNOMED code
+    and differ only in the ICD (#1038 QA R2-1). Two entries are one problem
+    only when every code matches. When in doubt the brief shows a duplicate;
+    it never hides a condition. A coding with no system, or a null flavour
+    or data-absent reason, names nothing and is left out of the set.
     """
-    real = [(s, c) for s, c in _codings(resource)
-            if s and s not in _NOT_A_CODE_SYSTEMS]
-    for system in (terminology.SNOMED, terminology.ICD10):
-        for s, c in real:
-            if s == system:
-                return s, c
-    return real[0] if real else None
+    real = frozenset((s, c) for s, c in _codings(resource)
+                     if s and s not in _NOT_A_CODE_SYSTEMS)
+    return real or None
 
 
 def _onset_key(resource: dict) -> str:
@@ -490,34 +488,66 @@ def _names_a_visit(resource: dict) -> bool:
         terminology.is_encounter_concept(s, c) for s, c in codings)
 
 
-def _first_of_each(conditions: list[tuple[dict, str]]) -> list[dict]:
-    """One entry per condition: entries whose identity coding (`_identity`)
-    and clinical status match are one problem written down more than once
-    (visit brief, 2026-10-26, item 1: one condition listed three times).
+def _earlier_onset(mine: str, theirs: str) -> bool:
+    """True when `mine` should stand for the group over `theirs`: the earlier
+    date, compared at the precision both share; on a tie there ("2019" and
+    "2019-05-01"), the more precise one, so the row keeps a date it can show
+    (#1038 QA R2-2). An onset beats none."""
+    if not mine:
+        return False
+    if not theirs:
+        return True
+    a, b = mine[:10], theirs[:10]
+    common = min(len(a), len(b))
+    if a[:common] != b[:common]:
+        return a[:common] < b[:common]
+    return len(a) > len(b)
+
+
+def _first_of_each(conditions: list[tuple[dict, str]]
+                   ) -> list[tuple[dict, str]]:
+    """One entry per condition: entries whose full set of real codings
+    (`_identity`) and clinical status match are one problem written down
+    more than once (visit brief, 2026-10-26, item 1: one condition listed
+    three times).
 
     The EARLIEST onset stands for them: "Active since" the first time it was
-    recorded is the date a clinician wants (#1038 ruling). An entry with an
-    onset beats one without. Only an exact key match merges, so nothing
-    chains from one entry to another, and an entry with no identity coding
-    is never merged.
+    recorded is the date a clinician wants (#1038 ruling). Only an exact key
+    match merges, so nothing chains from one entry to another, and an entry
+    with no real coding is never merged.
     """
-    kept: list[dict] = []
+    kept: list[tuple[dict, str]] = []
     slot: dict[tuple, int] = {}
     for c, status in conditions:
         ident = _identity(c)
         if ident is None:
-            kept.append(c)
+            kept.append((c, status))
             continue
-        key = (status, *ident)
+        key = (status, ident)
         if key not in slot:
             slot[key] = len(kept)
-            kept.append(c)
+            kept.append((c, status))
             continue
-        held = kept[slot[key]]
-        mine, theirs = _onset_key(c), _onset_key(held)
-        if mine and (not theirs or mine < theirs):
-            kept[slot[key]] = c
+        if _earlier_onset(_onset_key(c), _onset_key(kept[slot[key]][0])):
+            kept[slot[key]] = (c, status)
     return kept
+
+
+#: verificationStatus codes that say the entry is not a condition the
+#: person has. Dropped before the repeats are merged, so a refuted entry
+#: can never date a real one (#1038 QA R2-3).
+_NOT_THE_PERSONS = frozenset({"refuted", "entered-in-error"})
+
+#: How a row names its clinical status. A recurrence beside an active row
+#: of the same condition reads as what it is, not as a duplicate (R2-4).
+_STATUS_WORD = {"active": "Active", "recurrence": "Recurrence",
+                "relapse": "Relapse"}
+
+
+def _verification(resource: dict) -> set[str]:
+    return {c.get("code") for c in
+            as_dict(resource.get("verificationStatus")).get("coding") or []
+            if isinstance(c, dict)}
 
 
 def build_problems(conditions: list[dict]) -> list[BriefField]:
@@ -529,14 +559,14 @@ def build_problems(conditions: list[dict]) -> list[BriefField]:
         )
         if status not in _ACTIVE_CONDITION_STATUSES or _only_absences(c):
             continue
-        if _names_a_visit(c):
+        if _names_a_visit(c) or _verification(c) & _NOT_THE_PERSONS:
             continue
         active.append((c, status))
     out = []
-    for c in _first_of_each(active):
+    for c, status in _first_of_each(active):
         label = _code_text(c)
         onset = _onset_display(c)
-        value = f"Active{f' since {onset}' if onset else ''}"
+        value = f"{_STATUS_WORD[status]}{f' since {onset}' if onset else ''}"
         out.append(BriefField(
             label=label,
             value=value,

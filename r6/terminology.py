@@ -126,6 +126,9 @@ _LABELS: dict[tuple[str, str], str] = {
     (LOINC, "48643-1"): "Estimated GFR",
     (LOINC, "62238-1"): "Estimated GFR",
     (LOINC, "98979-8"): "Estimated GFR",
+    # "INR in Platelet poor plasma by Coagulation assay" (tx.fhir.org
+    # $lookup, 2026-10-26).
+    (LOINC, "6301-6"): "INR",
 
     # --- LOINC: hematology --------------------------------------------------
     (LOINC, "718-7"): "Hemoglobin",
