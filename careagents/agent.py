@@ -1269,7 +1269,8 @@ def _records(hc: HealthClawClient, tenant: str, rt: str,
              resolve_ref=None) -> list[dict]:
     """One record type as the model sees it. Conditions are the current
     problem list (careagents/conditions_view.py): the engine's full page,
-    resolved entries held back and counted, repeats of a code once, and no
+    resolved entries held back with a note, repeats of a code once, one
+    note for the unreadable ones rather than one each, and no
     cut at SUMMARY_LIMIT, since the filter already keeps it short."""
     if rt != "Condition":
         return _summarize_bundle(hc.search(tenant, rt), limit=SUMMARY_LIMIT,
@@ -1277,10 +1278,11 @@ def _records(hc: HealthClawClient, tenant: str, rt: str,
     bundle, held_back = conditions_view.current_conditions(
         hc.search(tenant, rt, {"_count": conditions_view.CONDITION_PAGE}),
         _coding_key, _withdrawn)
-    out = _summarize_bundle(bundle, limit=conditions_view.CONDITION_PAGE,
-                            resolve_ref=resolve_ref)
+    out = conditions_view.collapse_unreadable(_summarize_bundle(
+        bundle, limit=conditions_view.CONDITION_PAGE,
+        resolve_ref=resolve_ref))
     if held_back:
-        out.append(conditions_view.held_back_note(held_back))
+        out.append(conditions_view.held_back_note())
     return out
 
 

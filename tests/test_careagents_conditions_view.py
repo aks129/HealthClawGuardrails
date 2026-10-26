@@ -3,7 +3,7 @@
 Observed live: "I can only see 12 of 50 condition records". The default
 view is now the whole active problem list (the engine's full page, not its
 default 50), deduplicated by code, with resolved, inactive and
-in-remission entries held back and counted. Synthetic data only.
+in-remission entries held back behind one note. Synthetic data only.
 """
 
 from __future__ import annotations
@@ -169,7 +169,7 @@ def test_whole_page_is_not_marked_truncated():
     assert not any(i.get("truncated") for i in conds)
     named = [i for i in conds if i.get("type") == "Condition"]
     assert len(named) == 12
-    assert conds[-1]["not_current"] == 20
+    assert conds[-1]["not_current"] is True
     assert "type" not in conds[-1] and "name" not in conds[-1]
     # Measured budget for the observed shape: smaller than the 50 rows the
     # model was handed before, not larger.
@@ -239,6 +239,76 @@ def test_prompt_budget_for_a_full_page_of_conditions():
     assert len(payload) < 17_000, len(payload)
 
 
+def _unlabeled(rid, code, system=SNOMED):
+    res = _cond(rid, code, system=system)
+    del res["code"]["coding"][0]["display"]
+    return res
+
+
+def _uncoded(rid):
+    res = _cond(rid, "x")
+    res["code"] = {"coding": []}
+    return res
+
+
+@pytest.mark.parametrize("make", [
+    lambda i: _unlabeled(f"u{i}", str(20_000_000 + i)),
+    lambda i: _uncoded(f"u{i}"),
+], ids=["unlabeled", "uncoded"])
+def test_prompt_budget_for_a_full_page_of_unreadable_conditions(make):
+    """Measured: 200 conditions the model cannot name. With a note on each,
+    about 330 characters apiece, this was about 67k characters; one note per
+    kind leaves each a short item. Unlabeled 200: 17,896 characters;
+    uncoded 200: 21,857 (about 4.5k and 5.5k tokens). Every item stays:
+    unreadable is not absent (#207)."""
+    hc = _FakeHC(Condition=_bundle(*[make(i) for i in range(200)]))
+    payload = _execute_tool(hc, "t", "search_records",
+                            {"resource_type": "Condition"}, [])
+    items = json.loads(payload)
+    assert len(items) == 200 and all(i.get("unreadable") for i in items)
+    assert sum("note" in i for i in items) == 1
+    assert "200 in all" in items[0]["note"]
+    assert len(payload) < 22_500, len(payload)
+
+
+def test_one_unreadable_condition_keeps_its_own_note():
+    hc = _FakeHC(Condition=_bundle(_unlabeled("u", "20000000")))
+    items = json.loads(_execute_tool(hc, "t", "search_records",
+                                     {"resource_type": "Condition"}, []))
+    assert "no readable name" in items[0]["note"]
+    assert "in all" not in items[0]["note"]
+
+
+def test_unlabeled_and_uncoded_each_get_their_own_note():
+    hc = _FakeHC(Condition=_bundle(
+        _unlabeled("a", "20000001"), _unlabeled("b", "20000002"),
+        _uncoded("c"), _uncoded("d")))
+    items = json.loads(_execute_tool(hc, "t", "search_records",
+                                     {"resource_type": "Condition"}, []))
+    notes = [i["note"] for i in items if "note" in i]
+    assert len(items) == 4 and len(notes) == 2
+    assert any("no readable name" in n for n in notes)
+    assert any("free text" in n for n in notes)
+
+
+NULL_FLAVOR = "http://terminology.hl7.org/CodeSystem/v3-NullFlavor"
+ABSENT = "http://terminology.hl7.org/CodeSystem/data-absent-reason"
+
+
+@pytest.mark.parametrize("system,code", [
+    (NULL_FLAVOR, "UNK"), (ABSENT, "unknown"),
+    ("urn:oid:1.2.840.114350.1.13.0.1.7.2.696580", "1234"),
+    ("http://loinc.org", "LA4489-6")])
+def test_only_a_condition_code_system_makes_a_repeat(system, code):
+    # The same non-identity coding on two records is not one condition.
+    a, b = _unlabeled("a", code, system), _unlabeled("b", code, system)
+    assert _ids(_view(a, b)[0]) == ["a", "b"]
+    # Beside a real code, the shared non-identity coding is ignored.
+    a["code"]["coding"].append({"system": SNOMED, "code": "1"})
+    b["code"]["coding"].append({"system": SNOMED, "code": "2"})
+    assert _ids(_view(a, b)[0]) == ["a", "b"]
+
+
 # --- through the real engine -------------------------------------------------
 
 def test_real_engine_serves_the_full_page_and_labels_by_code(
@@ -272,4 +342,4 @@ def test_real_engine_serves_the_full_page_and_labels_by_code(
     names = sorted(i["name"] for i in conds if i.get("type") == "Condition")
     assert names == ["Hypertensive disorder", "Type 2 diabetes mellitus"]
     assert not any(i.get("truncated") for i in conds)
-    assert conds[-1]["not_current"] == 28
+    assert conds[-1]["not_current"] is True

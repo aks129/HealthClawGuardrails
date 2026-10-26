@@ -4,7 +4,8 @@ A real problem list holds every condition ever recorded, resolved ones and
 the same diagnosis entered at visit after visit. Handed over whole, it
 filled the model's view with history and repeats, and the agent told a
 person it could see only part of their conditions. The default view is
-the active list, deduplicated by code, with a count of what was held back.
+the active list, deduplicated by code, with a note that resolved ones
+were held back.
 
 Works on the redacted searchset bundle before `agent._summarize_bundle`
 names anything, so no label or text is read here: only codes and statuses.
@@ -49,11 +50,25 @@ def not_current(res: dict) -> bool:
     return bool(codes & NOT_CURRENT) and not codes & CURRENT
 
 
+#: The code systems whose codes name a condition, keyed as `coding_key`
+#: canonicalises them. Only a shared code in one of these makes two records
+#: one condition. A null flavor ("UNK"), a data-absent-reason ("unknown")
+#: or a local code says nothing about which problem a record is, and
+#: merging on one collapsed distinct problems into a single line (#1039 QA).
+IDENTITY_SYSTEMS = frozenset({
+    "http://snomed.info/sct",
+    "http://hl7.org/fhir/sid/icd-10-cm",
+    "http://hl7.org/fhir/sid/icd-10",
+    "http://hl7.org/fhir/sid/icd-9-cm",
+})
+
+
 def _keys(res: dict, coding_key: Callable) -> set:
+    """The record's codings that name a condition (IDENTITY_SYSTEMS)."""
     code = res.get("code")
     codings = code.get("coding") if isinstance(code, dict) else None
     return {k for k in map(coding_key, codings if isinstance(codings, list)
-                           else []) if k}
+                           else []) if k and k[0] in IDENTITY_SYSTEMS}
 
 
 def current_conditions(bundle: dict, coding_key: Callable,
@@ -63,15 +78,17 @@ def current_conditions(bundle: dict, coding_key: Callable,
 
     - Withdrawn (entered in error, refuted): out, and not counted; such a
       record says nothing about the person.
-    - Not current: out, counted once per code, and not at all when the same
-      code is current too (a resolved episode of a condition that is back).
-    - A repeat of a code already kept: out. Two records are one condition
-      when they share any (system, code) pair; a record with no code we
-      can key on is never a repeat, since nothing says what it is.
+    - Not current: out, and counted only when its code is not also current
+      (a resolved episode of a condition that is back is not history).
+    - A repeat of a condition already kept: out. Two records are one
+      condition only when they share a code from IDENTITY_SYSTEMS; a record
+      with none is never a repeat, since nothing says which problem it is.
 
-    The engine sorts newest first, so the newest record of a condition is
-    the one kept. `total` drops by the records taken out, so a page that
-    held the whole list still reads as whole, and a longer list stays cut.
+    "Newest" is the engine's order, `-_lastUpdated`: when the record last
+    reached the engine (ingest time), not when the condition began. The
+    first record of a condition in that order is the one kept. `total` drops
+    by the records taken out, so a page that held the whole list still
+    reads as whole, and a longer list stays cut.
     """
     entries = bundle.get("entry") if isinstance(bundle, dict) else None
     entries = entries if isinstance(entries, list) else []
@@ -106,20 +123,52 @@ def current_conditions(bundle: dict, coding_key: Callable,
     return out, held_back
 
 
-def held_back_note(count: int) -> dict:
+def held_back_note() -> dict:
     """The list item that says resolved conditions exist and were left out.
 
     Shaped like the truncation marker, no `type` and no `name`, so it is
-    never read as a condition. A count of the record's own resolved
-    entries, never "shown X of Y": that reads as being kept from one's own
-    records (#939)."""
+    never read as a condition. No number: what this page held back is not
+    a count of the person's resolved conditions, and "shown X of Y" reads
+    as being kept from one's own records (#939)."""
     return {
-        "not_current": count,
-        "note": (f"{count} other condition record(s) on file are marked "
-                 "resolved, inactive or in remission and are not listed. "
-                 "They are past history, not current problems: do not list "
-                 "them as current. If the person asks about past or "
-                 "resolved conditions, say those entries are in their "
-                 "records but not shown in this chat, and that the full "
-                 "history is in their patient portal."),
+        "not_current": True,
+        "note": ("Some resolved or inactive conditions are on file and are "
+                 "not listed. They are past history, not current problems: "
+                 "do not list them as current. If the person asks about "
+                 "past or resolved conditions, say those entries are in "
+                 "their records but not shown in this chat, and that the "
+                 "full history is in their patient portal."),
     }
+
+
+def collapse_unreadable(items: list[dict]) -> list[dict]:
+    """One note for the unreadable conditions of each kind, not one each.
+
+    Every unreadable item carries a sentence of about 330 characters, so
+    200 of them came to about 67k characters. Each item stays, so it is
+    still a real record and never absent; the first of a kind carries the
+    note, with how many share it, and the rest carry none. A single item
+    keeps its own note unchanged."""
+    for kind, note in (("uncoded", _UNCODED_NOTE),
+                       ("unlabeled", _UNLABELED_NOTE)):
+        group = [i for i in items if i.get("unreadable")
+                 and bool(i.get("uncoded")) == (kind == "uncoded")]
+        if len(group) < 2:
+            continue
+        for i in group:
+            i.pop("note", None)
+        group[0]["note"] = note.format(n=len(group))
+    return items
+
+
+_UNLABELED_NOTE = (
+    "This entry and the others marked unreadable ({n} in all) have no "
+    "readable name here. Say plainly that their doctor can say what they "
+    "are. Each is still a real record, never absent. Do not guess what they "
+    "are or suggest they could be serious, and never say you can't rule "
+    "anything out.")
+_UNCODED_NOTE = (
+    "This entry and the others marked uncoded ({n} in all) were sent by "
+    "the source as free text with no standard code, and free text is "
+    "removed for privacy. Each is still a real record, never absent; "
+    "suggest confirming the details with the clinician.")

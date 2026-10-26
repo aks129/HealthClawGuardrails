@@ -97,10 +97,6 @@ NULL_FLAVOR = "http://terminology.hl7.org/CodeSystem/v3-NullFlavor"
 ABSENT = "http://terminology.hl7.org/CodeSystem/data-absent-reason"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1039 QA: dedupe keys on any shared (system, code), so distinct "
-    "conditions that share a null-flavor or data-absent-reason coding "
-    "collapse into one. Remove this marker when such codings are not keys."))
 @pytest.mark.parametrize("codings", [
     # C-CDA problem with no code: nullFlavor UNK beside free text that
     # redaction strips (the allergy form of this is live, see agent.py).
