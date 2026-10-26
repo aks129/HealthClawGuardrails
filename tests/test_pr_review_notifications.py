@@ -471,3 +471,36 @@ def test_the_header_no_longer_promises_a_verdict_it_does_not_enforce():
     """
     assert "Always-on AI review" not in WORKFLOW_TEXT
     assert "SKIPPED, not green" in WORKFLOW_TEXT
+
+
+def test_the_reviewer_authenticates_by_federation_and_only_it_mints_tokens():
+    """The reviewer holds no long-lived key: it exchanges the job's GitHub
+    OIDC token for a short-lived Anthropic one. Only the review job may mint
+    that OIDC token, and no API key reaches the action, because a static key,
+    even an empty one, outranks federation.
+
+    MUTATION: move `id-token: write` to the workflow-level permissions -> red.
+    Add `anthropic_api_key` back to the review step -> red. Read the rule id
+    from `secrets.` instead of `vars.` -> red.
+    """
+    assert "id-token" not in WORKFLOW.get("permissions", {}), (
+        "every job could mint an OIDC token")
+    for name, job in _jobs().items():
+        perms = job.get("permissions", {})
+        if name == "claude-standards-review":
+            assert perms.get("id-token") == "write"
+        else:
+            assert "id-token" not in perms, f"{name} can mint an OIDC token"
+
+    step = [s for s in _jobs()["claude-standards-review"]["steps"]
+            if s.get("uses", "").startswith("anthropics/claude-code-action")][0]
+    inputs = step["with"]
+    assert "anthropic_api_key" not in inputs
+    assert "claude_code_oauth_token" not in inputs
+    for key, var in (("anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID"),
+                     ("anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID"),
+                     ("anthropic_service_account_id", "ANTHROPIC_SERVICE_ACCOUNT_ID")):
+        assert inputs[key] == "${{ vars.%s }}" % var
+
+    env = _jobs()["reviewer-preflight"]["steps"][0]["env"]["HAS_KEY"]
+    assert "vars.ANTHROPIC_FEDERATION_RULE_ID" in env

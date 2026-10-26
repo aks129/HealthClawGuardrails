@@ -1,14 +1,22 @@
 name: claude-pr-review
 
-# AI standards review, when it is configured. With ANTHROPIC_API_KEY set, every
-# PR gets a standards review, and `claude-standards-review` succeeds only on a
+# AI standards review, when it is configured. The reviewer authenticates by
+# Workload Identity Federation: the job exchanges its GitHub OIDC token for a
+# short-lived Anthropic token, so no long-lived key lives in the repository.
+# The federation IDs are repository VARIABLES (identifiers, not credentials):
+# ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID,
+# ANTHROPIC_SERVICE_ACCOUNT_ID, ANTHROPIC_WORKSPACE_ID. No API key is passed:
+# a static key, even an empty one, outranks federation, so the job has none.
+#
+# When configured, every PR gets a standards review, and
+# `claude-standards-review` succeeds only on a
 # claude:approve verdict against .github/REVIEW_STANDARDS.md. A PR merges by
 # itself only when all of these hold:
 #   required CI checks green
 #   + the review did not fail
 #   + trust tier (dependabot minor/patch OR a human maintainer approval)
 #
-# With the key UNSET, no review runs and the check says so (#608):
+# With the rule variable UNSET, no review runs and the check says so (#608):
 # `claude-standards-review` is SKIPPED, not green, and the preflight job's
 # summary reads "not run". Branch protection lets a skipped job through, so a
 # missing secret does not block PRs, and auto-merge still arms on the trust
@@ -16,9 +24,15 @@ name: claude-pr-review
 # from the required set, is the owner's decision.
 #
 # Security notes (deliberate):
-# - pull_request_target so fork PRs get the API-key secret, but we NEVER
+# - pull_request_target so fork PRs can be reviewed, but we NEVER
 #   check out or execute PR head code — the reviewer reads the diff via the
 #   GitHub API. Tools are restricted to read + PR-comment/label operations.
+# - Only the review job may mint an OIDC token (`id-token: write` is granted
+#   there and nowhere else). pull_request_target always runs the workflow
+#   file from main, so the federation rule pins `workflow_ref` to this file
+#   on refs/heads/main: a PR cannot edit its way to a token. The rule's scope
+#   is `workspace:inference`, in a workspace with its own spend limit, and the
+#   token lives minutes; a prompt-injected reviewer can spend, not administer.
 # - Full auto-merge without any human click is limited to dependabot
 #   minor/patch. External code keeps one maintainer approval in the loop:
 #   an AI reviewer can be prompt-injected by PR content, so on a health-data
@@ -64,12 +78,12 @@ jobs:
       - name: Is the reviewer configured
         id: keycheck
         env:
-          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_KEY: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID != '' }}
         run: |
           echo "has_key=$HAS_KEY" >> "$GITHUB_OUTPUT"
           if [ "$HAS_KEY" != "true" ]; then
-            echo "::warning::ANTHROPIC_API_KEY is not set. The standards review did not run; claude-standards-review is skipped, not passed."
-            printf '### claude-standards-review: not run\n\nNo review happened on this push: the ANTHROPIC_API_KEY secret is unset. The check shows as skipped, which branch protection lets through. It is not a verdict (#608).\n' \
+            echo "::warning::The ANTHROPIC_FEDERATION_RULE_ID repository variable is not set. The standards review did not run; claude-standards-review is skipped, not passed."
+            printf '### claude-standards-review: not run\n\nNo review happened on this push: the ANTHROPIC_FEDERATION_RULE_ID repository variable is unset, so the reviewer has no credential. The check shows as skipped, which branch protection lets through. It is not a verdict (#608).\n' \
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -81,6 +95,13 @@ jobs:
     # gate ran and found claude:approve; there is no path to green without a
     # review. Pinned by tests/test_pr_review_notifications.py.
     if: ${{ !github.event.pull_request.draft && needs.reviewer-preflight.outputs.has_key == 'true' }}
+    # Job-level permissions replace the workflow's, so the three above are
+    # repeated. id-token is the only addition, and only this job has it.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
       # Base ref ONLY — never the PR head (pull_request_target safety).
       - uses: actions/checkout@v7
@@ -90,7 +111,10 @@ jobs:
       - name: Claude standards review
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Review PR #${{ github.event.pull_request.number }} in
@@ -133,7 +157,8 @@ jobs:
                cost last time.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh pr edit:*),Bash(gh api repos/*/issues/*/labels*),Bash(gh label list:*)"
-            --model claude-sonnet-5
+            --model claude-opus-5-5
+            --max-turns 30
 
       - name: Gate on verdict label
         env:
