@@ -208,7 +208,9 @@ def test_two_record_sets_are_not_guessed_between(relay):
     svc.add_connection(acct.id, "fasten", "ca-relay-two", "Portal")
     r = _post(browser)
     assert r.status_code == 409
-    assert r.get_json() == {"error": "several_records"}
+    # The person picks (tests/test_checkin_wallet_pick.py).
+    assert r.get_json()["error"] == "several_records"
+    assert len(r.get_json()["choices"]) == 2
     assert hc.calls == []
 
 

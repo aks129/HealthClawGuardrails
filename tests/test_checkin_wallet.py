@@ -248,9 +248,12 @@ def test_the_browser_code_sends_nothing_but_sign_in(wallet):
         "/api/auth/email", "/api/auth/verify"}
     assert re.findall(r"(?<!function )post\((?!\")([^,)]+)", page) == [
         "card.dataset.records", "card.dataset.testPatient"]
-    # The relay is asked for type names and nothing else; the test patient
+    # The relay is asked for type names and, once the person has picked a
+    # set of records, that connection's id: nothing else. The test patient
     # choice sends an empty object.
-    assert "post(card.dataset.records, { resource_types: types })" in page
+    assert "post(card.dataset.records, body)" in page
+    assert "const body = { resource_types: types };" in page
+    assert re.findall(r"\bbody\.(\w+)\s*=", page) == ["connection_id"]
     assert "post(card.dataset.testPatient, {})" in page
 
 

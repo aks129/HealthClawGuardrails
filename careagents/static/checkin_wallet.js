@@ -11,7 +11,11 @@
    record the request names (POST /checkin/wallet/records, a list of type
    names and nothing else: not the request, not the website's origin), and
    answers with the account's own records from the engine's checkin export.
-   The other calls are the existing sign-in endpoints. */
+   An account with more than one set of its own records is told which sets
+   there are, by label and provider, and the person picks one; the relay is
+   then asked again with that connection's id, which the server checks is
+   one of the account's own. The other calls are the existing sign-in
+   endpoints. */
 import {
   checkWalletResponse, declineAll, serveWebWallet,
 } from "./vendor/smart-health-checkin-client/0.4.4/wallet.js";
@@ -27,7 +31,8 @@ const $ = (id) => document.getElementById(id);
 const card = $("wallet");
 // wallet-test-patient is on the page only when its flag is on.
 const SECTIONS = ["wallet-signin", "wallet-waiting", "wallet-direct",
-  "wallet-test-patient", "wallet-review", "wallet-done"].filter((s) => $(s));
+  "wallet-test-patient", "wallet-pick", "wallet-review", "wallet-done"]
+  .filter((s) => $(s));
 const show = (id) => SECTIONS.forEach((s) => ($(s).hidden = s !== id));
 const err = $("wallet-err");
 // How long "Waiting for the request" waits before it offers a next step.
@@ -356,12 +361,21 @@ function briefly(title, text) {
 const CANT_SHARE = "The person's wallet couldn't share records this time. They were told why.";
 
 /* The account's records of the kinds the request names, or none when it
-   names none this wallet can answer. Throws the server's fixed code. */
-async function loadRecords(request, unsupportedItems) {
+   names none this wallet can answer. `connectionId` is the set the person
+   picked, if they had to. Throws the server's fixed code, with the sets to
+   pick from on `choices` when there are several. */
+async function loadRecords(request, unsupportedItems, connectionId) {
   const types = requestedTypes(request, unsupportedItems);
   if (!types.length) return prepareRecords({ entry: [] });
-  const res = await post(card.dataset.records, { resource_types: types });
-  if (!res.ok) throw new Error(typeof res.d.error === "string" ? res.d.error : "records");
+  const body = { resource_types: types };
+  if (connectionId) body.connection_id = connectionId;
+  const res = await post(card.dataset.records, body);
+  if (!res.ok) {
+    const e = new Error(typeof res.d.error === "string" ? res.d.error : "records");
+    e.choices = Array.isArray(res.d.choices) ? res.d.choices.filter((c) =>
+      c && typeof c.id === "string" && typeof c.label === "string") : [];
+    throw e;
+  }
   return prepareRecords(res.d);
 }
 
@@ -370,7 +384,9 @@ async function loadRecords(request, unsupportedItems) {
 const NO_RECORDS = {
   no_records: "There are no records on your account yet. Upload or connect your own records first, then start check-in again.",
   sample_only: "Your account has only the sample records, which are made up and can't be shared. Upload or connect your own records first, then start check-in again.",
-  several_records: "Your account holds more than one set of records, and this test version can answer from only one.",
+  // Only if the server's list of sets did not arrive.
+  several_records: "Your account holds more than one set of records, and we couldn't list them just now. Start check-in again.",
+  unknown_records: "That set of records isn't available any more. Start check-in again to choose another.",
   no_patient: "We couldn't tell whose records these are, so we didn't send any.",
   too_large: "Your records are too large to send this way.",
   paused: "Sharing records is paused on your account.",
@@ -381,6 +397,43 @@ const NO_RECORDS = {
   not_your_records: "Check-in shares your own records. Upload or connect your own records first.",
   has_records: "Your records aren't ready to share yet. Finish connecting them in CareAgents, then start check-in again.",
 };
+
+// --- more than one set of records ------------------------------------------
+
+/* One button per set, its connection label then its provider: what the
+   person named it and where it came from, never anything from the records.
+   The same words twice get a number, so no two buttons look alike.
+   Resolves to the chosen connection id, or null for "Don't share". */
+function pickRecords(choices) {
+  const list = $("wallet-pick-list");
+  list.replaceChildren();
+  const seen = {};
+  return new Promise((resolve) => {
+    choices.forEach((c) => {
+      // Where the set came from (the connection's provider field).
+      const source = typeof c.provider === "string" ? c.provider : "";
+      const key = `${c.label}\n${source}`;
+      seen[key] = (seen[key] || 0) + 1;
+      const btn = document.createElement("button");
+      btn.className = "btn-secondary btn-block";
+      btn.dataset.connection = c.id;
+      const name = document.createElement("span");
+      name.textContent = seen[key] > 1 ? `${c.label} (${seen[key]})` : c.label;
+      btn.append(name);
+      if (source) {
+        const from = document.createElement("span");
+        from.className = "checkin-pick-source";
+        from.textContent = source;
+        btn.append(from);
+      }
+      btn.onclick = () => resolve(c.id);
+      list.append(btn);
+    });
+    $("wallet-pick-no").onclick = () => resolve(null);
+    show("wallet-pick");
+    list.querySelector("button")?.focus();
+  });
+}
 
 // --- the connectathon test patient ----------------------------------------
 
@@ -435,8 +488,21 @@ function start() {
       clearTimeout(late);
       let records;
       let code = "";
+      let choices = [];
       try { records = await loadRecords(request, unsupportedItems); } catch (e) {
         code = e.message;
+        choices = e.choices || [];
+      }
+      if (code === "several_records" && choices.length > 1) {
+        const picked = await pickRecords(choices);
+        if (picked === null) {
+          await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
+          return { response: declineAll(request) };
+        }
+        code = "";
+        try { records = await loadRecords(request, unsupportedItems, picked); } catch (e) {
+          code = e.message;
+        }
       }
       if (Object.hasOwn(OFFER_TEST, code) && card.dataset.testPatient) {
         if (!(await offerTestPatient(OFFER_TEST[code]))) {

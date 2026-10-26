@@ -21,11 +21,18 @@ The records come from the engine's `checkin` export (r6/checkin.py) through
 one relay route, POST /checkin/wallet/records:
 
 - The browser sends only `{"resource_types": [...]}`: the kinds of record the
-  website asked for. Not the request, not the website's origin, not a
+  website asked for, and, once the person has picked a set of records,
+  `"connection_id"`. Not the request, not the website's origin, not a
   patient or tenant id; any other key is refused. So the origin never
   reaches the engine or its audit trail.
-- The server picks the tenant (the account holder's own one active,
-  non-sample connection) and the client resolves the patient from it.
+- The server picks the tenant from the account holder's own active,
+  non-sample connections, and the client resolves the patient from it.
+  With one, that one. With several, the relay refuses with the list of
+  them, each named by its connection label and provider only, and the
+  person picks; the browser then sends that connection's id, which the
+  server checks against the same list, from the signed-in account, on
+  every call. The id chooses among the person's own sets; it never names
+  a tenant. One set is answered from; sets are never merged.
 - A single-use token for exactly that type set is minted per call and
   spent on the engine; it never reaches the browser.
 - The engine's Bundle is passed through with `Cache-Control: no-store`.
@@ -78,8 +85,10 @@ CHECKIN_TYPES = frozenset({
     "Immunization", "Coverage",
 })
 
-#: The relay's body is one short list of type names.
+#: The relay's body is one short list of type names and at most one id.
 RELAY_BODY_MAX = 1024
+#: A connection id (models.Connection.id, String(32)).
+CONNECTION_ID_MAX = 32
 
 #: The synthetic US Core test patient (#959). Under careagents/ because the
 #: image copies only that directory.
@@ -111,8 +120,13 @@ def _refuse(code: str, status: int):
 
 def requested_types(body) -> list | None:
     """The type set, sorted, or None unless the body is exactly
-    `{"resource_types": [one or more of CHECKIN_TYPES]}`."""
-    if not isinstance(body, dict) or set(body) != {"resource_types"}:
+    `{"resource_types": [one or more of CHECKIN_TYPES]}`, with at most a
+    well-formed `connection_id` (chosen_connection) beside it."""
+    if not isinstance(body, dict) or not (
+            set(body) == {"resource_types"}
+            or set(body) == {"resource_types", "connection_id"}):
+        return None
+    if "connection_id" in body and chosen_connection(body) is None:
         return None
     types = body["resource_types"]
     if not isinstance(types, list) or not types:
@@ -122,19 +136,52 @@ def requested_types(body) -> list | None:
     return sorted(set(types))
 
 
+def chosen_connection(body) -> str | None:
+    """The body's `connection_id`, when it is a short non-empty string.
+    Only its shape is checked here; records_tenant decides whether it is
+    one of the person's own sets."""
+    cid = body.get("connection_id") if isinstance(body, dict) else None
+    if isinstance(cid, str) and 0 < len(cid) <= CONNECTION_ID_MAX:
+        return cid
+    return None
+
+
 def _is_test_patient(c) -> bool:
     return c["kind"] == "sample" and c["provider"] == TEST_PROVIDER
 
 
-def records_tenant(svc, account_id: str,
-                   test_patient: bool = False) -> tuple[str | None, str]:
-    """(tenant, "") for the account holder's one active connection that is
-    not the sample, else (None, why). Someone the account cares for is not
-    the person checking in, and the sample's made-up records claim no US
-    Core profile, so they would answer nothing; an account with only the
-    sample is told so (`sample_only`), not that it has no records. With two
-    or more there is no telling which the person means, so none is
-    guessed.
+def record_sets(home: dict) -> list[dict]:
+    """The sets of records a check-in may answer from: the account holder's
+    own active, non-sample connections, one per tenant, oldest first.
+    Someone the account cares for is not the person checking in, and the
+    sample's made-up records claim no US Core profile."""
+    me = {p["id"] for p in home["people"] if p["kind"] == "self"}
+    sets, seen = [], set()
+    for c in sorted(home["connections"],
+                    key=lambda c: c["connected_at"] or 0):
+        if (c["person_id"] in me and c["status"] == "active"
+                and c["kind"] != "sample" and c["tenant_id"] not in seen):
+            seen.add(c["tenant_id"])
+            sets.append(c)
+    return sets
+
+
+def records_tenant(svc, account_id: str, test_patient: bool = False,
+                   connection_id: str | None = None
+                   ) -> tuple[str | None, str]:
+    """(tenant, "") for the set of records to answer from, else (None, why).
+
+    With `connection_id` (the person's pick), that set if it is one of the
+    account holder's own (record_sets), else `unknown_records`: one code
+    whatever the id names, another account's connection, someone cared
+    for, the sample, the test patient, one pending or revoked, or nothing.
+    The id is checked against the account the session signed in, so the
+    page chooses only among the person's own sets.
+
+    Without one: the one set if there is one. With two or more there is no
+    telling which the person means, so none is guessed (`several_records`);
+    the route lists them for the person to pick from. An account with only
+    the sample is told so (`sample_only`), not that it has no records.
 
     With `test_patient` (the flag), an account with no active real-record
     connection of its own answers from its connectathon test patient, if
@@ -148,11 +195,16 @@ def records_tenant(svc, account_id: str,
     connection (`has_real_connection`), and the two must agree (#1027 QA
     F1)."""
     home = svc.list_home(account_id)
+    sets = record_sets(home)
+    if connection_id is not None:
+        for c in sets:
+            if c["id"] == connection_id:
+                return c["tenant_id"], ""
+        return None, "unknown_records"
     me = {p["id"] for p in home["people"] if p["kind"] == "self"}
     mine = [c for c in home["connections"]
             if c["person_id"] in me and c["status"] == "active"]
-    tenants = {c["tenant_id"] for c in mine if c["kind"] != "sample"}
-    if not tenants:
+    if not sets:
         test = [c for c in mine if _is_test_patient(c)]
         if test_patient and test:
             return test[0]["tenant_id"], ""
@@ -165,9 +217,9 @@ def records_tenant(svc, account_id: str,
         if real:
             return None, "not_your_records"
         return None, ("sample_only" if mine else "no_records")
-    if len(tenants) > 1:
+    if len(sets) > 1:
         return None, "several_records"
-    return next(iter(tenants)), ""
+    return sets[0]["tenant_id"], ""
 
 
 def register(app, svc, cfg, hc, full_session) -> None:
@@ -215,7 +267,16 @@ def register(app, svc, cfg, hc, full_session) -> None:
         account_id = session["account_id"]
         if svc.is_paused(account_id):
             return _refuse("paused", 403)
-        tenant, why = records_tenant(svc, account_id, test_patient)
+        tenant, why = records_tenant(svc, account_id, test_patient,
+                                     chosen_connection(body))
+        if why == "several_records":
+            # The sets to pick from, by name only: never a tenant id or
+            # anything from the records.
+            choices = [{"id": c["id"], "label": c["label"],
+                        "provider": c["provider"]}
+                       for c in record_sets(svc.list_home(account_id))]
+            return _no_store(jsonify({"error": why,
+                                      "choices": choices})), 409
         if tenant is None:
             return _refuse(why, 409)
         try:
