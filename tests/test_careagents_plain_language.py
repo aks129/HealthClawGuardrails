@@ -179,6 +179,9 @@ def test_a_blood_pressure_panel_shows_its_numbers():
 #: Not shown: no number can be, so the row is left off the brief (visit
 #: brief, 2026-10-26, item 4). It used to read "Result not listed".
 NOT_LISTED = None
+#: A number in a unit the brief does not recognise: the row stays, the
+#: number does not (#1038 ruling F4).
+ON_FILE = "Result on file \u2014 see your record"
 A1C, CREATININE, GLUCOSE = "4548-4", "2160-0", "2345-7"
 UCUM = "http://unitsofmeasure.org"
 
@@ -202,9 +205,9 @@ UCUM = "http://unitsofmeasure.org"
     # QA F1: a unit the reading did not state is never attached. These two
     # rows used to read "6.1 %": the A1c's usual unit on a reading that
     # said something else.
-    (A1C, {"value": 6.1, "system": UCUM, "code": "mmol/molX"}, NOT_LISTED),
-    (CREATININE, {"value": 88, "unit": "micromoles per litre"}, NOT_LISTED),
-    (GLUCOSE, {"value": 5.4, "unit": "MMOL/L"}, NOT_LISTED),   # exact only
+    (A1C, {"value": 6.1, "system": UCUM, "code": "mmol/molX"}, ON_FILE),
+    (CREATININE, {"value": 88, "unit": "micromoles per litre"}, ON_FILE),
+    (GLUCOSE, {"value": 5.4, "unit": "MMOL/L"}, ON_FILE),   # exact only
     # No unit and no code at all: the analyte's usual unit (QA's rule).
     (A1C, {"value": 6.1}, "6.1 %"),
     (CREATININE, {"value": 1.1}, "1.1 mg/dL"),
@@ -231,12 +234,14 @@ def test_a_blood_pressure_in_an_unknown_unit_is_not_listed():
     comp = lambda code, v: {  # noqa: E731
         "code": {"coding": [{"system": "http://loinc.org", "code": code}]},
         "valueQuantity": {"value": v, "unit": "kPa?"}}
-    assert build_labs([{
+    [field] = build_labs([{
         "resourceType": "Observation", "id": "bp",
         "code": {"coding": [{"system": "http://loinc.org",
                              "code": "85354-9"}]},
         "component": [comp("8480-6", 16), comp("8462-4", 10.7)],
-        "effectiveDateTime": "2026-10-06"}]) == []
+        "effectiveDateTime": "2026-10-06"}])
+    assert field.value == f"{ON_FILE} (Oct 6, 2026)"
+    assert "16" not in field.value and "kPa" not in field.value
 
 
 @pytest.mark.parametrize("bad", ["2026-00-15", "2026-13-01", "2026-09-00",

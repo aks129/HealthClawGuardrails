@@ -181,13 +181,47 @@ def test_height_and_weight_rows_show_with_their_units():
 
 
 def test_a_body_measure_in_an_unknown_unit_or_free_text_still_never_shows():
+    """The number and the unit never show; the row says a result is on file
+    (#1038 ruling F4). Free text is no value, so no row at all."""
     rows = build_labs([
         _obs("h", "8302-2", 172, "CM", when="2026-09-04"),     # exact only
         _obs("w", "29463-7", 81, f"kg {PLANTED}", when="2026-09-03"),
         dict(_obs("s", "29463-7", when="2026-09-02"),
              valueString=f"81 kg, {PLANTED}"),
     ])
-    assert rows == []
+    got = {r.source_id: (r.label, r.value) for r in rows}
+    assert got == {
+        "h": ("Body height", "Result on file \u2014 see your record "
+                             "(Sep 4, 2026)"),
+        "w": ("Body weight", "Result on file \u2014 see your record "
+                             "(Sep 3, 2026)"),
+    }
+
+
+def test_the_new_ucum_units_read_plainly():
+    """#1038 ruling F4: exact tokens only, each shown as a fixed string."""
+    rows = build_labs([
+        _obs("tsh", "3016-3", 2.1, "uIU/mL", when="2026-09-06"),
+        _obs("tsh2", "3016-3", 2.2, "m[IU]/L", when="2026-09-05"),
+        _obs("inr", "6301-6", 1.1, "{INR}", when="2026-09-04"),
+        _obs("wbc", "6690-2", 6.4, "10*3/uL", when="2026-09-03"),
+        _obs("wbc2", "6690-2", 6.5, "K/uL", when="2026-09-02"),
+        _obs("wbc3", "6690-2", 6.6, "x10E3/uL", when="2026-09-01"),
+        _obs("bad", "6690-2", 6.7, "k/ul", when="2026-08-31"),
+    ])
+    got = {r.source_id: r.value.split(" (")[0] for r in rows}
+    assert got == {
+        "tsh": "2.1 uIU/mL", "tsh2": "2.2 mIU/L", "inr": "1.1 INR",
+        "wbc": "6.4 K/\u00b5L", "wbc2": "6.5 K/\u00b5L",
+        "wbc3": "6.6 K/\u00b5L",
+        "bad": "Result on file \u2014 see your record",
+    }
+
+
+def test_the_on_file_row_is_worded_for_the_sample_voice():
+    from r6.voice import SAMPLE
+    [row] = build_labs([_obs("h", "8302-2", 172, "CM")], voice=SAMPLE)
+    assert row.value.startswith("Result on file \u2014 see these made-up")
 
 
 def test_a_lab_reads_by_its_plain_name_not_loincs_long_name(monkeypatch):

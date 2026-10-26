@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from r6 import terminology
 from r6.labs.interpret import LOINC_RANGES
 from r6.safe_read import as_dict, codes, is_number
-from r6.voice import PATIENT
+from r6.voice import PATIENT, SAMPLE
 
 
 @dataclass
@@ -103,6 +103,13 @@ MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
 #: out is the directions, Dosage.text, which is free text from the source
 #: system (#884 QA F3). No "your", so it reads the same on sample records.
 DOSE_NOT_LISTED = "How to take it isn't shown here."
+#: A result with a number in a unit the brief does not recognise. The
+#: number is not shown (R884-1: only an allowlisted unit is ever paired with
+#: one), but the row stays, so a clinician knows the test was done (#1038
+#: ruling F4). A result with no value at all is still left off.
+RESULT_ON_FILE = "Result on file \u2014 see your record"
+#: RESULT_ON_FILE about a made-up sample person (r6/voice.py).
+SAMPLE_RESULT_ON_FILE = "Result on file \u2014 see these made-up records"
 
 
 #: SNOMED "no known allergy" (716186003 and its descendants) and "patient
@@ -234,9 +241,10 @@ def _effective_display(resource: dict) -> str:
 #: The units the brief recognises, each mapped to how it reads. A closed
 #: list of exact, case-sensitive tokens, as careagents/agent.py keeps for
 #: the model (R875-3): any other string, however unit-shaped, could be a
-#: word, so it is never shown (R884-1). Every value here is itself a key,
-#: so only an exact allowlist token ever reaches the page. UCUM's bracket
-#: forms read as their plain spelling; both spellings are accepted.
+#: word, so it is never shown (R884-1). Every value here is a fixed string
+#: from this table, so nothing the record wrote ever reaches the page.
+#: UCUM's bracket forms read as their plain spelling; both spellings are
+#: accepted.
 _UNIT_DISPLAY = {
     # US conventional
     "mg/dL": "mg/dL", "g/dL": "g/dL", "ng/mL": "ng/mL", "pg/mL": "pg/mL",
@@ -251,7 +259,8 @@ _UNIT_DISPLAY = {
     "%": "%", "U/L": "U/L", "[IU]/L": "IU/L", "IU/L": "IU/L",
     "mm[Hg]": "mmHg", "mmHg": "mmHg",
     "mL/min/{1.73_m2}": "mL/min/1.73m2", "mL/min/1.73m2": "mL/min/1.73m2",
-    "10*3/uL": "10^3/uL", "10^3/uL": "10^3/uL",
+    "10*3/uL": "K/µL", "K/uL": "K/µL", "x10E3/uL": "K/µL",
+    "10^3/uL": "10^3/uL",
     "10*6/uL": "10^6/uL", "10^6/uL": "10^6/uL",
     "fL": "fL", "pg": "pg", "mg/mmol": "mg/mmol", "mg/g": "mg/g",
     "[pH]": "pH", "pH": "pH",
@@ -260,6 +269,10 @@ _UNIT_DISPLAY = {
     # rows were dropped it vanished from the brief (#1038 review).
     "cm": "cm", "m": "m", "[in_i]": "in", "in": "in",
     "kg": "kg", "g": "g", "[lb_av]": "lb", "lb": "lb",
+    # Thyroid and anticoagulation results (#1038 ruling F4). INR has no
+    # unit; UCUM writes it as the annotation {INR}.
+    "uIU/mL": "uIU/mL", "m[IU]/L": "mIU/L", "mIU/L": "mIU/L",
+    "{INR}": "INR",
 }
 
 
@@ -300,13 +313,17 @@ def _unit(vq: dict, analyte_codes) -> str | None:
 
 def _obs_value(obs: dict) -> str:
     """Human-readable value + unit from an Observation: a finite number and
-    the unit it stated, or "" (the caller says the result is not listed)."""
+    the unit it stated; RESULT_ON_FILE for a number in a unit the brief does
+    not recognise; or "" when there is no value (the caller drops the row).
+    """
     if "valueQuantity" in obs:
         vq = as_dict(obs["valueQuantity"])
         value = _number(vq.get("value"))
-        unit = _unit(vq, codes(obs.get("code")))
-        if value is None or unit is None:
+        if value is None:
             return ""
+        unit = _unit(vq, codes(obs.get("code")))
+        if unit is None:
+            return RESULT_ON_FILE
         return f"{value} {unit}".strip()
     # No valueString branch. It is free text from the source system with no
     # code to label it by, so nothing here can stand behind it (#877). The
@@ -329,8 +346,9 @@ _KNOWN_UNITS = {_SYSTOLIC: "mm[Hg]", _DIASTOLIC: "mm[Hg]"}
 
 
 def _blood_pressure(obs: dict) -> str:
-    """"120/80 mmHg" from a panel's components, or "" (#884 G7: the row
-    showed a date and no numbers)."""
+    """"120/80 mmHg" from a panel's components (#884 G7: the row showed a
+    date and no numbers), RESULT_ON_FILE when a reading is in a unit the
+    brief does not recognise, or ""."""
     values = {}
     unit = ""
     for comp in obs.get("component") or []:
@@ -345,7 +363,8 @@ def _blood_pressure(obs: dict) -> str:
             if key in comp_codes:
                 comp_unit = _unit(vq, [key])
                 if comp_unit is None:
-                    return ""       # a unit we do not recognise: not shown
+                    # A unit we do not recognise: no number is shown.
+                    return RESULT_ON_FILE
                 values[key] = value
                 unit = unit or comp_unit
     if _SYSTOLIC not in values or _DIASTOLIC not in values:
@@ -550,8 +569,8 @@ def build_labs(observations: list[dict],
                voice: str = PATIENT) -> list[BriefField]:
     """Most recent lab results from Observation resources (capped at 10).
 
-    Only results with a value are listed. `voice` worded the "result not
-    listed" row, which is gone; it is kept so callers need not change."""
+    Only results with a value are listed. `voice` words RESULT_ON_FILE
+    about the sample person on made-up records."""
 
     def _sort_key(obs: dict) -> str:
         return (
@@ -573,6 +592,8 @@ def build_labs(observations: list[dict],
             # results out of the ten slots (visit brief, 2026-10-26, item
             # 4). Dropped here, not after the cap.
             continue
+        if value == RESULT_ON_FILE and voice == SAMPLE:
+            value = SAMPLE_RESULT_ON_FILE
         # LOINC's long name made plain ("Anion gap", not "Anion gap in
         # Serum or Plasma by calculation"), still keyed by code.
         label = _code_text(obs, terminology.lab_label)

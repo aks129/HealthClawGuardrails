@@ -182,9 +182,14 @@ def test_a_spoofed_unit_beside_an_allowlisted_one_shows_only_the_token():
                       "unit": f"lb {PLANTED}"}, "2026-08-31"),
     ])
     got = {r.source_id: (r.label, r.value) for r in rows}
+    # `c` has a value in no allowlisted unit: its row stays and says a
+    # result is on file, with no number (#1038 ruling F4, after this test
+    # was written; it used to expect `c` dropped).
     assert got == {
         "a": ("Body weight", "80 kg (Sep 3, 2026)"),
         "b": ("Body weight", "81 kg (Sep 2, 2026)"),
+        "c": ("Body weight",
+              "Result on file \u2014 see your record (Sep 1, 2026)"),
         "d": ("Body weight", "83 lb (Aug 31, 2026)"),
     }
     assert PLANTED not in json.dumps(got)
