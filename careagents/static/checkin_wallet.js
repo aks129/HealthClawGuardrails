@@ -427,8 +427,9 @@ function setDetail(c) {
   return [how, addedOn(c.added)].filter(Boolean).join(" · ");
 }
 
-/* A set in one line, as the review names the one in use. */
-const setLine = (c) => [c.label, setDetail(c)].filter(Boolean).join(" · ");
+/* A set in one line, as the review names the one in use: the name exactly
+   as the picker showed it, its number included. */
+const setLine = (c) => [c.shown || c.label, setDetail(c)].filter(Boolean).join(" · ");
 
 /* What the picker resolves to for "Close without answering". */
 const CLOSE_PICK = "close";
@@ -452,6 +453,7 @@ function pickRecords(choices) {
       btn.dataset.connection = c.id;
       const name = document.createElement("span");
       name.textContent = seen[key] > 1 ? `${c.label} (${seen[key]})` : c.label;
+      c.shown = name.textContent;
       btn.append(name);
       if (detail) {
         const from = document.createElement("span");

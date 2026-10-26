@@ -55,8 +55,14 @@
     border: 1px solid var(--hairline); border-left: 4px solid var(--accent);
     border-radius: var(--radius-sm); overflow-wrap: anywhere; cursor: pointer; }
   .checkin-pick-source { font-weight: 400; font-size: 15px; color: var(--ink-soft); }
-  .checkin-using { font-size: 15px; color: var(--ink-soft); overflow-wrap: anywhere;
-    margin: 0 0 4px; }
+  .checkin-using { color: var(--ink-soft); overflow-wrap: anywhere; margin: 0; }
+  /* The way back sits under the Using line, aligned with it. */
+  .checkin-repick { width: auto; min-height: 44px; margin: 0 0 12px; padding: 0;
+    text-align: left; }
+  /* A calm word, not an error: something changed, nothing went wrong. */
+  .checkin-note { background: var(--surface-2); color: var(--ink);
+    border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+    padding: 10px 14px; margin: 0 0 12px; }
   h1[tabindex="-1"]:focus { outline: none; }
 </style>
 {% endblock %}
@@ -144,7 +150,7 @@
       <p class="setup-sub">You've connected records from more than one
         place. Which should it see? You still choose each item before
         anything is sent.</p>
-      <p class="form-error" id="wallet-pick-note" role="status" hidden></p>
+      <p class="checkin-note" id="wallet-pick-note" role="status" hidden></p>
       <div class="checkin-pick" id="wallet-pick-list"></div>
       <button class="btn-secondary btn-block" id="wallet-pick-no">
         Don't share anything</button>
@@ -153,10 +159,10 @@
 
     <section id="wallet-review" hidden>
       <h1 id="wallet-review-title" tabindex="-1">A website is asking for your health information</h1>
+      <p class="checkin-origin" id="wallet-origin"></p>
       {# After a pick: which set this answers from, and a way back. #}
       <p class="checkin-using" id="wallet-using" hidden></p>
-      <button class="linkish" id="wallet-repick" hidden>Choose different records</button>
-      <p class="checkin-origin" id="wallet-origin"></p>
+      <button class="linkish checkin-repick" id="wallet-repick" hidden>Choose different records</button>
       <p class="setup-sub" id="wallet-purpose" hidden></p>
       <p class="setup-sub">Choose what to share. Nothing is shared unless you
         choose it.</p>

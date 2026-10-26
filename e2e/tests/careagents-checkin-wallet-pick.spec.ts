@@ -195,6 +195,23 @@ test.describe('check-in wallet, more than one set of records', () => {
       await expect(wallet.locator('#wallet-repick'))
         .toHaveText('Choose different records');
       expect(await choicesOn(wallet)).toEqual(['decline', 'decline', 'decline']);
+      // Heading, the address, the Using line with the way back right under
+      // it and aligned with it, then the instruction.
+      const tops = await wallet.evaluate(() => {
+        const sec = document.getElementById('wallet-review')!;
+        const say = [...sec.querySelectorAll('p.setup-sub')].find((p) =>
+          p.textContent!.includes('Choose what to share'))!;
+        return [sec.querySelector('h1')!, document.getElementById('wallet-origin')!,
+          document.getElementById('wallet-using')!,
+          document.getElementById('wallet-repick')!, say]
+          .map((e) => e.getBoundingClientRect())
+          .map((r) => ({ top: r.top, left: r.left }));
+      });
+      for (let i = 1; i < tops.length; i += 1) {
+        expect(tops[i].top, `row ${i}`).toBeGreaterThan(tops[i - 1].top);
+      }
+      expect(tops[3].left).toBe(tops[2].left);
+      await expect(wallet.locator('#wallet-repick')).toHaveCSS('text-align', 'left');
       await noSideScroll(wallet);
       if (process.env.CHECKIN_SHOTS) {
         await wallet.screenshot({ fullPage: true,
@@ -208,18 +225,19 @@ test.describe('check-in wallet, more than one set of records', () => {
       expect(await focused(wallet)).toBe('wallet-pick-title');
       await expect(wallet.locator('#wallet-pick-note')).toBeHidden();
 
-      // Another set: named on the review, and every item at "Don't share".
-      await sets.nth(0).click();
+      // Another set: named on the review exactly as tapped, its number
+      // included, and every item at "Don't share".
+      await sets.nth(2).click();
       await expect(wallet.locator('#wallet-review')).toBeVisible();
       expect(await focused(wallet)).toBe('wallet-review-title');
       await expect(wallet.locator('#wallet-using')).toHaveText(
-        `Using: ${FASTEN} · ${PORTAL} · Added Jan 12`);
+        `Using: ${FASTEN} (2) · ${PORTAL} · Added Jan 20`);
       expect(await choicesOn(wallet)).toEqual(['decline', 'decline', 'decline']);
 
       // Each relay call is the types and, after a pick, that id; nothing else.
       expect(asked).toHaveLength(3);
       expect(Object.keys(asked[0]).sort()).toEqual(['resource_types']);
-      for (const [i, id] of [[1, 'conn_e2epickc'], [2, 'conn_e2epicka']] as const) {
+      for (const [i, id] of [[1, 'conn_e2epickc'], [2, 'conn_e2epicke']] as const) {
         expect(Object.keys(asked[i]).sort())
           .toEqual(['connection_id', 'resource_types']);
         expect(asked[i].connection_id).toBe(id);
@@ -239,6 +257,10 @@ test.describe('check-in wallet, more than one set of records', () => {
       await sets.nth(1).click();
       const note = wallet.locator('#wallet-pick-note');
       await expect(note).toHaveText("That one was removed. Choose from what's left.");
+      // A calm notice, not an error, and still announced.
+      await expect(note).toHaveAttribute('role', 'status');
+      await expect(note).toHaveClass(/checkin-note/);
+      await expect(note).not.toHaveClass(/form-error/);
       await expect(sets).toHaveCount(4);
       await expect(wallet.locator('#wallet-pick-list [data-connection=conn_e2epickb]'))
         .toHaveCount(0);
