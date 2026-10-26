@@ -105,7 +105,7 @@ def test_agent_turn_receives_unreadable_record_and_never_emits_bare_no(
         _condition(ICD10, UNKNOWN_CODE, display="Jane Secret finding")))
 
     class HealthClawStub:
-        def search(self, tenant, resource_type):
+        def search(self, tenant, resource_type, params=None):
             assert tenant == "tenant-207"
             assert resource_type == "Condition"
             return redacted
