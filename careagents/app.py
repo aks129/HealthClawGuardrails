@@ -37,7 +37,7 @@ from careagents.accounts import (RESEND_COOLDOWN, AccountService, AuthError,
                                  MailError, MailUnconfirmed,
                                  new_binding_code, secret_matches)
 from careagents import advisors, analytics, connectors, consent, mail
-from careagents import beta, imessage, operator_cli, tester_terms
+from careagents import beta, imessage, operator_cli, routing, tester_terms
 from careagents import security_headers, sendblue_surface
 from careagents import brief as brief_mod
 from careagents import hub as hub_view
@@ -2585,12 +2585,17 @@ def create_app(config: Config | None = None,
                    for e in page.get("events") or [])
 
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0,
-                    account_id: str | None = None):
+                    account_id: str | None = None, lang: str | None = None):
         """Replay durable UI events. Disconnecting only stops this projection.
 
         The body runs after login_required has returned, so each read names
         the account itself (spec 6.2), scoped to that one call: a block held
-        across a yield would outlive the request on this thread."""
+        across a yield would outlive the request on this thread.
+
+        `lang` ("es") is the turn's language, from the message the POST
+        carried (routing.looks_spanish), for the page's own words around the
+        answer. A reconnect has no message and says nothing; the page keeps
+        what the POST said."""
         cursor = max(0, after)
         started = time.monotonic()
         # #575: the wait after a page with events is the base; after the k-th
@@ -2599,9 +2604,11 @@ def create_app(config: Config | None = None,
         # at 5, and a token that just arrived is likely followed by another.
         empty_streak = 0
         misses = 0
-        yield "data: " + json.dumps({
-            "type": "accepted", "run_id": run_id,
-            "next_cursor": cursor}) + "\n\n"
+        accepted = {"type": "accepted", "run_id": run_id,
+                    "next_cursor": cursor}
+        if lang:
+            accepted["lang"] = lang
+        yield "data: " + json.dumps(accepted) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
             try:
                 with acting_for(account_id):
@@ -2748,7 +2755,8 @@ def create_app(config: Config | None = None,
         after = _parse_cursor(body.get("after") or
                               request.headers.get("Last-Event-ID"))
         return Response(_stream_run(
-            tenant, agent["id"], run["id"], after, account_id=acct.id),
+            tenant, agent["id"], run["id"], after, account_id=acct.id,
+            lang="es" if routing.looks_spanish(text) else None),
                         mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no",

@@ -225,6 +225,32 @@ SAMPLE_TOOL_LABELS = {
     "propose_action": "Preparing a text to the linked phone",
 }
 
+#: TOOL_LABELS and SAMPLE_TOOL_LABELS for a turn the person wrote in Spanish
+#: (routing.looks_spanish): the answer came back in Spanish (#1017) under
+#: English status lines (live, 2026-10-26). "Usted", as beta.EMERGENCY_LINE.
+TOOL_LABELS_ES = {
+    "get_health_summary": "Leyendo sus registros",
+    "get_labs": "Interpretando sus análisis",
+    "show_lab_timeline": "Graficando sus resultados en el tiempo",
+    "get_care_gaps": "Revisando sus pendientes de atención preventiva",
+    "search_records": "Buscando en sus registros",
+    "appointment_brief": "Preparando el resumen de su consulta",
+    "start_intake_form": "Preparando su formulario de admisión",
+    "check_form_status": "Revisando su formulario",
+    "propose_action": "Preparando un mensaje de texto a su teléfono",
+}
+SAMPLE_TOOL_LABELS_ES = {
+    "get_health_summary": "Leyendo los registros inventados",
+    "get_labs": "Interpretando los análisis inventados",
+    "show_lab_timeline": "Graficando los resultados inventados en el tiempo",
+    "get_care_gaps": "Revisando exámenes de detección y vacunas",
+    "search_records": "Buscando en los registros inventados",
+    "appointment_brief": "Preparando el resumen de consulta de muestra",
+    "start_intake_form": "Preparando el formulario de admisión de muestra",
+    "check_form_status": "Revisando el formulario de muestra",
+    "propose_action": "Preparando un mensaje de texto al teléfono vinculado",
+}
+
 
 # How many DISTINCT Medication references one tool call may chase. Each is a
 # separately audited read; a pathological bundle must not turn one chat

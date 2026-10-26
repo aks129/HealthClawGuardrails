@@ -365,6 +365,38 @@ def _unaccented(text: str) -> str:
                    and ch not in _INVISIBLE)
 
 
+#: Common Spanish words that are not also everyday English words ("son",
+#: "me", "no" and "a" are left out), without accents, for looks_spanish.
+_SPANISH_WORDS = frozenset(
+    "que como cual cuales cuando donde porque pero tambien muy hay del los "
+    "las una uno unos unas mis el la y de con es esta estan estoy esto "
+    "estos tengo tiene tienen necesito puedo puede debo hola gracias sobre "
+    "para por mi resultados analisis medicamentos presion azucar sangre "
+    "examenes vacunas cita duele fiebre saber revisa favor".split())
+_ENGLISH_WORDS = frozenset(
+    "the is are my what how do does i you your and of to in for have has "
+    "was can it this that me am with show".split())
+
+
+def looks_spanish(text: str) -> bool:
+    """Did the person write this in Spanish? The one place a turn's
+    language is read, for the words the page puts around a Spanish answer
+    (status lines, "This wasn't right"). The answer's own language is the
+    model's (personas.REPLY_LANGUAGE), and the 911 lines are bilingual
+    whatever this says (beta.EMERGENCY_LINE).
+
+    Biased toward English: a false positive puts Spanish around an English
+    reader. An opening ¿ or ¡, or two or more Spanish words outnumbering
+    the English ones; one word ("hola", "La Jolla") is not enough."""
+    t = normalize(text)
+    if "¿" in t or "¡" in t:
+        return True
+    words = re.findall(r"[a-z]+", _unaccented(t))
+    es = sum(w in _SPANISH_WORDS for w in words)
+    en = sum(w in _ENGLISH_WORDS for w in words)
+    return es >= 2 and es > en
+
+
 def is_crisis(text: str) -> bool:
     return bool(_CRISIS.search(_unaccented(normalize(text))))
 

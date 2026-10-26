@@ -22,7 +22,8 @@ from careagents import beta, causes, checkins, funnel, llm, routing
 from careagents import tester_terms, text_self
 from careagents.accounts import AccountService
 from careagents.agent import (GENERIC_FAILURE_TEXT, MAX_TOOL_ROUNDS,
-                              SAMPLE_TOOL_LABELS, TOOL_LABELS, tools_for_turn,
+                              SAMPLE_TOOL_LABELS, SAMPLE_TOOL_LABELS_ES,
+                              TOOL_LABELS, TOOL_LABELS_ES, tools_for_turn,
                               failure_text as agent_failure_text,
                               records_arriving,
                               tool_error_result as agent_tool_error_result,
@@ -560,7 +561,12 @@ class RunWorker:
             run["_refund"]["day"] = day
 
         lead = beta.sample_frame(who) if sample else ""
-        labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
+        # In Spanish when the person wrote in Spanish: the language of
+        # their latest message, as #1017's rule reads it for the answer.
+        if routing.looks_spanish(user_text):
+            labels = SAMPLE_TOOL_LABELS_ES if sample else TOOL_LABELS_ES
+        else:
+            labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
 
         def sms_phone() -> str | None:
             return text_self.sms_phone_for(

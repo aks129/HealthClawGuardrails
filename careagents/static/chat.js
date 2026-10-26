@@ -49,10 +49,14 @@
   }
 
   // Model markdown, minimal subset: **bold**, *italic*, "- " / "* " / "1. "
-  // list lines, line breaks. Built from text nodes and fixed elements only,
-  // so nothing the model writes is ever parsed as HTML.
+  // list lines, "# " to "###### " heading lines, line breaks. Built from
+  // text nodes and fixed elements only, so nothing the model writes is ever
+  // parsed as HTML.
   const BOLD_OR_ITALIC = /\*\*([^*\n]+)\*\*|\*(\S[^*\n]*?)\*/g;
   const LIST_ITEM = /^\s*(?:[-*]|(\d+)\.)\s+(.*)$/;
+  // Every level is one small <h3>: a chat bubble is no place for a
+  // page-size heading. A space after the hashes, so "#1 thing" is text.
+  const HEADING = /^\s*#{1,6}\s+(.*)$/;
 
   // Two fixed links, never anything the model chooses: the contact address
   // and "your hub". The href is ours; the text node is the matched words.
@@ -91,7 +95,8 @@
     const lines = text.split("\n");
     let list = null;
     lines.forEach(function (line, i) {
-      const item = LIST_ITEM.exec(line);
+      const heading = HEADING.exec(line);
+      const item = !heading && LIST_ITEM.exec(line);
       if (item) {
         const kind = item[1] ? "ol" : "ul";
         if (!list || list.tagName.toLowerCase() !== kind) {
@@ -104,7 +109,15 @@
         return;
       }
       list = null;
-      appendInline(node, line);
+      if (heading) {
+        // Inline in the bubble (careagents.css), so the newline below
+        // breaks after it as after any line.
+        const h = el("h3", "msg-heading");
+        appendInline(h, heading[1]);
+        node.appendChild(h);
+      } else {
+        appendInline(node, line);
+      }
       const next = lines[i + 1];
       // A newline, not a <br>: .msg is white-space: pre-wrap, so it draws
       // the same break, and it stays in textContent, so a screen reader or
@@ -118,7 +131,8 @@
   // text without the emphasis markers, so they never flash on screen.
   function withoutMarkers(text) {
     return text.replace(/\*\*([^*\n]+)\*\*/g, "$1")
-      .replace(/\*(\S[^*\n]*?)\*/g, "$1");
+      .replace(/\*(\S[^*\n]*?)\*/g, "$1")
+      .replace(/^\s*#{1,6}\s+/gm, "");
   }
 
   // A 429 is two different limits (#862). The burst limiter sends only an
@@ -168,16 +182,17 @@
   }
 
   // `runId` alone marks a model's answer, which then gets "This wasn't
-  // right" under it once it has finished typing. With `failed` (an error
-  // code) the bubble is a failure, and gets "Report a problem" instead.
-  function addAgentText(text, runId, failed) {
+  // right" under it once it has finished typing, in the turn's `lang`.
+  // With `failed` (an error code) the bubble is a failure, and gets
+  // "Report a problem" instead.
+  function addAgentText(text, runId, failed, lang) {
     text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
       renderMarkdown(m, text);
       if (failed) addReport(m, runId, failed);
-      else if (runId) addFlag(m, runId);
+      else if (runId) addFlag(m, runId, lang);
       scroll();
     });
   }
@@ -214,11 +229,16 @@
     too_long: "That note is too long. Please make it shorter.",
   };
 
+  // The link's words by the turn's language: "es" when the person wrote in
+  // Spanish (the server's `accepted` event, routing.looks_spanish).
+  const FLAG_OPEN = { en: "This wasn't right", es: "Esto no estuvo bien" };
+
   // A quiet link under the bubble, beside it rather than inside it, so the
   // answer's own text is untouched. One tap opens a small sheet in place.
-  function addFlag(bubble, runId) {
+  function addFlag(bubble, runId, lang) {
     const wrap = el("div", "flag");
-    const open = el("button", "flag-open", "This wasn't right");
+    const open = el("button", "flag-open",
+                    FLAG_OPEN[lang === "es" ? "es" : "en"]);
     open.type = "button";
     wrap.appendChild(open);
     bubble.insertAdjacentElement("afterend", wrap);
@@ -303,7 +323,8 @@
     const text = bubble.textContent;
     BOLD_OR_ITALIC.lastIndex = 0;
     if (!BOLD_OR_ITALIC.test(text) &&
-        !text.split("\n").some((line) => LIST_ITEM.test(line))) return;
+        !text.split("\n").some((line) => LIST_ITEM.test(line) ||
+                                         HEADING.test(line))) return;
     renderMarkdown(bubble, text);
   }
 
@@ -581,6 +602,8 @@
         if (ev.type === "accepted") {
           state.runId = ev.run_id;
           state.cursor = Math.max(state.cursor, ev.next_cursor || 0);
+          // Only the POST that asked says; a reconnect keeps it.
+          if (ev.lang) state.lang = ev.lang;
         } else if (ev.type === "tool") addChip(ev.label);
         else if (ev.type === "card" && ev.kind === "review")
           addReviewCard(ev.action_id, ev.review_url, ev.label);
@@ -593,7 +616,8 @@
         else if (ev.type === "card" && ev.kind === "lab-timeline")
           addLabTimelineCard(ev.topic || "");
         else if (ev.type === "text") {
-          typing.remove(); addAgentText(ev.text, state.runId);
+          typing.remove();
+          addAgentText(ev.text, state.runId, null, state.lang);
         } else if (ev.type === "error") {
           // Terminal, exactly like `done`. Every producer of an error frame
           // ends the run on it: agent.py returns after each one, and the SSE
