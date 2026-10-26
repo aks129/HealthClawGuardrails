@@ -19,12 +19,11 @@ Synthetic phrases only.
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from careagents import routing
 from careagents.llm import REFUSAL_TEXT
+from tests.timing_helpers import assert_linear
 
 # Each one is a direct way of saying an English phrase _CRISIS covers.
 SPANISH_MISSES = (
@@ -126,9 +125,8 @@ def test_unicode_tricks_never_reach_haiku(text):
     assert routing.classify(text) == routing.TIER_SONNET
 
 
-def test_is_crisis_is_linear_on_long_input():
-    for text in ("dolor " * 35_000, "no puedo " * 22_000,
-                 "ataque al " * 20_000, "é" * 100_000):
-        start = time.perf_counter()
-        routing.is_crisis(text)
-        assert time.perf_counter() - start < 1.0
+# "e\u0301" is a decomposed é, a base letter and a combining accent.
+@pytest.mark.parametrize("unit", ("dolor ", "no puedo ", "ataque al ",
+                                  "e\u0301"))
+def test_is_crisis_is_linear_on_long_input(unit):
+    assert_linear(routing.is_crisis, unit)

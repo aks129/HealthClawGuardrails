@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,6 +20,7 @@ from careagents import beta, imessage, llm, routing, sendblue_surface
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 from tests.test_careagents_imessage import PHONE, _pair
+from tests.timing_helpers import assert_linear
 
 
 def _carries_911(text: str) -> bool:
@@ -137,11 +137,9 @@ def test_crisis_wording_is_crisis(said):
 def test_is_crisis_stays_linear(unit):
     """`cort\\w* las venas` and `perd\\w* el conocimiento`: an unbounded
     \\w* before a literal, from every start in a long word. 32k
-    characters take about 0.35 s on a6fee38f and quadruple per doubling."""
-    text = unit * (32_000 // len(unit))
-    start = time.perf_counter()
-    routing.is_crisis(text)
-    assert time.perf_counter() - start < 0.1
+    characters took about 0.35 s on a6fee38f and quadrupled per doubling.
+    Measured as growth, not a time limit, so a busy machine passes."""
+    assert_linear(routing.is_crisis, unit)
 
 
 # --- what holds ----------------------------------------------------------------------
