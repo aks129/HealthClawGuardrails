@@ -27,9 +27,6 @@ def _obs(value, unit, code):
                               "system": UCUM, "code": code}}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1036 QA: interpret_observation ignores a contradicting UCUM code. "
-    "Remove this marker when the coded unit is checked."))
 @pytest.mark.parametrize("value,unit,code", [
     (250000, "K/uL", "/uL"),         # newly scored by #1036
     (250000, "thou/uL", "/uL"),      # newly scored by #1036

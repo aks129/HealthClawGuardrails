@@ -59,10 +59,6 @@ def test_listed_spelling_reaches_the_chat_with_its_number(
     assert plt["flag"] == "H" and plt["value"] == 520 and plt["unit"] == "K/uL"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1036 QA: the engine scores these count spellings but "
-    "careagents/labs_timeline.UCUM_ALLOWED does not list them, so the chat "
-    "gets the flag with value None. Remove this marker when fixed."))
 @pytest.mark.parametrize("unit", UNLISTED)
 def test_scored_spelling_reaches_the_chat_with_its_number(
         cfg, svc, monkeypatch, unit):  # noqa: F811

@@ -92,3 +92,20 @@ def test_other_analytes_are_not_widened():
     # is still a mismatch, and mg/dL against mmol/L still falls back.
     r = interpret_observation(_obs("2823-3", 4.2, "K/uL"))
     assert r["indeterminate_reason"] == UNIT_MISMATCH
+
+
+UCUM = "http://unitsofmeasure.org"
+
+
+@pytest.mark.parametrize("code,flag", [("10*3/uL", "N"), ("10*9/L", "N"),
+                                       ("/uL", None)])
+def test_coded_unit_alone_is_what_is_compared(code, flag):
+    o = _obs(PLATELETS, 250, None)
+    o["valueQuantity"] = {"value": 250, "system": UCUM, "code": code}
+    assert interpret_observation(o)["flag"] == flag
+
+
+def test_a_code_from_another_system_is_not_a_unit():
+    o = _obs(PLATELETS, 250, "K/uL")
+    o["valueQuantity"].update({"system": "urn:x", "code": "/uL"})
+    assert interpret_observation(o)["flag"] == "N"

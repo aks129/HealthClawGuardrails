@@ -81,6 +81,10 @@ UCUM_ALLOWED = frozenset({
     "/[HPF]", "/[LPF]", "s", "ms", "mm/h", "mm/[Hg]", "cm[H2O]",
     "mg/(24.h)", "ng/mL{FEU}", "mg/g{creat}", "K/uL", "x10E3/uL",
     "x10E6/uL", "fl",
+    # Thousands per microlitre as feeds spell it; the engine scores each
+    # as 10*3/uL (r6/labs/interpret.py _EQUIVALENT_UNITS, #1036 QA F1).
+    # Only exact equivalents, each listed by exact spelling.
+    "thou/uL", "10*3/\u00b5L", "10*3/\u03bcL", "10E3/uL", "x10^9/L",
 })
 
 

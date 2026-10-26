@@ -85,6 +85,7 @@ LOINC_RANGES = {
 
 
 LOINC_SYSTEM = "http://loinc.org"
+UCUM_SYSTEM = "http://unitsofmeasure.org"
 
 
 #: Why a result could not be decided. Grouped by the report layer into what
@@ -218,16 +219,31 @@ def interpret_observation(obs, patient=None):
         return _indeterminate(analyte, loinc, value, unit, "unknown analyte",
                               UNKNOWN_ANALYTE)
 
+    # The coded UCUM unit is the computable one; `unit` is display text. A
+    # feed that writes "K/uL" beside a code of "/uL" sent a number 1000x the
+    # display's, so a disagreement is never scored. With no coded unit the
+    # display is all there is (as r6/labs/trend.py `_unit` reads it).
+    coded = vq.get("code") if vq.get("system") == UCUM_SYSTEM else None
+    coded = coded if isinstance(coded, str) and coded.strip() else None
+    if coded is not None and unit not in (None, "") \
+            and _canonical_unit(unit) != _canonical_unit(coded):
+        return _indeterminate(analyte, loinc, value, unit,
+                              f"unit {unit!r} disagrees with its coded "
+                              f"unit {coded!r}", UNIT_MISMATCH)
+    if unit in (None, ""):
+        unit = coded
+    measured = coded if coded is not None else unit
+
     crit_low, crit_high = entry.get("crit_low"), entry.get("crit_high")
 
-    resource_rng = _resource_range(obs, unit)
+    resource_rng = _resource_range(obs, measured)
     if resource_rng is not None:
         low, high = resource_rng
         source, note = "resource", "used the performing lab's reference range"
     else:
         # Table fallback requires a confirmed matching unit — an absent or
         # mismatched unit is indeterminate, never a guessed normal.
-        if _canonical_unit(unit) != entry["unit"]:
+        if _canonical_unit(measured) != entry["unit"]:
             return _indeterminate(analyte, loinc, value, unit,
                                   f"unit {unit!r} != expected {entry['unit']!r}",
                                   UNIT_MISMATCH)
@@ -245,7 +261,7 @@ def interpret_observation(obs, patient=None):
     # TABLE's bound on that side, we cannot honestly call it normal — and we
     # won't invent an H/L from a range the lab didn't assert. Indeterminate.
     if flag == "N" and source == "resource" and (low is None) != (high is None) \
-            and _canonical_unit(unit) == entry["unit"]:
+            and _canonical_unit(measured) == entry["unit"]:
         t_low, t_high = _apply_sex(entry, patient)
         crosses_missing_side = (
             (high is None and t_high is not None and value > t_high)
