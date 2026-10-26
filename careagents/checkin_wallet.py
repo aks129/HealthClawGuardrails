@@ -28,8 +28,9 @@ one relay route, POST /checkin/wallet/records:
 - The server picks the tenant from the account holder's own active,
   non-sample connections, and the client resolves the patient from it.
   With one, that one. With several, the relay refuses with the list of
-  them, each named by its connection label and provider only, and the
-  person picks; the browser then sends that connection's id, which the
+  them, each named by its connection label, a fixed phrase for how it was
+  connected, and when (connected_how; never anything from the records),
+  and the person picks; the browser then sends that connection's id, which the
   server checks against the same list, from the signed-in account, on
   every call. The id chooses among the person's own sets; it never names
   a tenant. One set is answered from; sets are never merged.
@@ -73,6 +74,7 @@ from pathlib import Path
 from flask import Response, jsonify, render_template, request, session
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from careagents.connectors import WEARABLE_PROVIDERS
 from careagents.healthclaw import HealthClawError, acting_for
 
 logger = logging.getLogger(__name__)
@@ -144,6 +146,23 @@ def chosen_connection(body) -> str | None:
     if isinstance(cid, str) and 0 < len(cid) <= CONNECTION_ID_MAX:
         return cid
     return None
+
+
+#: How a set of records was connected, by connection kind, as the picker
+#: says it. Fixed words: two "Records from your doctor" read alike, and
+#: this, with the date, tells them apart without a health detail.
+CONNECTED_HOW = {"fasten": "From a patient portal", "direct": "Uploaded file"}
+
+
+def connected_how(c) -> str:
+    """The picker's phrase for how `c` was connected. A wearable names its
+    source only when the provider is one of our own catalog's names; no
+    other free text is ever echoed."""
+    if c["kind"] == "wearable":
+        names = {p["label"] for p in WEARABLE_PROVIDERS}
+        return (f"From {c['provider']}" if c["provider"] in names
+                else "From a device or app")
+    return CONNECTED_HOW.get(c["kind"], "Connected records")
 
 
 def _is_test_patient(c) -> bool:
@@ -270,10 +289,10 @@ def register(app, svc, cfg, hc, full_session) -> None:
         tenant, why = records_tenant(svc, account_id, test_patient,
                                      chosen_connection(body))
         if why == "several_records":
-            # The sets to pick from, by name only: never a tenant id or
-            # anything from the records.
+            # The sets to pick from, by name, how and when only: never a
+            # tenant id or anything from the records.
             choices = [{"id": c["id"], "label": c["label"],
-                        "provider": c["provider"]}
+                        "how": connected_how(c), "added": c["connected_at"]}
                        for c in record_sets(svc.list_home(account_id))]
             return _no_store(jsonify({"error": why,
                                       "choices": choices})), 409

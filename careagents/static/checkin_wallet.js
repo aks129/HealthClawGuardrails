@@ -12,7 +12,7 @@
    names and nothing else: not the request, not the website's origin), and
    answers with the account's own records from the engine's checkin export.
    An account with more than one set of its own records is told which sets
-   there are, by label and provider, and the person picks one; the relay is
+   there are, by label, how and when, and the person picks one; the relay is
    then asked again with that connection's id, which the server checks is
    one of the account's own. The other calls are the existing sign-in
    endpoints. */
@@ -400,9 +400,18 @@ const NO_RECORDS = {
 
 // --- more than one set of records ------------------------------------------
 
-/* One button per set, its connection label then its provider: what the
-   person named it and where it came from, never anything from the records.
-   The same words twice get a number, so no two buttons look alike.
+/* "Added Oct 12, 2026", in the person's own time zone, from the
+   connection's epoch seconds; "" without one. */
+function addedOn(secs) {
+  if (typeof secs !== "number" || !Number.isFinite(secs)) return "";
+  return `Added ${new Date(secs * 1000).toLocaleDateString("en-US",
+    { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
+/* One button per set: its connection label, then how it was connected and
+   when (the server's fixed phrase and the connect date). Account
+   bookkeeping only, never anything from the records. Lines still alike
+   get a number, so no two buttons look the same.
    Resolves to the chosen connection id, or null for "Don't share". */
 function pickRecords(choices) {
   const list = $("wallet-pick-list");
@@ -410,9 +419,9 @@ function pickRecords(choices) {
   const seen = {};
   return new Promise((resolve) => {
     choices.forEach((c) => {
-      // Where the set came from (the connection's provider field).
-      const source = typeof c.provider === "string" ? c.provider : "";
-      const key = `${c.label}\n${source}`;
+      const how = typeof c.how === "string" ? c.how : "";
+      const detail = [how, addedOn(c.added)].filter(Boolean).join(" · ");
+      const key = `${c.label}\n${detail}`;
       seen[key] = (seen[key] || 0) + 1;
       const btn = document.createElement("button");
       btn.className = "btn-secondary btn-block";
@@ -420,10 +429,10 @@ function pickRecords(choices) {
       const name = document.createElement("span");
       name.textContent = seen[key] > 1 ? `${c.label} (${seen[key]})` : c.label;
       btn.append(name);
-      if (source) {
+      if (detail) {
         const from = document.createElement("span");
         from.className = "checkin-pick-source";
-        from.textContent = source;
+        from.textContent = detail;
         btn.append(from);
       }
       btn.onclick = () => resolve(c.id);

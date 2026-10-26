@@ -4,7 +4,8 @@
  *
  * Seen live 2026-10-26: such an account was told this test version answers
  * from only one set, and could not check in. Now the relay refuses with the
- * sets it may answer from, each by connection label and provider, the
+ * sets it may answer from, each by connection label, how it was connected
+ * and when, the
  * person picks one, and the wallet asks again naming that connection.
  *
  * What only a browser shows: the picker at phone width, its words set as
@@ -44,11 +45,20 @@ const ITEMS = [
 
 const LONG = 'Records from the synthetic clinic with a very long name that '
   + 'keeps going past the width of a phone screen';
+// The date is shown in the browser's time zone; pin it so the words are
+// the same on any runner.
+test.use({ timezoneId: 'America/New_York' });
+const DAY = (iso: string) => Date.parse(`${iso}T12:00:00Z`) / 1000;
+const FASTEN = 'Records from your doctor';
+const PORTAL = 'From a patient portal';
 const CHOICES = [
-  { id: 'conn_e2epicka', label: 'My records', provider: null },
-  { id: 'conn_e2epickb', label: 'My records', provider: null },
-  { id: 'conn_e2epickc', label: '<b>Portal</b>', provider: 'Synthetic Hospital C' },
-  { id: 'conn_e2epickd', label: LONG, provider: 'Synthetic Clinic D' },
+  // Two portals, different days: told apart by the date alone.
+  { id: 'conn_e2epicka', label: FASTEN, how: PORTAL, added: DAY('2026-10-12') },
+  { id: 'conn_e2epickb', label: FASTEN, how: PORTAL, added: DAY('2026-10-20') },
+  // A third the same day as the second: numbered as well.
+  { id: 'conn_e2epicke', label: FASTEN, how: PORTAL, added: DAY('2026-10-20') },
+  { id: 'conn_e2epickc', label: '<b>Portal</b>', how: 'Uploaded file', added: DAY('2026-09-01') },
+  { id: 'conn_e2epickd', label: LONG, how: 'Uploaded file', added: DAY('2026-09-02') },
 ];
 
 const VERIFIER = 'http://127.0.0.1:5398';
@@ -119,17 +129,26 @@ test.describe('check-in wallet, more than one set of records', () => {
       const pick = wallet.locator('#wallet-pick');
       await expect(pick).toBeVisible();
       const buttons = wallet.locator('#wallet-pick-list button');
-      await expect(buttons).toHaveCount(4);
-      // Label then provider, as text; the same words twice are numbered.
-      await expect(buttons.nth(0)).toHaveText('My records');
-      await expect(buttons.nth(1)).toHaveText('My records (2)');
-      await expect(buttons.nth(2)).toHaveText('<b>Portal</b>Synthetic Hospital C');
-      await expect(buttons.nth(2).locator('b')).toHaveCount(0);
-      await expect(buttons.nth(3)).toContainText('Synthetic Clinic D');
+      await expect(buttons).toHaveCount(5);
+      // Label, then how and when, as text. Two portal sets read apart by
+      // their dates; only lines still alike are numbered.
+      await expect(buttons.nth(0)).toHaveText(
+        `${FASTEN}${PORTAL} · Added Oct 12, 2026`);
+      await expect(buttons.nth(1)).toHaveText(
+        `${FASTEN}${PORTAL} · Added Oct 20, 2026`);
+      await expect(buttons.nth(2)).toHaveText(
+        `${FASTEN} (2)${PORTAL} · Added Oct 20, 2026`);
+      await expect(buttons.nth(3)).toHaveText(
+        '<b>Portal</b>Uploaded file · Added Sep 1, 2026');
+      await expect(buttons.nth(3).locator('b')).toHaveCount(0);
+      await expect(buttons.nth(4)).toContainText('Uploaded file · Added Sep 2, 2026');
+      // No two buttons read the same.
+      const words = await buttons.allInnerTexts();
+      expect(new Set(words).size).toBe(words.length);
       // Nothing runs off the side of a phone, the long label included.
       expect(await wallet.evaluate(() =>
         document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
-      const box = await buttons.nth(3).boundingBox();
+      const box = await buttons.nth(4).boundingBox();
       expect(box!.x + box!.width).toBeLessThanOrEqual(375);
       expect(box!.height).toBeGreaterThanOrEqual(44);
       if (process.env.CHECKIN_SHOTS) {
@@ -139,7 +158,7 @@ test.describe('check-in wallet, more than one set of records', () => {
       // Nothing has been answered while the person chooses.
       expect(await result(page)).toBeUndefined();
 
-      await buttons.nth(2).click();
+      await buttons.nth(3).click();
       await expect(wallet.locator('#wallet-review')).toBeVisible();
       await expect(pick).toBeHidden();
       // The second call names the picked connection and nothing else new:

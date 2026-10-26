@@ -51,18 +51,38 @@ def two(monkeypatch):
 
 # --- the list ------------------------------------------------------------------
 
-def test_two_sets_are_listed_by_label_and_provider_only(two):
+def test_two_sets_are_listed_by_label_how_and_when_only(two):
+    """Each set by its label, a fixed phrase for how it was connected, and
+    when: account bookkeeping, never a tenant id or anything from the
+    records."""
     browser, hc, svc, acct, a, b = two
     r = _post(browser)
     assert r.status_code == 409
     assert r.headers["Cache-Control"] == "no-store"
+    added = {c: svc.get_connection(acct.id, c)["connected_at"] for c in (a, b)}
     assert r.get_json() == {"error": "several_records", "choices": [
-        {"id": a, "label": "Upload", "provider": "Synthetic Clinic A"},
-        {"id": b, "label": "Portal", "provider": "Synthetic Hospital B"},
+        {"id": a, "label": "Upload", "how": "Uploaded file",
+         "added": added[a]},
+        {"id": b, "label": "Portal", "how": "From a patient portal",
+         "added": added[b]},
     ]}
     body = r.get_data(as_text=True)
     assert "ca-pick-one" not in body and "ca-pick-two" not in body
     assert hc.calls == []
+
+
+@pytest.mark.parametrize("kind, provider, how", [
+    ("fasten", "your doctor", "From a patient portal"),
+    ("direct", "Direct upload", "Uploaded file"),
+    ("wearable", "Oura", "From Oura"),
+    ("wearable", "Somewhere <b>odd</b>", "From a device or app"),
+    ("wearable", None, "From a device or app"),
+    ("hbo", "Free text from anywhere", "Connected records"),
+])
+def test_how_is_a_fixed_phrase_never_free_text(kind, provider, how):
+    """Only a wearable names its source, and only from our own catalog."""
+    from careagents.checkin_wallet import connected_how
+    assert connected_how({"kind": kind, "provider": provider}) == how
 
 
 def test_only_the_persons_own_active_real_sets_are_listed(two):
