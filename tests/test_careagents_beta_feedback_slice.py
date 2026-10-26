@@ -465,7 +465,8 @@ const scrolled = [];
 async function fetch(url, opts) { sentBody = opts.body;
   return { ok: true, json: async () => ({ ok: true }) }; }
 const code = cutFn('el') + cutConst('FLAG_REASONS') + cutConst('NOTE_MAX')
-  + cutFn('flagBody') + cutConst('FLAG_ERRORS') + cutFn('addFlag')
+  + cutFn('flagBody') + cutConst('FLAG_ERRORS') + cutConst('FLAG_OPEN')
+  + cutFn('addFlag')
   + 'return addFlag;';
 const addFlag = new Function('document', 'fetch', 'scroll', code)(
   document, fetch, () => {});
@@ -538,11 +539,13 @@ def test_the_page_offers_the_same_reasons_the_server_takes():
 def test_only_a_model_answer_gets_the_control():
     # Error frames and the 429 sentence are not answers: no run id passed.
     src = CHAT_JS.read_text()
-    assert 'addAgentText(ev.text, state.runId);' in src
+    assert 'addAgentText(ev.text, state.runId, null, state.lang);' in src
     calls = re.findall(r"(?<!function )addAgentText\(([^;{]*)\);", src)
     # A run id with no failure code is the flag; only the answer frame.
-    flagged = [c for c in calls if "runId" in c and c.count(",") == 1]
-    assert flagged == ["ev.text, state.runId"]
+    # The fourth argument is the turn's language, for the link's words.
+    flagged = [c for c in calls if "runId" in c and (
+        c.count(",") == 1 or c.split(",")[2].strip() == "null")]
+    assert flagged == ["ev.text, state.runId, null, state.lang"]
 
 
 # --- the digest -------------------------------------------------------------------
