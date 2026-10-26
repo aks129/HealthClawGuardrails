@@ -40,10 +40,6 @@ def _rng(low, high, unit):
     return [r]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1036 fix-round QA: a display that spells the UCUM code differently "
-    "is read as a contradiction, and a result main scored is lost. Remove "
-    "this marker when fixed."))
 @pytest.mark.parametrize("loinc,value,unit,code,ref,flag", [
     # Critical potassium, display mEq/L, UCUM code meq/L: HH on main.
     ("2823-3", 6.8, "mEq/L", "meq/L", _rng(3.5, 5.1, "mEq/L"), "HH"),

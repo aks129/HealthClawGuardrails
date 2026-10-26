@@ -105,6 +105,17 @@ def test_coded_unit_alone_is_what_is_compared(code, flag):
     assert interpret_observation(o)["flag"] == flag
 
 
+@pytest.mark.parametrize("display,code", [
+    ("mmol/L", "mg/dL"), ("mEq/L", "mmol/L"), ("mg/dL", "g/dL"),
+    ("mL/min", "mL/min/{1.73_m2}")])
+def test_spelling_fold_never_joins_two_units(display, code):
+    # Case, spaces, micro signs and the 1.73m2 alias only: a different
+    # unit, even one numerically equal for this analyte, is refused.
+    o = _obs("2823-3", 4.2, display)
+    o["valueQuantity"].update({"system": UCUM, "code": code})
+    assert interpret_observation(o)["indeterminate_reason"] == UNIT_MISMATCH
+
+
 def test_a_code_from_another_system_is_not_a_unit():
     o = _obs(PLATELETS, 250, "K/uL")
     o["valueQuantity"].update({"system": "urn:x", "code": "/uL"})

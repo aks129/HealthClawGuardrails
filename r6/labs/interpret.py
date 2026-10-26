@@ -110,9 +110,19 @@ _EQUIVALENT_UNITS = {k: _COUNT_PER_UL for k in (
     "10*9/l", "10^9/l", "10e9/l", "x10*9/l", "x10^9/l", "x10e9/l")}
 
 
+#: Spellings of one UCUM annotation that feeds write without its braces.
+_UNIT_ALIASES = (("{1.73_m2}", "1.73m2"),)
+
+
 def _unit_key(unit):
-    return "".join(unit.split()).replace("\u00b5", "u").replace(
+    """A unit folded for comparison: no spaces, either micro sign as u,
+    lower case, and the aliases above. "mEq/L" and "meq/L", "mg/dl" and
+    "mg/dL" are one unit spelled two ways."""
+    key = "".join(unit.split()).replace("\u00b5", "u").replace(
         "\u03bc", "u").lower()
+    for alias, plain in _UNIT_ALIASES:
+        key = key.replace(alias, plain)
+    return key
 
 
 def _canonical_unit(unit):
@@ -121,6 +131,16 @@ def _canonical_unit(unit):
     if not isinstance(unit, str):
         return unit
     return _EQUIVALENT_UNITS.get(_unit_key(unit), unit)
+
+
+def _same_unit(a, b):
+    """One unit in two spellings: the same after `_unit_key`, or two
+    spellings of thousands per microlitre. Anything else, including a
+    non-string, only when equal."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return a == b
+    return _unit_key(a) == _unit_key(b) \
+        or _canonical_unit(a) == _canonical_unit(b)
 
 
 # The write API stores what it is given, so any field may hold a string, a
@@ -168,8 +188,7 @@ def _resource_range(obs, value_unit):
         if not all(b is None or _is_number(b) for b in (low, high)):
             continue  # a bound that is not a number cannot be compared
         units = [q.get("unit") for q in (low_q, high_q) if q.get("unit")]
-        if any(value_unit and _canonical_unit(u) != _canonical_unit(value_unit)
-               for u in units):
+        if any(value_unit and not _same_unit(u, value_unit) for u in units):
             continue  # unit-inconsistent lab range — don't trust it
         return low, high
     return None
@@ -226,7 +245,7 @@ def interpret_observation(obs, patient=None):
     coded = vq.get("code") if vq.get("system") == UCUM_SYSTEM else None
     coded = coded if isinstance(coded, str) and coded.strip() else None
     if coded is not None and unit not in (None, "") \
-            and _canonical_unit(unit) != _canonical_unit(coded):
+            and not _same_unit(unit, coded):
         return _indeterminate(analyte, loinc, value, unit,
                               f"unit {unit!r} disagrees with its coded "
                               f"unit {coded!r}", UNIT_MISMATCH)
@@ -243,7 +262,7 @@ def interpret_observation(obs, patient=None):
     else:
         # Table fallback requires a confirmed matching unit — an absent or
         # mismatched unit is indeterminate, never a guessed normal.
-        if _canonical_unit(measured) != entry["unit"]:
+        if not _same_unit(measured, entry["unit"]):
             return _indeterminate(analyte, loinc, value, unit,
                                   f"unit {unit!r} != expected {entry['unit']!r}",
                                   UNIT_MISMATCH)
@@ -261,7 +280,7 @@ def interpret_observation(obs, patient=None):
     # TABLE's bound on that side, we cannot honestly call it normal — and we
     # won't invent an H/L from a range the lab didn't assert. Indeterminate.
     if flag == "N" and source == "resource" and (low is None) != (high is None) \
-            and _canonical_unit(measured) == entry["unit"]:
+            and _same_unit(measured, entry["unit"]):
         t_low, t_high = _apply_sex(entry, patient)
         crosses_missing_side = (
             (high is None and t_high is not None and value > t_high)
