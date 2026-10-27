@@ -55,12 +55,16 @@ INTERNAL_TOKEN_MINT_SECRET=<local secret> KTC_EXPORT_ENABLED=true \
   PUBLIC_BASE_URL=http://localhost:5099 uv run flask --app main run --port 5099
 
 INTERNAL_TOKEN_MINT_SECRET=<same secret> uv run python scripts/sandbox_test_patient.py \
-  --source smart --out smart.json --ingest http://localhost:5099 --tenant sandbox-smart
+  --source smart --out smart.json --ingest http://localhost:5099 --tenant sandbox-smart-test
 ```
 
 `--ingest` posts `{"bundle": ...}` to `POST /r6/fhir/internal/ingest-bundle`
 with `X-Tenant-Id` and `X-Internal-Secret`. The secret is read from
-`INTERNAL_TOKEN_MINT_SECRET` and is never a command-line flag. The script
+`INTERNAL_TOKEN_MINT_SECRET` and is never a command-line flag. The tenant
+must match `^sandbox-(oracle|smart)-[a-z0-9-]+$`, and the engine URL must be
+https (plain http only for `localhost` and `127.0.0.1`). Both are checked
+before the sandbox is read. No request the script makes follows a redirect,
+and proxy and CA-bundle environment variables are ignored. The script
 prints the counts and error codes from the engine's response.
 
 To run the export afterwards, mint a token with
@@ -92,12 +96,18 @@ FHIR-IQ/rxgenie. The script:
 1. Refuses the bundle (exit 2, nothing sent) unless it is a Bundle with at
    least one entry, and every entry's resource has the HTEST coding on
    `meta.tag` or `meta.security`. The check is `r6/ktc.py` `is_test_data`.
-2. Encrypts the bundle as a compact JWE: `alg` `dir`, `enc` `A256GCM`, `cty`
+   It also refuses a resource that nests another one (`contained`, a nested
+   Bundle), and any key outside the Bundle's `resourceType`, `id`, `type`,
+   `meta`, `timestamp` and `entry` or an entry's `resource` and `fullUrl`.
+   What it sends is rebuilt from the checked resources only, as
+   `{"resourceType": "Bundle", "type": "collection", "entry": [{"resource":
+   ...}]}`, so the harness gets exactly what was checked.
+2. Encrypts the rebuilt bundle as a compact JWE: `alg` `dir`, `enc` `A256GCM`, `cty`
    `application/fhir+json`, with the protected header segment as AAD and a
    fresh 32-byte key. The crypto is `r6/shl.py`, the same code the engine
    uses for `deliver: link`.
 3. POSTs `{"jwe": ...}` to `https://pshd-shl.exe.xyz/shl` and reads back the
-   link id.
+   link id. A redirect is not followed and fails the run.
 4. Prints a U-flag `shlink:/` with the file URL, the key, an `exp` of at
    most one hour (`--ttl` accepts 1 to 3600 seconds) and a label (default
    "Synthetic test records", 80 characters at most).

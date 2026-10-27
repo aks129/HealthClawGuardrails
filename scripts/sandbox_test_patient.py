@@ -31,7 +31,11 @@ and reported; a missing Patient fails the run.
 --ingest posts the bundle to a running engine's
 POST /r6/fhir/internal/ingest-bundle for --tenant, with the internal secret
 from INTERNAL_TOKEN_MINT_SECRET (never a flag, so it stays out of shell
-history).
+history). The tenant must match ^sandbox-(oracle|smart)-[a-z0-9-]+$ and the
+engine URL must be https (http only for localhost or 127.0.0.1), both
+checked before any request.
+
+No request follows a redirect, and env proxies and CA bundles are ignored.
 
 Public sandbox patients are synthetic, but this treats them as data
 anyway: it prints counts per type and the output path, never a resource.
@@ -42,7 +46,7 @@ Exit status: 0 written (and ingested); 1 no Patient or the ingest failed;
 Usage:
   uv run python scripts/sandbox_test_patient.py --source oracle --out o.json
   uv run python scripts/sandbox_test_patient.py --source smart --labs \\
-      --out s.json --ingest http://localhost:5099 --tenant sandbox-smart
+      --out s.json --ingest http://localhost:5099 --tenant sandbox-smart-test
 """
 
 from __future__ import annotations
@@ -50,9 +54,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SOURCES = {
     'oracle': {
@@ -80,6 +86,10 @@ HTEST = {'system': 'http://terminology.hl7.org/CodeSystem/v3-ActReason',
 
 TIMEOUT_SECONDS = 90
 
+#: --ingest only into a sandbox tenant named for one of these sources.
+TENANT_RE = re.compile(r'\Asandbox-(oracle|smart)-[a-z0-9-]+\Z')
+LOCAL_HOSTS = frozenset({'localhost', '127.0.0.1'})
+
 
 class SandboxError(RuntimeError):
     """The sandbox did not give us the patient."""
@@ -95,13 +105,33 @@ def tag_test_data(resource):
     return resource
 
 
+def new_session():
+    import requests
+
+    session = requests.Session()
+    session.trust_env = False   # no env proxy, CA bundle or .netrc
+    return session
+
+
+def check_engine_url(url):
+    """True for https, or http to this machine: the secret rides along."""
+    try:
+        got = urlsplit(url)
+        host = (got.hostname or '').lower()
+    except ValueError:
+        return False
+    return bool(host) and (got.scheme == 'https' or (
+        got.scheme == 'http' and host in LOCAL_HOSTS))
+
+
 def _get(session, url, params=None):
     """GET with one retry on a 504 or a timeout. The JSON body, or None
     after two failures (or any other non-200, or a body that is not JSON)."""
     for _ in range(2):
         try:
             resp = session.get(url, params=params, timeout=TIMEOUT_SECONDS,
-                               headers={'Accept': 'application/fhir+json'})
+                               headers={'Accept': 'application/fhir+json'},
+                               allow_redirects=False)
         except OSError:  # requests' Timeout and ConnectionError
             continue
         if resp.status_code == 504:
@@ -130,8 +160,7 @@ def build_bundle(source, patient_id, *, session=None, labs=False):
     """(bundle, counts): the tagged collection Bundle, and the count kept
     per type (None for a type whose search failed)."""
     if session is None:
-        import requests
-        session = requests.Session()
+        session = new_session()
     cfg = SOURCES[source]
     base = cfg['base']
 
@@ -164,12 +193,13 @@ def build_bundle(source, patient_id, *, session=None, labs=False):
 
 
 def ingest(bundle, engine, tenant, secret):
-    """POST the bundle to the engine's ingest-bundle; its JSON answer."""
-    import requests
-
-    resp = requests.post(
+    """POST the bundle to the engine's ingest-bundle; its JSON answer. A
+    redirect is not followed, so the secret reaches no other host."""
+    if not check_engine_url(engine):
+        raise ValueError('engine url must be https (http only for localhost)')
+    resp = new_session().post(
         f'{engine.rstrip("/")}/r6/fhir/internal/ingest-bundle',
-        json={'bundle': bundle}, timeout=120,
+        json={'bundle': bundle}, timeout=120, allow_redirects=False,
         headers={'X-Tenant-Id': tenant, 'X-Internal-Secret': secret})
     try:
         body = resp.json()
@@ -195,6 +225,10 @@ def main(argv=None):
     secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '')
     if args.ingest and not args.tenant:
         parser.error('--ingest needs --tenant')
+    if args.ingest and not TENANT_RE.match(args.tenant):
+        parser.error('--tenant must match ^sandbox-(oracle|smart)-[a-z0-9-]+$')
+    if args.ingest and not check_engine_url(args.ingest):
+        parser.error('--ingest must be https (http only for localhost)')
 
     patient_id = args.patient or SOURCES[args.source]['patient']
     try:

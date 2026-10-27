@@ -18,8 +18,13 @@ prints.
 Test data only. The harness is a third-party host, so a bundle is refused
 (exit 2, nothing sent) unless it has entries and every entry's resource
 carries the HL7 v3 ActReason HTEST marker on meta.tag or meta.security,
-matched as r6/ktc.py `is_test_data` matches it. scripts/sandbox_test_patient.py
-writes bundles that pass.
+matched as r6/ktc.py `is_test_data` matches it, and nests no other resource
+(`contained`, a Bundle's entries). A file with any key beyond the Bundle's
+resourceType, id, type, meta, timestamp and entry, or an entry's resource
+and fullUrl, is refused too (a Bundle `signature`, an entry `search`). What
+is encrypted and sent is rebuilt from the checked resources alone, as a
+`collection` Bundle; scripts/sandbox_test_patient.py writes bundles that
+pass.
 
 Usage:
   uv run python scripts/ktc_shl_link.py bundle.json
@@ -60,26 +65,58 @@ class NotTestData(ValueError):
     """The bundle is not all HTEST-tagged test data."""
 
 
+#: The only keys a file may carry. None of them is sent: the payload is
+#: rebuilt from the checked resources. Anything else is refused, since
+#: nothing checks what it holds.
+_BUNDLE_KEYS = frozenset({'resourceType', 'id', 'type', 'meta', 'timestamp',
+                          'entry'})
+_ENTRY_KEYS = frozenset({'resource', 'fullUrl'})
+
+
+def _nests_a_resource(value):
+    """True if any dict below `value` names a resourceType."""
+    children = value.values() if isinstance(value, dict) else (
+        value if isinstance(value, list) else ())
+    return any((isinstance(c, dict) and 'resourceType' in c)
+               or _nests_a_resource(c) for c in children)
+
+
 def check_test_only(bundle):
-    """Raise NotTestData unless `bundle` is a Bundle with at least one entry
-    and every entry's resource carries the HTEST marker."""
+    """The bundle to send, rebuilt from the checked resources only. Raise
+    NotTestData unless `bundle` is a Bundle with at least one entry and
+    every entry's resource carries the HTEST marker and nests no other
+    resource, and the file carries no key outside the known few."""
     if not isinstance(bundle, dict) or bundle.get('resourceType') != 'Bundle':
         raise NotTestData('not a FHIR Bundle')
+    if set(bundle) - _BUNDLE_KEYS:
+        raise NotTestData('the bundle carries an unchecked key')
     entries = bundle.get('entry')
     if not isinstance(entries, list) or not entries:
         raise NotTestData('the bundle has no entries')
+    checked = []
     for i, entry in enumerate(entries):
+        if isinstance(entry, dict) and set(entry) - _ENTRY_KEYS:
+            raise NotTestData(f'entry {i} carries an unchecked key')
         resource = entry.get('resource') if isinstance(entry, dict) else None
         if not is_test_data(resource):
             raise NotTestData(f'entry {i} is not tagged HTEST')
+        if _nests_a_resource(resource):
+            raise NotTestData(f'entry {i} nests another resource')
+        checked.append({'resource': resource})
+    return {'resourceType': 'Bundle', 'type': 'collection', 'entry': checked}
 
 
 def post_jwe(jwe, url=HARNESS_URL):
-    """POST `{jwe}` to the harness; the link id it answers."""
+    """POST `{jwe}` to the harness; the link id it answers. No redirect is
+    followed and env proxies and CA bundles are ignored."""
     import requests
 
-    resp = requests.post(url, json={'jwe': jwe}, timeout=30)
-    resp.raise_for_status()
+    session = requests.Session()
+    session.trust_env = False
+    resp = session.post(url, json={'jwe': jwe}, timeout=30,
+                        allow_redirects=False)
+    if not 200 <= resp.status_code < 300:   # a 3xx is not followed
+        raise requests.HTTPError(f'HTTP {resp.status_code}')
     return resp.json().get('id')
 
 
@@ -88,7 +125,7 @@ def make_link(bundle, *, ttl=MAX_TTL_SECONDS, label=DEFAULT_LABEL,
     """The `shlink:/` for `bundle`, stored on the harness by `post`.
 
     Every check runs before anything is sent."""
-    check_test_only(bundle)
+    checked = check_test_only(bundle)
     if isinstance(ttl, bool) or not isinstance(ttl, int) \
             or not 0 < ttl <= MAX_TTL_SECONDS:
         raise ValueError(f'ttl must be 1..{MAX_TTL_SECONDS} seconds')
@@ -96,7 +133,7 @@ def make_link(bundle, *, ttl=MAX_TTL_SECONDS, label=DEFAULT_LABEL,
         raise ValueError(f'label exceeds {shl.MAX_LABEL_CHARS} characters')
     post = post or post_jwe
     key = shl.new_key()
-    jwe = shl.encrypt(key, json.dumps(bundle).encode('utf-8'))
+    jwe = shl.encrypt(key, json.dumps(checked).encode('utf-8'))
     link_id = post(jwe, url=HARNESS_URL)
     if not (isinstance(link_id, str) and _LINK_ID.fullmatch(link_id)):
         raise ValueError('the harness did not answer a link id')

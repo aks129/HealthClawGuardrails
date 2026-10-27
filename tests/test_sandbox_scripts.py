@@ -213,7 +213,9 @@ class FakeSession:
         self.answers = answers
         self.calls = []
 
-    def get(self, url, params=None, headers=None, timeout=None):
+    def get(self, url, params=None, headers=None, timeout=None,
+            allow_redirects=True):
+        assert allow_redirects is False
         self.calls.append((url, dict(params or {})))
         rtype = url.rstrip('/').rsplit('/', 2)[-2 if '/Patient/' in url else -1]
         return self.answers[rtype].pop(0)
@@ -314,3 +316,122 @@ def test_no_patient_no_bundle():
     session = FakeSession(_answers(Patient=[FakeResponse(404), ]))
     with pytest.raises(pull.SandboxError):
         pull.build_bundle('oracle', 'p1', session=session)
+
+
+# --- Security review fix round (2026-10-26) -------------------------------------
+
+def test_the_file_sent_is_rebuilt_from_the_checked_resources():
+    """The harness gets exactly what the gate checked: a puller bundle's
+    fullUrl, meta and timestamp stay behind. MUTATION: encrypt `bundle`
+    instead of the rebuilt one -> red."""
+    built, _ = pull.build_bundle('oracle', 'p1',
+                                 session=FakeSession(_answers()))
+    harness = FakeHarness()
+    shlink = link.make_link(built, post=harness)
+    (_, jwe), = harness.posted
+    key = shl.b64url_decode(shl.parse_shlink(shlink)['key'])
+    assert json.loads(shl.decrypt(key, jwe)) == {
+        'resourceType': 'Bundle', 'type': 'collection',
+        'entry': [{'resource': e['resource']} for e in built['entry']]}
+
+
+@pytest.mark.parametrize('bundle', [
+    {'resourceType': 'Bundle', 'type': 'collection', 'link': [],
+     'entry': [{'resource': _res('Patient', 'p1')}]},
+    _bundle(dict(_res('Patient', 'p1'), extension=[
+        {'url': 'x', 'valueReference': {'resourceType': 'Patient'}}])),
+])
+def test_an_unchecked_key_or_a_nested_resource_is_refused(bundle):
+    harness = FakeHarness()
+    with pytest.raises(link.NotTestData):
+        link.make_link(bundle, post=harness)
+    assert harness.posted == []
+
+
+class _RecordingSession:
+    instances = []
+
+    def __init__(self):
+        self.trust_env = True
+        self.kwargs = None
+        _RecordingSession.instances.append(self)
+
+    def post(self, url, **kwargs):
+        self.kwargs = kwargs
+        return FakeResponse(302, {'id': 'abc'})
+
+
+def test_the_harness_post_follows_no_redirect_and_ignores_env(monkeypatch):
+    import requests
+    _RecordingSession.instances = []
+    monkeypatch.setattr(requests, 'Session', _RecordingSession)
+
+    with pytest.raises(requests.HTTPError):
+        link.post_jwe('a.b.c.d.e')
+
+    (s,) = _RecordingSession.instances
+    assert s.trust_env is False
+    assert s.kwargs['allow_redirects'] is False
+
+
+def test_the_ingest_post_follows_no_redirect_and_ignores_env(monkeypatch):
+    import requests
+    _RecordingSession.instances = []
+    monkeypatch.setattr(requests, 'Session', _RecordingSession)
+
+    status, _ = pull.ingest({'resourceType': 'Bundle'}, 'https://e.example',
+                            'sandbox-smart-x', 'synthetic-secret')
+
+    (s,) = _RecordingSession.instances
+    assert status == 302
+    assert s.trust_env is False
+    assert s.kwargs['allow_redirects'] is False
+
+
+def test_the_sandbox_session_ignores_env():
+    assert pull.new_session().trust_env is False
+
+
+def _main_ingest(monkeypatch, tmp_path, tenant, engine):
+    built, sent = [], []
+    monkeypatch.setattr(pull, 'build_bundle', lambda *a, **k: built.append(1)
+                        or (_bundle(_res('Patient', 'p1')), {'Patient': 1}))
+    monkeypatch.setattr(pull, 'ingest',
+                        lambda *a, **k: sent.append(a) or (200, {}))
+    try:
+        rc = pull.main(['--source', 'smart', '--out', str(tmp_path / 'b.json'),
+                        '--ingest', engine, '--tenant', tenant])
+    except SystemExit as exc:
+        rc = exc.code
+    return rc, built, sent
+
+
+@pytest.mark.parametrize('engine', [
+    'http://app.healthclaw.io', 'http://localhost.evil.example',
+    'ftp://localhost', 'localhost:5099'])
+def test_ingest_refuses_a_plain_http_engine_before_any_request(
+        monkeypatch, tmp_path, engine):
+    rc, built, sent = _main_ingest(monkeypatch, tmp_path, 'sandbox-smart-x',
+                                   engine)
+    assert rc != 0 and built == [] and sent == []
+
+
+@pytest.mark.parametrize('engine,tenant', [
+    ('http://localhost:5099', 'sandbox-smart-test'),
+    ('http://127.0.0.1:5099', 'sandbox-oracle-ben'),
+    ('https://app.healthclaw.io', 'sandbox-smart-x'),
+])
+def test_ingest_takes_a_sandbox_tenant_and_a_safe_engine(
+        monkeypatch, tmp_path, engine, tenant):
+    rc, built, sent = _main_ingest(monkeypatch, tmp_path, tenant, engine)
+    assert rc == 0 and len(sent) == 1
+    assert sent[0][2] == tenant
+
+
+@pytest.mark.parametrize('tenant', ['sandbox-smart', 'sandbox-epic-x',
+                                    'sandbox-smart-x\n', 'Sandbox-smart-x'])
+def test_ingest_refuses_a_tenant_off_the_sandbox_pattern(
+        monkeypatch, tmp_path, tenant):
+    rc, built, sent = _main_ingest(monkeypatch, tmp_path, tenant,
+                                   'http://localhost:5099')
+    assert rc != 0 and built == [] and sent == []
