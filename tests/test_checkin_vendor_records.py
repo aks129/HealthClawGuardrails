@@ -381,6 +381,23 @@ def test_no_empty_object_or_list_leaves(app, client, profile):
     assert list(_empties(resp.get_json()['entry'])) == []
 
 
+def test_the_profile_itself_leaves_no_empty_element():
+    """The profile prunes on its own, not only through the export's
+    reference drop (which prunes too), so any other caller of
+    _checkin_profile gets no `{}` either.
+
+    MUTATION: skip the empty-element prune in _checkin_profile -> red."""
+    from r6.access import _checkin_profile
+    med = v.oracle_medication('em-med')
+    med['requester'] = {'extension': [{'url': 'urn:example:x',
+                                       'valueString': v.CANARY}]}
+    med['dosageInstruction'] = [{}]
+    out = _checkin_profile(med, patient_id=v.PT)
+    assert 'requester' not in out
+    assert 'dosageInstruction' not in out
+    assert list(_empties(out)) == []
+
+
 def test_ktc_holds_entered_in_error_records_too(app, client):
     f.seed(app, v.patient(),
            _eie(v.oracle_condition('eie-cond', '91302008', True)))
