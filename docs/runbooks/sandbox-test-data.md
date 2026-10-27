@@ -43,7 +43,12 @@ Condition and Immunization even with the filters, which is why it is not the
 default.
 
 Every resource gets the HL7 v3 ActReason `HTEST` coding on `meta.tag`.
-Nothing else in the resource changes. The vendor's own `display` and `text`
+`contained` resources are dropped, because the link script refuses any
+nested resource (Oracle serves an untagged PractitionerRole inside
+AllergyIntolerance). Any `#id` reference to a dropped one goes too, and an
+element left empty by that is removed. The script prints the dropped
+contained resources as counts per type. Nothing else in the resource
+changes. The vendor's own `display` and `text`
 are kept exactly as served, because these bundles exist to test our
 redaction. The script prints counts per type, never resource content.
 

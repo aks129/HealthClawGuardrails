@@ -9,9 +9,12 @@ sandbox has any), plus lab Observations with --labs.
 
 Every resource is tagged with the HL7 v3 ActReason HTEST marker on
 meta.tag, so scripts/ktc_shl_link.py accepts the bundle and the engine
-treats it as test data. Nothing else is changed: the vendor's own `display`
-and `text` stay exactly as served, because the point is to test our
-redaction against them.
+treats it as test data. `contained` resources are dropped (Oracle serves
+an untagged PractitionerRole inside AllergyIntolerance, which the link
+gate refuses), with any `#id` reference to them; an element that leaves
+empty goes too. Nothing else is changed: the vendor's own `display` and
+`text` stay exactly as served, because the point is to test our redaction
+against them.
 
 Sources:
   oracle  Oracle Health (Cerner) open sandbox, tenant ec2458f2-... as
@@ -56,6 +59,7 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -87,6 +91,9 @@ HTEST = {'system': 'http://terminology.hl7.org/CodeSystem/v3-ActReason',
 TIMEOUT_SECONDS = 90
 
 #: --ingest only into a sandbox tenant named for one of these sources.
+#: A contained type is printed only when it looks like a FHIR type name.
+TYPE_LABEL_RE = re.compile(r'\A[A-Za-z]{1,64}\Z')
+
 TENANT_RE = re.compile(r'\Asandbox-(oracle|smart)-[a-z0-9-]+\Z')
 LOCAL_HOSTS = frozenset({'localhost', '127.0.0.1'})
 
@@ -102,6 +109,44 @@ def tag_test_data(resource):
     if not any(t.get('system') == HTEST['system']
                and t.get('code') == HTEST['code'] for t in tags):
         tags.append(dict(HTEST))
+    return resource
+
+
+def _drop_refs(value, refs):
+    """Remove each `reference` in `refs` below `value`, and any dict or
+    list left empty by that. True when `value` itself is now empty."""
+    if isinstance(value, dict):
+        if value.get('reference') in refs:
+            del value['reference']
+        for key in list(value):
+            if isinstance(value[key], (dict, list)) \
+                    and _drop_refs(value[key], refs):
+                del value[key]
+        return not value
+    if isinstance(value, list):
+        value[:] = [v for v in value
+                    if not (isinstance(v, (dict, list)) and _drop_refs(v, refs))]
+        return not value
+    return False
+
+
+def drop_contained(resource, dropped):
+    """Drop `contained` from `resource`, and every `#id` reference to what
+    it held. `dropped` (a Counter) counts the contained ones by type."""
+    contained = resource.pop('contained', None)
+    if not isinstance(contained, list):
+        return resource
+    refs = set()
+    for c in contained:
+        rtype = c.get('resourceType') if isinstance(c, dict) else None
+        dropped[rtype if isinstance(rtype, str)
+                and TYPE_LABEL_RE.match(rtype) else 'other'] += 1
+        if isinstance(c, dict) and isinstance(c.get('id'), str):
+            refs.add('#' + c['id'])
+    for key in list(resource):
+        if isinstance(resource[key], (dict, list)) \
+                and _drop_refs(resource[key], refs):
+            del resource[key]
     return resource
 
 
@@ -156,9 +201,13 @@ def _search(session, base, rtype, params):
             if isinstance(r, dict) and r.get('resourceType') == rtype][:PER_TYPE]
 
 
-def build_bundle(source, patient_id, *, session=None, labs=False):
+def build_bundle(source, patient_id, *, session=None, labs=False,
+                 dropped_contained=None):
     """(bundle, counts): the tagged collection Bundle, and the count kept
-    per type (None for a type whose search failed)."""
+    per type (None for a type whose search failed). Contained resources
+    dropped are counted by type into `dropped_contained`, if given."""
+    if dropped_contained is None:
+        dropped_contained = Counter()
     if session is None:
         session = new_session()
     cfg = SOURCES[source]
@@ -181,7 +230,9 @@ def build_bundle(source, patient_id, *, session=None, labs=False):
         resources.extend(found or [])
 
     entries = [{'fullUrl': f'{base}/{r["resourceType"]}/{r.get("id")}',
-                'resource': tag_test_data(r)} for r in resources]
+                'resource': tag_test_data(
+                    drop_contained(r, dropped_contained))}
+               for r in resources]
     bundle = {
         'resourceType': 'Bundle',
         'type': 'collection',
@@ -232,7 +283,9 @@ def main(argv=None):
 
     patient_id = args.patient or SOURCES[args.source]['patient']
     try:
-        bundle, counts = build_bundle(args.source, patient_id, labs=args.labs)
+        dropped = Counter()
+        bundle, counts = build_bundle(args.source, patient_id, labs=args.labs,
+                                      dropped_contained=dropped)
     except SandboxError as e:
         print(f'{args.source}: {e}', file=sys.stderr)
         return 1
@@ -240,6 +293,8 @@ def main(argv=None):
     Path(args.out).write_text(json.dumps(bundle, indent=2), encoding='utf-8')
     for rtype, n in counts.items():
         print(f'  {rtype:<20} {"search failed, left out" if n is None else n}')
+    for rtype, n in sorted(dropped.items()):
+        print(f'  contained {rtype} dropped: {n}')
     print(f'{len(bundle["entry"])} resources -> {args.out}')
 
     if args.ingest:

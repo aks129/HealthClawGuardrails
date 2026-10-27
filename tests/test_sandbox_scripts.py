@@ -446,3 +446,75 @@ def test_ingest_refuses_a_tenant_off_the_sandbox_pattern(
     rc, built, sent = _main_ingest(monkeypatch, tmp_path, tenant,
                                    'http://localhost:5099')
     assert rc != 0 and built == [] and sent == []
+
+
+def _oracle_allergy_with_contained_role():
+    """Oracle's open sandbox serves AllergyIntolerance with an untagged
+    contained PractitionerRole, referenced as `#id`."""
+    return {
+        'resourceType': 'AllergyIntolerance', 'id': 'a1',
+        'contained': [{'resourceType': 'PractitionerRole', 'id': 'pr1',
+                       'practitioner': {'display': 'CANARY-Contained-Name'}}],
+        'patient': {'reference': 'Patient/p1'},
+        'code': {'text': VENDOR_TEXT},
+        'recorder': {'reference': '#pr1'},
+        'asserter': {'reference': '#pr1', 'display': VENDOR_TEXT},
+        'note': [{'authorReference': {'reference': '#pr1'}}],
+    }
+
+
+def _oracle_answers():
+    return _answers(AllergyIntolerance=[FakeResponse(200, {
+        'resourceType': 'Bundle', 'type': 'searchset',
+        'entry': [{'resource': _oracle_allergy_with_contained_role()}]})])
+
+
+def test_contained_resources_and_their_references_are_dropped():
+    dropped = pull.Counter()
+    bundle, _ = pull.build_bundle('oracle', 'p1',
+                                  session=FakeSession(_oracle_answers()),
+                                  dropped_contained=dropped)
+
+    (allergy,) = [e['resource'] for e in bundle['entry']
+                  if e['resource']['resourceType'] == 'AllergyIntolerance']
+    assert 'contained' not in allergy
+    assert 'recorder' not in allergy      # left empty, so removed
+    assert 'note' not in allergy          # its only item emptied
+    assert allergy['asserter'] == {'display': VENDOR_TEXT}  # vendor text kept
+    assert allergy['patient'] == {'reference': 'Patient/p1'}
+    assert dropped == {'PractitionerRole': 1}
+    assert 'CANARY-Contained-Name' not in json.dumps(bundle)
+
+
+def test_an_oracle_shaped_pull_passes_the_link_gate_end_to_end():
+    """MUTATION: stop dropping `contained` -> the gate refuses -> red."""
+    bundle, _ = pull.build_bundle('oracle', 'p1',
+                                  session=FakeSession(_oracle_answers()))
+    link.check_test_only(bundle)
+    harness = FakeHarness()
+    assert link.make_link(bundle, post=harness).startswith('shlink:/')
+    assert len(harness.posted) == 1
+
+
+def test_main_prints_contained_drops_as_counts_only(monkeypatch, tmp_path,
+                                                   capsys):
+    monkeypatch.setattr(pull, 'new_session',
+                        lambda: FakeSession(_oracle_answers()))
+
+    rc = pull.main(['--source', 'oracle', '--out', str(tmp_path / 'b.json')])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert 'contained PractitionerRole dropped: 1' in out
+    assert 'CANARY' not in out and VENDOR_TEXT not in out
+
+
+def test_a_reference_to_a_kept_resource_is_untouched():
+    res = {'resourceType': 'AllergyIntolerance', 'id': 'a2',
+           'contained': [{'resourceType': 'Practitioner', 'id': 'x'}],
+           'recorder': {'reference': 'Practitioner/x'},
+           'asserter': {'reference': '#other'}}
+    pull.drop_contained(res, pull.Counter())
+    assert res == {'resourceType': 'AllergyIntolerance', 'id': 'a2',
+                   'recorder': {'reference': 'Practitioner/x'},
+                   'asserter': {'reference': '#other'}}
