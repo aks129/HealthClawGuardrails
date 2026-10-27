@@ -129,20 +129,31 @@ function answerable(item, unsupported) {
    options. One level of `group` is allowed too, as the SPEED dry eye form
    has (#1049): a heading over display lines and choice questions held to
    the same rules, the heading's words checked as a question's are. A
-   group inside a group is not. Everything shown is the website's own
-   words, put on the page as text, never as markup; the Questionnaire's
-   generated narrative is never read. Anything else is unsupported rather
-   than half shown. The answers stay in this tab: they go only into the
-   sealed response. */
+   group inside a group is not. A question of another kind (free text, a
+   number, a date, pick-several) is not answered here: when it is optional
+   it is shown as one this wallet does not answer and left out of the
+   response, as the contact lens trial form's are; when it is `required`
+   the form cannot be completed without it, so the form is unsupported.
+   Everything shown is the website's own words, put on the page as text,
+   never as markup; the Questionnaire's generated narrative is never read.
+   Anything else is unsupported rather than half shown. The answers stay in
+   this tab: they go only into the sealed response. */
 
 const FORM_MAX_CHARS = 32768;      // the Questionnaire, serialised
-const FORM_MAX_QUESTIONS = 10;
+// The contact lens trial form asks 19 (it was 10, PHQ-2 and SPEED sized).
+const FORM_MAX_QUESTIONS = 30;
+const FORM_MAX_SKIPPED = 10;       // questions shown as not answered here
 const FORM_MAX_OPTIONS = 10;
 const FORM_TEXT_MAX = 500;
 const FORM_CANONICAL_MAX = 1024;
 // What would make a question more than one pick from a fixed list. `item`
 // is allowed on a top-level group only (readItems).
 const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
+// The other FHIR R4 question types: left out when optional (readItems). A
+// type outside this list is not a question to leave out.
+const FORM_SKIPPED_TYPES = ["boolean", "decimal", "integer", "date",
+  "dateTime", "time", "string", "text", "url", "choice", "open-choice",
+  "attachment", "reference", "quantity"];
 
 const text = (v, max = FORM_TEXT_MAX) =>
   typeof v === "string" && v.trim() && v.length <= max ? v : null;
@@ -186,7 +197,10 @@ function readOption(option) {
    `displays` (or, inside a group, the group's), choice questions into
    form.questions, each with the index into form.groups of the group it
    sits in, or null at the top. `group` is that index while reading a
-   group's own items. False when any item is outside the rules. */
+   group's own items. An optional question of another kind goes into
+   form.skipped, with its group and `at`, the number of questions before
+   it, which says where it sits among them. False when any item is outside
+   the rules. */
 function readItems(items, form, linkIds, group) {
   for (const it of items) {
     if (it === null || typeof it !== "object") return false;
@@ -195,7 +209,8 @@ function readItems(items, form, linkIds, group) {
     const isGroup = type === "group" && group === null;
     if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k) &&
         !(k === "item" && isGroup))) return false;
-    if (own(it, "repeats") === true) return false;
+    const repeats = own(it, "repeats") === true;
+    if (repeats && (type === "display" || type === "group")) return false;
     const linkId = text(own(it, "linkId"), 255);
     const said = words(own(it, "text"));
     if (!linkId || !said || linkIds.has(linkId)) return false;
@@ -204,9 +219,18 @@ function readItems(items, form, linkIds, group) {
       (group === null ? form.displays : form.groups[group].displays).push(said);
       continue;
     }
-    if (type !== "choice" && !isGroup) return false;
     const prefix = own(it, "prefix");
     if (prefix !== undefined && !words(prefix, 16)) return false;
+    if (!isGroup && (type !== "choice" || repeats)) {
+      // Not one pick from a list: shown, never answered, its options (if
+      // any) unread. Required, it cannot be left out of a completed form.
+      const required = own(it, "required");
+      if (!FORM_SKIPPED_TYPES.includes(type) ||
+          (required !== undefined && required !== false)) return false;
+      form.skipped.push({ linkId, prefix: prefix || "", text: said, group,
+        at: form.questions.length });
+      continue;
+    }
     if (isGroup) {
       // A heading over at least one question: nothing to answer is a
       // heading over nothing, and options belong to questions.
@@ -231,12 +255,14 @@ function readItems(items, form, linkIds, group) {
 /* The form an item carries, or null when this wallet will not answer it:
    { canonical, title, displays: [text], groups: [{ linkId, prefix, text,
    displays: [text] }], questions: [{ linkId, prefix, text, options:
-   [{ coding, display }], group: index into groups or null }] }. Questions
-   are in the Questionnaire's order, so a group's are next to each other;
-   the 10-question cap counts them all. Display lines are shown before the
-   questions they belong with, wherever they sit among them: the form's
-   above every question, a group's under its heading and above its
-   questions (checkin_wallet.js formQuestions). */
+   [{ coding, display }], group: index into groups or null }], skipped:
+   [{ linkId, prefix, text, group, at }] }. Questions are in the
+   Questionnaire's order, so a group's are next to each other; the
+   30-question cap counts them all. A skipped question is shown in its
+   place, before questions[at] (or after the last), and never answered.
+   Display lines are shown before the questions they belong with, wherever
+   they sit among them: the form's above every question, a group's under
+   its heading and above its questions (checkin_wallet.js formQuestions). */
 export function readForm(item) {
   const content = own(item, "content");
   const accept = own(item, "accept");
@@ -261,11 +287,13 @@ export function readForm(item) {
 
   const items = own(q, "item");
   if (!Array.isArray(items)) return null;
-  const form = { displays: [], groups: [], questions: [] };
+  const form = { displays: [], groups: [], questions: [], skipped: [] };
   if (!readItems(items, form, new Set(), null)) return null;
-  const { displays, groups, questions } = form;
-  if (!questions.length || questions.length > FORM_MAX_QUESTIONS) return null;
-  return { canonical, title: words(own(q, "title")) || "", displays, groups, questions };
+  const { displays, groups, questions, skipped } = form;
+  if (!questions.length || questions.length > FORM_MAX_QUESTIONS ||
+      skipped.length > FORM_MAX_SKIPPED) return null;
+  return { canonical, title: words(own(q, "title")) || "", displays, groups,
+    questions, skipped };
 }
 
 /* The QuestionnaireResponse for `picked` ({ linkId: option index }), or

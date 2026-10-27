@@ -160,25 +160,35 @@ function describe(m) {
 
 /* A form's questions (checkin_answer.js readForm), one radio group each.
    A group's questions sit together under its heading and display lines
-   (#1049). The text is the website's: textContent only, never markup.
-   Nothing is picked to start with. */
+   (#1049). A question this wallet does not answer is shown in its place,
+   with a line saying so and no options. The text is the website's:
+   textContent only, never markup. Nothing is picked to start with. */
 function formQuestions(form, i) {
   const box = document.createElement("div");
   box.className = "checkin-form";
+  // In the form's order: each skipped question before questions[at].
+  const rows = [];
+  let s = 0;
+  form.questions.forEach((q, qi) => {
+    while (s < form.skipped.length && form.skipped[s].at === qi) rows.push({ skip: form.skipped[s++] });
+    rows.push({ q, qi });
+  });
+  while (s < form.skipped.length) rows.push({ skip: form.skipped[s++] });
   let into = box;
   let shown = null;   // the group whose questions are being drawn
-  form.questions.forEach((q, qi) => {
-    if (q.group !== shown) {
-      shown = q.group;
+  rows.forEach(({ q, qi, skip }) => {
+    const group = q ? q.group : skip.group;
+    if (group !== shown) {
+      shown = group;
       into = box;
-      if (q.group !== null) {
-        const g = form.groups[q.group];
+      if (group !== null) {
+        const g = form.groups[group];
         into = document.createElement("div");
         into.className = "checkin-group";
         into.setAttribute("role", "group");
         const heading = document.createElement("p");
         heading.className = "checkin-group-title";
-        heading.id = `form-${i}-group-${q.group}`;
+        heading.id = `form-${i}-group-${group}`;
         heading.textContent = g.prefix ? `${g.prefix} ${g.text}` : g.text;
         into.setAttribute("aria-labelledby", heading.id);
         into.append(heading);
@@ -190,6 +200,19 @@ function formQuestions(form, i) {
         });
         box.append(into);
       }
+    }
+    if (skip) {
+      const row = document.createElement("div");
+      row.className = "checkin-skipped";
+      const said = document.createElement("p");
+      said.className = "checkin-skipped-text";
+      said.textContent = skip.prefix ? `${skip.prefix} ${skip.text}` : skip.text;
+      const why = document.createElement("p");
+      why.className = "checkin-skipped-why";
+      why.textContent = "This wallet can't answer this one, so nothing is sent for it. You can answer it in person instead.";
+      row.append(said, why);
+      into.append(row);
+      return;
     }
     const set = document.createElement("fieldset");
     set.className = "checkin-question";

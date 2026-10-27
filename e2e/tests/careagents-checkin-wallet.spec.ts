@@ -882,21 +882,55 @@ test.describe('check-in wallet', () => {
       expect(asked).toEqual([{ resource_types: ['Patient'] }]);
     });
 
-  test('the contact lens form, with free text and numbers, stays unsupported',
+  // The Verifier's contact lens trial form (the fixture is its structure
+  // exactly): its single choices are answered; its free text, numbers and
+  // pick-several are each shown, in place, as not answered here, and left
+  // out of what is sent. It used to be unsupported whole.
+  test('the contact lens form answers its choices and leaves out the rest, saying so',
     async ({ page }) => {
       await serveRelay(page);
       const req = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
         'fixtures', 'checkin-request-form-cl-trial.json'), 'utf8'));
       const wallet = await checkIn(page, req);
-      const item = wallet.locator('#wallet-items li[data-item=eyeClTrial]');
-      await expect(item).toContainText('You can answer it in person instead.');
-      await expect(item.locator('fieldset, .checkin-group')).toHaveCount(0);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      const form = wallet.locator('#wallet-items li[data-item=eyeClTrial]');
+      await expect(form.locator('.checkin-group')).toHaveCount(5);
+      const skipped = ['trial-lens', 'days-worn', 'hours-worn', 'hours-comfortable',
+        'problems', 'concerns', 'improvement'];
+      const q = req.items[1].content.questionnaire;
+      const textOf = (id: string) => q.item.flatMap((g: any) => [g, ...(g.item || [])])
+        .find((i: any) => i.linkId === id).text;
+      await expect(form.locator('.checkin-skipped-text')).toHaveText(skipped.map(textOf));
+      await expect(form.locator('.checkin-skipped-why')).toHaveCount(7);
+      for (const why of await form.locator('.checkin-skipped-why').allTextContents()) {
+        expect(why).toContain('nothing is sent for it');
+      }
+      // In its place: the lens question first in its group, before its choices.
+      const wear = form.locator('.checkin-group').nth(1);
+      await expect(wear.locator('.checkin-skipped, fieldset').first())
+        .toHaveClass(/checkin-skipped/);
+      // Nothing to type into, and every choice a radio button.
+      await expect(form.locator('input:not([type=radio]), textarea, select')).toHaveCount(0);
+      expect(await wallet.evaluate(() =>
+        document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await wallet.screenshot({ path: test.info().outputPath('cl-trial-375.png'), fullPage: true });
+
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      await expect(sets).toHaveCount(19);
+      for (let n = 0; n < 19; n++) await sets.nth(n).locator('input').first().check();
       await wallet.locator('#wallet-send').click();
       await done(page).toMatchObject({ status: 'completed' });
       const r = await page.evaluate(() => (window as any).__result);
       expect(r.json.requestStatus.find((s: any) => s.item === 'eyeClTrial').status)
-        .toBe('unsupported');
-      expect(r.json.artifacts).toEqual([]);
+        .toBe('fulfilled');
+      const qr = r.json.artifacts[0].value;
+      expect(qr.status).toBe('completed');
+      expect(qr.item.map((g: any) => g.linkId)).toEqual(
+        ['safety', 'wear', 'vision', 'comfort', 'impression']);
+      const sent = qr.item.flatMap((g: any) => g.item.map((i: any) => i.linkId));
+      expect(sent).toHaveLength(19);
+      for (const id of skipped) expect(sent).not.toContain(id);
     });
 
   // QA #1052: the grouped form, declined after some answers, sends a
