@@ -299,6 +299,17 @@ def test_a_vendor_that_ignores_count_is_cut_to_twenty_and_strays_dropped():
         e['resource']['resourceType'] for e in bundle['entry']}
 
 
+class NotJson(FakeResponse):
+    def json(self):
+        raise ValueError('not JSON')
+
+
+def test_a_200_that_is_not_json_leaves_the_type_out():
+    session = FakeSession(_answers(Coverage=[NotJson(200)]))
+    _, counts = pull.build_bundle('oracle', 'p1', session=session)
+    assert counts['Coverage'] is None
+
+
 def test_no_patient_no_bundle():
     session = FakeSession(_answers(Patient=[FakeResponse(404), ]))
     with pytest.raises(pull.SandboxError):

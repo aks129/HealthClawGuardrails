@@ -97,7 +97,7 @@ def tag_test_data(resource):
 
 def _get(session, url, params=None):
     """GET with one retry on a 504 or a timeout. The JSON body, or None
-    after two failures (or any other non-200)."""
+    after two failures (or any other non-200, or a body that is not JSON)."""
     for _ in range(2):
         try:
             resp = session.get(url, params=params, timeout=TIMEOUT_SECONDS,
@@ -106,7 +106,12 @@ def _get(session, url, params=None):
             continue
         if resp.status_code == 504:
             continue
-        return resp.json() if resp.status_code == 200 else None
+        if resp.status_code != 200:
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
     return None
 
 
