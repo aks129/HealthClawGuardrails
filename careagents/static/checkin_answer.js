@@ -154,16 +154,22 @@ const BIDI = /[؜‎‏‪-‮⁦-⁩]/u;
 // Characters that draw nothing: format characters such as U+200B, and the
 // Hangul fillers (U+3164, U+115F, U+1160, U+FFA0), which are letters.
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+// Right-to-left scripts (Hebrew, Arabic, Syriac, Thaana, NKo and the rest of
+// U+0590-08FF, their presentation forms, and the RTL supplementary blocks).
+// One visible RTL letter reorders the digits beside it, so "(0, 4)" draws
+// as "(4 ,0)" (#1052 security F3). The wallet reads in English and Spanish;
+// a form in an RTL script is unsupported rather than drawn misleadingly.
+const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFE\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
 
 /* Words the person will read: `text`, with at least one letter or digit
    that draws something (a string of characters that draw nothing is blank
    on screen however it trims, #1030 security F1; a Hangul filler is a
-   letter that draws nothing, #1052 security F1), and no bidi control or
-   mark that could reorder what is around it. Otherwise null, and the form
-   is unsupported. */
+   letter that draws nothing, #1052 security F1), and no bidi control,
+   mark or right-to-left letter that could reorder what is around it.
+   Otherwise null, and the form is unsupported. */
 const words = (v, max = FORM_TEXT_MAX) =>
   text(v, max) && /[\p{L}\p{N}]/u.test(v.replace(IGNORABLE, "")) &&
-    !BIDI.test(v) ? v : null;
+    !BIDI.test(v) && !RTL.test(v) ? v : null;
 
 function readOption(option) {
   const c = own(option, "valueCoding");
