@@ -427,7 +427,7 @@ test.describe('check-in wallet', () => {
         'Hypertensive disorder']) {
         expect(text, plain).toContain(plain);
       }
-      // The member ID is masked, and the problem with no profile is not there.
+      // The member ID is masked.
       expect(text).not.toContain('FAKE-MEMBER-0000001');
       // The relay was asked for the six kinds of record, and nothing else:
       // not the request, its purpose, or the website's origin.
