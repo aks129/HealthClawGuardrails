@@ -416,6 +416,41 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
         opt('0', 'Never ؜(0, 4)'), opt('4', 'Always ؜(4, 0)')])])]));
     });
 
+  // #1052 recheck (head 62ccba33). The fix refuses the three invisible
+  // marks, but any visible right-to-left character reorders digits the
+  // same way. HEBREW LETTER YOD and ARABIC FULL STOP draw as a speck, which
+  // the reordering moves to the end of the line: "Never י(0, 4)" is
+  // drawn "Never (4 ,0)ʼ"-like, and the response still says "(0, 4)".
+  // Either fix holds this test: refuse the option, or draw it in the order
+  // it is sent. It checks where the browser actually puts the digits.
+  for (const [name, ch] of [['HEBREW LETTER YOD U+05D9', 'י'],
+    ['ARABIC FULL STOP U+06D4', '۔']] as const) {
+    test(`FINDING #1052-3: an option that ${name} draws as another is refused or drawn as sent`,
+      async ({ page }) => {
+        await serveRelay(page);
+        const wallet = await checkIn(page, formRequest(q([group('g', 'Eye symptoms', [
+          choice('q1', 'Dryness', [opt('0', `Never ${ch}(0, 4)`), opt('4', `Always ${ch}(4, 0)`)]),
+        ])])));
+        await shot(wallet, `finding-1052-3-${ch.codePointAt(0)!.toString(16)}`);
+        const item = wallet.locator('#wallet-items li[data-item=f]');
+        if (await item.locator('fieldset').count() === 0) return;   // refused: fixed
+        // Drawn: the "0" that comes first in the text must be drawn first.
+        const order = await item.locator('fieldset label').first().evaluate((lab) => {
+          const node = [...lab.childNodes].find((n) => n.nodeType === Node.TEXT_NODE
+            && /\(0, 4\)/.test(n.textContent || ''))!;
+          const s = node.textContent || '';
+          const x = (i: number) => {
+            const r = document.createRange();
+            r.setStart(node, i); r.setEnd(node, i + 1);
+            return r.getBoundingClientRect().left;
+          };
+          return { zero: x(s.indexOf('0')), four: x(s.indexOf('4')) };
+        });
+        expect(order.zero, `"(0, 4)" is drawn as "(4 ,0)": ${JSON.stringify(order)}`)
+          .toBeLessThan(order.four);
+      });
+  }
+
   test("a form's answers never ride on another item, and a records item's data never rides on the form",
     async ({ page }) => {
       await serveRelay(page);
