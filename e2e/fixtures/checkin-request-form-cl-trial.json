@@ -1,0 +1,803 @@
+{
+  "type": "smart-health-checkin-request",
+  "version": "1",
+  "id": "replace-with-a-unique-id",
+  "purpose": "Before your eye care visit",
+  "fhirVersions": [
+    "4.0.1"
+  ],
+  "items": [
+    {
+      "id": "patient",
+      "title": "Demographics",
+      "content": {
+        "kind": "selection.fhir",
+        "profiles": [
+          "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+        ]
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    },
+    {
+      "id": "eyeClTrial",
+      "title": "Mixed-answer example",
+      "summary": "Choice, free text and number questions in groups.",
+      "content": {
+        "kind": "form.fhir",
+        "questionnaireCanonical": "https://eye-care.verifier.example/fhir/Questionnaire/cl-trial",
+        "questionnaire": {
+          "resourceType": "Questionnaire",
+          "id": "cl-trial",
+          "url": "https://eye-care.verifier.example/fhir/Questionnaire/cl-trial",
+          "version": "1",
+          "name": "MixedAnswerExample",
+          "title": "Mixed-answer example",
+          "status": "draft",
+          "subjectType": [
+            "Patient"
+          ],
+          "date": "2026-10-12",
+          "publisher": "Eye care Verifier (connectathon example)",
+          "description": "Example form with free text and numbers inside groups.",
+          "item": [
+            {
+              "linkId": "intro",
+              "text": "Note 1",
+              "type": "display"
+            },
+            {
+              "linkId": "safety",
+              "text": "Section 2",
+              "type": "group",
+              "required": true,
+              "item": [
+                {
+                  "linkId": "safety-warning",
+                  "text": "Note 3",
+                  "type": "display"
+                },
+                {
+                  "linkId": "safety-pain",
+                  "text": "Question 4",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q4-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q4-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q4-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "safety-redness",
+                  "text": "Question 5",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q5-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q5-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q5-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "safety-light",
+                  "text": "Question 6",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q6-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q6-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q6-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "safety-vision",
+                  "text": "Question 7",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q7-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q7-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q7-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "safety-discharge",
+                  "text": "Question 8",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q8-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q8-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q8-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "linkId": "wear",
+              "text": "Section 9",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "trial-lens",
+                  "text": "Question 10",
+                  "type": "string"
+                },
+                {
+                  "linkId": "trial-status",
+                  "text": "Question 11",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q11-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q11-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q11-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q11-3",
+                        "display": "Option 4"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "days-worn",
+                  "text": "Question 12",
+                  "type": "integer"
+                },
+                {
+                  "linkId": "hours-worn",
+                  "text": "Question 13",
+                  "type": "decimal"
+                },
+                {
+                  "linkId": "hours-comfortable",
+                  "text": "Question 14",
+                  "type": "decimal"
+                },
+                {
+                  "linkId": "compared",
+                  "text": "Question 15",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q15-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q15-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q15-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q15-3",
+                        "display": "Option 4"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q15-4",
+                        "display": "Option 5"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "attention-eye",
+                  "text": "Question 16",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q16-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q16-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q16-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q16-3",
+                        "display": "Option 4"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q16-4",
+                        "display": "Option 5"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "linkId": "vision",
+              "text": "Section 17",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "vision-note",
+                  "text": "Note 18",
+                  "type": "display"
+                },
+                {
+                  "linkId": "vision-distance",
+                  "text": "Question 19",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q19-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q19-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q19-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q19-3",
+                        "display": "Option 4"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "vision-intermediate",
+                  "text": "Question 20",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q20-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q20-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q20-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q20-3",
+                        "display": "Option 4"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "vision-near",
+                  "text": "Question 21",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q21-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q21-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q21-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q21-3",
+                        "display": "Option 4"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "vision-night",
+                  "text": "Question 22",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q22-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q22-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q22-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q22-3",
+                        "display": "Option 4"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "linkId": "comfort",
+              "text": "Section 23",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "comfort-insertion",
+                  "text": "Question 24",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q24-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q24-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q24-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "comfort-end",
+                  "text": "Question 25",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q25-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q25-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q25-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "vision-stable",
+                  "text": "Question 26",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q26-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q26-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q26-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "handling",
+                  "text": "Question 27",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q27-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q27-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q27-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "prefer",
+                  "text": "Question 28",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q28-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q28-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q28-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "problems",
+                  "text": "Question 29",
+                  "type": "choice",
+                  "repeats": true,
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q29-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q29-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q29-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q29-3",
+                        "display": "Option 4"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q29-4",
+                        "display": "Option 5"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q29-5",
+                        "display": "Option 6"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "concerns",
+                  "text": "Question 30",
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "linkId": "impression",
+              "text": "Section 31",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "overall",
+                  "text": "Question 32",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q32-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q32-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q32-2",
+                        "display": "Option 3"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q32-3",
+                        "display": "Option 4"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q32-4",
+                        "display": "Option 5"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "improvement",
+                  "text": "Question 33",
+                  "type": "text"
+                },
+                {
+                  "linkId": "supply-options",
+                  "text": "Question 34",
+                  "type": "choice",
+                  "answerOption": [
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q34-0",
+                        "display": "Option 1"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q34-1",
+                        "display": "Option 2"
+                      }
+                    },
+                    {
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "q34-2",
+                        "display": "Option 3"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "impression-note",
+                  "text": "Note 35",
+                  "type": "display"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    }
+  ]
+}

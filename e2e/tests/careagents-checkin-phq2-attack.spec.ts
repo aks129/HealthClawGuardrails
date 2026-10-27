@@ -286,7 +286,7 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
     await item.locator('.checkin-choice input[value=share]').check();
     await wallet.locator('#wallet-send').click();
     // Nothing is sent in part: the person is told, and can choose Don't share.
-    await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
+    await expect(wallet.locator('#wallet-review-err')).toContainText('still needs an answer');
     expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
     // No prototype was polluted in the wallet tab.
     expect(await wallet.evaluate(() => Object.getOwnPropertyNames(Object.prototype).filter(
@@ -299,6 +299,157 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
     expect(r.json.artifacts).toEqual([]);
     expect(r.json.requestStatus).toEqual([{ item: 'f', status: 'declined' }]);
   });
+
+  // #1049: one level of `group` is answered; every rule above holds inside
+  // it, and its heading is checked as a question's words are.
+  const group = (linkId: string, text: unknown, item: unknown[]) =>
+    ({ linkId, type: 'group', text, item });
+  const refused = async (page: Page, quest: unknown) => {
+    const wallet = await checkIn(page, formRequest(quest));
+    const item = wallet.locator('#wallet-items li[data-item=f]');
+    await expect(item).toContainText('You can answer it in person instead.');
+    await expect(item.locator('fieldset, .checkin-group')).toHaveCount(0);
+    await wallet.locator('#wallet-send').click();
+    const r = await result(page);
+    expect(r.json.artifacts).toEqual([]);
+    expect(r.json.requestStatus).toEqual([{ item: 'f', status: 'unsupported' }]);
+  };
+
+  test('a group inside a group is refused whole', async ({ page }) => {
+    await serveRelay(page);
+    await refused(page, q([group('outer', 'Outer', [
+      choice('q1', 'First'), group('inner', 'Inner', [choice('q2', 'Second')])])]));
+  });
+
+  test('a group heading with a bidi control is refused', async ({ page }) => {
+    await serveRelay(page);
+    await refused(page, q([
+      group('g', 'Eye symptoms\u202e erahs', [choice('q1', 'Dryness')])]));
+  });
+
+  for (const [name, heading] of [['blank', '   '], ['invisible', '\u200b\u2063'],
+    ['missing', undefined]] as const) {
+    test(`a ${name} group heading is refused`, async ({ page }) => {
+      await serveRelay(page);
+      await refused(page, q([group('g', heading, [choice('q1', 'Dryness')])]));
+    });
+  }
+
+  test('markup in a group heading and its note renders as text', async ({ page }) => {
+    await serveRelay(page);
+    const xss = '<img src=x onerror="window.__pwned=7">';
+    const wallet = await checkIn(page, formRequest(q([group('g', `${xss}Symptoms`, [
+      { linkId: 'n', type: 'display', text: `<b onclick="window.__pwned=8">Note</b>` },
+      choice('q1', 'Dryness')])])));
+    const item = wallet.locator('#wallet-items li[data-item=f]');
+    await expect(item.locator('img, b')).toHaveCount(0);
+    await expect(item.locator('.checkin-group-title')).toHaveText(`${xss}Symptoms`);
+    await expect(item.locator('.checkin-group-note'))
+      .toHaveText('<b onclick="window.__pwned=8">Note</b>');
+    // Still under the website's label, as every form line is.
+    await expect(item.locator('.checkin-website-says')).toHaveText('The website asks:');
+    expect(await wallet.evaluate(() => (window as any).__pwned)).toBeUndefined();
+  });
+
+  // #1052 security review. Both findings sit in words() (checkin_answer.js),
+  // which predates #1049, but the group heading, its prefix and its notes
+  // are new places it is the only check. Each test asserts the fixed
+  // behaviour, so it FAILS until the finding is fixed.
+
+  // The Hangul fillers are letters (category Lo), so /[\p{L}\p{N}]/ passes
+  // them, but they are Default_Ignorable_Code_Point and draw nothing: the
+  // #1030 FINDING 1 rule ("nothing the person cannot read is asked of
+  // them") with a different blank character.
+  const FILLERS = [['U+3164', 'ㅤ'], ['U+115F', 'ᅟ'], ['U+1160', 'ᅠ'],
+    ['U+FFA0', 'ﾠ']] as const;
+
+  test('FINDING #1052-1: a group, question and options in Hangul fillers are refused, not answered',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, formRequest(q([group('g', 'ㅤ', [
+        choice('q1', 'ㅤㅤ', [opt('self-harm-yes', 'ㅤ'), opt('self-harm-no', 'ﾠ')]),
+      ])])));
+      await shot(wallet, 'finding-1052-1-hangul-filler');
+      const item = wallet.locator('#wallet-items li[data-item=f]');
+      // Today: a blank heading over a blank question with two blank radios,
+      // and a tick on the first sends "self-harm-yes" as the person's answer.
+      const fieldsets = await item.locator('fieldset').count();
+      if (fieldsets) {
+        await item.locator('fieldset input').first().check();
+        await item.locator('.checkin-choice input[value=share]').check();
+        await wallet.locator('#wallet-send').click();
+        const r = await result(page);
+        const answered = r.json?.artifacts?.[0]?.value?.item?.[0]?.item?.[0];
+        expect(answered?.answer?.[0]?.valueCoding?.code,
+          'an answer to a question the person could not see was sent').toBeUndefined();
+      }
+      expect(fieldsets).toBe(0);
+    });
+
+  for (const [name, filler] of FILLERS) {
+    test(`FINDING #1052-1: a group heading of ${name} alone is refused`, async ({ page }) => {
+      await serveRelay(page);
+      await refused(page, q([group('g', filler, [choice('q1', 'Dryness')])]));
+    });
+  }
+
+  // BIDI covers the embedding, override and isolate controls only. The
+  // implicit marks are strong characters with no glyph: ARABIC LETTER MARK
+  // turns the digits after it into Arabic numbers, so "؜0 - 3" draws
+  // as "3 - 0" while the response carries "0 - 3". Seen in Chromium.
+  const MARKS = [['ALM U+061C', '؜'], ['RLM U+200F', '‏'],
+    ['LRM U+200E', '‎']] as const;
+
+  for (const [name, mark] of MARKS) {
+    test(`FINDING #1052-2: a group heading with ${name} is refused`, async ({ page }) => {
+      await serveRelay(page);
+      await refused(page, q([group('g', `Days: ${mark}0 - 3`, [choice('q1', 'Dryness')])]));
+    });
+  }
+
+  test('FINDING #1052-2: an option that a letter mark draws as another is refused',
+    async ({ page }) => {
+      await serveRelay(page);
+      // Drawn as "Never (4 ,0)" and "Always (0 ,4)": each choice reads as
+      // the other's score.
+      await refused(page, q([group('g', 'Eye symptoms', [choice('q1', 'Dryness', [
+        opt('0', 'Never ؜(0, 4)'), opt('4', 'Always ؜(4, 0)')])])]));
+    });
+
+  // #1052 recheck (head 62ccba33). The fix refuses the three invisible
+  // marks, but any visible right-to-left character reorders digits the
+  // same way. HEBREW LETTER YOD and ARABIC FULL STOP draw as a speck, which
+  // the reordering moves to the end of the line: "Never י(0, 4)" is
+  // drawn "Never (4 ,0)ʼ"-like, and the response still says "(0, 4)".
+  // Either fix holds this test: refuse the option, or draw it in the order
+  // it is sent. It checks where the browser actually puts the digits.
+  for (const [name, ch] of [['HEBREW LETTER YOD U+05D9', 'י'],
+    ['ARABIC FULL STOP U+06D4', '۔']] as const) {
+    test(`FINDING #1052-3: an option that ${name} draws as another is refused or drawn as sent`,
+      async ({ page }) => {
+        await serveRelay(page);
+        const wallet = await checkIn(page, formRequest(q([group('g', 'Eye symptoms', [
+          choice('q1', 'Dryness', [opt('0', `Never ${ch}(0, 4)`), opt('4', `Always ${ch}(4, 0)`)]),
+        ])])));
+        await shot(wallet, `finding-1052-3-${ch.codePointAt(0)!.toString(16)}`);
+        const item = wallet.locator('#wallet-items li[data-item=f]');
+        if (await item.locator('fieldset').count() === 0) return;   // refused: fixed
+        // Drawn: the "0" that comes first in the text must be drawn first.
+        const order = await item.locator('fieldset label').first().evaluate((lab) => {
+          const node = [...lab.childNodes].find((n) => n.nodeType === Node.TEXT_NODE
+            && /\(0, 4\)/.test(n.textContent || ''))!;
+          const s = node.textContent || '';
+          const x = (i: number) => {
+            const r = document.createRange();
+            r.setStart(node, i); r.setEnd(node, i + 1);
+            return r.getBoundingClientRect().left;
+          };
+          return { zero: x(s.indexOf('0')), four: x(s.indexOf('4')) };
+        });
+        expect(order.zero, `"(0, 4)" is drawn as "(4 ,0)": ${JSON.stringify(order)}`)
+          .toBeLessThan(order.four);
+      });
+  }
 
   test("a form's answers never ride on another item, and a records item's data never rides on the form",
     async ({ page }) => {

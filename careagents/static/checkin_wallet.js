@@ -159,12 +159,72 @@ function describe(m) {
 }
 
 /* A form's questions (checkin_answer.js readForm), one radio group each.
-   The text is the website's: textContent only, never markup. Nothing is
-   picked to start with. */
+   A group's questions sit together under its heading and display lines
+   (#1049). A question this wallet does not answer is shown in its place,
+   with a line saying so and no options. The text is the website's:
+   textContent only, never markup. Nothing is picked to start with. */
 function formQuestions(form, i) {
   const box = document.createElement("div");
   box.className = "checkin-form";
+  // In the form's order: each skipped question before questions[at].
+  const rows = [];
+  let s = 0;
   form.questions.forEach((q, qi) => {
+    while (s < form.skipped.length && form.skipped[s].at === qi) rows.push({ skip: form.skipped[s++] });
+    rows.push({ q, qi });
+  });
+  while (s < form.skipped.length) rows.push({ skip: form.skipped[s++] });
+  let into = box;
+  let shown = null;   // the group whose questions are being drawn
+  rows.forEach(({ q, qi, skip }) => {
+    const group = q ? q.group : skip.group;
+    if (group !== shown) {
+      shown = group;
+      into = box;
+      if (group !== null) {
+        const g = form.groups[group];
+        into = document.createElement("div");
+        into.className = "checkin-group";
+        into.setAttribute("role", "group");
+        const heading = document.createElement("p");
+        heading.className = "checkin-group-title";
+        heading.id = `form-${i}-group-${group}`;
+        heading.textContent = g.prefix ? `${g.prefix} ${g.text}` : g.text;
+        into.setAttribute("aria-labelledby", heading.id);
+        into.append(heading);
+        g.displays.forEach((line) => {
+          const note = document.createElement("p");
+          note.className = "checkin-group-note";
+          note.textContent = line;
+          into.append(note);
+        });
+        box.append(into);
+      }
+    }
+    if (skip) {
+      // Ours first, naming what follows; then the website's words under
+      // their own label, set apart as its display lines are. Never the
+      // website's words straight above ours, where they could pass for
+      // ours (#1061 security F2; #1030 QA: website text is labelled where
+      // it stands).
+      const row = document.createElement("div");
+      row.className = "checkin-skipped";
+      const why = document.createElement("p");
+      why.className = "checkin-skipped-why";
+      why.textContent = "This wallet does not answer this question. It is not sent.";
+      const theirs = document.createElement("p");
+      theirs.className = "checkin-skipped-website checkin-from-website";
+      const label = document.createElement("span");
+      label.className = "checkin-website-label";
+      label.textContent = "From the website: ";
+      const said = document.createElement("span");
+      said.className = "checkin-skipped-text";
+      said.textContent = skip.prefix ? `${skip.prefix} ${skip.text}` : skip.text;
+      theirs.append(label, said);
+      row.append(why, theirs);
+      into.append(row);
+      return;
+    }
     const set = document.createElement("fieldset");
     set.className = "checkin-question";
     const legend = document.createElement("legend");
@@ -179,10 +239,17 @@ function formQuestions(form, i) {
       lab.append(input, ` ${o.display}`);
       set.append(lab);
     });
-    box.append(set);
+    // Answered: no longer marked as needing an answer.
+    set.addEventListener("change", () => unmark(set));
+    into.append(set);
   });
   return box;
 }
+
+/* A question left blank when its form was to be sent: outlined and said
+   to be invalid, until it is answered or Send is tapped again. */
+function mark(set) { set.classList.add("checkin-missing"); set.setAttribute("aria-invalid", "true"); }
+function unmark(set) { set.classList.remove("checkin-missing"); set.removeAttribute("aria-invalid"); }
 
 /* { linkId: option index } for the questions answered on item i. */
 function formAnswers(form, i) {
@@ -307,9 +374,11 @@ function review(request, origin, matches, using) {
     $("wallet-repick").onclick = () => resolve({ kind: "back" });
     $("wallet-send").onclick = () => {
       clear();
+      list.querySelectorAll(".checkin-missing").forEach(unmark);
       const share = {};
       const answers = {};
       let problem = null;
+      let firstMissing = null;   // the first blank question of the form named
       matches.forEach((m, i) => {
         const picked = list.querySelector(`input[name="choice-${i}"]:checked`);
         const sharing = Boolean(picked) && picked.value === "share";
@@ -326,12 +395,31 @@ function review(request, origin, matches, using) {
         share[m.item.id] = true;
         if (!m.form) return;
         answers[m.item.id] = given;
-        // A form is sent whole or not at all: say so rather than decline it.
-        if (Object.keys(given).length !== m.form.questions.length) {
-          problem = problem || `Answer every question in "${isolate(itemHeading(m), 80)}", or choose Don't share for it.`;
+        // A form is sent whole or not at all: say so rather than decline it,
+        // and show which questions, on a form that can be long (#1061 patient
+        // test). "Every" is not said: a skipped question needs no answer.
+        const sets = [];
+        m.form.questions.forEach((q, qi) => {
+          if (Object.hasOwn(given, q.linkId)) return;
+          sets.push(list.querySelector(`input[name="form-${i}-${qi}"]`).closest("fieldset"));
+        });
+        if (sets.length && !problem) {
+          sets.forEach(mark);
+          firstMissing = sets[0];
+          const n = sets.length === 1 ? "1 question" : `${sets.length} questions`;
+          problem = `${n} in "${isolate(itemHeading(m), 80)}" still ${sets.length === 1 ? "needs" : "need"} an answer. The first one is highlighted. Answer ${sets.length === 1 ? "it" : "them"}, or choose Don't share for it.`;
         }
       });
-      if (problem) return reviewFail(problem);
+      if (problem) {
+        reviewFail(problem);
+        if (firstMissing) {
+          // The message is announced (role=alert); the person is taken to
+          // the question itself.
+          firstMissing.scrollIntoView({ block: "center" });
+          firstMissing.querySelector("input").focus({ preventScroll: true });
+        }
+        return;
+      }
       resolve({ kind: "send", share, answers });
     };
     $("wallet-decline-all").onclick = () => resolve({ kind: "declined-all" });
@@ -637,6 +725,13 @@ async function chooseSet(request, unsupportedItems, choices) {
     }
   }
 }
+
+// Every handler is attached now: sign-in can start (the page draws these
+// disabled, since a tap before this did nothing, #1061).
+$("signin-passkey").disabled = false;
+$("signin-email-btn").disabled = false;
+// Ready after all, if late: take back the page's "could not start".
+$("signin-stalled").hidden = true;
 
 // Opened directly, not by a check-in page: nothing to sign in for.
 if (!window.opener) show("wallet-direct");

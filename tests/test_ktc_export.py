@@ -336,10 +336,11 @@ def test_no_meta_profile_on_any_entry(client, records):
 
 
 def test_rows_without_a_claim_still_stay_home(app, client, records):
-    """The claim gate runs on the stored row, before the strip.
+    """The upstream claim is read on the stored row, before the strip; an
+    unclaimed row goes only if r6/us_core_profiles.py classify passes it
+    (#1058), and this one has no category.
 
-    MUTATION: gate on the profiled resource instead -> red (nothing but
-    the payor would go out)."""
+    MUTATION: classify passes a Condition with no category -> red."""
     f.seed(app, f.condition('ci-cond-unclaimed', profiled=False))
     resp, text = _full(client)
     assert 'ci-cond-unclaimed' not in text

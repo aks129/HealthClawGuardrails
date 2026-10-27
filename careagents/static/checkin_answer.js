@@ -124,34 +124,88 @@ function answerable(item, unsupported) {
 /* --- Forms (FHI-55) -------------------------------------------------------
 
    A `form.fhir` item is answered only from the Questionnaire the website
-   sent inline, and only when it is small, flat and single-choice, as the
-   PHQ-2 is: display lines and choice questions, each with its own coded
-   answer options. Everything shown is the website's own words, put on the
-   page as text, never as markup; the Questionnaire's generated narrative
-   is never read. Anything else is unsupported rather than half shown. The
-   answers stay in this tab: they go only into the sealed response. */
+   sent inline, and only when it is small and single-choice, as the PHQ-2
+   is: display lines and choice questions, each with its own coded answer
+   options. One level of `group` is allowed too, as the SPEED dry eye form
+   has (#1049): a heading over display lines and choice questions held to
+   the same rules, the heading's words checked as a question's are. A
+   group inside a group is not. A question of another kind (free text, a
+   number, a date, pick-several) is not answered here: when it is optional
+   it is shown as one this wallet does not answer and left out of the
+   response, as the contact lens trial form's are; when it is `required`,
+   or carries an extension that could say so, the form cannot be completed
+   without it, so the form is unsupported. So is any form with a
+   modifierExtension or an SDC constraint (changesWhatIsRequired).
+   Everything shown is the website's own words, put on the page as text,
+   never as markup; the Questionnaire's generated narrative is never read.
+   Anything else is unsupported rather than half shown. The answers stay in
+   this tab: they go only into the sealed response. */
 
 const FORM_MAX_CHARS = 32768;      // the Questionnaire, serialised
-const FORM_MAX_QUESTIONS = 10;
+// The contact lens trial form asks 19 (it was 10, PHQ-2 and SPEED sized).
+const FORM_MAX_QUESTIONS = 30;
+const FORM_MAX_SKIPPED = 10;       // questions shown as not answered here
 const FORM_MAX_OPTIONS = 10;
 const FORM_TEXT_MAX = 500;
 const FORM_CANONICAL_MAX = 1024;
-// What would make a question more than one pick from a fixed list.
+// What would make a question more than one pick from a fixed list. `item`
+// is allowed on a top-level group only (readItems).
 const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
+// The other FHIR R4 question types: left out when optional (readItems). A
+// type outside this list is not a question to leave out.
+const FORM_SKIPPED_TYPES = ["boolean", "decimal", "integer", "date",
+  "dateTime", "time", "string", "text", "url", "choice", "open-choice",
+  "attachment", "reference", "quantity"];
+
+const FORM_CONSTRAINT =
+  "http://hl7.org/fhir/StructureDefinition/questionnaire-constraint";
+
+/* Whether anything in the Questionnaire could change what must be
+   answered beyond what readItems reads (#1061 security F1): a
+   modifierExtension anywhere (FHIR: one not understood means the element
+   must not be processed), or an SDC questionnaire-constraint anywhere,
+   which can require an answer to a question this wallet leaves out.
+   Walked with a stack, not recursion: the size cap bounds the work, not
+   the depth. */
+function changesWhatIsRequired(q) {
+  const stack = [q];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node === null || typeof node !== "object") continue;
+    if (Array.isArray(node)) { node.forEach((v) => stack.push(v)); continue; }
+    if (Object.hasOwn(node, "modifierExtension") ||
+        own(node, "url") === FORM_CONSTRAINT) return true;
+    Object.values(node).forEach((v) => stack.push(v));
+  }
+  return false;
+}
 
 const text = (v, max = FORM_TEXT_MAX) =>
   typeof v === "string" && v.trim() && v.length <= max ? v : null;
 
-// Bidi embedding, override and isolate controls (U+202A-202E, U+2066-2069).
-const BIDI = /[‪-‮⁦-⁩]/u;
+// Bidi embedding, override and isolate controls (U+202A-202E, U+2066-2069),
+// and the implicit marks ALM, LRM and RLM (U+061C, U+200E, U+200F), which
+// draw nothing but can turn "(0, 4)" into "(4 ,0)" (#1052 security F2).
+const BIDI = /[؜‎‏‪-‮⁦-⁩]/u;
+// Characters that draw nothing: format characters such as U+200B, and the
+// Hangul fillers (U+3164, U+115F, U+1160, U+FFA0), which are letters.
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+// Right-to-left scripts (Hebrew, Arabic, Syriac, Thaana, NKo and the rest of
+// U+0590-08FF, their presentation forms, and the RTL supplementary blocks).
+// One visible RTL letter reorders the digits beside it, so "(0, 4)" draws
+// as "(4 ,0)" (#1052 security F3). The wallet reads in English and Spanish;
+// a form in an RTL script is unsupported rather than drawn misleadingly.
+const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFE\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
 
 /* Words the person will read: `text`, with at least one letter or digit
-   (a string of format characters alone, U+200B and the like, is blank on
-   screen however it trims), and no bidi control that could reorder what
-   is around it. Otherwise null, and the form is unsupported (#1030
-   security F1). */
+   that draws something (a string of characters that draw nothing is blank
+   on screen however it trims, #1030 security F1; a Hangul filler is a
+   letter that draws nothing, #1052 security F1), and no bidi control,
+   mark or right-to-left letter that could reorder what is around it.
+   Otherwise null, and the form is unsupported. */
 const words = (v, max = FORM_TEXT_MAX) =>
-  text(v, max) && /[\p{L}\p{N}]/u.test(v) && !BIDI.test(v) ? v : null;
+  text(v, max) && /[\p{L}\p{N}]/u.test(v.replace(IGNORABLE, "")) &&
+    !BIDI.test(v) && !RTL.test(v) ? v : null;
 
 function readOption(option) {
   const c = own(option, "valueCoding");
@@ -164,9 +218,78 @@ function readOption(option) {
   return { coding, display };
 }
 
+/* Reads `items` into `form`, in order: display lines into the form's
+   `displays` (or, inside a group, the group's), choice questions into
+   form.questions, each with the index into form.groups of the group it
+   sits in, or null at the top. `group` is that index while reading a
+   group's own items. An optional question of another kind goes into
+   form.skipped, with its group and `at`, the number of questions before
+   it, which says where it sits among them. False when any item is outside
+   the rules. */
+function readItems(items, form, linkIds, group) {
+  for (const it of items) {
+    if (it === null || typeof it !== "object") return false;
+    const type = own(it, "type");
+    // One level: a group at the top may carry items, nothing else may.
+    const isGroup = type === "group" && group === null;
+    if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k) &&
+        !(k === "item" && isGroup))) return false;
+    const repeats = own(it, "repeats") === true;
+    if (repeats && (type === "display" || type === "group")) return false;
+    const linkId = text(own(it, "linkId"), 255);
+    const said = words(own(it, "text"));
+    if (!linkId || !said || linkIds.has(linkId)) return false;
+    linkIds.add(linkId);
+    if (type === "display") {
+      (group === null ? form.displays : form.groups[group].displays).push(said);
+      continue;
+    }
+    const prefix = own(it, "prefix");
+    if (prefix !== undefined && !words(prefix, 16)) return false;
+    if (!isGroup && (type !== "choice" || repeats)) {
+      // Not one pick from a list: shown, never answered, its options (if
+      // any) unread. Required, it cannot be left out of a completed form;
+      // and an extension may say so another way (questionnaire-minOccurs),
+      // so one that carries any is not left out either (#1061 security F1).
+      const required = own(it, "required");
+      if (!FORM_SKIPPED_TYPES.includes(type) || Object.hasOwn(it, "extension") ||
+          (required !== undefined && required !== false)) return false;
+      form.skipped.push({ linkId, prefix: prefix || "", text: said, group,
+        at: form.questions.length });
+      continue;
+    }
+    if (isGroup) {
+      // A heading over at least one question: nothing to answer is a
+      // heading over nothing, and options belong to questions.
+      const children = own(it, "item");
+      if (Object.hasOwn(it, "answerOption") || !Array.isArray(children)) return false;
+      const before = form.questions.length;
+      form.groups.push({ linkId, prefix: prefix || "", text: said, displays: [] });
+      if (!readItems(children, form, linkIds, form.groups.length - 1)) return false;
+      if (form.questions.length === before) return false;
+      continue;
+    }
+    const options = own(it, "answerOption");
+    if (!Array.isArray(options) || options.length < 2 ||
+        options.length > FORM_MAX_OPTIONS) return false;
+    const read = options.map(readOption);
+    if (read.includes(null)) return false;
+    form.questions.push({ linkId, prefix: prefix || "", text: said, options: read, group });
+  }
+  return true;
+}
+
 /* The form an item carries, or null when this wallet will not answer it:
-   { canonical, title, displays: [text], questions: [{ linkId, prefix,
-   text, options: [{ coding, display }] }] }. */
+   { canonical, title, displays: [text], groups: [{ linkId, prefix, text,
+   displays: [text] }], questions: [{ linkId, prefix, text, options:
+   [{ coding, display }], group: index into groups or null }], skipped:
+   [{ linkId, prefix, text, group, at }] }. Questions are in the
+   Questionnaire's order, so a group's are next to each other; the
+   30-question cap counts them all. A skipped question is shown in its
+   place, before questions[at] (or after the last), and never answered.
+   Display lines are shown before the questions they belong with, wherever
+   they sit among them: the form's above every question, a group's under
+   its heading and above its questions (checkin_wallet.js formQuestions). */
 export function readForm(item) {
   const content = own(item, "content");
   const accept = own(item, "accept");
@@ -176,7 +299,7 @@ export function readForm(item) {
   if (own(q, "resourceType") !== "Questionnaire") return null;
   let size;
   try { size = JSON.stringify(q).length; } catch (e) { return null; }
-  if (size > FORM_MAX_CHARS) return null;
+  if (size > FORM_MAX_CHARS || changesWhatIsRequired(q)) return null;
 
   // What the answer names: the item's canonical exactly as sent (a `|1`
   // version included), else the inline url, with its version if it has one.
@@ -191,42 +314,33 @@ export function readForm(item) {
 
   const items = own(q, "item");
   if (!Array.isArray(items)) return null;
-  const displays = [];
-  const questions = [];
-  const linkIds = new Set();
-  for (const it of items) {
-    if (it === null || typeof it !== "object") return null;
-    if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k))) return null;
-    if (own(it, "repeats") === true) return null;
-    const linkId = text(own(it, "linkId"), 255);
-    const said = words(own(it, "text"));
-    if (!linkId || !said || linkIds.has(linkId)) return null;
-    linkIds.add(linkId);
-    const type = own(it, "type");
-    if (type === "display") { displays.push(said); continue; }
-    if (type !== "choice") return null;
-    const prefix = own(it, "prefix");
-    if (prefix !== undefined && !words(prefix, 16)) return null;
-    const options = own(it, "answerOption");
-    if (!Array.isArray(options) || options.length < 2 ||
-        options.length > FORM_MAX_OPTIONS) return null;
-    const read = options.map(readOption);
-    if (read.includes(null)) return null;
-    questions.push({ linkId, prefix: prefix || "", text: said, options: read });
-  }
-  if (!questions.length || questions.length > FORM_MAX_QUESTIONS) return null;
-  return { canonical, title: words(own(q, "title")) || "", displays, questions };
+  const form = { displays: [], groups: [], questions: [], skipped: [] };
+  if (!readItems(items, form, new Set(), null)) return null;
+  const { displays, groups, questions, skipped } = form;
+  if (!questions.length || questions.length > FORM_MAX_QUESTIONS ||
+      skipped.length > FORM_MAX_SKIPPED) return null;
+  return { canonical, title: words(own(q, "title")) || "", displays, groups,
+    questions, skipped };
 }
 
 /* The QuestionnaireResponse for `picked` ({ linkId: option index }), or
-   null unless every question has exactly one of its own options. */
+   null unless every question has exactly one of its own options. A
+   group's answers sit under the group's linkId, as FHIR nests them. */
 function questionnaireResponse(form, picked) {
   const item = [];
+  let into = null;   // the group being filled, while its questions last
   for (const question of form.questions) {
     const i = own(picked, question.linkId);
     if (!Number.isInteger(i) || i < 0 || i >= question.options.length) return null;
-    item.push({ linkId: question.linkId, text: question.text,
-      answer: [{ valueCoding: { ...question.options[i].coding } }] });
+    const answered = { linkId: question.linkId, text: question.text,
+      answer: [{ valueCoding: { ...question.options[i].coding } }] };
+    if (question.group === null) { into = null; item.push(answered); continue; }
+    if (!into || into.at !== question.group) {
+      const g = form.groups[question.group];
+      into = { at: question.group, node: { linkId: g.linkId, text: g.text, item: [] } };
+      item.push(into.node);
+    }
+    into.node.item.push(answered);
   }
   return {
     resourceType: "QuestionnaireResponse",

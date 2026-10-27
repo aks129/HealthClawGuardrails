@@ -44,6 +44,27 @@
   .checkin-question legend { font-weight: 600; padding: 0; overflow-wrap: anywhere; }
   .checkin-question label { display: flex; align-items: center; gap: 6px; min-height: 44px;
     overflow-wrap: anywhere; }
+  /* A group of questions (#1049): its heading, its notes, then them. The
+     heading reads as a section, not one more question: larger, ruled off
+     from what is above it. */
+  .checkin-group { margin: 0 0 6px; }
+  .checkin-group-title { font-size: 1.125em; font-weight: 700; margin: 16px 0 4px;
+    padding-top: 10px; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
+  .checkin-group-note { font-size: 14px; color: var(--ink-soft); margin: 0 0 8px;
+    overflow-wrap: anywhere; }
+  /* A question left blank when its form was to be sent (#1061 patient
+     test): outlined, so it can be found on a long form. */
+  .checkin-question.checkin-missing { outline: 2px solid var(--critical-line);
+    outline-offset: 4px; border-radius: var(--radius-sm); }
+  /* A question this wallet does not answer, in place of its options: our
+     short line first, in our voice (ink, not a website note's soft grey;
+     smaller than a question), then the website's words, labelled and set
+     apart as its other words are (#1061 security F2). */
+  .checkin-skipped { margin: 14px 0 10px; }
+  .checkin-skipped-why { font-size: 13px; font-weight: 500; color: var(--ink); margin: 0 0 2px; }
+  .checkin-skipped-website { margin: 0; overflow-wrap: anywhere; }
+  /* Sign-in, before the page's script is ready (#1061). */
+  #signin-start button:disabled { opacity: 0.55; cursor: not-allowed; }
   /* The website's address inside our heading: set apart, and wraps. */
   .checkin-pick-origin { font-family: var(--mono); font-size: 0.75em; overflow-wrap: anywhere; }
   /* One card per set of records: its label, then how and when. A card,
@@ -86,13 +107,27 @@
         it is and exactly what it asks for, and you choose what to share.
         This tab stays open.</p>
       <div id="signin-start">
-        <button class="btn-primary btn-block" id="signin-passkey">
+        {# Disabled until checkin_wallet.js has attached their handlers: a
+           tap before that did nothing at all (#1061). If it never does (no
+           script, or it failed to load or threw first), say so rather than
+           leave two dead buttons. #}
+        <noscript><p class="form-error">Sign-in could not start. Turn on
+          JavaScript, then reload the page.</p></noscript>
+        <p class="form-error" id="signin-stalled" role="alert" hidden>Sign-in
+          could not start. Reload the page.</p>
+        <script>
+          setTimeout(function () {
+            if (document.getElementById("signin-passkey").disabled)
+              document.getElementById("signin-stalled").hidden = false;
+          }, 8000);
+        </script>
+        <button class="btn-primary btn-block" id="signin-passkey" disabled>
           Sign in with a passkey</button>
         <div class="or">or use your email</div>
         <label class="field-label" for="signin-email">Email</label>
         <input class="field" id="signin-email" type="email" inputmode="email"
                autocomplete="email" placeholder="you@example.com">
-        <button class="btn-secondary btn-block" id="signin-email-btn">
+        <button class="btn-secondary btn-block" id="signin-email-btn" disabled>
           Email me a code</button>
         <p class="auth-fine">By continuing you agree to the
           <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and

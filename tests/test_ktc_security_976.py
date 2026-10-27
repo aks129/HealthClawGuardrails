@@ -52,14 +52,17 @@ def _hostile_records():
                                   'display': C}]
     pt['maritalStatus'] = {'text': C}
     pt['communication'] = [{'language': {'text': C}}]
-    pt['modifierExtension'] = _ext()
+    # Was modifierExtension: since the #1062 security review a record that
+    # carries one is held whole (tests/test_checkin_vendor_records.py), so
+    # the text it carried now rides a plain extension, which is stripped.
+    pt['_birthDate'] = {'extension': _ext()}
     pt['link'] = [{'other': {'reference': f'Patient/{f.SIBLING}',
                              'display': C}, 'type': 'seealso'}]
     pt['patientName'] = C  # non-FHIR (FHI-66)
 
     cond = f.condition()
     cond['extension'] = _ext()
-    cond['modifierExtension'] = _ext()
+    cond['code']['extension'] = _ext()  # was modifierExtension
     cond['category'] = [{'text': C}]
     cond['severity'] = {'coding': [{'system': SNOMED, 'code': '0000000',
                                     'display': C}], 'text': C}

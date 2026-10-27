@@ -427,7 +427,7 @@ test.describe('check-in wallet', () => {
         'Hypertensive disorder']) {
         expect(text, plain).toContain(plain);
       }
-      // The member ID is masked, and the problem with no profile is not there.
+      // The member ID is masked.
       expect(text).not.toContain('FAKE-MEMBER-0000001');
       // The relay was asked for the six kinds of record, and nothing else:
       // not the request, its purpose, or the website's origin.
@@ -628,7 +628,7 @@ test.describe('check-in wallet', () => {
       await form.locator('.checkin-choice input[value=share]').check();
       await form.locator('fieldset').nth(0).getByLabel('Several days').check();
       await wallet.locator('#wallet-send').click();
-      await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
+      await expect(wallet.locator('#wallet-review-err')).toContainText('1 question in');
       await expect(wallet.locator('#wallet-review')).toBeVisible();
 
       await form.locator('fieldset').nth(1).getByLabel('Nearly every day').check();
@@ -664,9 +664,11 @@ test.describe('check-in wallet', () => {
   });
 
   // QA #1030: on a phone the Send button is far below the top of the card.
-  // toContainText passes whether or not the message can be seen; what a
-  // person needs is to see it, beside the button they tapped, focused.
-  test('at phone width, the unanswered-question message is on screen',
+  // toContainText passes whether or not the message can be seen. #1061
+  // patient test: on a long form the message alone did not say which
+  // question, so the blank one is marked, scrolled to and focused, and the
+  // message (announced, role=alert) gives the count.
+  test('at phone width, the unanswered question is marked, on screen and focused',
     async ({ page }) => {
       await serveRelay(page);
       const wallet = await checkIn(page, PHQ2);
@@ -677,10 +679,18 @@ test.describe('check-in wallet', () => {
       await form.locator('fieldset').nth(0).getByLabel('Several days').check();
       await wallet.locator('#wallet-send').click();
       const msg = wallet.locator('#wallet-review-err');
-      await expect(msg).toBeInViewport({ timeout: 2_000 });
-      await expect(msg).toBeFocused();
       await expect(msg).toHaveAttribute('role', 'alert');
-      await expect(msg).toContainText('Answer every question');
+      await expect(msg).toContainText('1 question in');
+      await expect(msg).toContainText('still needs an answer. The first one is highlighted.');
+      await expect(msg).toContainText("or choose Don't share for it.");
+      const blank = form.locator('fieldset').nth(1);
+      await expect(blank).toHaveAttribute('aria-invalid', 'true');
+      await expect(form.locator('fieldset').nth(0)).not.toHaveAttribute('aria-invalid', 'true');
+      await expect(blank).toBeInViewport({ timeout: 2_000 });
+      await expect(blank.locator('input').first()).toBeFocused();
+      // Answering it clears the mark.
+      await blank.getByLabel('Not at all').check();
+      await expect(blank).not.toHaveAttribute('aria-invalid', 'true');
     });
 
   // #1030 product decision: answers given while the item still sits at its
@@ -830,4 +840,192 @@ test.describe('check-in wallet', () => {
     expect(r.json.requestStatus.find((s: any) => s.item === 'phq2').status)
       .toBe('unsupported');
   });
+
+  // #1049: an eye-care Verifier's SPEED form, its questions in two groups
+  // (the Verifier's published request structure, with made-up wording).
+  const SPEED = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+    'fixtures', 'checkin-request-form-speed.json'), 'utf8'));
+  const speed = (wallet: Page) => wallet.locator('#wallet-items li[data-item=speed]');
+
+  test('fills in the grouped SPEED form and nests the answers by group',
+    async ({ page }) => {
+      const asked = await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      const form = speed(wallet);
+      // Each group's heading, then its own note, then its questions.
+      await expect(form.locator('.checkin-group-title')).toHaveText([
+        'How often', 'How bad']);
+      await expect(form.locator('.checkin-group').nth(0).locator('.checkin-group-note'))
+        .toHaveText('0 Never · 1 Rarely · 2 Often · 3 Always');
+      for (const [g, word] of [[0, 'how often'], [1, 'how bad']] as const) {
+        await expect(form.locator('.checkin-group').nth(g).locator('legend')).toHaveText(
+          ['A', 'B', 'C', 'D'].map((s) => `Symptom ${s}, ${word}`));
+      }
+      await expect(form.locator('fieldset input:checked')).toHaveCount(0);
+
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      await expect(sets).toHaveCount(8);
+      for (let n = 0; n < 7; n++) await sets.nth(n).locator('input').first().check();
+      // One left: said, not sent in part.
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-review-err')).toContainText('1 question in');
+      await sets.nth(7).getByLabel('Very severe').check();
+      await sets.nth(1).getByLabel('Always').check();
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus).toEqual([
+        { item: 'patient', status: 'declined' },
+        { item: 'speed', status: 'fulfilled' }]);
+      const qr = r.json.artifacts[0].value;
+      expect(qr.questionnaire).toBe(SPEED.items[1].content.questionnaireCanonical);
+      expect(qr.item.map((g: any) => [g.linkId, g.answer,
+        g.item.map((i: any) => [i.linkId, i.answer[0].valueCoding.code])])).toEqual([
+        ['frequency', undefined, [['frequency-dryness', 'frequency-0'],
+          ['frequency-soreness', 'frequency-3'], ['frequency-burning', 'frequency-0'],
+          ['frequency-fatigue', 'frequency-0']]],
+        ['severity', undefined, [['severity-dryness', 'severity-0'],
+          ['severity-soreness', 'severity-0'], ['severity-burning', 'severity-0'],
+          ['severity-fatigue', 'severity-4']]]]);
+      expect(JSON.stringify(qr)).not.toContain('ordinalValue');
+      expect(asked).toEqual([{ resource_types: ['Patient'] }]);
+    });
+
+  // The Verifier's contact lens trial form (the fixture is its structure
+  // exactly): its single choices are answered; its free text, numbers and
+  // pick-several are each shown, in place, as not answered here, and left
+  // out of what is sent. It used to be unsupported whole.
+  test('the contact lens form answers its choices and leaves out the rest, saying so',
+    async ({ page }) => {
+      await serveRelay(page);
+      const req = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+        'fixtures', 'checkin-request-form-cl-trial.json'), 'utf8'));
+      const wallet = await checkIn(page, req);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      const form = wallet.locator('#wallet-items li[data-item=eyeClTrial]');
+      await expect(form.locator('.checkin-group')).toHaveCount(5);
+      const skipped = ['trial-lens', 'days-worn', 'hours-worn', 'hours-comfortable',
+        'problems', 'concerns', 'improvement'];
+      const q = req.items[1].content.questionnaire;
+      const textOf = (id: string) => q.item.flatMap((g: any) => [g, ...(g.item || [])])
+        .find((i: any) => i.linkId === id).text;
+      await expect(form.locator('.checkin-skipped-text')).toHaveText(skipped.map(textOf));
+      await expect(form.locator('.checkin-skipped-why')).toHaveCount(7);
+      for (const why of await form.locator('.checkin-skipped-why').allTextContents()) {
+        expect(why).toBe('This wallet does not answer this question. It is not sent.');
+      }
+      // In its place: the lens question first in its group, before its choices.
+      const wear = form.locator('.checkin-group').nth(1);
+      await expect(wear.locator('.checkin-skipped, fieldset').first())
+        .toHaveClass(/checkin-skipped/);
+      // Nothing to type into, and every choice a radio button.
+      await expect(form.locator('input:not([type=radio]), textarea, select')).toHaveCount(0);
+      expect(await wallet.evaluate(() =>
+        document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await wallet.screenshot({ path: test.info().outputPath('cl-trial-375.png'), fullPage: true });
+
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      await expect(sets).toHaveCount(19);
+      // #1061 patient test: three left blank on a long form. Each is
+      // marked, the message gives the count, and the first is on screen
+      // and focused, wherever Send is.
+      for (let n = 0; n < 16; n++) await sets.nth(n).locator('input').first().check();
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-review-err')).toContainText(
+        'still need an answer. The first one is highlighted.');
+      await expect(wallet.locator('#wallet-review-err')).toContainText('3 questions in');
+      await expect(form.locator('fieldset[aria-invalid=true]')).toHaveCount(3);
+      await expect(form.locator('fieldset.checkin-missing')).toHaveCount(3);
+      await expect(sets.nth(16)).toHaveAttribute('aria-invalid', 'true');
+      await expect(sets.nth(16)).toBeInViewport();
+      await expect(sets.nth(16).locator('input').first()).toBeFocused();
+      await wallet.screenshot({ path: test.info().outputPath('cl-trial-missing-375.png') });
+      for (let n = 16; n < 19; n++) await sets.nth(n).locator('input').first().check();
+      await expect(form.locator('fieldset[aria-invalid=true]')).toHaveCount(0);
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus.find((s: any) => s.item === 'eyeClTrial').status)
+        .toBe('fulfilled');
+      const qr = r.json.artifacts[0].value;
+      expect(qr.status).toBe('completed');
+      expect(qr.item.map((g: any) => g.linkId)).toEqual(
+        ['safety', 'wear', 'vision', 'comfort', 'impression']);
+      const sent = qr.item.flatMap((g: any) => g.item.map((i: any) => i.linkId));
+      expect(sent).toHaveLength(19);
+      for (const id of skipped) expect(sent).not.toContain(id);
+    });
+
+  // QA #1052: the grouped form, declined after some answers, sends a
+  // declined status and none of the answers given.
+  test('the grouped SPEED form can be declined after answering some of it',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      const form = speed(wallet);
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      for (let n = 0; n < 5; n++) await sets.nth(n).locator('input').first().check();
+      await form.locator('.checkin-choice input[value=decline]').click();
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.artifacts).toEqual([]);
+      expect(r.json.requestStatus.find((s: any) => s.item === 'speed').status)
+        .toBe('declined');
+    });
+
+  // QA #1052: each group is a named group for a screen reader, holding only
+  // its own questions.
+  test("each SPEED group is named by its heading and holds only its questions",
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      const form = speed(wallet);
+      for (const [name, word] of [['How often', 'how often'], ['How bad', 'how bad']]) {
+        const g = form.getByRole('group', { name, exact: true });
+        await expect(g).toHaveCount(1);
+        await expect(g.locator('legend')).toHaveText(
+          ['A', 'B', 'C', 'D'].map((s) => `Symptom ${s}, ${word}`));
+      }
+    });
+
+  // QA #1052: on a phone (375px), the grouped form fits the screen, every
+  // option is a full-size tap target, and a question left blank in the
+  // FIRST group (not only the last) stops the send with the message on screen.
+  test('at phone width, the grouped form fits and a blank in the first group blocks Send',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      const form = speed(wallet);
+      await expect(form.locator('.checkin-group-title').first()).toBeVisible();
+      expect(await wallet.evaluate(() =>
+        document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      for (const el of await form.locator(
+        '.checkin-group-title, .checkin-group-note, fieldset.checkin-question').all()) {
+        const box = await el.boundingBox();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+      }
+      const heights = await form.locator('fieldset.checkin-question label')
+        .evaluateAll((ls) => ls.map((l) => l.getBoundingClientRect().height));
+      expect(heights.length).toBe(4 * 4 + 4 * 5);
+      for (const h of heights) expect(h).toBeGreaterThanOrEqual(44);
+      await wallet.screenshot({ path: test.info().outputPath('speed-375.png'), fullPage: true });
+
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      for (let n = 1; n < 8; n++) await sets.nth(n).locator('input').first().check();
+      await wallet.locator('#wallet-send').click();
+      const msg = wallet.locator('#wallet-review-err');
+      await expect(msg).toContainText('1 question in');
+      // The blank question itself is taken to, far above Send (#1061).
+      await expect(sets.nth(0)).toBeInViewport({ timeout: 2_000 });
+      await expect(sets.nth(0)).toHaveAttribute('aria-invalid', 'true');
+      await expect(sets.nth(0).locator('input').first()).toBeFocused();
+      expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
+    });
 });
