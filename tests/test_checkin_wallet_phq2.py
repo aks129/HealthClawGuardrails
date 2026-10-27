@@ -13,7 +13,8 @@ careagents/static/checkin_answer.js under node:
   vendored library's own pre-flight check finds the response clean.
 - Per-item consent: unchosen is declined, and so is an incomplete or
   tampered set of answers. Nothing is guessed.
-- Only a small, flat, single-choice form is answered. Anything else (no
+- Only a small, single-choice form is answered (one level of group is
+  allowed, #1049: tests/test_checkin_wallet_speed.py). Anything else (no
   inline Questionnaire, too large, nested, free text, a value set, too many
   questions) is `unsupported`, never half-rendered.
 - The answers never reach CareAgents: the form asks the relay for nothing,
