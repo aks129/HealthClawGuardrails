@@ -898,4 +898,72 @@ test.describe('check-in wallet', () => {
         .toBe('unsupported');
       expect(r.json.artifacts).toEqual([]);
     });
+
+  // QA #1052: the grouped form, declined after some answers, sends a
+  // declined status and none of the answers given.
+  test('the grouped SPEED form can be declined after answering some of it',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      const form = speed(wallet);
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      for (let n = 0; n < 5; n++) await sets.nth(n).locator('input').first().check();
+      await form.locator('.checkin-choice input[value=decline]').click();
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.artifacts).toEqual([]);
+      expect(r.json.requestStatus.find((s: any) => s.item === 'speed').status)
+        .toBe('declined');
+    });
+
+  // QA #1052: each group is a named group for a screen reader, holding only
+  // its own questions.
+  test("each SPEED group is named by its heading and holds only its questions",
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      const form = speed(wallet);
+      for (const [name, word] of [['How often', 'how often'], ['How bad', 'how bad']]) {
+        const g = form.getByRole('group', { name, exact: true });
+        await expect(g).toHaveCount(1);
+        await expect(g.locator('legend')).toHaveText(
+          ['A', 'B', 'C', 'D'].map((s) => `Symptom ${s}, ${word}`));
+      }
+    });
+
+  // QA #1052: on a phone (375px), the grouped form fits the screen, every
+  // option is a full-size tap target, and a question left blank in the
+  // FIRST group (not only the last) stops the send with the message on screen.
+  test('at phone width, the grouped form fits and a blank in the first group blocks Send',
+    async ({ page }) => {
+      await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      const form = speed(wallet);
+      await expect(form.locator('.checkin-group-title').first()).toBeVisible();
+      expect(await wallet.evaluate(() =>
+        document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      for (const el of await form.locator(
+        '.checkin-group-title, .checkin-group-note, fieldset.checkin-question').all()) {
+        const box = await el.boundingBox();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+      }
+      const heights = await form.locator('fieldset.checkin-question label')
+        .evaluateAll((ls) => ls.map((l) => l.getBoundingClientRect().height));
+      expect(heights.length).toBe(4 * 4 + 4 * 5);
+      for (const h of heights) expect(h).toBeGreaterThanOrEqual(44);
+      await wallet.screenshot({ path: test.info().outputPath('speed-375.png'), fullPage: true });
+
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      for (let n = 1; n < 8; n++) await sets.nth(n).locator('input').first().check();
+      await wallet.locator('#wallet-send').click();
+      const msg = wallet.locator('#wallet-review-err');
+      await expect(msg).toBeInViewport({ timeout: 2_000 });
+      await expect(msg).toContainText('Answer every question');
+      expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
+    });
 });
