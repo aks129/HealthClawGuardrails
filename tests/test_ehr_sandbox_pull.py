@@ -499,7 +499,7 @@ def test_a_sandbox_tenant_is_accepted(tenant):
 
 @pytest.mark.parametrize('tenant', [
     'desktop-demo', 'sandbox-epic-', 'sandbox-cerner-x', 'sandbox-epic-Ana',
-    'sandbox-epic-ana\n', 'gigi-sandbox-epic-x', 'sandbox-epic-a_b',
+    'sandbox-epic-ana\n', 'demo-sandbox-epic-x', 'sandbox-epic-a_b',
     'xsandbox-epic-a', ''])
 def test_a_bad_tenant_is_refused(tenant):
     with pytest.raises(pull.PullError):
@@ -758,3 +758,10 @@ def test_the_checkin_export_keeps_the_patient_name(seeded, client):
     assert pt['name'] == [{'family': 'Synthetic', 'given': ['Ana']}]
     assert pt['birthDate'] == '1987-09-12'
     assert _htest(pt)  # the test-data marker crosses to the clinic
+
+
+def test_the_signing_kid_is_published():
+    """The vendors verify against deploy/ehr-sandbox-jwks.json by kid."""
+    jwks = json.loads((pull.ROOT / 'deploy'
+                       / 'ehr-sandbox-jwks.json').read_text())
+    assert pull.KID in {k['kid'] for k in jwks['keys']}
