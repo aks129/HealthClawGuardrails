@@ -272,7 +272,8 @@ def test_sandbox_urls_are_the_exact_strings():
 
 def test_env_cannot_move_any_request(monkeypatch, key_file, exports):
     """Every env spelling a reader might reach for, pointed at production,
-    and every request still lands on the exact sandbox strings."""
+    and every request still lands on the exact sandbox strings. The names
+    are a guess; the real guard is the exact-string test above."""
     prod = 'https://fhir-ehr.cerner.com/r4/ec2458f2-1e24-41c8-b71b-0e701af7583d'
     for name in ('EPIC_FHIR_BASE', 'EPIC_TOKEN_URL', 'ORACLE_FHIR_BASE',
                  'ORACLE_TOKEN_URL', 'EHR_FHIR_BASE', 'EHR_TOKEN_URL',
@@ -892,6 +893,19 @@ def test_a_dot_patient_id_never_reaches_the_vendor(
     assert rc == 1
     assert [m for m, _, _ in session.calls if m == 'GET'] == []
     assert seed.calls == []
+
+
+@pytest.mark.parametrize('seg', ['%2e%2e', '%2E%2E', '.%2e', '%2e'])
+def test_a_percent_encoded_dot_segment_next_link_is_refused(seg):
+    """A server that decodes before it normalises would leave the base."""
+    nxt = f'{EPIC_FHIR}/Condition/{seg}/{seg}/{seg}/oauth2/token'
+    session = FakeSession(EPIC, {
+        'Condition': _bundle(epic_condition(), next_url=nxt)})
+
+    assert pull._under_base(EPIC, nxt) is False
+    with pytest.raises(pull.PullError):
+        pull.search(session, EPIC, BEARER, 'Condition', {'patient': 'p'})
+    assert all(url != nxt for _, url, _ in session.calls)
 
 
 def test_the_patient_id_is_url_encoded():
