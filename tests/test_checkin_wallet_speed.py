@@ -209,6 +209,22 @@ def _group_child(q, **changes):
         text="​⁣")), id="group-heading-invisible"),
     pytest.param(_mutated(lambda q: q["item"][0].update(text="   ")),
                  id="group-heading-blank"),
+    # #1052 security F1: Hangul fillers are letters that draw nothing.
+    *(pytest.param(_mutated(lambda q, c=c: q["item"][0].update(text=c * 2)),
+                   id=f"group-heading-filler-{ord(c):04X}")
+      for c in "ㅤᅟᅠﾠ"),
+    pytest.param(_mutated(lambda q: _group_child(q, text="ㅤ")),
+                 id="child-filler-text"),
+    pytest.param(_mutated(lambda q: q["item"][0]["item"][1]["answerOption"][0]
+                          ["valueCoding"].update(display="ﾠ")),
+                 id="child-option-filler"),
+    # #1052 security F2: implicit bidi marks reorder what is around them.
+    *(pytest.param(_mutated(lambda q, c=c: q["item"][0].update(
+        text=f"Days: {c}0 - 3")), id=f"group-heading-mark-{ord(c):04X}")
+      for c in "؜‎‏"),
+    pytest.param(_mutated(lambda q: q["item"][0]["item"][1]["answerOption"][0]
+                          ["valueCoding"].update(display="Never ؜(0, 4)")),
+                 id="child-option-mark"),
     pytest.param(_mutated(lambda q: q["item"][0].pop("text")),
                  id="group-heading-missing"),
     pytest.param(_mutated(lambda q: q["item"][0].update(text="x" * 501)),

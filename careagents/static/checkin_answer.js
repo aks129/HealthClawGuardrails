@@ -147,16 +147,23 @@ const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
 const text = (v, max = FORM_TEXT_MAX) =>
   typeof v === "string" && v.trim() && v.length <= max ? v : null;
 
-// Bidi embedding, override and isolate controls (U+202A-202E, U+2066-2069).
-const BIDI = /[‪-‮⁦-⁩]/u;
+// Bidi embedding, override and isolate controls (U+202A-202E, U+2066-2069),
+// and the implicit marks ALM, LRM and RLM (U+061C, U+200E, U+200F), which
+// draw nothing but can turn "(0, 4)" into "(4 ,0)" (#1052 security F2).
+const BIDI = /[؜‎‏‪-‮⁦-⁩]/u;
+// Characters that draw nothing: format characters such as U+200B, and the
+// Hangul fillers (U+3164, U+115F, U+1160, U+FFA0), which are letters.
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
 
 /* Words the person will read: `text`, with at least one letter or digit
-   (a string of format characters alone, U+200B and the like, is blank on
-   screen however it trims), and no bidi control that could reorder what
-   is around it. Otherwise null, and the form is unsupported (#1030
-   security F1). */
+   that draws something (a string of characters that draw nothing is blank
+   on screen however it trims, #1030 security F1; a Hangul filler is a
+   letter that draws nothing, #1052 security F1), and no bidi control or
+   mark that could reorder what is around it. Otherwise null, and the form
+   is unsupported. */
 const words = (v, max = FORM_TEXT_MAX) =>
-  text(v, max) && /[\p{L}\p{N}]/u.test(v) && !BIDI.test(v) ? v : null;
+  text(v, max) && /[\p{L}\p{N}]/u.test(v.replace(IGNORABLE, "")) &&
+    !BIDI.test(v) ? v : null;
 
 function readOption(option) {
   const c = own(option, "valueCoding");
@@ -220,7 +227,10 @@ function readItems(items, form, linkIds, group) {
    displays: [text] }], questions: [{ linkId, prefix, text, options:
    [{ coding, display }], group: index into groups or null }] }. Questions
    are in the Questionnaire's order, so a group's are next to each other;
-   the 10-question cap counts them all. */
+   the 10-question cap counts them all. Display lines are shown before the
+   questions they belong with, wherever they sit among them: the form's
+   above every question, a group's under its heading and above its
+   questions (checkin_wallet.js formQuestions). */
 export function readForm(item) {
   const content = own(item, "content");
   const accept = own(item, "accept");

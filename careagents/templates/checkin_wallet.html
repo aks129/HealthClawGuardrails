@@ -44,9 +44,12 @@
   .checkin-question legend { font-weight: 600; padding: 0; overflow-wrap: anywhere; }
   .checkin-question label { display: flex; align-items: center; gap: 6px; min-height: 44px;
     overflow-wrap: anywhere; }
-  /* A group of questions (#1049): its heading, its notes, then them. */
+  /* A group of questions (#1049): its heading, its notes, then them. The
+     heading reads as a section, not one more question: larger, ruled off
+     from what is above it. */
   .checkin-group { margin: 0 0 6px; }
-  .checkin-group-title { font-weight: 700; margin: 10px 0 2px; overflow-wrap: anywhere; }
+  .checkin-group-title { font-size: 1.125em; font-weight: 700; margin: 16px 0 4px;
+    padding-top: 10px; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
   .checkin-group-note { font-size: 14px; color: var(--ink-soft); margin: 0 0 8px;
     overflow-wrap: anywhere; }
   /* The website's address inside our heading: set apart, and wraps. */
