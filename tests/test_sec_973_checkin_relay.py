@@ -316,6 +316,8 @@ _UNLABELLED = {
                                   "text": CANARY},
     "empty coding": lambda: {"coding": [], "text": CANARY},
 }
+#: The shapes that leave no coding behind once upstream words are stripped.
+_NOTHING_CODED = {"text only", "empty coding"}
 _FIELDS = [("Condition", "code"), ("Immunization", "vaccineCode"),
            ("MedicationRequest", "medicationCodeableConcept"),
            # A substance code so the allow-list lets it through to be named.
@@ -350,12 +352,22 @@ def test_upstream_text_on_an_unlabelled_concept_never_names_a_record(
         assert r.status_code == 200, r.get_data(as_text=True)
         assert CANARY not in r.get_data(as_text=True)
         got = {e["resource"]["id"] for e in r.get_json()["entry"]}
+        expected = {"sec973-0", "sec973-1", "sec973-2"}
+        shown = {"A health problem", "A vaccine", "A medicine"}
+        if shape in _NOTHING_CODED:
+            # Since #1062: with its words stripped the concept is empty and
+            # is pruned. The Condition met its claim as stored (subject and
+            # code), loses the code its claim requires, and is held whole.
+            # The others never met theirs upstream (no status), so they go
+            # as before, under the upstream's claim, and are still checked.
+            assert "sec973-0" not in got, got
+            expected.discard("sec973-0")
+            shown.discard("A health problem")
         # Every planted record is exported (else this proves nothing), the
         # allergy only when its coding is a list a substance code can join.
-        assert {"sec973-0", "sec973-1", "sec973-2"} <= got, got
+        assert expected <= got, got
         view = _wallet_view(r.get_json(), types)
         assert CANARY not in json.dumps(view)
-        assert {"A health problem", "A vaccine", "A medicine"} <= set(
-            view["shown"]), view["shown"]
+        assert shown <= set(view["shown"]), view["shown"]
     finally:
         svc.engine.dispose()
