@@ -14,13 +14,19 @@
  * sent. The website's display note in a group and the wallet's sentence
  * share one style (14px, --ink-soft), so the two cannot be told apart.
  *
+ * Fixed: the wallet's own line now comes first and names what follows, and
+ * the website's words carry their own "From the website:" label, set apart
+ * as its display lines are, in a style that is not the wallet's.
+ *
  * DIAGNOSIS of the phq2-attack `codeFromLog` flake. The wallet page draws
  * its sign-in form from the server (visible before any script runs), and
  * checkin_wallet.js attaches the "Email me a code" click handler only after
- * a top-level `await import(checkin_answer.js)`. A click that lands first
- * does nothing: no POST /api/auth/email, so no code is ever logged and
- * codeFromLog times out. The probe below delays checkin_answer.js to make
- * the race certain. Synthetic data only.
+ * a top-level `await import(checkin_answer.js)`. A click that landed first
+ * did nothing: no POST /api/auth/email, so no code was ever logged and
+ * codeFromLog timed out. Fixed: the page draws the sign-in buttons disabled
+ * and the script enables them once its handlers are attached. The probe
+ * below delays checkin_answer.js to make the race certain. Synthetic data
+ * only.
  */
 import { test, expect, Page } from '@playwright/test';
 import fs from 'fs';
@@ -121,9 +127,8 @@ const hostile = {
 test.describe('#1061 skipped questions, hostile Verifier', () => {
   test.beforeEach(async ({ page }) => { await blockThirdParty(page); });
 
-  test('FINDING 2: a skipped question pairs the website\'s words with the wallet\'s sentence, in place, unlabelled',
+  test('FINDING 2: a skipped question\'s words are labelled as the website\'s, after the wallet\'s own line',
     async ({ page }) => {
-      test.fail(true, '#1061 security F2: open until the skipped row is labelled');
       await serveRelay(page);
       const wallet = await openVerifier(page, hostile);
       await wallet.setViewportSize({ width: 375, height: 812 });
@@ -134,18 +139,22 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       await expect(question).toHaveCount(1);
       await expect(row.locator('.checkin-skipped-text')).toHaveText(SPOOF);
       await expect(row.locator('.checkin-skipped-why')).toHaveText(
-        "This wallet can't answer this one, so nothing is sent for it. You can answer it in person instead.");
+        'Not answered here, so nothing is sent for this question. You can answer it in person instead.');
       fs.mkdirSync(SHOTS, { recursive: true });
       await wallet.screenshot({ path: path.join(SHOTS, 'finding2-skipped-spoof-375.png'), fullPage: true });
 
-      // The website's words sit directly after the radio question and
-      // directly before the wallet's own sentence: nothing between them.
+      // The skipped row still follows the radio question, but it opens with
+      // the wallet's own line, and the website's words come after it, under
+      // their own label.
       const shape = await card.evaluate((li) => {
         const q = li.querySelector('fieldset.checkin-question')!;
         const s = li.querySelector('.checkin-skipped')!;
+        const said = s.querySelector('.checkin-skipped-text')!;
         return { next: q.nextElementSibling === s,
           firstChild: s.firstElementChild!.className,
-          labelled: Boolean(s.querySelector('.checkin-website-label, .checkin-website-says')) };
+          labelled: Boolean(s.querySelector('.checkin-website-label, .checkin-website-says')),
+          labelBeforeText: said.previousElementSibling?.className === 'checkin-website-label' &&
+            said.previousElementSibling.textContent === 'From the website: ' };
       });
       const style = (sel: string) => card.locator(sel).first().evaluate((n) => {
         const c = getComputedStyle(n);
@@ -154,8 +163,7 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       const noteStyle = await style('.checkin-group-note');
       const whyStyle = await style('.checkin-skipped-why');
 
-      // Evidence, which holds on the PR head: the answer the wallet seemed
-      // to say stays on the device is sent.
+      // The radio question is a question like any other: its answer is sent.
       await question.getByLabel('Yes').check();
       await card.locator('.checkin-choice input[value=share]').check();
       await wallet.locator('#wallet-send').click();
@@ -166,16 +174,17 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
         .toEqual([['drugs', 'Y']]);
       expect(shape.next).toBe(true);
 
-      // The fixed behaviour (expected to fail on the PR head, hence
-      // test.fail): the website's words in a skipped row carry their own
+      // The fix: the website's words in a skipped row carry their own
       // website label, as display lines do (#1030 QA round 2: every piece
-      // of website text is labelled where it stands), and the wallet's
-      // sentence does not share the website note's style.
+      // of website text is labelled where it stands), the wallet's line
+      // comes first, and it does not share the website note's style.
       expect(shape.labelled, 'skipped-question text carries no website label').toBe(true);
+      expect(shape.labelBeforeText).toBe(true);
+      expect(shape.firstChild).toBe('checkin-skipped-why');
       expect(whyStyle, "the wallet's sentence looks like a website note").not.toBe(noteStyle);
     });
 
-  test('DIAGNOSIS: a sign-in click before checkin_wallet.js finishes loading is lost (the phq2-attack codeFromLog flake)',
+  test('DIAGNOSIS fixed: a sign-in click before checkin_wallet.js finishes loading waits, then sends the code (the phq2-attack codeFromLog flake)',
     async ({ page }) => {
       // Hold checkin_answer.js back, as a cold dev server does for the
       // first spec of a run. The sign-in form is already on screen.
@@ -189,14 +198,15 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       });
       const wallet = await openVerifier(page, hostile);
       const email = uniqueEmail();
-      // Exactly the attack spec's steps (careagents-checkin-phq2-attack checkIn).
+      // While the script is held back, the buttons cannot be tapped.
+      await expect(wallet.locator('#signin-email-btn')).toBeDisabled();
+      await expect(wallet.locator('#signin-passkey')).toBeDisabled();
+      // Exactly the attack spec's steps (careagents-checkin-phq2-attack
+      // checkIn): the click now waits for the button, so it is not lost.
       await wallet.locator('#signin-email').fill(email);
       await wallet.locator('#signin-email-btn').click();
-      // Long enough for the script to load and run.
-      await wallet.waitForTimeout(4000);
-      expect(posts, 'the click reached the handler').toEqual([]);
-      await expect(wallet.locator('#signin-code')).toBeHidden();
-      const log = fs.existsSync(CARE_LOG) ? fs.readFileSync(CARE_LOG, 'utf8') : '';
-      expect(log).not.toContain(email);
+      await expect(wallet.locator('#signin-code')).toBeVisible();
+      expect(posts, 'the click reached the handler').toEqual(['POST']);
+      expect(await codeFromLog(email, CARE_LOG)).toMatch(/^\d{8}$/);
     });
 });

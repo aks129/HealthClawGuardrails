@@ -202,15 +202,26 @@ function formQuestions(form, i) {
       }
     }
     if (skip) {
+      // Ours first, naming what follows; then the website's words under
+      // their own label, set apart as its display lines are. Never the
+      // website's words straight above ours, where they could pass for
+      // ours (#1061 security F2; #1030 QA: website text is labelled where
+      // it stands).
       const row = document.createElement("div");
       row.className = "checkin-skipped";
-      const said = document.createElement("p");
-      said.className = "checkin-skipped-text";
-      said.textContent = skip.prefix ? `${skip.prefix} ${skip.text}` : skip.text;
       const why = document.createElement("p");
       why.className = "checkin-skipped-why";
-      why.textContent = "This wallet can't answer this one, so nothing is sent for it. You can answer it in person instead.";
-      row.append(said, why);
+      why.textContent = "Not answered here, so nothing is sent for this question. You can answer it in person instead.";
+      const theirs = document.createElement("p");
+      theirs.className = "checkin-skipped-website checkin-from-website";
+      const label = document.createElement("span");
+      label.className = "checkin-website-label";
+      label.textContent = "From the website: ";
+      const said = document.createElement("span");
+      said.className = "checkin-skipped-text";
+      said.textContent = skip.prefix ? `${skip.prefix} ${skip.text}` : skip.text;
+      theirs.append(label, said);
+      row.append(why, theirs);
       into.append(row);
       return;
     }
@@ -686,6 +697,11 @@ async function chooseSet(request, unsupportedItems, choices) {
     }
   }
 }
+
+// Every handler is attached now: sign-in can start (the page draws these
+// disabled, since a tap before this did nothing, #1061).
+$("signin-passkey").disabled = false;
+$("signin-email-btn").disabled = false;
 
 // Opened directly, not by a check-in page: nothing to sign in for.
 if (!window.opener) show("wallet-direct");

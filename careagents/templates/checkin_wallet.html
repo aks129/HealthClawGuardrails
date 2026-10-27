@@ -52,11 +52,13 @@
     padding-top: 10px; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
   .checkin-group-note { font-size: 14px; color: var(--ink-soft); margin: 0 0 8px;
     overflow-wrap: anywhere; }
-  /* A question this wallet does not answer: its words, then ours saying
-     so, in place of the options. */
+  /* A question this wallet does not answer, in place of its options: our
+     line first, in our voice (ink, weight 600, not a website note's soft
+     grey), then the website's words, labelled and set apart as its other
+     words are (#1061 security F2). */
   .checkin-skipped { margin: 0 0 10px; }
-  .checkin-skipped-text { font-weight: 600; margin: 0; overflow-wrap: anywhere; }
-  .checkin-skipped-why { font-size: 14px; color: var(--ink-soft); margin: 2px 0 0; }
+  .checkin-skipped-why { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0 0 2px; }
+  .checkin-skipped-website { margin: 0; overflow-wrap: anywhere; }
   /* The website's address inside our heading: set apart, and wraps. */
   .checkin-pick-origin { font-family: var(--mono); font-size: 0.75em; overflow-wrap: anywhere; }
   /* One card per set of records: its label, then how and when. A card,
@@ -99,13 +101,15 @@
         it is and exactly what it asks for, and you choose what to share.
         This tab stays open.</p>
       <div id="signin-start">
-        <button class="btn-primary btn-block" id="signin-passkey">
+        {# Disabled until checkin_wallet.js has attached their handlers: a
+           tap before that did nothing at all (#1061). #}
+        <button class="btn-primary btn-block" id="signin-passkey" disabled>
           Sign in with a passkey</button>
         <div class="or">or use your email</div>
         <label class="field-label" for="signin-email">Email</label>
         <input class="field" id="signin-email" type="email" inputmode="email"
                autocomplete="email" placeholder="you@example.com">
-        <button class="btn-secondary btn-block" id="signin-email-btn">
+        <button class="btn-secondary btn-block" id="signin-email-btn" disabled>
           Email me a code</button>
         <p class="auth-fine">By continuing you agree to the
           <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and

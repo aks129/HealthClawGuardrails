@@ -903,7 +903,7 @@ test.describe('check-in wallet', () => {
       await expect(form.locator('.checkin-skipped-text')).toHaveText(skipped.map(textOf));
       await expect(form.locator('.checkin-skipped-why')).toHaveCount(7);
       for (const why of await form.locator('.checkin-skipped-why').allTextContents()) {
-        expect(why).toContain('nothing is sent for it');
+        expect(why).toContain('nothing is sent for this question');
       }
       // In its place: the lens question first in its group, before its choices.
       const wear = form.locator('.checkin-group').nth(1);

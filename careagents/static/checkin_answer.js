@@ -132,8 +132,10 @@ function answerable(item, unsupported) {
    group inside a group is not. A question of another kind (free text, a
    number, a date, pick-several) is not answered here: when it is optional
    it is shown as one this wallet does not answer and left out of the
-   response, as the contact lens trial form's are; when it is `required`
-   the form cannot be completed without it, so the form is unsupported.
+   response, as the contact lens trial form's are; when it is `required`,
+   or carries an extension that could say so, the form cannot be completed
+   without it, so the form is unsupported. So is any form with a
+   modifierExtension or an SDC constraint (changesWhatIsRequired).
    Everything shown is the website's own words, put on the page as text,
    never as markup; the Questionnaire's generated narrative is never read.
    Anything else is unsupported rather than half shown. The answers stay in
@@ -154,6 +156,29 @@ const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
 const FORM_SKIPPED_TYPES = ["boolean", "decimal", "integer", "date",
   "dateTime", "time", "string", "text", "url", "choice", "open-choice",
   "attachment", "reference", "quantity"];
+
+const FORM_CONSTRAINT =
+  "http://hl7.org/fhir/StructureDefinition/questionnaire-constraint";
+
+/* Whether anything in the Questionnaire could change what must be
+   answered beyond what readItems reads (#1061 security F1): a
+   modifierExtension anywhere (FHIR: one not understood means the element
+   must not be processed), or an SDC questionnaire-constraint anywhere,
+   which can require an answer to a question this wallet leaves out.
+   Walked with a stack, not recursion: the size cap bounds the work, not
+   the depth. */
+function changesWhatIsRequired(q) {
+  const stack = [q];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node === null || typeof node !== "object") continue;
+    if (Array.isArray(node)) { node.forEach((v) => stack.push(v)); continue; }
+    if (Object.hasOwn(node, "modifierExtension") ||
+        own(node, "url") === FORM_CONSTRAINT) return true;
+    Object.values(node).forEach((v) => stack.push(v));
+  }
+  return false;
+}
 
 const text = (v, max = FORM_TEXT_MAX) =>
   typeof v === "string" && v.trim() && v.length <= max ? v : null;
@@ -223,9 +248,11 @@ function readItems(items, form, linkIds, group) {
     if (prefix !== undefined && !words(prefix, 16)) return false;
     if (!isGroup && (type !== "choice" || repeats)) {
       // Not one pick from a list: shown, never answered, its options (if
-      // any) unread. Required, it cannot be left out of a completed form.
+      // any) unread. Required, it cannot be left out of a completed form;
+      // and an extension may say so another way (questionnaire-minOccurs),
+      // so one that carries any is not left out either (#1061 security F1).
       const required = own(it, "required");
-      if (!FORM_SKIPPED_TYPES.includes(type) ||
+      if (!FORM_SKIPPED_TYPES.includes(type) || Object.hasOwn(it, "extension") ||
           (required !== undefined && required !== false)) return false;
       form.skipped.push({ linkId, prefix: prefix || "", text: said, group,
         at: form.questions.length });
@@ -272,7 +299,7 @@ export function readForm(item) {
   if (own(q, "resourceType") !== "Questionnaire") return null;
   let size;
   try { size = JSON.stringify(q).length; } catch (e) { return null; }
-  if (size > FORM_MAX_CHARS) return null;
+  if (size > FORM_MAX_CHARS || changesWhatIsRequired(q)) return null;
 
   // What the answer names: the item's canonical exactly as sent (a `|1`
   // version included), else the inline url, with its version if it has one.
