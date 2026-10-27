@@ -1,0 +1,610 @@
+{
+  "type": "smart-health-checkin-request",
+  "version": "1",
+  "id": "replace-with-a-unique-id",
+  "purpose": "Before your eye care visit",
+  "fhirVersions": [
+    "4.0.1"
+  ],
+  "items": [
+    {
+      "id": "patient",
+      "title": "Demographics",
+      "content": {
+        "kind": "selection.fhir",
+        "profiles": [
+          "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+        ]
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    },
+    {
+      "id": "speed",
+      "title": "Symptom check (grouped example)",
+      "summary": "How often and how badly four symptoms bother you.",
+      "content": {
+        "kind": "form.fhir",
+        "questionnaireCanonical": "https://eye-care.verifier.example/fhir/Questionnaire/speed",
+        "questionnaire": {
+          "resourceType": "Questionnaire",
+          "id": "speed",
+          "url": "https://eye-care.verifier.example/fhir/Questionnaire/speed",
+          "version": "1",
+          "name": "GroupedSymptomExample",
+          "title": "Grouped symptom example",
+          "status": "draft",
+          "subjectType": [
+            "Patient"
+          ],
+          "date": "2026-10-12",
+          "publisher": "Eye care Verifier (connectathon example)",
+          "description": "Example form: two groups of four single-choice questions, scored by the receiver.",
+          "copyright": "Synthetic example for tests.",
+          "item": [
+            {
+              "linkId": "frequency",
+              "text": "How often",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "frequency-help",
+                  "text": "0 Never · 1 Rarely · 2 Often · 3 Always",
+                  "type": "display"
+                },
+                {
+                  "linkId": "frequency-dryness",
+                  "text": "Symptom A, how often",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-0",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-1",
+                        "display": "Rarely"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-2",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-3",
+                        "display": "Always"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "frequency-soreness",
+                  "text": "Symptom B, how often",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-0",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-1",
+                        "display": "Rarely"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-2",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-3",
+                        "display": "Always"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "frequency-burning",
+                  "text": "Symptom C, how often",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-0",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-1",
+                        "display": "Rarely"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-2",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-3",
+                        "display": "Always"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "frequency-fatigue",
+                  "text": "Symptom D, how often",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-0",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-1",
+                        "display": "Rarely"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-2",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "frequency-3",
+                        "display": "Always"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "linkId": "severity",
+              "text": "How bad",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "severity-help",
+                  "text": "0 None · 1 Mild · 2 Moderate · 3 Severe · 4 Very severe",
+                  "type": "display"
+                },
+                {
+                  "linkId": "severity-dryness",
+                  "text": "Symptom A, how bad",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-0",
+                        "display": "None"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-1",
+                        "display": "Mild"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-2",
+                        "display": "Moderate"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-3",
+                        "display": "Severe"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-4",
+                        "display": "Very severe"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "severity-soreness",
+                  "text": "Symptom B, how bad",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-0",
+                        "display": "None"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-1",
+                        "display": "Mild"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-2",
+                        "display": "Moderate"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-3",
+                        "display": "Severe"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-4",
+                        "display": "Very severe"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "severity-burning",
+                  "text": "Symptom C, how bad",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-0",
+                        "display": "None"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-1",
+                        "display": "Mild"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-2",
+                        "display": "Moderate"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-3",
+                        "display": "Severe"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-4",
+                        "display": "Very severe"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "severity-fatigue",
+                  "text": "Symptom D, how bad",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-0",
+                        "display": "None"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-1",
+                        "display": "Mild"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-2",
+                        "display": "Moderate"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-3",
+                        "display": "Severe"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "severity-4",
+                        "display": "Very severe"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    }
+  ]
+}
