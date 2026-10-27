@@ -116,6 +116,10 @@ jobs:
           anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Sonnet does the reading; it consults Opus as advisor before it
+          # commits to a verdict. Cheaper than Opus throughout, and the
+          # judgment that sets the label gets the stronger model.
+          settings: '{"advisorModel": "claude-opus-5-5"}'
           prompt: |
             Review PR #${{ github.event.pull_request.number }} in
             ${{ github.repository }} against the checklist in
@@ -157,7 +161,7 @@ jobs:
                cost last time.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh pr edit:*),Bash(gh api repos/*/issues/*/labels*),Bash(gh label list:*)"
-            --model claude-opus-5-5
+            --model claude-sonnet-5-5
 
       - name: Gate on verdict label
         env:

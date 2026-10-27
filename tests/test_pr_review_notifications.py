@@ -21,6 +21,7 @@ matters: does pushing five times send five mails?
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -504,3 +505,16 @@ def test_the_reviewer_authenticates_by_federation_and_only_it_mints_tokens():
 
     env = _jobs()["reviewer-preflight"]["steps"][0]["env"]["HAS_KEY"]
     assert "vars.ANTHROPIC_FEDERATION_RULE_ID" in env
+
+
+def test_the_reviewer_consults_a_stronger_advisor():
+    """The review model reads the diff; the advisor model is consulted before
+    the verdict. The advisor must outrank the main model or the run errors.
+
+    MUTATION: drop the settings input -> red.
+    """
+    step = [s for s in _jobs()["claude-standards-review"]["steps"]
+            if s.get("uses", "").startswith("anthropics/claude-code-action")][0]
+    settings = json.loads(step["with"]["settings"])
+    assert settings["advisorModel"] == "claude-opus-5-5"
+    assert "--model claude-sonnet-5-5" in step["with"]["claude_args"]
