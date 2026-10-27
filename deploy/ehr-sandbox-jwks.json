@@ -1,0 +1,13 @@
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "crv": "P-384",
+      "alg": "ES384",
+      "use": "sig",
+      "kid": "healthclaw-ehr-sandbox-es384-1",
+      "x": "Mj79Ec9eWGg19omvvakc2QQZhIol6_EA79AESskFEtWvLwo38P3rwcu2CRmghbWw",
+      "y": "yY8UB1ANgjM1-sDJXf_Za5rNO-GX0amrVlFre_lmL4RM3-67MEyVOxI__f24YG3p"
+    }
+  ]
+}

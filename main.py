@@ -250,6 +250,11 @@ def _register_blueprints(flask_app: Flask) -> None:
     from r6.oauth import discovery_root_view
     flask_app.add_url_rule('/.well-known/oauth-authorization-server',
                            'oauth_discovery_root', discovery_root_view)
+    # The public key set EHR sandboxes fetch to verify our backend client
+    # assertion (r6/ehr_client_jwks.py). Purpose-named, not jwks.json.
+    from r6.ehr_client_jwks import JWKS_URL_PATH, ehr_client_jwks_view
+    flask_app.add_url_rule(JWKS_URL_PATH, 'ehr_client_jwks',
+                           ehr_client_jwks_view)
 
     from r6.fasten.routes import fasten_blueprint
 
