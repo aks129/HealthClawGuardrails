@@ -110,7 +110,10 @@ def test_a_patient_and_a_profiled_condition_go_out(app, client):
 
 
 def test_a_row_without_a_claim_is_not_exported(app, client):
-    """MUTATION: drop the `has_claim` check in r6/checkin.py export -> red."""
+    """An unclaimed row goes only if r6/us_core_profiles.py classify passes
+    it (#1058); this one has no category, which US Core requires.
+
+    MUTATION: classify passes a Condition with no category -> red."""
     f.seed(app, f.patient(), f.condition('ci-cond-bare', profiled=False))
     resp = f.export(client, f.token(client, ['Patient', 'Condition']),
                     ['Patient', 'Condition'])
@@ -118,6 +121,9 @@ def test_a_row_without_a_claim_is_not_exported(app, client):
 
 
 def test_a_claim_for_another_type_does_not_count(app, client):
+    """It is checked as unclaimed, and this one fails (no category). One
+    that passes carries only the checked claim (tests/
+    test_checkin_vendor_records.py, the foreign-type claim test)."""
     cond = f.condition('ci-cond-wrong-claim')
     cond['meta'] = f.claim('us-core-patient')
     f.seed(app, f.patient(), cond)
