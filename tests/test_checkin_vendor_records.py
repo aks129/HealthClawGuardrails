@@ -274,6 +274,47 @@ def test_an_entered_in_error_record_never_exports_claimed_or_not(
     assert f.export_audits(app)[0][1].endswith('; held=10')
 
 
+@pytest.mark.parametrize('where', ['top', 'nested'])
+def test_a_record_with_a_modifier_extension_is_held_not_changed(
+        app, client, where):
+    """FHIR: an unknown modifierExtension may change the record's meaning.
+    The export drops extensions, so such a record is held, claimed or not,
+    rather than sent with its meaning silently changed (security review of
+    #1062, F3).
+
+    MUTATION: drop the modifierExtension check in status_hold -> red."""
+    mod = [{'url': 'urn:example:negated', 'valueBoolean': True}]
+    cond = _claimed(v.oracle_condition('mod-cond', '91302008', True),
+                    'us-core-condition-problems-health-concerns')
+    if where == 'top':
+        cond['modifierExtension'] = mod
+    else:
+        cond['category'][0]['modifierExtension'] = mod
+    f.seed(app, v.patient(), cond)
+    resp = _export(client)
+    assert 'mod-cond' not in resp.get_data(as_text=True)
+    assert json.loads(resp.headers['X-Records-Held']) == {
+        'Condition': {'unknown-modifier': 1}}
+    assert us_core_profiles.HELD_REASONS['unknown-modifier']
+
+
+def test_a_patient_keeps_only_its_rebuilt_race_extension(app, client):
+    pt = v.patient()
+    pt['extension'] = [
+        {'url': US_CORE + 'us-core-race', 'extension': [
+            {'url': 'ombCategory', 'valueCoding': {
+                'system': 'urn:oid:2.16.840.1.113883.6.238',
+                'code': '2106-3'}},
+            {'url': 'text', 'valueString': v.CANARY}]},
+        {'url': 'urn:example:next-of-kin',
+         'valueHumanName': {'family': v.CANARY}}]
+    f.seed(app, pt)
+    resp = _export(client, ['Patient'])
+    out, = f.resources(resp, 'Patient')
+    assert [e['url'] for e in out['extension']] == [US_CORE + 'us-core-race']
+    assert v.CANARY not in resp.get_data(as_text=True)
+
+
 def test_ktc_holds_entered_in_error_records_too(app, client):
     f.seed(app, v.patient(),
            _eie(v.oracle_condition('eie-cond', '91302008', True)))

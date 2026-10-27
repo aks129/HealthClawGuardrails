@@ -1725,6 +1725,7 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
     """
     res = _redaction_mod.apply_redaction(resource)
     rtype = resource.get('resourceType')
+    exts = None
     if rtype == 'Patient':
         for key in ('name', 'birthDate', 'address', 'telecom', 'identifier',
                     'extension'):
@@ -1750,6 +1751,32 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
     elif rtype == 'Organization':
         res = _checkin_organization(resource, res)
     _drop_related_person_refs(res)
+
+    # Extensions carry whatever an upstream puts in them: a valueHumanName,
+    # valueAddress or valueContactPoint is a third party's name, street or
+    # phone, and redaction matches those by key only (security review of
+    # #1062, F3, owner ruling option (a)). So every `extension` and
+    # `modifierExtension` goes, at any depth, and every `_`-prefixed
+    # primitive companion (`_gender.extension`) with them. None of the six
+    # US Core profiles a check-in claims requires one. Patient's own race
+    # and ethnicity, rebuilt from empty by allow-list (_patient_extensions),
+    # go back on afterwards. A record carrying a modifierExtension is held
+    # before it gets here (r6/checkin.py collect).
+    def strip_extensions(node):
+        if isinstance(node, list):
+            for item in node:
+                strip_extensions(item)
+        elif isinstance(node, dict):
+            for key in [k for k in node if isinstance(k, str) and (
+                    k.startswith('_')
+                    or k in ('extension', 'modifierExtension'))]:
+                node.pop(key)
+            for value in node.values():
+                strip_extensions(value)
+
+    strip_extensions(res)
+    if rtype == 'Patient' and exts:
+        res['extension'] = exts
     # FHI-66 slot: a per-resource element allow-list belongs here, the one
     # step both checkin and ktc (_ktc_profile) run through. Redaction above
     # is a deny-list, so an element it does not name (a top-level

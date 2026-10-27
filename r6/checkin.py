@@ -216,8 +216,21 @@ def drop_dangling_references(node, present):
 
 
 def _payor_ids(resource):
-    return {p['reference'].split('/', 1)[1]
-            for p in resource.get('payor') or []}
+    """The Organization ids a Coverage's payor names. Only a Coverage: a
+    stray `payor` on another type pulls no Organization out, since the
+    token's types are the patient's consent (security review of #1062,
+    F4). A malformed payor is skipped, never raised on (F1)."""
+    if resource.get('resourceType') != 'Coverage':
+        return set()
+    payors = resource.get('payor')
+    ids = set()
+    for p in payors if isinstance(payors, list) else []:
+        ref = p.get('reference') if isinstance(p, dict) else None
+        if isinstance(ref, str):
+            rtype, _, rid = ref.partition('/')
+            if rtype == 'Organization' and rid and '/' not in rid:
+                ids.add(rid)
+    return ids
 
 
 def collect(tenant, types, patient_id, profile, *, stamp=True):
@@ -230,8 +243,9 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
     references are fetched by id in this tenant, never by type. An entry
     without a fullUrl we would serve is not sent.
 
-    A row its source marked entered-in-error is never sent, claimed or not
-    (r6/us_core_profiles.py entered_in_error).
+    A row its source marked entered-in-error, whose status is malformed, or
+    that carries a modifierExtension is never sent, claimed or not
+    (r6/us_core_profiles.py status_hold).
 
     The claim gate (#1058): a row that carries an allow-listed claim for
     its own type goes, read BEFORE `profile` runs (a profile may drop
@@ -270,9 +284,12 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
                 stored.get('beneficiary')) if isinstance(r, dict)), None)
             if ref != own:
                 continue
-        # A record its source withdrew is never sent, claimed or not.
-        if _us_core_profiles.entered_in_error(stored):
-            hold(row.resource_type, 'entered-in-error')
+        # A record its source withdrew, whose status we cannot read, or
+        # that carries a modifier we would drop, is never sent, claimed or
+        # not.
+        reason = _us_core_profiles.status_hold(stored)
+        if reason:
+            hold(row.resource_type, reason)
             continue
         claimed = has_claim(stored)
         resource = profile(

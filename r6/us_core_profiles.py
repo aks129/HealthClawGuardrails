@@ -146,6 +146,11 @@ HELD_REASONS = {
     'no-insurer': "The insurance company's own record is not on file.",
     'entered-in-error': ('The place that keeps it marked it as entered in '
                          'error.'),
+    'malformed-status': ('Its status is written in a way we cannot read, so '
+                         'we cannot tell whether it still stands.'),
+    'unknown-modifier': ('It carries a note from the place that keeps it '
+                         'that could change its meaning, and we cannot read '
+                         'that note.'),
 }
 
 #: The code systems US Core binds each coded element to (SNOMED and the ICD
@@ -292,12 +297,66 @@ def entered_in_error(resource):
     entered-in-error on a Condition or AllergyIntolerance, `status`
     entered-in-error on anything else. Read on any coding system, so a
     misspelt system does not let one through. Refuted is not withdrawn
-    (a finding ruled out), and is not matched here."""
+    (a finding ruled out), and is not matched here. Only meaningful once
+    `malformed_status` has passed the record: a shape `_codes` cannot read
+    reads as no codes."""
     if not isinstance(resource, dict):
         return False
     if resource.get('resourceType') in ('Condition', 'AllergyIntolerance'):
         return 'entered-in-error' in _codes(resource.get('verificationStatus'))
     return resource.get('status') == 'entered-in-error'
+
+
+def _concept_malformed(value):
+    """True when `value`, if present, is not a CodeableConcept we can read
+    whole: not an object, a `coding` that is not a list, a coding that is
+    not an object, or a code that is not a string."""
+    if value is None:
+        return False
+    if not isinstance(value, dict):
+        return True
+    codings = value.get('coding')
+    if codings is None:
+        return False
+    return not isinstance(codings, list) or any(
+        not isinstance(c, dict)
+        or ('code' in c and not isinstance(c['code'], str))
+        for c in codings)
+
+
+def _has_modifier_extension(node):
+    if isinstance(node, list):
+        return any(_has_modifier_extension(i) for i in node)
+    if isinstance(node, dict):
+        return bool(node.get('modifierExtension')) or any(
+            _has_modifier_extension(v) for v in node.values())
+    return False
+
+
+def status_hold(resource):
+    """The reason code a record is never sent for, whatever it claims, or
+    None. Read on the record as stored, before any profile:
+
+    - `malformed-status`: a status we cannot read whole (security review
+      of #1062, F2). A dict `coding` or a list-valued verificationStatus
+      would otherwise read as "no codes" and hide an entered-in-error.
+    - `entered-in-error`: its source withdrew it.
+    - `unknown-modifier`: a modifierExtension anywhere. FHIR says an
+      unknown modifier can change the record's meaning, and the export
+      drops extensions (F3), so the record is held, not sent changed."""
+    if not isinstance(resource, dict):
+        return 'malformed-status'
+    if resource.get('resourceType') in ('Condition', 'AllergyIntolerance'):
+        if any(_concept_malformed(resource.get(k))
+               for k in ('verificationStatus', 'clinicalStatus')):
+            return 'malformed-status'
+    elif 'status' in resource and not isinstance(resource['status'], str):
+        return 'malformed-status'
+    if entered_in_error(resource):
+        return 'entered-in-error'
+    if _has_modifier_extension(resource):
+        return 'unknown-modifier'
+    return None
 
 
 #: The references each type requires: the ones a dangling-reference drop
