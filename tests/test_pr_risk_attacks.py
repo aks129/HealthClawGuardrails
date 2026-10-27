@@ -247,7 +247,10 @@ def test_no_pr_controlled_expression_is_interpolated_into_a_script():
         assert "${{" not in script, script
     allowed = {"github.token", "github.event.pull_request.number",
                "github.event.pull_request.head.sha",
-               "secrets.ANTHROPIC_API_KEY != ''", "steps.score.outputs.ok"}
+               "secrets.ANTHROPIC_API_KEY != ''", "steps.score.outputs.ok",
+               # Repository variables are set by the owner, never by a PR.
+               "secrets.ANTHROPIC_API_KEY != '' || "
+               "vars.ANTHROPIC_FEDERATION_RULE_ID != ''"}
     for step in _steps():
         for value in (step.get("env") or {}).values():
             for expr in re.findall(r"\$\{\{\s*(.*?)\s*\}\}", str(value)):
