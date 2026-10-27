@@ -303,6 +303,21 @@ def test_no_reference_in_the_bundle_points_outside_it(app, client):
     assert 'requester' not in med and 'encounter' not in med
 
 
+def test_a_reference_to_a_held_record_goes_with_it(app, client):
+    """A medicine given for a problem that stayed home does not point at it.
+
+    MUTATION: skip the drop after holding in collect -> red."""
+    records = v.smart_records()
+    held = records[1]
+    med = records[6]
+    med['reasonReference'] = [{'reference': f"Condition/{held['id']}"}]
+    f.seed(app, *records)
+    resp = _export(client)
+    out = next(r for r in f.resources(resp) if r['id'] == med['id'])
+    assert 'reasonReference' not in out
+    assert held['id'] not in resp.get_data(as_text=True)
+
+
 def test_the_named_patient_reference_stays_when_patient_is_not_asked_for(
         app, client):
     """subject is required, and the receiver knows whose check-in it is."""
