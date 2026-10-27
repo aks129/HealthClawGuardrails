@@ -401,6 +401,16 @@ def test_ingest_itself_refuses_a_plain_http_engine(monkeypatch):
     assert _RecordingSession.instances == []
 
 
+def test_a_label_over_the_spec_limit_is_refused_and_nothing_is_posted():
+    harness = FakeHarness()
+    with pytest.raises(ValueError):
+        link.make_link(_bundle(_res('Patient', 'p1')), post=harness,
+                       label='x' * (shl.MAX_LABEL_CHARS + 1))
+    assert harness.posted == []
+    link.make_link(_bundle(_res('Patient', 'p1')), post=harness,
+                   label='x' * shl.MAX_LABEL_CHARS)
+
+
 def test_the_sandbox_session_ignores_env():
     assert pull.new_session().trust_env is False
 
