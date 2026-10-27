@@ -144,6 +144,8 @@ HELD_REASONS = {
     'missing-details': ('It is missing details a clinic system needs, such '
                         'as a date or a status.'),
     'no-insurer': "The insurance company's own record is not on file.",
+    'entered-in-error': ('The place that keeps it marked it as entered in '
+                         'error.'),
 }
 
 #: The code systems US Core binds each coded element to (SNOMED and the ICD
@@ -283,6 +285,44 @@ def _coverage(res):
                           _HL7 + 'subscriber-relationship')):
         return None, 'missing-details'
     return _US_CORE + 'us-core-coverage', None
+
+
+def entered_in_error(resource):
+    """True when the record's source withdrew it: `verificationStatus`
+    entered-in-error on a Condition or AllergyIntolerance, `status`
+    entered-in-error on anything else. Read on any coding system, so a
+    misspelt system does not let one through. Refuted is not withdrawn
+    (a finding ruled out), and is not matched here."""
+    if not isinstance(resource, dict):
+        return False
+    if resource.get('resourceType') in ('Condition', 'AllergyIntolerance'):
+        return 'entered-in-error' in _codes(resource.get('verificationStatus'))
+    return resource.get('status') == 'entered-in-error'
+
+
+#: The references each type requires: the ones a dangling-reference drop
+#: could take away. The record's own patient is never dropped.
+_REQUIRED_REFERENCES = {
+    'Condition': (('subject', 'missing-details'),),
+    'AllergyIntolerance': (('patient', 'missing-details'),),
+    'MedicationRequest': (('subject', 'missing-details'),),
+    'Immunization': (('patient', 'missing-details'),),
+    'Coverage': (('payor', 'no-insurer'), ('beneficiary', 'missing-details')),
+}
+
+
+def lost_reference(resource):
+    """The reason code when `resource` lacks a reference its type requires,
+    else None. The re-check for a record that arrived claimed and lost a
+    reference to the dangling-reference drop: the claim was the upstream's,
+    and this checks only what our drop could have broken."""
+    for key, reason in _REQUIRED_REFERENCES.get(
+            resource.get('resourceType'), ()):
+        value = resource.get(key)
+        items = value if isinstance(value, list) else [value]
+        if not any(_has_ref(i) for i in items):
+            return reason
+    return None
 
 
 _CHECKS = {

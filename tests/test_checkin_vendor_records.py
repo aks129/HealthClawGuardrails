@@ -70,14 +70,15 @@ def _refs(obj):
 # --- 0 -> N: the two vendor shapes export ---------------------------------
 
 def test_an_oracle_shaped_patient_exports_what_conforms(app, client):
-    """Was 0 of 30. The words-only allergy and the Coverage whose payor is
-    not on file stay home; everything else goes.
+    """Was 0 of 30. The words-only allergy, the Coverage whose payor is
+    not on file and the four entered-in-error Conditions stay home;
+    everything else goes.
 
     MUTATION: restore `if not has_claim(stored): continue` -> red (0)."""
     f.seed(app, *v.oracle_records())
     resp = _export(client)
     assert resp.status_code == 200
-    assert _counts(resp) == {'Patient': 1, 'Condition': 6,
+    assert _counts(resp) == {'Patient': 1, 'Condition': 2,
                              'AllergyIntolerance': 12,
                              'MedicationRequest': 2, 'Immunization': 7}
 
@@ -101,7 +102,7 @@ def test_ktc_exports_an_oracle_shaped_patient_without_any_claim(app, client):
     resp = _ktc_export(client)
     assert resp.status_code == 200
     assert _counts(resp)['Patient'] == 1
-    assert _counts(resp)['Condition'] == 6
+    assert _counts(resp)['Condition'] == 2
     for res in f.resources(resp):
         assert 'profile' not in res.get('meta', {}), res['resourceType']
 
@@ -156,12 +157,13 @@ def test_held_records_are_counted_by_a_fixed_reason(app, client):
     resp = _export(client)
     held = json.loads(resp.headers['X-Records-Held'])
     assert held == {'AllergyIntolerance': {'no-standard-code': 1},
+                    'Condition': {'entered-in-error': 4},
                     'Coverage': {'no-insurer': 1}}
     for reasons in held.values():
         for code in reasons:
             words = us_core_profiles.HELD_REASONS[code]
             assert words and v.CANARY not in words
-    assert f.export_audits(app)[0][1].endswith('; held=2')
+    assert f.export_audits(app)[0][1].endswith('; held=6')
 
 
 def test_nothing_held_sends_no_held_header(app, client):
@@ -208,6 +210,111 @@ def test_a_claimed_record_is_not_reclassified(app, client):
     f.seed(app, f.patient(), f.condition())
     resp = _export(client, ['Condition'])
     assert len(f.resources(resp, 'Condition')) == 1
+
+
+# --- entered in error, and claims a drop breaks (PR #1062 review) ----------
+
+def _eie(res):
+    """`res` marked entered-in-error where its type says so."""
+    if res['resourceType'] in ('Condition', 'AllergyIntolerance'):
+        res['verificationStatus'] = {'coding': [{'code': 'entered-in-error',
+                                                 'system': (
+            'http://terminology.hl7.org/CodeSystem/condition-ver-status'
+            if res['resourceType'] == 'Condition' else
+            'http://terminology.hl7.org/CodeSystem/'
+            'allergyintolerance-verification')}]}
+        res.pop('clinicalStatus', None)
+    else:
+        res['status'] = 'entered-in-error'
+    return res
+
+
+def _claimed(res, name):
+    res['meta'] = f.claim(name)
+    return res
+
+
+def test_an_entered_in_error_record_never_exports_claimed_or_not(
+        app, client):
+    """A record its source withdrew is not the person's, whatever it
+    claims. Main exported these: nothing on the export path read
+    verificationStatus or status, and the wallet holds back only withdrawn
+    allergies, after the export.
+
+    MUTATION: skip the entered-in-error hold in collect -> red."""
+    unclaimed = [
+        _eie(v.oracle_condition('eie-cond', '91302008', True)),
+        _eie(v.oracle_allergy('eie-alg', (v.RXNORM, '161'))),
+        _eie(v.oracle_medication('eie-med')),
+        _eie(v.oracle_immunization('eie-imm', '207')),
+        _eie(v.oracle_coverage('eie-cov')),
+    ]
+    claimed = [
+        _eie(_claimed(v.oracle_condition('eie-cond-c', '91302008', True),
+                      'us-core-condition-problems-health-concerns')),
+        _eie(_claimed(v.oracle_allergy('eie-alg-c', (v.RXNORM, '161')),
+                      'us-core-allergyintolerance')),
+        _eie(_claimed(v.oracle_medication('eie-med-c'),
+                      'us-core-medicationrequest')),
+        _eie(_claimed(v.oracle_immunization('eie-imm-c', '207'),
+                      'us-core-immunization')),
+        _eie(f.coverage('eie-cov-c')),
+    ]
+    f.seed(app, v.patient(), v.payor(), f.organization(), *unclaimed,
+           *claimed)
+    resp = _export(client)
+    assert resp.status_code == 200
+    text = resp.get_data(as_text=True)
+    assert 'eie-' not in text
+    held = json.loads(resp.headers['X-Records-Held'])
+    for rtype in ('Condition', 'AllergyIntolerance', 'MedicationRequest',
+                  'Immunization', 'Coverage'):
+        assert held[rtype] == {'entered-in-error': 2}, rtype
+    assert us_core_profiles.HELD_REASONS['entered-in-error']
+    assert f.export_audits(app)[0][1].endswith('; held=10')
+
+
+def test_ktc_holds_entered_in_error_records_too(app, client):
+    f.seed(app, v.patient(),
+           _eie(v.oracle_condition('eie-cond', '91302008', True)))
+    resp = _ktc_export(client)
+    assert resp.status_code == 200
+    assert 'eie-cond' not in resp.get_data(as_text=True)
+    assert json.loads(resp.headers['X-Records-Held']) == {
+        'Condition': {'entered-in-error': 1}}
+
+
+def test_a_claimed_refuted_condition_still_exports(app, client):
+    """Ruling: refuted is not held. The export never filtered it for a
+    claimed record, and refuted is a clinical finding (ruled out), not a
+    withdrawn record. The wallet still holds back refuted allergies."""
+    cond = f.condition()
+    cond['verificationStatus'] = {'coding': [{
+        'system': 'http://terminology.hl7.org/CodeSystem/condition-ver-status',
+        'code': 'refuted'}]}
+    f.seed(app, f.patient(), cond)
+    resp = _export(client, ['Condition'])
+    assert [c['id'] for c in f.resources(resp, 'Condition')] == ['ci-cond-1']
+
+
+def test_a_claimed_coverage_that_loses_its_payor_is_held(app, client):
+    """The claim arrived with the record, but the record we would send has
+    no payor once the unresolvable one is dropped, so it no longer meets
+    us-core-coverage.
+
+    MUTATION: skip the re-check of records a drop changed -> red."""
+    f.seed(app, f.patient(), f.coverage())
+    resp = _export(client, ['Coverage'])
+    assert f.resources(resp, 'Coverage') == []
+    assert json.loads(resp.headers['X-Records-Held']) == {
+        'Coverage': {'no-insurer': 1}}
+
+
+def test_a_claimed_coverage_whose_payor_is_on_file_still_goes(app, client):
+    f.seed(app, f.patient(), f.coverage(), f.organization())
+    resp = _export(client, ['Coverage'])
+    assert len(f.resources(resp, 'Coverage')) == 1
+    assert 'X-Records-Held' not in resp.headers
 
 
 # --- classify, per type ---------------------------------------------------

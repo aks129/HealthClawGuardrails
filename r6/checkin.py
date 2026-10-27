@@ -230,6 +230,9 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
     references are fetched by id in this tenant, never by type. An entry
     without a fullUrl we would serve is not sent.
 
+    A row its source marked entered-in-error is never sent, claimed or not
+    (r6/us_core_profiles.py entered_in_error).
+
     The claim gate (#1058): a row that carries an allow-listed claim for
     its own type goes, read BEFORE `profile` runs (a profile may drop
     `meta.profile`). A row without one goes only if
@@ -239,7 +242,10 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
 
     References naming nothing in the bundle are dropped
     (drop_dangling_references), except the named patient's: a Condition's
-    `subject` is required, and the clinic knows whose check-in it is."""
+    `subject` is required, and the clinic knows whose check-in it is. Any
+    record a drop changes is checked again: an unclaimed one by `classify`,
+    one claimed on arrival for the required references the drop could take
+    (`lost_reference`), so no claim goes out on a record our drop broke."""
     rows = R6Resource.query.filter(
         R6Resource.tenant_id == tenant.id,
         R6Resource.is_deleted == False,  # noqa: E712
@@ -247,6 +253,11 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
     ).order_by(R6Resource.resource_type, R6Resource.id).all()
 
     own = f'Patient/{patient_id}'
+    held = {}
+
+    def hold(rtype, reason):
+        held[(rtype, reason)] = held.get((rtype, reason), 0) + 1
+
     candidates = []
     for row in rows:
         stored = row.to_fhir_json()
@@ -259,6 +270,10 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
                 stored.get('beneficiary')) if isinstance(r, dict)), None)
             if ref != own:
                 continue
+        # A record its source withdrew is never sent, claimed or not.
+        if _us_core_profiles.entered_in_error(stored):
+            hold(row.resource_type, 'entered-in-error')
+            continue
         claimed = has_claim(stored)
         resource = profile(
             stored, patient_id=patient_id, stored_meta=stored_meta(row))
@@ -282,38 +297,66 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
                 orgs.append(resource)
 
     present = {own} | {_key(r) for r, _ in candidates} | {_key(o) for o in orgs}
-    for resource, _ in candidates:
-        drop_dangling_references(resource, present)
-
-    held = {}
     kept = []
     for resource, claimed in candidates:
-        if not claimed:
+        changed = _drop_changed(resource, present)
+        if claimed:
+            # The claim arrived with the record; a drop that took a
+            # required reference (a Coverage's only payor) breaks it.
+            reason = (_us_core_profiles.lost_reference(resource)
+                      if changed else None)
+            if reason:
+                hold(resource['resourceType'], reason)
+                continue
+        else:
             claim, reason = _us_core_profiles.classify(resource)
             if claim is None:
-                key = (resource['resourceType'], reason)
-                held[key] = held.get(key, 0) + 1
+                hold(resource['resourceType'], reason)
                 continue
             if stamp:
                 meta = resource.get('meta')
                 if not isinstance(meta, dict):
                     meta = resource['meta'] = {}
                 meta['profile'] = [claim]
-        kept.append(resource)
+        kept.append((resource, claimed))
 
     # A held record takes its payor with it, and nothing kept may point at
-    # it. Organizations are not classified: a payor is named by reference.
-    payor_ids = set()
-    for resource in kept:
-        payor_ids |= _payor_ids(resource)
-    orgs = [o for o in orgs if o['id'] in payor_ids]
-    kept += orgs
-    present = {own} | {_key(r) for r in kept}
-    for resource in kept:
-        drop_dangling_references(resource, present)
+    # it; a record the drop changes is checked again, as above, until
+    # nothing more is held. Organizations are not classified: a payor is
+    # named by reference.
+    while True:
+        payor_ids = set()
+        for resource, _ in kept:
+            payor_ids |= _payor_ids(resource)
+        orgs = [o for o in orgs if o['id'] in payor_ids]
+        present = ({own} | {_key(r) for r, _ in kept}
+                   | {_key(o) for o in orgs})
+        still = []
+        for resource, claimed in kept:
+            reason = None
+            if _drop_changed(resource, present):
+                reason = (_us_core_profiles.lost_reference(resource)
+                          if claimed
+                          else _us_core_profiles.classify(resource)[1])
+            if reason:
+                hold(resource['resourceType'], reason)
+            else:
+                still.append((resource, claimed))
+        if len(still) == len(kept):
+            break
+        kept = still
+    kept = [r for r, _ in kept] + orgs
 
     entries = [_entry(r) for r in kept]
     return entries, {r['resourceType'] for r in kept}, held
+
+
+def _drop_changed(resource, present):
+    """drop_dangling_references on `resource`; True if it removed
+    anything."""
+    before = json.dumps(resource, sort_keys=True)
+    drop_dangling_references(resource, present)
+    return json.dumps(resource, sort_keys=True) != before
 
 
 def held_detail(held):
