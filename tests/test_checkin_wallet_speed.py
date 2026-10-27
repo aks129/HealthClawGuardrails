@@ -457,7 +457,10 @@ def test_ten_skipped_questions_is_still_answered():
 def test_a_skipped_questions_options_are_never_read():
     """The pick-several question's answerOption is never read (readItems):
     options that would refuse an answered question (too many, a null, no
-    coding, a bidi display) leave the form answered, the question skipped."""
+    coding, a bidi display) leave the form answered, the question skipped.
+
+    MUTATION: read them before skipping (`if (... answerOption
+    .map(readOption).includes(null)) return false;`) -> red."""
     def garbage(q):
         _cl_item(q, "problems")["answerOption"] = (
             [None, {}, {"valueCoding": {"code": "x", "display": "‮oops"}},
