@@ -47,7 +47,14 @@ init-db`. The URL must be https; plain http is accepted only for
 `INTERNAL_TOKEN_MINT_SECRET`; it still checks `--engine-url`.
 
 The tenant must match `^sandbox-(epic|oracle)-[a-z0-9-]+$`. The script
-refuses anything else before it sends a request.
+refuses anything else before it sends a request. That rule, the vendor URLs
+and the HTEST marking are all in this script. The engine does not enforce
+"sandbox only": `/r6/fhir/internal/seed` accepts any `tenant_id` from a
+caller holding the internal secret.
+
+If no Patient is kept (the vendor answered an OperationOutcome, or a
+Patient with no string id), the script prints the counts, writes nothing,
+seeds nothing and exits 1.
 
 The script prints counts by type (kept and dropped), the export file name
 and the number of resources the engine created (`created unknown` if the

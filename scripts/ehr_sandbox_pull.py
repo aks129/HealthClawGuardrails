@@ -10,8 +10,8 @@ Backend Services (client_credentials with a signed ES384 assertion).
 
 It gets a token, reads the patient and a fixed set of searches, keeps only
 the allowlisted types, marks every entry HTEST, writes a transaction Bundle
-to exports/ (gitignored) and POSTs it to the engine's /internal/seed. It
-prints counts and types only. Runbook: docs/runbooks/ehr-sandbox-pull.md.
+to exports/ (gitignored) and POSTs it to the engine's /r6/fhir/internal/seed.
+It prints counts and types only. Runbook: docs/runbooks/ehr-sandbox-pull.md.
 
 Guardrails (design 2026-10-26):
 - The vendor URLs are exact strings, never read from env:
@@ -378,7 +378,7 @@ def write_export(tenant, bundle):
 
 
 def seed(session, engine_url, tenant, bundle, secret):
-    """POST to /internal/seed. Returns created_count, or None when the
+    """POST to /r6/fhir/internal/seed. Returns created_count, or None when the
     answer has none; nothing else of the answer (it carries a step-up
     token) is read or printed."""
     resp = session.post(engine_url + SEED_PATH,
@@ -430,12 +430,16 @@ def main(argv=None, *, session=None, seed_session=None):
         kept, dropped = prepare_counted(
             fetch(session, vendor, token, args.patient, truncated))
         del token
-        bundle = transaction_bundle(kept)
-        path = write_export(args.tenant, bundle)
-        print(f'{vendor.name}: kept {_counts(Counter(r["resourceType"] for r in kept))}')
+        kept_types = Counter(r['resourceType'] for r in kept)
+        print(f'{vendor.name}: kept {_counts(kept_types)}')
         print(f'{vendor.name}: dropped {_counts(dropped)}')
         for rtype, count in truncated:
             print(f'{vendor.name}: {rtype} truncated at {count}')
+        if not kept_types['Patient']:
+            # A record set with no patient is not a pull: nothing is written.
+            raise PullError('no Patient kept; nothing written or seeded')
+        bundle = transaction_bundle(kept)
+        path = write_export(args.tenant, bundle)
         print(f'wrote {path.name}')
         if args.dry_run:
             print('dry run: not seeded')

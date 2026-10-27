@@ -633,15 +633,20 @@ def test_a_token_failure_prints_no_body(capsys, key_file, exports,
 
     rc = pull.main(_argv(key_file), session=session, seed_session=FakeSeed())
 
+    out = capsys.readouterr().out
     assert rc != 0
-    assert 'CANARY' not in capsys.readouterr().out
+    assert 'token: HTTP 400' in out
+    assert 'CANARY' not in out
 
 
 def test_no_token_on_disk(key_file, exports, monkeypatch, tmp_path):
+    """MUTATION: write the bearer into the export -> red."""
     monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
-    pull.main(_argv(key_file), session=FakeSession(EPIC, epic_pages()),
-              seed_session=FakeSeed())
+    rc = pull.main(_argv(key_file), session=FakeSession(EPIC, epic_pages()),
+                   seed_session=FakeSeed())
 
+    assert rc == 0
+    assert list(exports.glob('*.json'))   # the scan below read an export
     for path in tmp_path.rglob('*'):
         if path.is_file():
             assert BEARER.encode() not in path.read_bytes()
@@ -731,6 +736,8 @@ def test_a_reference_display_naming_a_practitioner_is_absent_on_read(
     assert PRACTITIONER_CANARY not in body
     assert SUBJECT_CANARY not in body
     assert 'CANARY' not in body
+    # The structure survives: only the display went.
+    assert 'Practitioner/eSynth.Prac-01' in body
     # Stored as received: redaction is at the exit, not on ingest.
     from r6.models import R6Resource
     stored = R6Resource.query.filter_by(
@@ -908,6 +915,26 @@ def test_a_percent_encoded_dot_segment_next_link_is_refused(seg):
     assert all(url != nxt for _, url, _ in session.calls)
 
 
+@pytest.mark.parametrize('answer', [
+    oracle_outcome(),
+    {'resourceType': 'Patient'},          # no id
+    {'resourceType': 'Patient', 'id': 7},  # not a string id
+])
+def test_no_patient_kept_means_no_export_and_no_seed(
+        capsys, key_file, exports, monkeypatch, answer):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
+    pages = dict(epic_pages(), **{'Patient/eSynth.Pt-0001': answer})
+    seed = FakeSeed()
+
+    rc = pull.main(_argv(key_file), session=FakeSession(EPIC, pages),
+                   seed_session=seed)
+
+    assert rc == 1
+    assert seed.calls == []
+    assert not exports.exists() or not list(exports.iterdir())
+    assert 'no Patient kept' in capsys.readouterr().out
+
+
 def test_the_patient_id_is_url_encoded():
     session = FakeSession(EPIC)
     pull.fetch_patient(session, EPIC, BEARER, 'a b?c#d')
@@ -957,4 +984,6 @@ def test_a_code_text_is_absent_on_read(seeded, client):
                                    generate_step_up_token(TENANT)})
 
     assert resp.status_code == 200, resp.status_code
-    assert 'CANARY-med-text' not in resp.get_data(as_text=True)
+    body = resp.get_data(as_text=True)
+    assert 'CANARY-med-text' not in body
+    assert '197361' in body   # the code survives: only the text went
