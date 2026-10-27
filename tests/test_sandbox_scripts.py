@@ -388,6 +388,17 @@ def test_the_ingest_post_follows_no_redirect_and_ignores_env(monkeypatch):
     assert s.kwargs['allow_redirects'] is False
 
 
+def test_ingest_itself_refuses_a_plain_http_engine(monkeypatch):
+    import requests
+    _RecordingSession.instances = []
+    monkeypatch.setattr(requests, 'Session', _RecordingSession)
+
+    with pytest.raises(ValueError):
+        pull.ingest({'resourceType': 'Bundle'}, 'http://e.example',
+                    'sandbox-smart-x', 'synthetic-secret')
+    assert _RecordingSession.instances == []
+
+
 def test_the_sandbox_session_ignores_env():
     assert pull.new_session().trust_env is False
 
