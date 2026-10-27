@@ -139,7 +139,7 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       await expect(question).toHaveCount(1);
       await expect(row.locator('.checkin-skipped-text')).toHaveText(SPOOF);
       await expect(row.locator('.checkin-skipped-why')).toHaveText(
-        'Not answered here, so nothing is sent for this question. You can answer it in person instead.');
+        'Not sent. You can answer this in person.');
       fs.mkdirSync(SHOTS, { recursive: true });
       await wallet.screenshot({ path: path.join(SHOTS, 'finding2-skipped-spoof-375.png'), fullPage: true });
 
@@ -201,6 +201,11 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       // While the script is held back, the buttons cannot be tapped.
       await expect(wallet.locator('#signin-email-btn')).toBeDisabled();
       await expect(wallet.locator('#signin-passkey')).toBeDisabled();
+      // And they look it (#1061 patient test).
+      expect(await wallet.locator('#signin-email-btn').evaluate((b) => {
+        const c = getComputedStyle(b);
+        return [c.opacity, c.cursor];
+      })).toEqual(['0.55', 'not-allowed']);
       // Exactly the attack spec's steps (careagents-checkin-phq2-attack
       // checkIn): the click now waits for the button, so it is not lost.
       await wallet.locator('#signin-email').fill(email);

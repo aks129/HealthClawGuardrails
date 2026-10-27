@@ -52,13 +52,19 @@
     padding-top: 10px; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
   .checkin-group-note { font-size: 14px; color: var(--ink-soft); margin: 0 0 8px;
     overflow-wrap: anywhere; }
+  /* A question left blank when its form was to be sent (#1061 patient
+     test): outlined, so it can be found on a long form. */
+  .checkin-question.checkin-missing { outline: 2px solid var(--critical-line);
+    outline-offset: 4px; border-radius: var(--radius-sm); }
   /* A question this wallet does not answer, in place of its options: our
-     line first, in our voice (ink, weight 600, not a website note's soft
-     grey), then the website's words, labelled and set apart as its other
-     words are (#1061 security F2). */
-  .checkin-skipped { margin: 0 0 10px; }
-  .checkin-skipped-why { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0 0 2px; }
+     short line first, in our voice (ink, not a website note's soft grey;
+     smaller than a question), then the website's words, labelled and set
+     apart as its other words are (#1061 security F2). */
+  .checkin-skipped { margin: 14px 0 10px; }
+  .checkin-skipped-why { font-size: 13px; font-weight: 500; color: var(--ink); margin: 0 0 2px; }
   .checkin-skipped-website { margin: 0; overflow-wrap: anywhere; }
+  /* Sign-in, before the page's script is ready (#1061). */
+  #signin-start button:disabled { opacity: 0.55; cursor: not-allowed; }
   /* The website's address inside our heading: set apart, and wraps. */
   .checkin-pick-origin { font-family: var(--mono); font-size: 0.75em; overflow-wrap: anywhere; }
   /* One card per set of records: its label, then how and when. A card,

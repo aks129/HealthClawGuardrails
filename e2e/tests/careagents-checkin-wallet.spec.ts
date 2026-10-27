@@ -628,7 +628,7 @@ test.describe('check-in wallet', () => {
       await form.locator('.checkin-choice input[value=share]').check();
       await form.locator('fieldset').nth(0).getByLabel('Several days').check();
       await wallet.locator('#wallet-send').click();
-      await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
+      await expect(wallet.locator('#wallet-review-err')).toContainText('1 question in');
       await expect(wallet.locator('#wallet-review')).toBeVisible();
 
       await form.locator('fieldset').nth(1).getByLabel('Nearly every day').check();
@@ -664,9 +664,11 @@ test.describe('check-in wallet', () => {
   });
 
   // QA #1030: on a phone the Send button is far below the top of the card.
-  // toContainText passes whether or not the message can be seen; what a
-  // person needs is to see it, beside the button they tapped, focused.
-  test('at phone width, the unanswered-question message is on screen',
+  // toContainText passes whether or not the message can be seen. #1061
+  // patient test: on a long form the message alone did not say which
+  // question, so the blank one is marked, scrolled to and focused, and the
+  // message (announced, role=alert) gives the count.
+  test('at phone width, the unanswered question is marked, on screen and focused',
     async ({ page }) => {
       await serveRelay(page);
       const wallet = await checkIn(page, PHQ2);
@@ -677,10 +679,18 @@ test.describe('check-in wallet', () => {
       await form.locator('fieldset').nth(0).getByLabel('Several days').check();
       await wallet.locator('#wallet-send').click();
       const msg = wallet.locator('#wallet-review-err');
-      await expect(msg).toBeInViewport({ timeout: 2_000 });
-      await expect(msg).toBeFocused();
       await expect(msg).toHaveAttribute('role', 'alert');
-      await expect(msg).toContainText('Answer every question');
+      await expect(msg).toContainText('1 question in');
+      await expect(msg).toContainText('still needs an answer. The first one is highlighted.');
+      await expect(msg).toContainText("or choose Don't share for it.");
+      const blank = form.locator('fieldset').nth(1);
+      await expect(blank).toHaveAttribute('aria-invalid', 'true');
+      await expect(form.locator('fieldset').nth(0)).not.toHaveAttribute('aria-invalid', 'true');
+      await expect(blank).toBeInViewport({ timeout: 2_000 });
+      await expect(blank.locator('input').first()).toBeFocused();
+      // Answering it clears the mark.
+      await blank.getByLabel('Not at all').check();
+      await expect(blank).not.toHaveAttribute('aria-invalid', 'true');
     });
 
   // #1030 product decision: answers given while the item still sits at its
@@ -859,7 +869,7 @@ test.describe('check-in wallet', () => {
       for (let n = 0; n < 7; n++) await sets.nth(n).locator('input').first().check();
       // One left: said, not sent in part.
       await wallet.locator('#wallet-send').click();
-      await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
+      await expect(wallet.locator('#wallet-review-err')).toContainText('1 question in');
       await sets.nth(7).getByLabel('Very severe').check();
       await sets.nth(1).getByLabel('Always').check();
       await wallet.locator('#wallet-send').click();
@@ -903,7 +913,7 @@ test.describe('check-in wallet', () => {
       await expect(form.locator('.checkin-skipped-text')).toHaveText(skipped.map(textOf));
       await expect(form.locator('.checkin-skipped-why')).toHaveCount(7);
       for (const why of await form.locator('.checkin-skipped-why').allTextContents()) {
-        expect(why).toContain('nothing is sent for this question');
+        expect(why).toBe('Not sent. You can answer this in person.');
       }
       // In its place: the lens question first in its group, before its choices.
       const wear = form.locator('.checkin-group').nth(1);
@@ -918,7 +928,22 @@ test.describe('check-in wallet', () => {
       await form.locator('.checkin-choice input[value=share]').check();
       const sets = form.locator('fieldset.checkin-question');
       await expect(sets).toHaveCount(19);
-      for (let n = 0; n < 19; n++) await sets.nth(n).locator('input').first().check();
+      // #1061 patient test: three left blank on a long form. Each is
+      // marked, the message gives the count, and the first is on screen
+      // and focused, wherever Send is.
+      for (let n = 0; n < 16; n++) await sets.nth(n).locator('input').first().check();
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-review-err')).toContainText(
+        'still need an answer. The first one is highlighted.');
+      await expect(wallet.locator('#wallet-review-err')).toContainText('3 questions in');
+      await expect(form.locator('fieldset[aria-invalid=true]')).toHaveCount(3);
+      await expect(form.locator('fieldset.checkin-missing')).toHaveCount(3);
+      await expect(sets.nth(16)).toHaveAttribute('aria-invalid', 'true');
+      await expect(sets.nth(16)).toBeInViewport();
+      await expect(sets.nth(16).locator('input').first()).toBeFocused();
+      await wallet.screenshot({ path: test.info().outputPath('cl-trial-missing-375.png') });
+      for (let n = 16; n < 19; n++) await sets.nth(n).locator('input').first().check();
+      await expect(form.locator('fieldset[aria-invalid=true]')).toHaveCount(0);
       await wallet.locator('#wallet-send').click();
       await done(page).toMatchObject({ status: 'completed' });
       const r = await page.evaluate(() => (window as any).__result);
@@ -996,8 +1021,11 @@ test.describe('check-in wallet', () => {
       for (let n = 1; n < 8; n++) await sets.nth(n).locator('input').first().check();
       await wallet.locator('#wallet-send').click();
       const msg = wallet.locator('#wallet-review-err');
-      await expect(msg).toBeInViewport({ timeout: 2_000 });
-      await expect(msg).toContainText('Answer every question');
+      await expect(msg).toContainText('1 question in');
+      // The blank question itself is taken to, far above Send (#1061).
+      await expect(sets.nth(0)).toBeInViewport({ timeout: 2_000 });
+      await expect(sets.nth(0)).toHaveAttribute('aria-invalid', 'true');
+      await expect(sets.nth(0).locator('input').first()).toBeFocused();
       expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
     });
 });

@@ -286,7 +286,7 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
     await item.locator('.checkin-choice input[value=share]').check();
     await wallet.locator('#wallet-send').click();
     // Nothing is sent in part: the person is told, and can choose Don't share.
-    await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
+    await expect(wallet.locator('#wallet-review-err')).toContainText('still needs an answer');
     expect(await page.evaluate(() => (window as any).__result)).toBeUndefined();
     // No prototype was polluted in the wallet tab.
     expect(await wallet.evaluate(() => Object.getOwnPropertyNames(Object.prototype).filter(

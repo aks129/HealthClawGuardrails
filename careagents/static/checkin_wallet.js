@@ -211,7 +211,7 @@ function formQuestions(form, i) {
       row.className = "checkin-skipped";
       const why = document.createElement("p");
       why.className = "checkin-skipped-why";
-      why.textContent = "Not answered here, so nothing is sent for this question. You can answer it in person instead.";
+      why.textContent = "Not sent. You can answer this in person.";
       const theirs = document.createElement("p");
       theirs.className = "checkin-skipped-website checkin-from-website";
       const label = document.createElement("span");
@@ -239,10 +239,17 @@ function formQuestions(form, i) {
       lab.append(input, ` ${o.display}`);
       set.append(lab);
     });
+    // Answered: no longer marked as needing an answer.
+    set.addEventListener("change", () => unmark(set));
     into.append(set);
   });
   return box;
 }
+
+/* A question left blank when its form was to be sent: outlined and said
+   to be invalid, until it is answered or Send is tapped again. */
+function mark(set) { set.classList.add("checkin-missing"); set.setAttribute("aria-invalid", "true"); }
+function unmark(set) { set.classList.remove("checkin-missing"); set.removeAttribute("aria-invalid"); }
 
 /* { linkId: option index } for the questions answered on item i. */
 function formAnswers(form, i) {
@@ -367,9 +374,11 @@ function review(request, origin, matches, using) {
     $("wallet-repick").onclick = () => resolve({ kind: "back" });
     $("wallet-send").onclick = () => {
       clear();
+      list.querySelectorAll(".checkin-missing").forEach(unmark);
       const share = {};
       const answers = {};
       let problem = null;
+      let firstMissing = null;   // the first blank question of the form named
       matches.forEach((m, i) => {
         const picked = list.querySelector(`input[name="choice-${i}"]:checked`);
         const sharing = Boolean(picked) && picked.value === "share";
@@ -386,12 +395,31 @@ function review(request, origin, matches, using) {
         share[m.item.id] = true;
         if (!m.form) return;
         answers[m.item.id] = given;
-        // A form is sent whole or not at all: say so rather than decline it.
-        if (Object.keys(given).length !== m.form.questions.length) {
-          problem = problem || `Answer every question in "${isolate(itemHeading(m), 80)}", or choose Don't share for it.`;
+        // A form is sent whole or not at all: say so rather than decline it,
+        // and show which questions, on a form that can be long (#1061 patient
+        // test). "Every" is not said: a skipped question needs no answer.
+        const sets = [];
+        m.form.questions.forEach((q, qi) => {
+          if (Object.hasOwn(given, q.linkId)) return;
+          sets.push(list.querySelector(`input[name="form-${i}-${qi}"]`).closest("fieldset"));
+        });
+        if (sets.length && !problem) {
+          sets.forEach(mark);
+          firstMissing = sets[0];
+          const n = sets.length === 1 ? "1 question" : `${sets.length} questions`;
+          problem = `${n} in "${isolate(itemHeading(m), 80)}" still ${sets.length === 1 ? "needs" : "need"} an answer. The first one is highlighted. Answer ${sets.length === 1 ? "it" : "them"}, or choose Don't share for it.`;
         }
       });
-      if (problem) return reviewFail(problem);
+      if (problem) {
+        reviewFail(problem);
+        if (firstMissing) {
+          // The message is announced (role=alert); the person is taken to
+          // the question itself.
+          firstMissing.scrollIntoView({ block: "center" });
+          firstMissing.querySelector("input").focus({ preventScroll: true });
+        }
+        return;
+      }
       resolve({ kind: "send", share, answers });
     };
     $("wallet-decline-all").onclick = () => resolve({ kind: "declined-all" });
