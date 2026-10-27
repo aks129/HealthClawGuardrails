@@ -765,3 +765,182 @@ def test_the_signing_kid_is_published():
     jwks = json.loads((pull.ROOT / 'deploy'
                        / 'ehr-sandbox-jwks.json').read_text())
     assert pull.KID in {k['kid'] for k in jwks['keys']}
+
+
+# --------------------------------------------------------------------------
+# Security review fix round (2026-10-26)
+
+
+def test_fhir_reads_get_the_long_search_timeout(monkeypatch, key_file,
+                                                exports):
+    """Oracle's problem-list search has taken more than 30 s live."""
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
+    session = FakeSession(EPIC, epic_pages())
+
+    assert pull.main(_argv(key_file), session=session,
+                     seed_session=FakeSeed()) == 0
+
+    gets = [kw for m, _, kw in session.calls if m == 'GET']
+    assert gets and pull.SEARCH_TIMEOUT >= 120
+    assert all(kw['timeout'] == pull.SEARCH_TIMEOUT for kw in gets)
+
+
+def _run_pages(capsys, key_file, monkeypatch, pages, *extra):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
+    seed = FakeSeed()
+    rc = pull.main(_argv(key_file) + list(extra),
+                   session=FakeSession(EPIC, pages), seed_session=seed)
+    out = capsys.readouterr()
+    return rc, out.out + out.err, seed
+
+
+def test_the_page_cap_prints_a_truncation_notice(capsys, key_file, exports,
+                                                 monkeypatch):
+    monkeypatch.setattr(pull, 'MAX_PAGES', 3)
+    nxt = f'{EPIC_FHIR}/Condition?page=again'
+    looping = _bundle(epic_condition(), next_url=nxt)
+    pages = dict(epic_pages(), Condition=looping, **{nxt: looping})
+
+    rc, text, seed = _run_pages(capsys, key_file, monkeypatch, pages)
+
+    # A truncated pull still seeds and exits 0; the notice says so.
+    assert rc == 0 and seed.calls
+    assert 'epic: Condition truncated at 3' in text
+    assert 'CANARY' not in text
+
+
+def test_the_entry_cap_prints_a_truncation_notice(capsys, key_file, exports,
+                                                  monkeypatch):
+    monkeypatch.setattr(pull, 'MAX_ENTRIES', 2)
+    pages = dict(epic_pages(), Condition=_bundle(
+        *(dict(epic_condition(), id=f'eSynth.Cond-0{i}') for i in range(3))))
+
+    rc, text, _ = _run_pages(capsys, key_file, monkeypatch, pages)
+
+    assert rc == 0
+    assert 'epic: Condition truncated at 2' in text
+    assert 'Condition 2' in text
+
+
+def test_a_complete_search_prints_no_truncation_notice(
+        capsys, key_file, exports, monkeypatch):
+    monkeypatch.setattr(pull, 'MAX_ENTRIES', 2)
+    pages = {'Patient/eSynth.Pt-0001': epic_patient(),
+             'Condition': _bundle(*(dict(epic_condition(),
+                                         id=f'eSynth.Cond-0{i}')
+                                    for i in range(2)))}
+
+    rc, text, _ = _run_pages(capsys, key_file, monkeypatch, pages)
+
+    assert rc == 0
+    assert 'Condition 2' in text
+    assert 'truncated' not in text
+
+
+def test_dry_run_writes_the_export_and_does_not_seed(
+        capsys, key_file, exports, monkeypatch):
+    monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET', raising=False)
+    seed = FakeSeed()
+
+    rc = pull.main(_argv(key_file) + ['--dry-run'],
+                   session=FakeSession(EPIC, epic_pages()), seed_session=seed)
+
+    assert rc == 0
+    assert seed.calls == []
+    assert len(list(exports.iterdir())) == 1
+    assert 'not seeded' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('url', [
+    'http://app.healthclaw.io',
+    'http://localhost.evil.example',
+    'http://127.0.0.1.evil.example:5099',
+    'ftp://localhost',
+    'app.healthclaw.io',
+    'https://',
+])
+def test_a_non_https_engine_url_is_refused_before_any_request(
+        capsys, key_file, exports, monkeypatch, url):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
+    session, seed = FakeSession(EPIC, epic_pages()), FakeSeed()
+
+    rc = pull.main(_argv(key_file) + ['--engine-url', url],
+                   session=session, seed_session=seed)
+
+    assert rc == 1
+    assert session.calls == [] and seed.calls == []
+    assert SECRET not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('url', [
+    'https://app.healthclaw.io', 'http://localhost:5099',
+    'http://127.0.0.1:5099', 'HTTP://LOCALHOST:5099',
+])
+def test_https_or_local_http_engine_urls_are_accepted(url):
+    pull.check_engine_url(url)
+
+
+@pytest.mark.parametrize('patient', ['..', '../..', '.'])
+def test_a_dot_patient_id_never_reaches_the_vendor(
+        key_file, exports, monkeypatch, patient):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
+    session, seed = FakeSession(EPIC, epic_pages()), FakeSeed()
+
+    rc = pull.main(_argv(key_file, patient=patient),
+                   session=session, seed_session=seed)
+
+    assert rc == 1
+    assert [m for m, _, _ in session.calls if m == 'GET'] == []
+    assert seed.calls == []
+
+
+def test_the_patient_id_is_url_encoded():
+    session = FakeSession(EPIC)
+    pull.fetch_patient(session, EPIC, BEARER, 'a b?c#d')
+    assert session.calls[0][1] == f'{EPIC_FHIR}/Patient/a%20b%3Fc%23d'
+
+
+def test_a_malformed_meta_tag_is_treated_as_untagged():
+    for tag in ('x', 7, None):
+        (res,) = pull.prepare([{'resourceType': 'Condition', 'id': 'c1',
+                                'meta': {'tag': tag}}])
+        assert res['meta']['tag'] == [
+            {'system': V3_ACT_REASON, 'code': 'HTEST'}]
+
+
+def test_dropped_types_are_labelled_only_when_type_shaped():
+    _, dropped = pull.prepare_counted([
+        {'resourceType': 'Practitioner', 'id': 'a'},
+        {'resourceType': 'CANARY Name\x1b[2J', 'id': 'b'},
+        {'resourceType': 'X' * 65, 'id': 'c'},
+        {'resourceType': 7, 'id': 'd'},
+    ])
+    assert dropped == {'Practitioner': 1, 'other': 3}
+
+
+def test_a_seed_answer_without_a_count_prints_unknown(
+        capsys, key_file, exports, monkeypatch):
+    class NoCount(FakeSeed):
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FakeResponse(201, {'step_up_token': STEP_UP})
+
+    rc, text = _run_and_capture(capsys, key_file, NoCount(), monkeypatch)
+
+    assert rc == 0
+    assert 'created unknown' in text
+    assert 'created 0' not in text
+
+
+def test_a_code_text_is_absent_on_read(seeded, client):
+    """The runbook says the engine redacts `display` and `text` on the way
+    out; this pins the `text` half on the `_include`d Medication."""
+    from r6.stepup import generate_step_up_token
+
+    resp = client.get('/r6/fhir/Medication/eSynth.Med-01',
+                      headers={'X-Tenant-Id': TENANT,
+                               'X-Step-Up-Token':
+                                   generate_step_up_token(TENANT)})
+
+    assert resp.status_code == 200, resp.status_code
+    assert 'CANARY-med-text' not in resp.get_data(as_text=True)

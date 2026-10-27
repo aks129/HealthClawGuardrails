@@ -45,7 +45,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
@@ -108,6 +108,10 @@ SEARCHES = (
 )
 
 TENANT_RE = re.compile(r'\Asandbox-(epic|oracle)-[a-z0-9-]+\Z')
+# A dropped type is printed only when it looks like a FHIR type name;
+# anything else is upstream text and is counted as 'other'.
+TYPE_LABEL_RE = re.compile(r'\A[A-Za-z]{1,64}\Z')
+LOCAL_HOSTS = frozenset({'localhost', '127.0.0.1'})
 KID = 'healthclaw-ehr-sandbox-es384-1'
 DEFAULT_KEY = Path.home() / '.healthclaw' / 'ehr-sandbox-es384-1.pem'
 CLIENT_CONFIG = Path.home() / '.healthclaw' / 'ehr-sandbox.json'
@@ -124,6 +128,9 @@ ASSERTION_TTL = 300   # seconds; both vendors cap it at five minutes
 MAX_PAGES = 20        # per search
 MAX_ENTRIES = 2000    # per search
 TIMEOUT = 30
+# A sandbox search can be slow: Oracle's problem-list search has taken
+# more than 30 s for one patient.
+SEARCH_TIMEOUT = 120
 
 
 class PullError(Exception):
@@ -144,6 +151,18 @@ def new_session():
 def check_tenant(tenant):
     if not isinstance(tenant, str) or not TENANT_RE.match(tenant):
         raise PullError('tenant must match ^sandbox-(epic|oracle)-[a-z0-9-]+$')
+
+
+def check_engine_url(url):
+    """https, or http only to this machine: the seed secret rides along."""
+    try:
+        got = urlsplit(url)
+        host = (got.hostname or '').lower()
+    except ValueError:
+        raise PullError('engine url is not a URL') from None
+    if not host or not (got.scheme == 'https' or (
+            got.scheme == 'http' and host in LOCAL_HOSTS)):
+        raise PullError('engine url must be https (http only for localhost)')
 
 
 def client_id(vendor_name):
@@ -215,9 +234,15 @@ def get_token(session, vendor, cid, key):
 
 
 def _under_base(vendor, url):
-    """True only for an https URL on the base's host, under its path."""
+    """True only for an https URL on the base's host, under its path. A dot
+    segment, or a percent-encoded dot or slash in a segment, is refused
+    outright: the string check would pass it and the request (or the
+    server) would then leave the base path."""
     base = urlsplit(vendor.fhir_base)
     got = urlsplit(url)
+    if any(seg in ('.', '..') or '%2e' in seg.lower() or '%2f' in seg.lower()
+           for seg in got.path.split('/')):
+        return False
     return (got.scheme == 'https' and got.netloc == base.netloc
             and url.startswith(vendor.fhir_base + '/'))
 
@@ -228,7 +253,7 @@ def get_json(session, vendor, token, url, params=None):
     resp = session.get(url, params=params,
                        headers={'Authorization': f'Bearer {token}',
                                 'Accept': 'application/fhir+json'},
-                       allow_redirects=False, timeout=TIMEOUT)
+                       allow_redirects=False, timeout=SEARCH_TIMEOUT)
     if resp.status_code != 200:
         raise PullError(f'GET: HTTP {resp.status_code}')
     try:
@@ -242,37 +267,48 @@ def get_json(session, vendor, token, url, params=None):
 
 def fetch_patient(session, vendor, token, patient_id):
     return get_json(session, vendor, token,
-                    f'{vendor.fhir_base}/Patient/{patient_id}')
+                    f'{vendor.fhir_base}/Patient/{quote(patient_id, safe="")}')
 
 
-def search(session, vendor, token, rtype, params):
-    """Every entry resource across pages, under the page and entry caps."""
+def _next_link(bundle):
+    return next((link.get('url') for link in bundle.get('link') or []
+                 if isinstance(link, dict)
+                 and link.get('relation') == 'next'), None)
+
+
+def search(session, vendor, token, rtype, params, truncated=None):
+    """Every entry resource across pages, under the page and entry caps.
+    A cap that cuts off more data appends (rtype, count) to `truncated`."""
     out = []
     url, query = f'{vendor.fhir_base}/{rtype}', params
     for _ in range(MAX_PAGES):
         bundle = get_json(session, vendor, token, url, query)
-        for entry in bundle.get('entry') or []:
+        entries = bundle.get('entry') or []
+        for i, entry in enumerate(entries):
             res = entry.get('resource') if isinstance(entry, dict) else None
             if isinstance(res, dict):
                 out.append(res)
             if len(out) >= MAX_ENTRIES:
+                if (i + 1 < len(entries) or _next_link(bundle)) \
+                        and truncated is not None:
+                    truncated.append((rtype, len(out)))
                 return out
-        nxt = next((link.get('url') for link in bundle.get('link') or []
-                    if isinstance(link, dict)
-                    and link.get('relation') == 'next'), None)
+        nxt = _next_link(bundle)
         if not nxt:
             return out
         if not _under_base(vendor, nxt):
             raise PullError(f'{rtype}: refused a next link off the FHIR base')
         url, query = nxt, None
+    if truncated is not None:
+        truncated.append((rtype, len(out)))
     return out
 
 
-def fetch(session, vendor, token, patient_id):
+def fetch(session, vendor, token, patient_id, truncated=None):
     resources = [fetch_patient(session, vendor, token, patient_id)]
     for rtype, extra in SEARCHES:
         resources.extend(search(session, vendor, token, rtype,
-                                dict(extra, patient=patient_id)))
+                                dict(extra, patient=patient_id), truncated))
     return resources
 
 
@@ -292,6 +328,8 @@ def _mark_test_data(res):
                 meta[slot] = kept
             else:
                 meta.pop(slot, None)
+    if not isinstance(meta.get('tag'), list):
+        meta.pop('tag', None)   # malformed upstream: treat as untagged
     meta.setdefault('tag', []).append(dict(HTEST))
 
 
@@ -307,7 +345,9 @@ def prepare_counted(resources):
         rtype = res.get('resourceType') if isinstance(res, dict) else None
         rid = res.get('id') if isinstance(res, dict) else None
         if rtype not in ALLOWED_TYPES or not isinstance(rid, str) or not rid:
-            dropped[rtype if isinstance(rtype, str) else 'unknown'] += 1
+            label = rtype if isinstance(rtype, str) \
+                and TYPE_LABEL_RE.match(rtype) else 'other'
+            dropped[label] += 1
             continue
         if (rtype, rid) in seen:
             continue
@@ -338,8 +378,9 @@ def write_export(tenant, bundle):
 
 
 def seed(session, engine_url, tenant, bundle, secret):
-    """POST to /internal/seed. Returns created_count; nothing else of the
-    answer (it carries a step-up token) is read or printed."""
+    """POST to /internal/seed. Returns created_count, or None when the
+    answer has none; nothing else of the answer (it carries a step-up
+    token) is read or printed."""
     resp = session.post(engine_url + SEED_PATH,
                         json={'tenant_id': tenant, 'bundle': bundle},
                         headers={'X-Internal-Secret': secret,
@@ -351,7 +392,7 @@ def seed(session, engine_url, tenant, bundle, secret):
         count = resp.json().get('created_count')
     except (ValueError, AttributeError):
         count = None
-    return count if isinstance(count, int) else 0
+    return count if isinstance(count, int) else None
 
 
 def _counts(counter):
@@ -367,31 +408,43 @@ def main(argv=None, *, session=None, seed_session=None):
                         help='sandbox-(epic|oracle)-<name>')
     parser.add_argument('--key', default=str(DEFAULT_KEY),
                         help='ES384 private key PEM (default: %(default)s)')
-    parser.add_argument('--engine-url', default=DEFAULT_ENGINE_URL)
+    parser.add_argument('--engine-url', default=DEFAULT_ENGINE_URL,
+                        help='https, or http for localhost only '
+                             '(default: %(default)s)')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='write the export only; do not seed')
     args = parser.parse_args(argv)
 
     vendor = VENDORS[args.vendor]
     try:
         check_tenant(args.tenant)
+        check_engine_url(args.engine_url)
         cid = client_id(vendor.name)
         secret = os.environ.get(SECRET_ENV, '').strip()
-        if not secret:
+        if not secret and not args.dry_run:
             raise PullError(f'{SECRET_ENV} is not set')
         key = load_key(args.key)
         session = session or new_session()
         token = get_token(session, vendor, cid, key)
+        truncated = []
         kept, dropped = prepare_counted(
-            fetch(session, vendor, token, args.patient))
+            fetch(session, vendor, token, args.patient, truncated))
         del token
         bundle = transaction_bundle(kept)
         path = write_export(args.tenant, bundle)
         print(f'{vendor.name}: kept {_counts(Counter(r["resourceType"] for r in kept))}')
         print(f'{vendor.name}: dropped {_counts(dropped)}')
+        for rtype, count in truncated:
+            print(f'{vendor.name}: {rtype} truncated at {count}')
         print(f'wrote {path.name}')
+        if args.dry_run:
+            print('dry run: not seeded')
+            return 0
         created = seed(seed_session or new_session(),
                        args.engine_url.rstrip('/'), args.tenant, bundle,
                        secret)
-        print(f'seeded {args.tenant}: created {created}')
+        print(f'seeded {args.tenant}: created '
+              f'{"unknown" if created is None else created}')
     except PullError as exc:
         print(f'error: {exc}')
         return 1

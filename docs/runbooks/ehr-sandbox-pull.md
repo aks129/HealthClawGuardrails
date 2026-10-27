@@ -40,13 +40,19 @@ uv run python scripts/ehr_sandbox_pull.py --vendor oracle \
 
 `--engine-url` defaults to `https://app.healthclaw.io`. For a local engine,
 pass `--engine-url http://localhost:5099` after `uv run flask --app main
-init-db`.
+init-db`. The URL must be https; plain http is accepted only for
+`localhost` and `127.0.0.1`, because the seed secret goes with the request.
+
+`--dry-run` pulls and writes the export but does not seed. It needs no
+`INTERNAL_TOKEN_MINT_SECRET`; it still checks `--engine-url`.
 
 The tenant must match `^sandbox-(epic|oracle)-[a-z0-9-]+$`. The script
 refuses anything else before it sends a request.
 
 The script prints counts by type (kept and dropped), the export file name
-and the number of resources the engine created. It never prints resource
+and the number of resources the engine created (`created unknown` if the
+engine's answer has no count). A dropped type that is not a plain
+letters-only name is counted as `other`, never printed. It never prints resource
 content, the vendor bearer token or the seed response. It keeps no token on
 disk. The transaction Bundle goes to `exports/` (gitignored). Never commit a
 pulled bundle: the vendor terms have not been checked, and this repo is
@@ -86,7 +92,13 @@ Nothing else changes. Records are stored as received; the engine redacts
   `fhir-ehr-code`).
 - The HTTP session ignores proxy and CA-bundle environment variables. No
   request follows a redirect. A paging `next` link is followed only under the
-  same https FHIR base. Each search stops at 20 pages or 2000 entries.
+  same https FHIR base, and never with a `.` or `..` segment or a
+  percent-encoded dot or slash. Each search stops at 20 pages or 2000
+  entries. A search cut off by either cap prints
+  `<vendor>: <Type> truncated at <N>`; the pull still seeds and exits 0, so
+  read the notice before you treat the tenant as complete.
+- FHIR reads wait up to 120 s. Oracle's problem-list search has taken more
+  than 30 s for one sandbox patient.
 - The assertion header has `alg`, `typ` and `kid` only (no `jku`). The
   claims are `iss` = `sub` = client id, `aud` = the exact token URL, a
   unique `jti` and `exp` five minutes out.
