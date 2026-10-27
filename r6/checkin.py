@@ -4,7 +4,8 @@ A check-in hands a clinic only the items the patient ticked, once. The engine
 side is a short-lived, single-use token minted for an exact set of resource
 types, and a `$share-bundle` profile that exports only those types, for one
 named patient, and only rows that carry an allow-listed US Core or C4DIC
-profile claim (r6/us_core_profiles.py). What each released resource keeps is
+profile claim (r6/us_core_profiles.py), or that pass its light US Core check
+and are claimed here for it (#1058). What each released resource keeps is
 r6/access.py `_checkin_profile`.
 
 One function, `operation`, builds the token's `op` claim for both the mint
@@ -25,6 +26,7 @@ from flask import Response, jsonify, request
 
 from models import db
 from r6 import access, stepup
+from r6 import us_core_profiles as _us_core_profiles
 from r6.audit import add_audit_event
 from r6.models import R6Resource
 from r6.runtime_config import resolve_app_env
@@ -167,16 +169,107 @@ def _entry(resource):
     return {'fullUrl': url, 'resource': resource} if url else None
 
 
-def collect(tenant, types, patient_id, profile):
-    """The entries an export sends, and the types among them.
+def _key(resource):
+    return f"{resource.get('resourceType')}/{resource.get('id')}"
+
+
+def _dangles(value, present):
+    return (isinstance(value, dict) and isinstance(value.get('reference'), str)
+            and value['reference'] not in present)
+
+
+#: Backbone elements whose one reference is required: a performer without
+#: its actor, or a link without its `other`, is not sent as a stub.
+_REQUIRED_REFERENCE = ('actor', 'other')
+
+
+def drop_dangling_references(node, present):
+    """Remove, in place, every Reference whose `reference` names nothing in
+    `present` (#1058): an Encounter, Practitioner or Location the bundle
+    does not carry, a `#contained` id after `contained` went, an absolute
+    URL. Dropped rather than kept as a pointer a receiver cannot follow, the
+    way the payor and subscriber checks already drop theirs. A backbone
+    element whose required reference went goes too (_REQUIRED_REFERENCE),
+    and then every object or list left empty, children first.
+
+    An explicit stack, not recursion, so a record nested past the frame
+    limit cannot turn the export into a 500 (#1062 re-check, F5)."""
+    order = []
+    stack = [node]
+    while stack:
+        item = stack.pop()
+        order.append(item)
+        if isinstance(item, dict):
+            for key in list(item):
+                value = item[key]
+                if _dangles(value, present):
+                    del item[key]
+                elif isinstance(value, list):
+                    value[:] = [i for i in value if not _dangles(
+                        i, present) and not (isinstance(i, dict) and any(
+                            _dangles(i.get(k), present)
+                            for k in _REQUIRED_REFERENCE))]
+                    stack.append(value)
+                elif isinstance(value, dict):
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(i for i in item if isinstance(i, (dict, list)))
+    for item in reversed(order):
+        if isinstance(item, dict):
+            for key in [k for k, v in item.items()
+                        if isinstance(v, (dict, list)) and not v]:
+                del item[key]
+        else:
+            item[:] = [v for v in item
+                       if not (isinstance(v, (dict, list)) and not v)]
+
+
+def _payor_ids(resource):
+    """The Organization ids a Coverage's payor names. Only a Coverage: a
+    stray `payor` on another type pulls no Organization out, since the
+    token's types are the patient's consent (security review of #1062,
+    F4). A malformed payor is skipped, never raised on (F1)."""
+    if resource.get('resourceType') != 'Coverage':
+        return set()
+    payors = resource.get('payor')
+    ids = set()
+    for p in payors if isinstance(payors, list) else []:
+        ref = p.get('reference') if isinstance(p, dict) else None
+        if isinstance(ref, str):
+            rtype, _, rid = ref.partition('/')
+            if rtype == 'Organization' and rid and '/' not in rid:
+                ids.add(rid)
+    return ids
+
+
+def collect(tenant, types, patient_id, profile, *, stamp=True):
+    """The entries an export sends, the types among them, and a count of
+    the records kept home, by (type, reason).
 
     Only `types`, only rows of the one patient (a Patient by id, anything
-    else by its subject/patient/beneficiary reference), not deleted, and
-    only rows that carry an allow-listed claim for their own type, read
-    BEFORE `profile` runs (a profile may drop `meta.profile`). Each row goes
-    through `profile`, then the payor Organizations the exported Coverage
+    else by its subject/patient/beneficiary reference), not deleted. Each
+    row goes through `profile`, then the payor Organizations its Coverage
     references are fetched by id in this tenant, never by type. An entry
-    without a fullUrl we would serve is not sent."""
+    without a fullUrl we would serve is not sent.
+
+    A row its source marked entered-in-error, whose status is malformed, or
+    that carries a modifierExtension is never sent, claimed or not
+    (r6/us_core_profiles.py status_hold).
+
+    The claim gate (#1058): a row that carries an allow-listed claim for
+    its own type goes, read BEFORE `profile` runs (a profile may drop
+    `meta.profile`). A row without one goes only if
+    r6/us_core_profiles.py `classify` passes it, as it will leave; with
+    `stamp`, it then carries that one claim and no other. Otherwise it is
+    counted under classify's reason and not sent.
+
+    References naming nothing in the bundle are dropped
+    (drop_dangling_references), except the named patient's: a Condition's
+    `subject` is required, and the clinic knows whose check-in it is. Any
+    record the export changes is checked again: an unclaimed one by
+    `classify`, one claimed on arrival for the required elements and
+    references the export's drops and strips could take (`lost_required`),
+    so no claim goes out on a record the export broke."""
     rows = R6Resource.query.filter(
         R6Resource.tenant_id == tenant.id,
         R6Resource.is_deleted == False,  # noqa: E712
@@ -184,9 +277,12 @@ def collect(tenant, types, patient_id, profile):
     ).order_by(R6Resource.resource_type, R6Resource.id).all()
 
     own = f'Patient/{patient_id}'
-    entries = []
-    type_set = set()
-    payor_ids = set()
+    held = {}
+
+    def hold(rtype, reason):
+        held[(rtype, reason)] = held.get((rtype, reason), 0) + 1
+
+    candidates = []
     for row in rows:
         stored = row.to_fhir_json()
         if row.resource_type == 'Patient':
@@ -198,33 +294,120 @@ def collect(tenant, types, patient_id, profile):
                 stored.get('beneficiary')) if isinstance(r, dict)), None)
             if ref != own:
                 continue
-        if not has_claim(stored):
+        # A record its source withdrew, whose status we cannot read, or
+        # that carries a modifier we would drop, is never sent, claimed or
+        # not.
+        reason = _us_core_profiles.status_hold(stored)
+        if reason:
+            hold(row.resource_type, reason)
             continue
+        claimed = has_claim(stored)
+        # Whether a claimed record met its required elements as stored (a
+        # value given only as `_x` counts): if it did and the export's own
+        # strips and drops take one away, it is held below.
+        met = claimed and _us_core_profiles.lost_required(
+            stored, as_stored=True) is None
         resource = profile(
             stored, patient_id=patient_id, stored_meta=stored_meta(row))
-        entry = _entry(resource)
-        if entry is None:
-            continue
-        entries.append(entry)
-        type_set.add(row.resource_type)
-        for payor in resource.get('payor') or []:
-            payor_ids.add(payor['reference'].split('/', 1)[1])
+        if full_url(resource) is not None:
+            candidates.append((resource, claimed, met))
 
+    payor_ids = set()
+    for resource, _, _ in candidates:
+        payor_ids |= _payor_ids(resource)
+    orgs = []
     if payor_ids:
-        orgs = R6Resource.query.filter(
-            R6Resource.tenant_id == tenant.id,
-            R6Resource.is_deleted == False,  # noqa: E712
-            R6Resource.resource_type == 'Organization',
-            R6Resource.id.in_(sorted(payor_ids)),
-        ).order_by(R6Resource.id).all()
-        for org in orgs:
-            entry = _entry(profile(
-                org.to_fhir_json(), patient_id=patient_id,
-                stored_meta=stored_meta(org)))
-            if entry is not None:
-                entries.append(entry)
-                type_set.add('Organization')
-    return entries, type_set
+        for org in R6Resource.query.filter(
+                R6Resource.tenant_id == tenant.id,
+                R6Resource.is_deleted == False,  # noqa: E712
+                R6Resource.resource_type == 'Organization',
+                R6Resource.id.in_(sorted(payor_ids)),
+        ).order_by(R6Resource.id).all():
+            resource = profile(org.to_fhir_json(), patient_id=patient_id,
+                               stored_meta=stored_meta(org))
+            if full_url(resource) is not None:
+                orgs.append(resource)
+
+    present = ({own} | {_key(r) for r, _, _ in candidates}
+               | {_key(o) for o in orgs})
+    kept = []
+    for resource, claimed, met in candidates:
+        drop_dangling_references(resource, present)
+        if claimed:
+            # The claim arrived with the record; what the export took from
+            # it (a Coverage's only payor, a gender given only as
+            # `_gender`) can break it. One that never met it upstream is
+            # the upstream's claim, sent as before.
+            reason = _us_core_profiles.lost_required(resource) if met else None
+            if reason:
+                hold(resource['resourceType'], reason)
+                continue
+        else:
+            claim, reason = _us_core_profiles.classify(resource)
+            if claim is None:
+                hold(resource['resourceType'], reason)
+                continue
+            if stamp:
+                meta = resource.get('meta')
+                if not isinstance(meta, dict):
+                    meta = resource['meta'] = {}
+                meta['profile'] = [claim]
+        kept.append((resource, claimed, met))
+
+    # A held record takes its payor with it, and nothing kept may point at
+    # it; a record the drop changes is checked again, as above, until
+    # nothing more is held. Organizations are not classified: a payor is
+    # named by reference.
+    while True:
+        payor_ids = set()
+        for resource, _, _ in kept:
+            payor_ids |= _payor_ids(resource)
+        orgs = [o for o in orgs if o['id'] in payor_ids]
+        present = ({own} | {_key(r) for r, _, _ in kept}
+                   | {_key(o) for o in orgs})
+        still = []
+        for resource, claimed, met in kept:
+            reason = None
+            if _drop_changed(resource, present):
+                if not claimed:
+                    reason = _us_core_profiles.classify(resource)[1]
+                elif met:
+                    reason = _us_core_profiles.lost_required(resource)
+            if reason:
+                hold(resource['resourceType'], reason)
+            else:
+                still.append((resource, claimed, met))
+        if len(still) == len(kept):
+            break
+        kept = still
+    kept = [r for r, _, _ in kept] + orgs
+
+    entries = [_entry(r) for r in kept]
+    return entries, {r['resourceType'] for r in kept}, held
+
+
+def _drop_changed(resource, present):
+    """drop_dangling_references on `resource`; True if it removed
+    anything."""
+    before = json.dumps(resource, sort_keys=True)
+    drop_dangling_references(resource, present)
+    return json.dumps(resource, sort_keys=True) != before
+
+
+def held_detail(held):
+    """The audit detail's suffix for `held`: a count, no reasons."""
+    return f'; held={sum(held.values())}' if held else ''
+
+
+def held_header(held):
+    """The X-Records-Held value for `held` (collect), or None when nothing
+    was kept home: {type: {reason: count}}, every word ours."""
+    if not held:
+        return None
+    out = {}
+    for (rtype, reason), count in sorted(held.items()):
+        out.setdefault(rtype, {})[reason] = count
+    return json.dumps(out, separators=(',', ':'), sort_keys=True)
 
 
 def collection(entries):
@@ -269,7 +452,11 @@ def export(tenant, body):
       has no `aud` and is refused; a subset or superset is refused.
     - `patient_id` and a valid type set are required, checked before the
       token is spent; a 400 is audited. Only that patient's rows go out.
-    - Only rows carrying an allow-listed claim for their own type go out.
+    - Only rows carrying an allow-listed claim for their own type go out,
+      or rows r6/us_core_profiles.py classify passes, which then carry
+      that claim (collect, #1058). The rest are counted by fixed reason in
+      the X-Records-Held header and the audit row; no record content.
+    - References naming nothing in the bundle are dropped (collect).
     - Each row goes through r6/access.py _checkin_profile. Payor Organizations
       are fetched by the ids the exported Coverage references, in this
       tenant, never by type.
@@ -319,8 +506,8 @@ def export(tenant, body):
                  absent_status=401, rejected_status=401)
     access.require_grant(**grant)
 
-    entries, type_set = collect(tenant, types, patient_id,
-                                access._checkin_profile)
+    entries, type_set, held = collect(tenant, types, patient_id,
+                                      access._checkin_profile)
     bundle = collection(entries)
     payload = json.dumps(bundle)
     if len(payload.encode('utf-8')) > MAX_BUNDLE_BYTES:
@@ -338,6 +525,9 @@ def export(tenant, body):
         agent_id=AUDIT_AGENT, tenant_id=tenant.id,
         detail=(f'share-bundle export (profile=checkin): {len(entries)} '
                 f'resources across {len(type_set)} type(s); '
-                f'types={",".join(types)}'))
+                f'types={",".join(types)}{held_detail(held)}'))
     db.session.commit()
-    return Response(payload, status=200, mimetype='application/fhir+json')
+    resp = Response(payload, status=200, mimetype='application/fhir+json')
+    if held:
+        resp.headers['X-Records-Held'] = held_header(held)
+    return resp

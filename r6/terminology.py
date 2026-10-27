@@ -222,6 +222,21 @@ _LABELS: dict[tuple[str, str], str] = {
     # penicillin G. Unlabelled, a clinic saw the bare code 7980. "Penicillin",
     # the name the wallet's review shows (tests/test_checkin_wallet.py).
     (RXNORM, "7980"): "Penicillin",
+    # The sandbox patients real vendor feeds serve (#1058): Oracle Health's
+    # open sandbox and SMART Health IT's. Ingredient-level generic names; a
+    # pack or brand code is named by its ingredients, never its brand.
+    (RXNORM, "161"): "Acetaminophen",
+    (RXNORM, "519"): "Allopurinol",
+    (RXNORM, "743"): "Amylase",
+    (RXNORM, "2670"): "Codeine",
+    (RXNORM, "190521"): "Abacavir",
+    (RXNORM, "219228"): "Acetaminophen and phenyltoloxamine",
+    (RXNORM, "389221"): "Etonogestrel 68 mg implant",
+    (RXNORM, "665078"): "Loratadine 5 mg chewable tablet",
+    (RXNORM, "748856"): "Drospirenone and ethinyl estradiol (28-day pack)",
+    (RXNORM, "751905"): "Norgestimate and ethinyl estradiol (28-day pack)",
+    (RXNORM, "1367439"): "Etonogestrel and ethinyl estradiol vaginal ring",
+    (RXNORM, "1870230"): "Epinephrine 0.3 mg auto-injector",
 
     # --- SNOMED CT: codes the product carries (#577) -------------------------
     # Only codes found in our seed/demo data, fixtures or rule sets
@@ -260,6 +275,25 @@ _LABELS: dict[tuple[str, str], str] = {
     # The check-in test patient (#959). tx.fhir.org $lookup, 2026-10-16.
     (SNOMED, "195967001"): "Asthma",
     (SNOMED, "271807003"): "Eruption",
+    # The sandbox patients real vendor feeds serve (#1058). tx.fhir.org
+    # $lookup, 2026-10-26.
+    (SNOMED, "91302008"): "Sepsis",
+    (SNOMED, "66344007"): "Recurrent major depression",
+    (SNOMED, "93444006"): (
+        "Dumbbell-shaped cartilaginous centrum of thoracic vertebra"),
+    (SNOMED, "90979004"): "Chronic tonsillitis",
+    (SNOMED, "48694002"): "Anxiety",
+    (SNOMED, "19169002"): "Miscarriage in first trimester",
+    (SNOMED, "156073000"): "Complete miscarriage",
+    (SNOMED, "102263004"): "Eggs (edible)",
+    (SNOMED, "418920007"): "Adhesive agent",
+    (SNOMED, "762952008"): "Peanut",
+    (SNOMED, "373553006"): "Tylosin",
+    (SNOMED, "256259004"): "Pollen",
+    (SNOMED, "295004007"): "Allergy to torsemide",
+    (SNOMED, "293660003"): "Allergy to mesalamine",
+    (SNOMED, "232347008"): "Allergy to animal dander",
+    (SNOMED, "420174000"): "Allergy to wheat",
 
     # --- HL7 terminology: the check-in test patient's coded fields (#959) --
     # Each label is the code system's own display, so a validator that
@@ -295,6 +329,14 @@ _LABELS: dict[tuple[str, str], str] = {
     (CVX, "187"): "Shingles vaccine (Shingrix)",
     (CVX, "43"): "Hepatitis B vaccine",
     (CVX, "03"): "MMR vaccine",
+    # The sandbox patients real vendor feeds serve (#1058).
+    (CVX, "24"): "Anthrax vaccine",
+    (CVX, "93"): "RSV monoclonal antibody",
+    (CVX, "112"): "Tetanus toxoid vaccine",
+    (CVX, "114"): "Meningococcal vaccine (MenACWY)",
+    (CVX, "229"): "COVID-19 vaccine, bivalent",
+    (CVX, "230"): "COVID-19 vaccine, bivalent",
+    (CVX, "302"): "COVID-19 vaccine, bivalent",
 
     # --- v3-ActReason: the reason r6/curatr.py writes on a fix's Provenance -
     ("http://terminology.hl7.org/CodeSystem/v3-ActReason", "PATADMIN"):

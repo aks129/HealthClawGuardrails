@@ -178,9 +178,12 @@ def export(tenant, body):
       general token (no `aud`), a subset or a superset is refused.
     - `patient_id` and a valid type set naming Patient are required, checked
       before the token is spent; a 400 is audited.
-    - Rows: r6/checkin.collect, through r6/access.py _ktc_profile.
-    - No exportable Patient (absent, deleted, unclaimed): 422, audited, token
-      not spent. The spec requires the bundle to carry the Patient.
+    - Rows: r6/checkin.collect, through r6/access.py _ktc_profile; an
+      unclaimed row goes only if it passes the light US Core check, and
+      is not claimed (#1058). What stayed home is counted in the
+      X-Records-Held header.
+    - No exportable Patient (absent, deleted, failing the check): 422,
+      audited, token not spent. The spec requires the bundle to carry the Patient.
     - Over MAX_BUNDLE_BYTES: 413, no bundle, audited, token not spent.
     - One AuditEvent, from fixed words.
     """
@@ -219,8 +222,10 @@ def export(tenant, body):
                  absent_status=401, rejected_status=401)
     access.require_grant(**grant)
 
-    entries, type_set = checkin.collect(tenant, types, patient_id,
-                                        access._ktc_profile)
+    # No stamp: ktc sends no meta.profile. The check still decides what
+    # goes (#1058).
+    entries, type_set, held = checkin.collect(
+        tenant, types, patient_id, access._ktc_profile, stamp=False)
     if 'Patient' not in type_set:
         return _refuse(
             tenant, 422, 'no exportable Patient',
@@ -243,15 +248,24 @@ def export(tenant, body):
 
     access.require_grant(**grant, consume_nonce=True)
     if deliver == 'link':
-        return _deliver_link(tenant, entries, type_set, types, payload)
+        return _deliver_link(tenant, entries, type_set, types, payload, held)
     add_audit_event(
         'read', resource_type='Bundle', resource_id='share-bundle',
         agent_id=AUDIT_AGENT, tenant_id=tenant.id,
         detail=(f'share-bundle export (profile=ktc): {len(entries)} '
                 f'resources across {len(type_set)} type(s); '
-                f'types={",".join(types)}'))
+                f'types={",".join(types)}{checkin.held_detail(held)}'))
     db.session.commit()
-    return Response(payload, status=200, mimetype='application/fhir+json')
+    return _with_held(
+        Response(payload, status=200, mimetype='application/fhir+json'), held)
+
+
+def _with_held(resp, held):
+    """`resp` with the X-Records-Held header when something stayed home
+    (r6/checkin.py held_header): fixed reason codes and counts only."""
+    if held:
+        resp.headers['X-Records-Held'] = checkin.held_header(held)
+    return resp
 
 
 def _link_refusal(tenant, entries):
@@ -268,7 +282,7 @@ def _link_refusal(tenant, entries):
     return None
 
 
-def _deliver_link(tenant, entries, type_set, types, payload):
+def _deliver_link(tenant, entries, type_set, types, payload, held):
     """`deliver: link`, token spent: the bundle encrypted and stored, the
     answer the shlink."""
     link = shl_links.issue(tenant.id, payload.encode('utf-8'), LINK_LABEL)
@@ -277,8 +291,8 @@ def _deliver_link(tenant, entries, type_set, types, payload):
         agent_id=AUDIT_AGENT, tenant_id=tenant.id,
         detail=(f'share-bundle export (profile=ktc, deliver=link): '
                 f'{len(entries)} resources across {len(type_set)} type(s); '
-                f'types={",".join(types)}'))
+                f'types={",".join(types)}{checkin.held_detail(held)}'))
     db.session.commit()
     resp = jsonify(link)
     resp.headers['Cache-Control'] = 'no-store'
-    return resp
+    return _with_held(resp, held)
