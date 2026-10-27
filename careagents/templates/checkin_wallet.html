@@ -108,7 +108,19 @@
         This tab stays open.</p>
       <div id="signin-start">
         {# Disabled until checkin_wallet.js has attached their handlers: a
-           tap before that did nothing at all (#1061). #}
+           tap before that did nothing at all (#1061). If it never does (no
+           script, or it failed to load or threw first), say so rather than
+           leave two dead buttons. #}
+        <noscript><p class="form-error">Sign-in could not start. Turn on
+          JavaScript, then reload the page.</p></noscript>
+        <p class="form-error" id="signin-stalled" role="alert" hidden>Sign-in
+          could not start. Reload the page.</p>
+        <script>
+          setTimeout(function () {
+            if (document.getElementById("signin-passkey").disabled)
+              document.getElementById("signin-stalled").hidden = false;
+          }, 8000);
+        </script>
         <button class="btn-primary btn-block" id="signin-passkey" disabled>
           Sign in with a passkey</button>
         <div class="or">or use your email</div>

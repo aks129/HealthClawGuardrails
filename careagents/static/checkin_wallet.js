@@ -211,7 +211,7 @@ function formQuestions(form, i) {
       row.className = "checkin-skipped";
       const why = document.createElement("p");
       why.className = "checkin-skipped-why";
-      why.textContent = "Not sent. You can answer this in person.";
+      why.textContent = "This wallet does not answer this question. It is not sent.";
       const theirs = document.createElement("p");
       theirs.className = "checkin-skipped-website checkin-from-website";
       const label = document.createElement("span");
@@ -730,6 +730,8 @@ async function chooseSet(request, unsupportedItems, choices) {
 // disabled, since a tap before this did nothing, #1061).
 $("signin-passkey").disabled = false;
 $("signin-email-btn").disabled = false;
+// Ready after all, if late: take back the page's "could not start".
+$("signin-stalled").hidden = true;
 
 // Opened directly, not by a check-in page: nothing to sign in for.
 if (!window.opener) show("wallet-direct");

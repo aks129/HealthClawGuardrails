@@ -454,5 +454,23 @@ def test_ten_skipped_questions_is_still_answered():
     assert len(_run(req)["forms"][0]["skipped"]) == 10
 
 
+def test_a_skipped_questions_options_are_never_read():
+    """The pick-several question's answerOption is never read (readItems):
+    options that would refuse an answered question (too many, a null, no
+    coding, a bidi display) leave the form answered, the question skipped."""
+    def garbage(q):
+        _cl_item(q, "problems")["answerOption"] = (
+            [None, {}, {"valueCoding": {"code": "x", "display": "‮oops"}},
+             {"valueString": "free"}]
+            + [{"valueCoding": {"code": f"c{n}", "display": f"O{n}"}}
+               for n in range(50)])
+    form = _run(_cl_mutated(garbage))["forms"][0]
+    assert form is not None
+    assert "problems" in [s["linkId"] for s in form["skipped"]]
+    out = _run(_cl_mutated(garbage), share={"eyeClTrial": True},
+               answers={"eyeClTrial": _cl_all_first(form)})
+    assert _status(out) == {"eyeClTrial": "fulfilled"}
+
+
 def test_a_form_with_nothing_skipped_lists_nothing():
     assert _run(_speed_only())["forms"][0]["skipped"] == []

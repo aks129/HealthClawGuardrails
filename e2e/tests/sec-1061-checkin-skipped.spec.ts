@@ -25,7 +25,9 @@
  * did nothing: no POST /api/auth/email, so no code was ever logged and
  * codeFromLog timed out. Fixed: the page draws the sign-in buttons disabled
  * and the script enables them once its handlers are attached. The probe
- * below delays checkin_answer.js to make the race certain. Synthetic data
+ * below delays checkin_answer.js to make the race certain. A script that
+ * never enables them (blocked, or throws first) leaves the page saying
+ * "Sign-in could not start. Reload the page." after 8 s. Synthetic data
  * only.
  */
 import { test, expect, Page } from '@playwright/test';
@@ -139,7 +141,7 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       await expect(question).toHaveCount(1);
       await expect(row.locator('.checkin-skipped-text')).toHaveText(SPOOF);
       await expect(row.locator('.checkin-skipped-why')).toHaveText(
-        'Not sent. You can answer this in person.');
+        'This wallet does not answer this question. It is not sent.');
       fs.mkdirSync(SHOTS, { recursive: true });
       await wallet.screenshot({ path: path.join(SHOTS, 'finding2-skipped-spoof-375.png'), fullPage: true });
 
@@ -214,4 +216,57 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       expect(posts, 'the click reached the handler').toEqual(['POST']);
       expect(await codeFromLog(email, CARE_LOG)).toMatch(/^\d{8}$/);
     });
+
+  // Standards review on #1061: the buttons are drawn disabled and enabled
+  // on the script's last lines, so a script that never gets there must not
+  // leave two dead buttons and no word. After 8 s the page says so.
+  const STALLED = 'Sign-in could not start. Reload the page.';
+
+  test('sign-in that never starts says so: the script never loads',
+    async ({ page }) => {
+      await page.context().route(`${CARE_BASE_URL}/static/checkin_wallet.js*`,
+        (route) => route.abort());
+      const wallet = await openVerifier(page, hostile);
+      const stalled = wallet.locator('#signin-stalled');
+      await expect(stalled).toBeHidden();
+      await expect(stalled).toBeVisible({ timeout: 15_000 });
+      await expect(stalled).toHaveText(STALLED);
+      await expect(stalled).toHaveAttribute('role', 'alert');
+      await expect(wallet.locator('#signin-email-btn')).toBeDisabled();
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      fs.mkdirSync(SHOTS, { recursive: true });
+      await wallet.screenshot({ path: path.join(SHOTS, 'signin-stalled-375.png') });
+    });
+
+  test('sign-in that never starts says so: the script throws before enabling it',
+    async ({ page }) => {
+      await page.context().route(`${CARE_BASE_URL}/static/checkin_answer.js*`,
+        (route) => route.fulfill({ status: 200, contentType: 'text/javascript',
+          body: 'throw new Error("synthetic load failure");' }));
+      const wallet = await openVerifier(page, hostile);
+      await expect(wallet.locator('#signin-stalled')).toBeVisible({ timeout: 15_000 });
+      await expect(wallet.locator('#signin-passkey')).toBeDisabled();
+    });
+
+  test('a slow script: the message shows, then goes once sign-in can start',
+    async ({ page }) => {
+      test.setTimeout(60_000);
+      await page.context().route(`${CARE_BASE_URL}/static/checkin_answer.js*`, async (route) => {
+        await new Promise((r) => setTimeout(r, 11_000));
+        return route.continue();
+      });
+      const wallet = await openVerifier(page, hostile);
+      const stalled = wallet.locator('#signin-stalled');
+      await expect(stalled).toBeVisible({ timeout: 15_000 });
+      await expect(wallet.locator('#signin-email-btn')).toBeEnabled({ timeout: 15_000 });
+      await expect(stalled).toBeHidden();
+    });
+
+  // Chromium's JavaScript-off emulation still parses <noscript> as if
+  // scripts ran, so it is never drawn there; the served markup is checked.
+  test('with JavaScript off, the page carries its own "could not start"', async ({ page }) => {
+    const html = await (await page.request.get('/checkin/wallet')).text();
+    const start = html.slice(html.indexOf('id="signin-start"'), html.indexOf('id="signin-code"'));
+    expect(start).toMatch(/<noscript><p class="form-error">Sign-in could not start\. Turn on\s+JavaScript, then reload the page\.<\/p><\/noscript>/);
+  });
 });
