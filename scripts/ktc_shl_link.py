@@ -15,8 +15,10 @@ difference from the .mjs: it encodes the payload with standard base64
 (`btoa`), the SHL spec and r6/shl.py use base64url, which is what this
 prints.
 
-Test data only. The harness is a third-party host, so a bundle is refused
-(exit 2, nothing sent) unless it has entries and every entry's resource
+Test data only, as far as a tag can tell: the gate proves each entry
+carries a self-applied HTEST tag, and cannot tell whether the tag is true;
+a real record someone tagged passes. The harness is a third-party host, so
+a bundle is refused (exit 2, nothing sent) unless it has entries and every entry's resource
 carries the HL7 v3 ActReason HTEST marker on meta.tag or meta.security,
 matched as r6/ktc.py `is_test_data` matches it, and nests no other resource
 (`contained`, a Bundle's entries). A file with any key beyond the Bundle's
@@ -59,6 +61,11 @@ DEFAULT_LABEL = 'Synthetic test records'
 #: What the harness may answer as a link id: plain URL-safe characters,
 #: short enough for the spec's 128-character url.
 _LINK_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
+
+
+class HarnessError(OSError):
+    """The harness answered, but not with a usable link id. The file may
+    already be stored there, so this is never reported as a refusal."""
 
 
 class NotTestData(ValueError):
@@ -117,7 +124,13 @@ def post_jwe(jwe, url=HARNESS_URL):
                         allow_redirects=False)
     if not 200 <= resp.status_code < 300:   # a 3xx is not followed
         raise requests.HTTPError(f'HTTP {resp.status_code}')
-    return resp.json().get('id')
+    try:
+        body = resp.json()
+    except ValueError:
+        raise HarnessError('the harness answer is not JSON') from None
+    if not isinstance(body, dict):
+        raise HarnessError('the harness answer is not a JSON object')
+    return body.get('id')
 
 
 def make_link(bundle, *, ttl=MAX_TTL_SECONDS, label=DEFAULT_LABEL,
@@ -136,7 +149,7 @@ def make_link(bundle, *, ttl=MAX_TTL_SECONDS, label=DEFAULT_LABEL,
     jwe = shl.encrypt(key, json.dumps(checked).encode('utf-8'))
     link_id = post(jwe, url=HARNESS_URL)
     if not (isinstance(link_id, str) and _LINK_ID.fullmatch(link_id)):
-        raise ValueError('the harness did not answer a link id')
+        raise HarnessError('the harness did not answer a link id')
     exp = int(time.time() if now is None else now) + ttl
     return shl.build_shlink(f'{HARNESS_URL}/{link_id}', key, exp, label)
 
@@ -160,13 +173,14 @@ def main(argv=None):
     except NotTestData as e:
         print(f'refused, nothing sent: {e}', file=sys.stderr)
         return 2
+    except OSError as e:  # requests' errors and HarnessError; before
+        # ValueError, since requests.JSONDecodeError is both.
+        print(f'no link made ({type(e).__name__}); the file may already be '
+              'on the harness', file=sys.stderr)
+        return 1
     except ValueError as e:
         print(f'refused: {e}', file=sys.stderr)
         return 2
-    except OSError as e:  # requests' errors are OSErrors
-        print(f'the harness did not take the file: {type(e).__name__}',
-              file=sys.stderr)
-        return 1
     print(f'{len(bundle["entry"])} entries stored on {HARNESS_URL}',
           file=sys.stderr)
     print(shlink)

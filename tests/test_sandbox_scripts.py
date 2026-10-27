@@ -178,7 +178,8 @@ def test_a_shorter_ttl_and_own_label_are_honoured():
 
 @pytest.mark.parametrize('link_id', ['', 'a/b', '../x', 'a' * 200, None, 7])
 def test_a_harness_answer_that_is_not_a_plain_id_is_refused(link_id):
-    with pytest.raises(ValueError):
+    # The file was already posted, so this is a harness error, not a refusal.
+    with pytest.raises(link.HarnessError):
         link.make_link(_bundle(_res('Patient', 'p1')),
                        post=FakeHarness(link_id))
 
@@ -498,6 +499,16 @@ def test_an_ingest_that_did_not_take_exits_1(monkeypatch, tmp_path, answer):
     assert len(sent) == 1 and rc == 1
 
 
+@pytest.mark.parametrize('errors', [['x', 7, None], 'not-a-list'])
+def test_malformed_ingest_errors_do_not_raise(monkeypatch, tmp_path, errors):
+    """The ingest has happened by then; a bad `errors` field must not turn
+    the run into a traceback."""
+    rc, _, sent = _main_ingest(monkeypatch, tmp_path, 'sandbox-smart-x',
+                               'http://localhost:5099',
+                               (200, dict(INGESTED, errors=errors)))
+    assert len(sent) == 1 and rc == 0
+
+
 def test_a_type_cut_to_per_type_says_so(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(pull, 'new_session', lambda: FakeSession(
         _answers(Condition=[_search('Condition', 45)])))
@@ -662,3 +673,40 @@ def test_a_reference_to_a_kept_resource_is_untouched():
     assert res == {'resourceType': 'AllergyIntolerance', 'id': 'a2',
                    'recorder': {'reference': 'Practitioner/x'},
                    'asserter': {'reference': '#other'}}
+
+
+class _HarnessSession:
+    def __init__(self, resp):
+        self.trust_env = True
+        self.resp = resp
+
+    def post(self, url, **kwargs):
+        return self.resp
+
+
+class _NotJson(FakeResponse):
+    def json(self):
+        import requests
+        raise requests.JSONDecodeError('not json', '', 0)
+
+
+@pytest.mark.parametrize('resp', [
+    pytest.param(_NotJson(200), id='200-not-json'),
+    pytest.param(FakeResponse(200, ['abc']), id='200-json-list'),
+    pytest.param(FakeResponse(201, {'id': 'a/b'}), id='201-bad-id'),
+])
+def test_a_bad_harness_answer_after_the_post_exits_1_not_refused(
+        tmp_path, monkeypatch, capsys, resp):
+    """The file is already on the harness: exit 1, never 'refused' (exit 2),
+    and no traceback. MUTATION: drop the JSON guards in post_jwe -> red."""
+    import requests
+    monkeypatch.setattr(requests, 'Session', lambda: _HarnessSession(resp))
+    path = tmp_path / 'b.json'
+    path.write_text(json.dumps(_bundle(_res('Patient', 'p1'))))
+
+    rc = link.main([str(path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert 'refused' not in err
+    assert 'may already be on the harness' in err

@@ -10,8 +10,10 @@ link store:
 - `scripts/ktc_shl_link.py` encrypts a test bundle and stores it on the CMS
   Kill the Clipboard test harness, then prints a `shlink:/`.
 
-Both work only with test data. The puller tags every resource HTEST, and the
-link script refuses any bundle that has an entry without that tag.
+Both are meant for test data only. The puller tags every resource HTEST,
+and the link script refuses any bundle that has an entry without that tag.
+The tag is self-applied, so the check cannot tell whether it is true: a
+real record someone tagged would pass.
 
 ## Pull a sandbox patient
 
@@ -135,7 +137,8 @@ Things to know about the harness:
 
 ## Tests
 
-`tests/test_sandbox_scripts.py` covers both scripts with no network access:
+`tests/test_sandbox_scripts.py` covers both scripts with no external network access (the redirect
+test uses two loopback sockets):
 
 - the HTEST refusal: an untagged entry, the wrong system or code, an empty
   bundle and a non-Bundle are all refused, and nothing is posted;

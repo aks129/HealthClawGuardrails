@@ -325,7 +325,10 @@ def main(argv=None):
         # The answer carries counts and stable error codes, never content.
         print(f'ingest: HTTP {status} ingested={body.get("ingested")} '
               f'skipped={body.get("skipped")} failed={body.get("failed")}')
-        for err in body.get('errors') or []:
+        errors = body.get('errors')
+        for err in errors if isinstance(errors, list) else []:
+            if not isinstance(err, dict):
+                continue
             print(f'  entry {err.get("index")}: {err.get("resourceType")} '
                   f'{err.get("code")}')
         # A 200 is not success by itself: the engine must say it ingested
