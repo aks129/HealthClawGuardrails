@@ -22,8 +22,8 @@
     },
     {
       "id": "eyeClTrial",
-      "title": "How your trial contact lenses are working",
-      "summary": "Safety questions first, then vision, comfort, and handling with your diagnostic lenses.",
+      "title": "Mixed-answer example",
+      "summary": "Choice, free text and number questions in groups.",
       "content": {
         "kind": "form.fhir",
         "questionnaireCanonical": "https://eye-care.verifier.example/fhir/Questionnaire/cl-trial",
@@ -32,173 +32,173 @@
           "id": "cl-trial",
           "url": "https://eye-care.verifier.example/fhir/Questionnaire/cl-trial",
           "version": "1",
-          "name": "ContactLensTrialEvaluationForm",
-          "title": "Contact Lens Trial Evaluation Form",
+          "name": "MixedAnswerExample",
+          "title": "Mixed-answer example",
           "status": "draft",
           "subjectType": [
             "Patient"
           ],
           "date": "2026-10-12",
           "publisher": "Eye care Verifier (connectathon example)",
-          "description": "How diagnostic contact lenses are working during everyday activities: safety questions first, then wear, vision, comfort and handling, and the patient's overall impression.",
+          "description": "Example form with free text and numbers inside groups.",
           "item": [
             {
               "linkId": "intro",
-              "text": "Tell us how your diagnostic contact lenses are working during everyday activities. Please select what you actually experienced; it is fine to report problems or that you have not tried an activity yet.",
+              "text": "Note 1",
               "type": "display"
             },
             {
               "linkId": "safety",
-              "text": "1 Safety questions (answer first)",
+              "text": "Section 2",
               "type": "group",
               "required": true,
               "item": [
                 {
                   "linkId": "safety-warning",
-                  "text": "If you have eye pain, unusual redness, light sensitivity, sudden vision changes or unusual discharge, remove your contact lenses and contact our office promptly. Do not wait for this form to be reviewed.",
+                  "text": "Note 3",
                   "type": "display"
                 },
                 {
                   "linkId": "safety-pain",
-                  "text": "New or worsening eye pain?",
+                  "text": "Question 4",
                   "type": "choice",
                   "required": true,
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q4-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q4-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q4-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "safety-redness",
-                  "text": "New or unusual eye redness?",
+                  "text": "Question 5",
                   "type": "choice",
                   "required": true,
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q5-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q5-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q5-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "safety-light",
-                  "text": "New light sensitivity?",
+                  "text": "Question 6",
                   "type": "choice",
                   "required": true,
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q6-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q6-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q6-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "safety-vision",
-                  "text": "Sudden or persistent reduction in vision?",
+                  "text": "Question 7",
                   "type": "choice",
                   "required": true,
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q7-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q7-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q7-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "safety-discharge",
-                  "text": "Unusual discharge or excessive tearing?",
+                  "text": "Question 8",
                   "type": "choice",
                   "required": true,
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q8-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q8-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q8-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
@@ -207,144 +207,144 @@
             },
             {
               "linkId": "wear",
-              "text": "2 How have you worn the trial lenses?",
+              "text": "Section 9",
               "type": "group",
               "item": [
                 {
                   "linkId": "trial-lens",
-                  "text": "Trial lens (if known)",
+                  "text": "Question 10",
                   "type": "string"
                 },
                 {
                   "linkId": "trial-status",
-                  "text": "Trial status",
+                  "text": "Question 11",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "wearing",
-                        "display": "Wearing"
+                        "code": "q11-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "stopped",
-                        "display": "Stopped"
+                        "code": "q11-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "not-tried",
-                        "display": "Not tried"
+                        "code": "q11-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unable-to-insert-remove",
-                        "display": "Unable to insert/remove"
+                        "code": "q11-3",
+                        "display": "Option 4"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "days-worn",
-                  "text": "Number of days worn",
+                  "text": "Question 12",
                   "type": "integer"
                 },
                 {
                   "linkId": "hours-worn",
-                  "text": "Average hours worn per day",
+                  "text": "Question 13",
                   "type": "decimal"
                 },
                 {
                   "linkId": "hours-comfortable",
-                  "text": "Hours comfortable per day",
+                  "text": "Question 14",
                   "type": "decimal"
                 },
                 {
                   "linkId": "compared",
-                  "text": "Compared with your prior lenses or glasses",
+                  "text": "Question 15",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "better",
-                        "display": "Better"
+                        "code": "q15-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "same",
-                        "display": "Same"
+                        "code": "q15-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "worse",
-                        "display": "Worse"
+                        "code": "q15-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "first-time-wearer",
-                        "display": "First-time wearer"
+                        "code": "q15-3",
+                        "display": "Option 4"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q15-4",
+                        "display": "Option 5"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "attention-eye",
-                  "text": "Which eye needs attention?",
+                  "text": "Question 16",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "right",
-                        "display": "Right"
+                        "code": "q16-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "left",
-                        "display": "Left"
+                        "code": "q16-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "both",
-                        "display": "Both"
+                        "code": "q16-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "neither",
-                        "display": "Neither"
+                        "code": "q16-3",
+                        "display": "Option 4"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q16-4",
+                        "display": "Option 5"
                       }
                     }
                   ]
@@ -353,150 +353,150 @@
             },
             {
               "linkId": "vision",
-              "text": "3 How is your vision?",
+              "text": "Section 17",
               "type": "group",
               "item": [
                 {
                   "linkId": "vision-note",
-                  "text": "Choose Not tried if you have not tested the activity.",
+                  "text": "Note 18",
                   "type": "display"
                 },
                 {
                   "linkId": "vision-distance",
-                  "text": "Distance (TV / road signs)",
+                  "text": "Question 19",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "good",
-                        "display": "Good"
+                        "code": "q19-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "ok-mixed",
-                        "display": "OK / mixed"
+                        "code": "q19-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "poor",
-                        "display": "Poor"
+                        "code": "q19-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "not-tried",
-                        "display": "Not tried"
+                        "code": "q19-3",
+                        "display": "Option 4"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "vision-intermediate",
-                  "text": "Intermediate (computer)",
+                  "text": "Question 20",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "good",
-                        "display": "Good"
+                        "code": "q20-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "ok-mixed",
-                        "display": "OK / mixed"
+                        "code": "q20-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "poor",
-                        "display": "Poor"
+                        "code": "q20-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "not-tried",
-                        "display": "Not tried"
+                        "code": "q20-3",
+                        "display": "Option 4"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "vision-near",
-                  "text": "Near (phone / reading)",
+                  "text": "Question 21",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "good",
-                        "display": "Good"
+                        "code": "q21-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "ok-mixed",
-                        "display": "OK / mixed"
+                        "code": "q21-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "poor",
-                        "display": "Poor"
+                        "code": "q21-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "not-tried",
-                        "display": "Not tried"
+                        "code": "q21-3",
+                        "display": "Option 4"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "vision-night",
-                  "text": "Night driving / glare",
+                  "text": "Question 22",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "good",
-                        "display": "Good"
+                        "code": "q22-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "ok-mixed",
-                        "display": "OK / mixed"
+                        "code": "q22-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "poor",
-                        "display": "Poor"
+                        "code": "q22-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "not-tried",
-                        "display": "Not tried"
+                        "code": "q22-3",
+                        "display": "Option 4"
                       }
                     }
                   ]
@@ -505,289 +505,289 @@
             },
             {
               "linkId": "comfort",
-              "text": "4 Comfort and handling",
+              "text": "Section 23",
               "type": "group",
               "item": [
                 {
                   "linkId": "comfort-insertion",
-                  "text": "Comfortable when first inserted?",
+                  "text": "Question 24",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q24-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q24-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q24-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "comfort-end",
-                  "text": "Still comfortable near the end of wear?",
+                  "text": "Question 25",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q25-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q25-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q25-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "vision-stable",
-                  "text": "Vision reasonably stable throughout the day?",
+                  "text": "Question 26",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q26-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q26-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q26-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "handling",
-                  "text": "Able to insert and remove without difficulty?",
+                  "text": "Question 27",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q27-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q27-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q27-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "prefer",
-                  "text": "Would you choose these over your previous correction?",
+                  "text": "Question 28",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q28-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q28-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "unsure",
-                        "display": "Unsure"
+                        "code": "q28-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "problems",
-                  "text": "Problems noticed",
+                  "text": "Question 29",
                   "type": "choice",
                   "repeats": true,
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "dryness",
-                        "display": "Dryness"
+                        "code": "q29-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "blur-fluctuation",
-                        "display": "Blur / fluctuation"
+                        "code": "q29-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "lens-movement",
-                        "display": "Lens movement"
+                        "code": "q29-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "glare-halos",
-                        "display": "Glare / halos"
+                        "code": "q29-3",
+                        "display": "Option 4"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "handling",
-                        "display": "Handling"
+                        "code": "q29-4",
+                        "display": "Option 5"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "other",
-                        "display": "Other"
+                        "code": "q29-5",
+                        "display": "Option 6"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "concerns",
-                  "text": "Describe concerns, which eye, and when they occur",
+                  "text": "Question 30",
                   "type": "text"
                 }
               ]
             },
             {
               "linkId": "impression",
-              "text": "5 Your impression",
+              "text": "Section 31",
               "type": "group",
               "item": [
                 {
                   "linkId": "overall",
-                  "text": "Overall",
+                  "text": "Question 32",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "happy-interested-in-ordering",
-                        "display": "Happy; interested in ordering"
+                        "code": "q32-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "mostly-happy-have-a-question",
-                        "display": "Mostly happy; have a question"
+                        "code": "q32-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "need-adjustment",
-                        "display": "Need adjustment"
+                        "code": "q32-2",
+                        "display": "Option 3"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "do-not-want-these-lenses",
-                        "display": "Do not want these lenses"
+                        "code": "q32-3",
+                        "display": "Option 4"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "need-more-time",
-                        "display": "Need more time"
+                        "code": "q32-4",
+                        "display": "Option 5"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "improvement",
-                  "text": "Most important improvement or remaining concern",
+                  "text": "Question 33",
                   "type": "text"
                 },
                 {
                   "linkId": "supply-options",
-                  "text": "Would you like our team to discuss supply options if the doctor approves the prescription?",
+                  "text": "Question 34",
                   "type": "choice",
                   "answerOption": [
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "yes",
-                        "display": "Yes"
+                        "code": "q34-0",
+                        "display": "Option 1"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "not-yet",
-                        "display": "Not yet"
+                        "code": "q34-1",
+                        "display": "Option 2"
                       }
                     },
                     {
                       "valueCoding": {
                         "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
-                        "code": "no",
-                        "display": "No"
+                        "code": "q34-2",
+                        "display": "Option 3"
                       }
                     }
                   ]
                 },
                 {
                   "linkId": "impression-note",
-                  "text": "A trial may require a doctor review or follow-up evaluation before the prescription can be finalized. An order is optional, and reporting concerns helps us recommend the best next step.",
+                  "text": "Note 35",
                   "type": "display"
                 }
               ]

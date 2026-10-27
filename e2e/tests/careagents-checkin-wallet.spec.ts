@@ -832,7 +832,7 @@ test.describe('check-in wallet', () => {
   });
 
   // #1049: an eye-care Verifier's SPEED form, its questions in two groups
-  // (rebuilt from the Verifier's published request, same structure).
+  // (the Verifier's published request structure, with made-up wording).
   const SPEED = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
     'fixtures', 'checkin-request-form-speed.json'), 'utf8'));
   const speed = (wallet: Page) => wallet.locator('#wallet-items li[data-item=speed]');
@@ -844,13 +844,12 @@ test.describe('check-in wallet', () => {
       const form = speed(wallet);
       // Each group's heading, then its own note, then its questions.
       await expect(form.locator('.checkin-group-title')).toHaveText([
-        'How often do you have these symptoms?', 'How severe are these symptoms?']);
+        'How often', 'How bad']);
       await expect(form.locator('.checkin-group').nth(0).locator('.checkin-group-note'))
-        .toHaveText('0 Never · 1 Sometimes · 2 Often · 3 Constant');
-      for (const g of [0, 1]) {
-        await expect(form.locator('.checkin-group').nth(g).locator('legend')).toHaveText([
-          'Dryness, grittiness or scratchiness', 'Soreness or irritation',
-          'Burning or watering', 'Eye fatigue']);
+        .toHaveText('0 Never · 1 Rarely · 2 Often · 3 Always');
+      for (const [g, word] of [[0, 'how often'], [1, 'how bad']] as const) {
+        await expect(form.locator('.checkin-group').nth(g).locator('legend')).toHaveText(
+          ['A', 'B', 'C', 'D'].map((s) => `Symptom ${s}, ${word}`));
       }
       await expect(form.locator('fieldset input:checked')).toHaveCount(0);
 
@@ -861,8 +860,8 @@ test.describe('check-in wallet', () => {
       // One left: said, not sent in part.
       await wallet.locator('#wallet-send').click();
       await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
-      await sets.nth(7).getByLabel('Intolerable - unable to perform my daily tasks').check();
-      await sets.nth(1).getByLabel('Constant').check();
+      await sets.nth(7).getByLabel('Very severe').check();
+      await sets.nth(1).getByLabel('Always').check();
       await wallet.locator('#wallet-send').click();
       await done(page).toMatchObject({ status: 'completed' });
       const r = await page.evaluate(() => (window as any).__result);
@@ -873,12 +872,12 @@ test.describe('check-in wallet', () => {
       expect(qr.questionnaire).toBe(SPEED.items[1].content.questionnaireCanonical);
       expect(qr.item.map((g: any) => [g.linkId, g.answer,
         g.item.map((i: any) => [i.linkId, i.answer[0].valueCoding.code])])).toEqual([
-        ['frequency', undefined, [['frequency-dryness', 'never'],
-          ['frequency-soreness', 'constant'], ['frequency-burning', 'never'],
-          ['frequency-fatigue', 'never']]],
-        ['severity', undefined, [['severity-dryness', 'no-problems'],
-          ['severity-soreness', 'no-problems'], ['severity-burning', 'no-problems'],
-          ['severity-fatigue', 'intolerable-unable-to-perform-my-daily-tasks']]]]);
+        ['frequency', undefined, [['frequency-dryness', 'frequency-0'],
+          ['frequency-soreness', 'frequency-3'], ['frequency-burning', 'frequency-0'],
+          ['frequency-fatigue', 'frequency-0']]],
+        ['severity', undefined, [['severity-dryness', 'severity-0'],
+          ['severity-soreness', 'severity-0'], ['severity-burning', 'severity-0'],
+          ['severity-fatigue', 'severity-4']]]]);
       expect(JSON.stringify(qr)).not.toContain('ordinalValue');
       expect(asked).toEqual([{ resource_types: ['Patient'] }]);
     });

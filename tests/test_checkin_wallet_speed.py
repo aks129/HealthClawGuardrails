@@ -2,8 +2,9 @@
 
 A Verifier we pair with for the connectathon sends the SPEED questionnaire
 inline: two `group` items, each a display line and four single-choice
-questions (e2e/fixtures/checkin-request-form-speed.json, rebuilt from the
-Verifier's published request with the same structure). What these pin, by
+questions (e2e/fixtures/checkin-request-form-speed.json: the Verifier's
+published request structure exactly, with made-up wording, so the tests
+prove the shape and carry none of the instrument's text). What these pin, by
 running the shipped careagents/static/checkin_answer.js under node, as
 tests/test_checkin_wallet_phq2.py does:
 
@@ -66,20 +67,21 @@ def test_the_speed_form_is_answered_from_the_questionnaire_sent():
     assert out["unsupported"] == [False, False]
     form = out["forms"][1]
     assert form["canonical"] == CANONICAL
-    assert form["title"] == "SPEED dry eye questionnaire"
+    assert form["title"] == "Grouped symptom example"
     assert form["displays"] == []
     assert [(g["linkId"], g["text"], g["displays"]) for g in form["groups"]] == [
-        ("frequency", "How often do you have these symptoms?",
-         ["0 Never · 1 Sometimes · 2 Often · 3 Constant"]),
-        ("severity", "How severe are these symptoms?",
-         ["0 No problems · 1 Tolerable · 2 Uncomfortable · "
-          "3 Bothersome · 4 Intolerable"]),
+        ("frequency", "How often",
+         ["0 Never · 1 Rarely · 2 Often · 3 Always"]),
+        ("severity", "How bad",
+         ["0 None · 1 Mild · 2 Moderate · 3 Severe · 4 Very severe"]),
     ]
+    assert [q["text"] for q in form["questions"]] == [
+        f"Symptom {s}, {w}" for w in ("how often", "how bad") for s in "ABCD"]
     assert [(q["linkId"], q["group"]) for q in form["questions"]] == [
         (f"{g}-{s}", gi) for gi, g in enumerate(("frequency", "severity"))
         for s in SYMPTOMS]
     assert [o["display"] for o in form["questions"][0]["options"]] == [
-        "Never", "Sometimes", "Often", "Constant"]
+        "Never", "Rarely", "Often", "Always"]
     assert len(form["questions"][4]["options"]) == 5
     # The form asks the records relay for nothing.
     assert out["types"] == ["Patient"]
@@ -105,8 +107,8 @@ def test_answers_nest_under_each_groups_linkid():
     qr = art["value"]
     assert qr["questionnaire"] == CANONICAL
     assert [(g["linkId"], g["text"], "answer" in g) for g in qr["item"]] == [
-        ("frequency", "How often do you have these symptoms?", False),
-        ("severity", "How severe are these symptoms?", False)]
+        ("frequency", "How often", False),
+        ("severity", "How bad", False)]
     frequency, severity = qr["item"]
     assert [i["linkId"] for i in frequency["item"]] == [
         f"frequency-{s}" for s in SYMPTOMS]
@@ -114,17 +116,16 @@ def test_answers_nest_under_each_groups_linkid():
         f"severity-{s}" for s in SYMPTOMS]
     # The option's coding, exactly; its ordinalValue extension stays behind.
     assert frequency["item"][1]["answer"] == [{"valueCoding": {
-        "system": SYSTEM, "code": "constant", "display": "Constant"}}]
+        "system": SYSTEM, "code": "frequency-3", "display": "Always"}}]
     assert severity["item"][3]["answer"] == [{"valueCoding": {
-        "system": SYSTEM, "code": "intolerable-unable-to-perform-my-daily-tasks",
-        "display": "Intolerable - unable to perform my daily tasks"}}]
+        "system": SYSTEM, "code": "severity-4", "display": "Very severe"}}]
     assert "extension" not in json.dumps(qr)
 
 
 def test_top_level_and_grouped_questions_keep_their_order():
     def mix(q):
         q["item"].insert(1, {"linkId": "top", "type": "choice",
-                             "text": "Do you wear contact lenses?",
+                             "text": "A question at the top",
                              "answerOption": [
                                  {"valueCoding": {"code": "y", "display": "Yes"}},
                                  {"valueCoding": {"code": "n", "display": "No"}}]})
