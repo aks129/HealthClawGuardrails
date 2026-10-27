@@ -124,19 +124,24 @@ function answerable(item, unsupported) {
 /* --- Forms (FHI-55) -------------------------------------------------------
 
    A `form.fhir` item is answered only from the Questionnaire the website
-   sent inline, and only when it is small, flat and single-choice, as the
-   PHQ-2 is: display lines and choice questions, each with its own coded
-   answer options. Everything shown is the website's own words, put on the
-   page as text, never as markup; the Questionnaire's generated narrative
-   is never read. Anything else is unsupported rather than half shown. The
-   answers stay in this tab: they go only into the sealed response. */
+   sent inline, and only when it is small and single-choice, as the PHQ-2
+   is: display lines and choice questions, each with its own coded answer
+   options. One level of `group` is allowed too, as the SPEED dry eye form
+   has (#1049): a heading over display lines and choice questions held to
+   the same rules, the heading's words checked as a question's are. A
+   group inside a group is not. Everything shown is the website's own
+   words, put on the page as text, never as markup; the Questionnaire's
+   generated narrative is never read. Anything else is unsupported rather
+   than half shown. The answers stay in this tab: they go only into the
+   sealed response. */
 
 const FORM_MAX_CHARS = 32768;      // the Questionnaire, serialised
 const FORM_MAX_QUESTIONS = 10;
 const FORM_MAX_OPTIONS = 10;
 const FORM_TEXT_MAX = 500;
 const FORM_CANONICAL_MAX = 1024;
-// What would make a question more than one pick from a fixed list.
+// What would make a question more than one pick from a fixed list. `item`
+// is allowed on a top-level group only (readItems).
 const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
 
 const text = (v, max = FORM_TEXT_MAX) =>
@@ -164,9 +169,58 @@ function readOption(option) {
   return { coding, display };
 }
 
+/* Reads `items` into `form`, in order: display lines into the form's
+   `displays` (or, inside a group, the group's), choice questions into
+   form.questions, each with the index into form.groups of the group it
+   sits in, or null at the top. `group` is that index while reading a
+   group's own items. False when any item is outside the rules. */
+function readItems(items, form, linkIds, group) {
+  for (const it of items) {
+    if (it === null || typeof it !== "object") return false;
+    const type = own(it, "type");
+    // One level: a group at the top may carry items, nothing else may.
+    const isGroup = type === "group" && group === null;
+    if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k) &&
+        !(k === "item" && isGroup))) return false;
+    if (own(it, "repeats") === true) return false;
+    const linkId = text(own(it, "linkId"), 255);
+    const said = words(own(it, "text"));
+    if (!linkId || !said || linkIds.has(linkId)) return false;
+    linkIds.add(linkId);
+    if (type === "display") {
+      (group === null ? form.displays : form.groups[group].displays).push(said);
+      continue;
+    }
+    if (type !== "choice" && !isGroup) return false;
+    const prefix = own(it, "prefix");
+    if (prefix !== undefined && !words(prefix, 16)) return false;
+    if (isGroup) {
+      // A heading over at least one question: nothing to answer is a
+      // heading over nothing, and options belong to questions.
+      const children = own(it, "item");
+      if (Object.hasOwn(it, "answerOption") || !Array.isArray(children)) return false;
+      const before = form.questions.length;
+      form.groups.push({ linkId, prefix: prefix || "", text: said, displays: [] });
+      if (!readItems(children, form, linkIds, form.groups.length - 1)) return false;
+      if (form.questions.length === before) return false;
+      continue;
+    }
+    const options = own(it, "answerOption");
+    if (!Array.isArray(options) || options.length < 2 ||
+        options.length > FORM_MAX_OPTIONS) return false;
+    const read = options.map(readOption);
+    if (read.includes(null)) return false;
+    form.questions.push({ linkId, prefix: prefix || "", text: said, options: read, group });
+  }
+  return true;
+}
+
 /* The form an item carries, or null when this wallet will not answer it:
-   { canonical, title, displays: [text], questions: [{ linkId, prefix,
-   text, options: [{ coding, display }] }] }. */
+   { canonical, title, displays: [text], groups: [{ linkId, prefix, text,
+   displays: [text] }], questions: [{ linkId, prefix, text, options:
+   [{ coding, display }], group: index into groups or null }] }. Questions
+   are in the Questionnaire's order, so a group's are next to each other;
+   the 10-question cap counts them all. */
 export function readForm(item) {
   const content = own(item, "content");
   const accept = own(item, "accept");
@@ -191,42 +245,31 @@ export function readForm(item) {
 
   const items = own(q, "item");
   if (!Array.isArray(items)) return null;
-  const displays = [];
-  const questions = [];
-  const linkIds = new Set();
-  for (const it of items) {
-    if (it === null || typeof it !== "object") return null;
-    if (FORM_REFUSED_KEYS.some((k) => Object.hasOwn(it, k))) return null;
-    if (own(it, "repeats") === true) return null;
-    const linkId = text(own(it, "linkId"), 255);
-    const said = words(own(it, "text"));
-    if (!linkId || !said || linkIds.has(linkId)) return null;
-    linkIds.add(linkId);
-    const type = own(it, "type");
-    if (type === "display") { displays.push(said); continue; }
-    if (type !== "choice") return null;
-    const prefix = own(it, "prefix");
-    if (prefix !== undefined && !words(prefix, 16)) return null;
-    const options = own(it, "answerOption");
-    if (!Array.isArray(options) || options.length < 2 ||
-        options.length > FORM_MAX_OPTIONS) return null;
-    const read = options.map(readOption);
-    if (read.includes(null)) return null;
-    questions.push({ linkId, prefix: prefix || "", text: said, options: read });
-  }
+  const form = { displays: [], groups: [], questions: [] };
+  if (!readItems(items, form, new Set(), null)) return null;
+  const { displays, groups, questions } = form;
   if (!questions.length || questions.length > FORM_MAX_QUESTIONS) return null;
-  return { canonical, title: words(own(q, "title")) || "", displays, questions };
+  return { canonical, title: words(own(q, "title")) || "", displays, groups, questions };
 }
 
 /* The QuestionnaireResponse for `picked` ({ linkId: option index }), or
-   null unless every question has exactly one of its own options. */
+   null unless every question has exactly one of its own options. A
+   group's answers sit under the group's linkId, as FHIR nests them. */
 function questionnaireResponse(form, picked) {
   const item = [];
+  let into = null;   // the group being filled, while its questions last
   for (const question of form.questions) {
     const i = own(picked, question.linkId);
     if (!Number.isInteger(i) || i < 0 || i >= question.options.length) return null;
-    item.push({ linkId: question.linkId, text: question.text,
-      answer: [{ valueCoding: { ...question.options[i].coding } }] });
+    const answered = { linkId: question.linkId, text: question.text,
+      answer: [{ valueCoding: { ...question.options[i].coding } }] };
+    if (question.group === null) { into = null; item.push(answered); continue; }
+    if (!into || into.at !== question.group) {
+      const g = form.groups[question.group];
+      into = { at: question.group, node: { linkId: g.linkId, text: g.text, item: [] } };
+      item.push(into.node);
+    }
+    into.node.item.push(answered);
   }
   return {
     resourceType: "QuestionnaireResponse",

@@ -159,12 +159,38 @@ function describe(m) {
 }
 
 /* A form's questions (checkin_answer.js readForm), one radio group each.
-   The text is the website's: textContent only, never markup. Nothing is
-   picked to start with. */
+   A group's questions sit together under its heading and display lines
+   (#1049). The text is the website's: textContent only, never markup.
+   Nothing is picked to start with. */
 function formQuestions(form, i) {
   const box = document.createElement("div");
   box.className = "checkin-form";
+  let into = box;
+  let shown = null;   // the group whose questions are being drawn
   form.questions.forEach((q, qi) => {
+    if (q.group !== shown) {
+      shown = q.group;
+      into = box;
+      if (q.group !== null) {
+        const g = form.groups[q.group];
+        into = document.createElement("div");
+        into.className = "checkin-group";
+        into.setAttribute("role", "group");
+        const heading = document.createElement("p");
+        heading.className = "checkin-group-title";
+        heading.id = `form-${i}-group-${q.group}`;
+        heading.textContent = g.prefix ? `${g.prefix} ${g.text}` : g.text;
+        into.setAttribute("aria-labelledby", heading.id);
+        into.append(heading);
+        g.displays.forEach((line) => {
+          const note = document.createElement("p");
+          note.className = "checkin-group-note";
+          note.textContent = line;
+          into.append(note);
+        });
+        box.append(into);
+      }
+    }
     const set = document.createElement("fieldset");
     set.className = "checkin-question";
     const legend = document.createElement("legend");
@@ -179,7 +205,7 @@ function formQuestions(form, i) {
       lab.append(input, ` ${o.display}`);
       set.append(lab);
     });
-    box.append(set);
+    into.append(set);
   });
   return box;
 }

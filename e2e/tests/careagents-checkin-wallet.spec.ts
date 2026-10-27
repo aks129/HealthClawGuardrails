@@ -830,4 +830,73 @@ test.describe('check-in wallet', () => {
     expect(r.json.requestStatus.find((s: any) => s.item === 'phq2').status)
       .toBe('unsupported');
   });
+
+  // #1049: an eye-care Verifier's SPEED form, its questions in two groups
+  // (rebuilt from the Verifier's published request, same structure).
+  const SPEED = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+    'fixtures', 'checkin-request-form-speed.json'), 'utf8'));
+  const speed = (wallet: Page) => wallet.locator('#wallet-items li[data-item=speed]');
+
+  test('fills in the grouped SPEED form and nests the answers by group',
+    async ({ page }) => {
+      const asked = await serveRelay(page);
+      const wallet = await checkIn(page, SPEED);
+      const form = speed(wallet);
+      // Each group's heading, then its own note, then its questions.
+      await expect(form.locator('.checkin-group-title')).toHaveText([
+        'How often do you have these symptoms?', 'How severe are these symptoms?']);
+      await expect(form.locator('.checkin-group').nth(0).locator('.checkin-group-note'))
+        .toHaveText('0 Never · 1 Sometimes · 2 Often · 3 Constant');
+      for (const g of [0, 1]) {
+        await expect(form.locator('.checkin-group').nth(g).locator('legend')).toHaveText([
+          'Dryness, grittiness or scratchiness', 'Soreness or irritation',
+          'Burning or watering', 'Eye fatigue']);
+      }
+      await expect(form.locator('fieldset input:checked')).toHaveCount(0);
+
+      await form.locator('.checkin-choice input[value=share]').check();
+      const sets = form.locator('fieldset.checkin-question');
+      await expect(sets).toHaveCount(8);
+      for (let n = 0; n < 7; n++) await sets.nth(n).locator('input').first().check();
+      // One left: said, not sent in part.
+      await wallet.locator('#wallet-send').click();
+      await expect(wallet.locator('#wallet-review-err')).toContainText('Answer every question');
+      await sets.nth(7).getByLabel('Intolerable - unable to perform my daily tasks').check();
+      await sets.nth(1).getByLabel('Constant').check();
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus).toEqual([
+        { item: 'patient', status: 'declined' },
+        { item: 'speed', status: 'fulfilled' }]);
+      const qr = r.json.artifacts[0].value;
+      expect(qr.questionnaire).toBe(SPEED.items[1].content.questionnaireCanonical);
+      expect(qr.item.map((g: any) => [g.linkId, g.answer,
+        g.item.map((i: any) => [i.linkId, i.answer[0].valueCoding.code])])).toEqual([
+        ['frequency', undefined, [['frequency-dryness', 'never'],
+          ['frequency-soreness', 'constant'], ['frequency-burning', 'never'],
+          ['frequency-fatigue', 'never']]],
+        ['severity', undefined, [['severity-dryness', 'no-problems'],
+          ['severity-soreness', 'no-problems'], ['severity-burning', 'no-problems'],
+          ['severity-fatigue', 'intolerable-unable-to-perform-my-daily-tasks']]]]);
+      expect(JSON.stringify(qr)).not.toContain('ordinalValue');
+      expect(asked).toEqual([{ resource_types: ['Patient'] }]);
+    });
+
+  test('the contact lens form, with free text and numbers, stays unsupported',
+    async ({ page }) => {
+      await serveRelay(page);
+      const req = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
+        'fixtures', 'checkin-request-form-cl-trial.json'), 'utf8'));
+      const wallet = await checkIn(page, req);
+      const item = wallet.locator('#wallet-items li[data-item=eyeClTrial]');
+      await expect(item).toContainText('You can answer it in person instead.');
+      await expect(item.locator('fieldset, .checkin-group')).toHaveCount(0);
+      await wallet.locator('#wallet-send').click();
+      await done(page).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus.find((s: any) => s.item === 'eyeClTrial').status)
+        .toBe('unsupported');
+      expect(r.json.artifacts).toEqual([]);
+    });
 });

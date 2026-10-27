@@ -300,6 +300,57 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
     expect(r.json.requestStatus).toEqual([{ item: 'f', status: 'declined' }]);
   });
 
+  // #1049: one level of `group` is answered; every rule above holds inside
+  // it, and its heading is checked as a question's words are.
+  const group = (linkId: string, text: unknown, item: unknown[]) =>
+    ({ linkId, type: 'group', text, item });
+  const refused = async (page: Page, quest: unknown) => {
+    const wallet = await checkIn(page, formRequest(quest));
+    const item = wallet.locator('#wallet-items li[data-item=f]');
+    await expect(item).toContainText('You can answer it in person instead.');
+    await expect(item.locator('fieldset, .checkin-group')).toHaveCount(0);
+    await wallet.locator('#wallet-send').click();
+    const r = await result(page);
+    expect(r.json.artifacts).toEqual([]);
+    expect(r.json.requestStatus).toEqual([{ item: 'f', status: 'unsupported' }]);
+  };
+
+  test('a group inside a group is refused whole', async ({ page }) => {
+    await serveRelay(page);
+    await refused(page, q([group('outer', 'Outer', [
+      choice('q1', 'First'), group('inner', 'Inner', [choice('q2', 'Second')])])]));
+  });
+
+  test('a group heading with a bidi control is refused', async ({ page }) => {
+    await serveRelay(page);
+    await refused(page, q([
+      group('g', 'Eye symptoms\u202e erahs', [choice('q1', 'Dryness')])]));
+  });
+
+  for (const [name, heading] of [['blank', '   '], ['invisible', '\u200b\u2063'],
+    ['missing', undefined]] as const) {
+    test(`a ${name} group heading is refused`, async ({ page }) => {
+      await serveRelay(page);
+      await refused(page, q([group('g', heading, [choice('q1', 'Dryness')])]));
+    });
+  }
+
+  test('markup in a group heading and its note renders as text', async ({ page }) => {
+    await serveRelay(page);
+    const xss = '<img src=x onerror="window.__pwned=7">';
+    const wallet = await checkIn(page, formRequest(q([group('g', `${xss}Symptoms`, [
+      { linkId: 'n', type: 'display', text: `<b onclick="window.__pwned=8">Note</b>` },
+      choice('q1', 'Dryness')])])));
+    const item = wallet.locator('#wallet-items li[data-item=f]');
+    await expect(item.locator('img, b')).toHaveCount(0);
+    await expect(item.locator('.checkin-group-title')).toHaveText(`${xss}Symptoms`);
+    await expect(item.locator('.checkin-group-note'))
+      .toHaveText('<b onclick="window.__pwned=8">Note</b>');
+    // Still under the website's label, as every form line is.
+    await expect(item.locator('.checkin-website-says')).toHaveText('The website asks:');
+    expect(await wallet.evaluate(() => (window as any).__pwned)).toBeUndefined();
+  });
+
   test("a form's answers never ride on another item, and a records item's data never rides on the form",
     async ({ page }) => {
       await serveRelay(page);

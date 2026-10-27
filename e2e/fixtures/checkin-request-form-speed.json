@@ -1,0 +1,610 @@
+{
+  "type": "smart-health-checkin-request",
+  "version": "1",
+  "id": "replace-with-a-unique-id",
+  "purpose": "Before your eye care visit",
+  "fhirVersions": [
+    "4.0.1"
+  ],
+  "items": [
+    {
+      "id": "patient",
+      "title": "Demographics",
+      "content": {
+        "kind": "selection.fhir",
+        "profiles": [
+          "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+        ]
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    },
+    {
+      "id": "speed",
+      "title": "Dry eye symptoms (SPEED)",
+      "summary": "How often and how badly four dry eye symptoms bother you. About 1 minute.",
+      "content": {
+        "kind": "form.fhir",
+        "questionnaireCanonical": "https://eye-care.verifier.example/fhir/Questionnaire/speed",
+        "questionnaire": {
+          "resourceType": "Questionnaire",
+          "id": "speed",
+          "url": "https://eye-care.verifier.example/fhir/Questionnaire/speed",
+          "version": "1",
+          "name": "SPEEDQuestionnaire",
+          "title": "SPEED dry eye questionnaire",
+          "status": "draft",
+          "subjectType": [
+            "Patient"
+          ],
+          "date": "2026-10-12",
+          "publisher": "Eye care Verifier (connectathon example)",
+          "description": "Standard Patient Evaluation of Eye Dryness (SPEED): how often and how severely four dry eye symptoms occur. Frequency scores 0-3 and severity 0-4 per symptom; the SPEED score is the sum, 0-28, computed by the receiver.",
+          "copyright": "SPEED questionnaire: Korb DR, et al. TearScience, Inc.",
+          "item": [
+            {
+              "linkId": "frequency",
+              "text": "How often do you have these symptoms?",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "frequency-help",
+                  "text": "0 Never · 1 Sometimes · 2 Often · 3 Constant",
+                  "type": "display"
+                },
+                {
+                  "linkId": "frequency-dryness",
+                  "text": "Dryness, grittiness or scratchiness",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "never",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "sometimes",
+                        "display": "Sometimes"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "often",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "constant",
+                        "display": "Constant"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "frequency-soreness",
+                  "text": "Soreness or irritation",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "never",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "sometimes",
+                        "display": "Sometimes"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "often",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "constant",
+                        "display": "Constant"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "frequency-burning",
+                  "text": "Burning or watering",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "never",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "sometimes",
+                        "display": "Sometimes"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "often",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "constant",
+                        "display": "Constant"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "frequency-fatigue",
+                  "text": "Eye fatigue",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "never",
+                        "display": "Never"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "sometimes",
+                        "display": "Sometimes"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "often",
+                        "display": "Often"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "constant",
+                        "display": "Constant"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "linkId": "severity",
+              "text": "How severe are these symptoms?",
+              "type": "group",
+              "item": [
+                {
+                  "linkId": "severity-help",
+                  "text": "0 No problems · 1 Tolerable · 2 Uncomfortable · 3 Bothersome · 4 Intolerable",
+                  "type": "display"
+                },
+                {
+                  "linkId": "severity-dryness",
+                  "text": "Dryness, grittiness or scratchiness",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "no-problems",
+                        "display": "No problems"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "tolerable-not-perfectly-comfortable",
+                        "display": "Tolerable - not perfectly comfortable"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "uncomfortable-irritating-but-does-not-interfere-with-my-day",
+                        "display": "Uncomfortable - irritating but does not interfere with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "bothersome-irritating-and-interferes-with-my-day",
+                        "display": "Bothersome - irritating and interferes with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "intolerable-unable-to-perform-my-daily-tasks",
+                        "display": "Intolerable - unable to perform my daily tasks"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "severity-soreness",
+                  "text": "Soreness or irritation",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "no-problems",
+                        "display": "No problems"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "tolerable-not-perfectly-comfortable",
+                        "display": "Tolerable - not perfectly comfortable"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "uncomfortable-irritating-but-does-not-interfere-with-my-day",
+                        "display": "Uncomfortable - irritating but does not interfere with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "bothersome-irritating-and-interferes-with-my-day",
+                        "display": "Bothersome - irritating and interferes with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "intolerable-unable-to-perform-my-daily-tasks",
+                        "display": "Intolerable - unable to perform my daily tasks"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "severity-burning",
+                  "text": "Burning or watering",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "no-problems",
+                        "display": "No problems"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "tolerable-not-perfectly-comfortable",
+                        "display": "Tolerable - not perfectly comfortable"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "uncomfortable-irritating-but-does-not-interfere-with-my-day",
+                        "display": "Uncomfortable - irritating but does not interfere with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "bothersome-irritating-and-interferes-with-my-day",
+                        "display": "Bothersome - irritating and interferes with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "intolerable-unable-to-perform-my-daily-tasks",
+                        "display": "Intolerable - unable to perform my daily tasks"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "linkId": "severity-fatigue",
+                  "text": "Eye fatigue",
+                  "type": "choice",
+                  "required": true,
+                  "answerOption": [
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 0
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "no-problems",
+                        "display": "No problems"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 1
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "tolerable-not-perfectly-comfortable",
+                        "display": "Tolerable - not perfectly comfortable"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 2
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "uncomfortable-irritating-but-does-not-interfere-with-my-day",
+                        "display": "Uncomfortable - irritating but does not interfere with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 3
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "bothersome-irritating-and-interferes-with-my-day",
+                        "display": "Bothersome - irritating and interferes with my day"
+                      }
+                    },
+                    {
+                      "extension": [
+                        {
+                          "url": "http://hl7.org/fhir/StructureDefinition/ordinalValue",
+                          "valueDecimal": 4
+                        }
+                      ],
+                      "valueCoding": {
+                        "system": "https://eye-care.verifier.example/fhir/CodeSystem/eye-care-response",
+                        "code": "intolerable-unable-to-perform-my-daily-tasks",
+                        "display": "Intolerable - unable to perform my daily tasks"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    }
+  ]
+}
