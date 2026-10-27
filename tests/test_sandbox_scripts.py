@@ -1,0 +1,305 @@
+"""The sandbox test-data scripts: scripts/sandbox_test_patient.py and
+scripts/ktc_shl_link.py.
+
+No network here: the vendor sandbox and the KTC harness are faked. What is
+pinned is the part that keeps real records off a third-party host (the HTEST
+gate), the file a receiver decrypts (the JWE), and the shape of the bundle
+the puller builds.
+"""
+
+import importlib.util
+import json
+import time
+from pathlib import Path
+
+import pytest
+
+from r6 import shl
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / 'scripts' / f'{name}.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+link = _load('ktc_shl_link')
+pull = _load('sandbox_test_patient')
+
+V3 = 'http://terminology.hl7.org/CodeSystem/v3-ActReason'
+HTEST = {'system': V3, 'code': 'HTEST', 'display': 'test health data'}
+VENDOR_TEXT = 'Vendor display that must survive the pull verbatim'
+
+
+def _res(rtype, rid, slot='tag'):
+    res = {'resourceType': rtype, 'id': rid}
+    if slot:
+        res['meta'] = {slot: [dict(HTEST)]}
+    return res
+
+
+def _bundle(*resources):
+    return {'resourceType': 'Bundle', 'type': 'collection',
+            'entry': [{'resource': r} for r in resources]}
+
+
+class FakeHarness:
+    def __init__(self, link_id='abcDEF123_-xyz'):
+        self.link_id = link_id
+        self.posted = []
+
+    def __call__(self, jwe, url=link.HARNESS_URL):
+        self.posted.append((url, jwe))
+        return self.link_id
+
+
+# --- ktc_shl_link: the HTEST gate ---------------------------------------------
+
+@pytest.mark.parametrize('bundle', [
+    _bundle(_res('Patient', 'p1'), _res('Condition', 'c1', slot=None)),
+    _bundle(_res('Patient', 'p1'),
+            {'resourceType': 'Condition', 'id': 'c1',
+             'meta': {'tag': [{'system': 'http://example.org', 'code': 'HTEST'}]}}),
+    _bundle(_res('Patient', 'p1'),
+            {'resourceType': 'Condition', 'id': 'c1',
+             'meta': {'tag': [{'system': V3, 'code': 'HTEST2'}]}}),
+    _bundle(),
+    {'resourceType': 'Bundle', 'type': 'collection'},
+    {'resourceType': 'Patient', 'id': 'p1', 'meta': {'tag': [dict(HTEST)]}},
+    {'resourceType': 'Bundle', 'entry': [{'fullUrl': 'urn:uuid:x'}]},
+    [],
+])
+def test_a_bundle_not_all_htest_is_refused_and_nothing_is_posted(bundle):
+    """MUTATION: drop the per-entry check, or let an empty bundle pass as
+    vacuously all-tagged -> red."""
+    harness = FakeHarness()
+    with pytest.raises(link.NotTestData):
+        link.make_link(bundle, post=harness)
+    assert harness.posted == []
+
+
+def test_the_marker_counts_on_meta_security_too():
+    harness = FakeHarness()
+    shlink = link.make_link(_bundle(_res('Patient', 'p1', slot='security')),
+                            post=harness)
+    assert shlink.startswith('shlink:/')
+
+
+def test_main_refuses_an_untagged_file_with_exit_2(tmp_path, monkeypatch, capsys):
+    path = tmp_path / 'b.json'
+    path.write_text(json.dumps(_bundle(_res('Patient', 'p1', slot=None))))
+    harness = FakeHarness()
+    monkeypatch.setattr(link, 'post_jwe', harness)
+    assert link.main([str(path)]) == 2
+    assert harness.posted == []
+    assert 'shlink:/' not in capsys.readouterr().out
+
+
+# --- ktc_shl_link: the file a receiver reads -----------------------------------
+
+def test_the_jwe_round_trips_to_the_bundle_under_the_shlink_key():
+    """The file the harness stores decrypts, under the key in the shlink, to
+    exactly the bundle, the way r6/shl.py (a receiver) reads it."""
+    bundle = _bundle(_res('Patient', 'p1'), _res('Condition', 'c1'))
+    harness = FakeHarness()
+    shlink = link.make_link(bundle, post=harness)
+    (_, jwe), = harness.posted
+    payload = shl.parse_shlink(shlink)
+    plain = shl.decrypt(shl.b64url_decode(payload['key']), jwe)
+    assert json.loads(plain) == bundle
+
+
+def test_the_jwe_is_compact_dir_a256gcm_fhir_json():
+    harness = FakeHarness()
+    link.make_link(_bundle(_res('Patient', 'p1')), post=harness)
+    (_, jwe), = harness.posted
+    parts = jwe.split('.')
+    assert len(parts) == 5 and parts[1] == ''
+    assert json.loads(shl.b64url_decode(parts[0])) == {
+        'alg': 'dir', 'enc': 'A256GCM', 'cty': 'application/fhir+json'}
+    assert len(shl.b64url_decode(parts[2])) == 12
+    assert len(shl.b64url_decode(parts[4])) == 16
+
+
+def test_the_aad_is_the_header_segment():
+    """MUTATION: encrypt with no AAD -> the receiver's decrypt fails -> red."""
+    harness = FakeHarness()
+    shlink = link.make_link(_bundle(_res('Patient', 'p1')), post=harness)
+    (_, jwe), = harness.posted
+    key = shl.b64url_decode(shl.parse_shlink(shlink)['key'])
+    head, _, iv, ct, tag = jwe.split('.')
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    sealed = shl.b64url_decode(ct) + shl.b64url_decode(tag)
+    AESGCM(key).decrypt(shl.b64url_decode(iv), sealed, head.encode('ascii'))
+    with pytest.raises(Exception):
+        AESGCM(key).decrypt(shl.b64url_decode(iv), sealed, None)
+
+
+def test_each_link_has_its_own_key():
+    harness = FakeHarness()
+    a = link.make_link(_bundle(_res('Patient', 'p1')), post=harness)
+    b = link.make_link(_bundle(_res('Patient', 'p1')), post=harness)
+    assert shl.parse_shlink(a)['key'] != shl.parse_shlink(b)['key']
+
+
+def test_the_shlink_is_u_flag_on_the_harness_with_a_label_and_at_most_an_hour():
+    harness = FakeHarness('the-link-id')
+    now = int(time.time())
+    p = shl.parse_shlink(link.make_link(
+        _bundle(_res('Patient', 'p1')), post=harness, now=now))
+    assert p['url'] == link.HARNESS_URL + '/the-link-id'
+    assert p['flag'] == 'U'
+    assert p['exp'] == now + 3600
+    assert p['label'] == link.DEFAULT_LABEL
+    assert harness.posted[0][0] == link.HARNESS_URL
+
+
+@pytest.mark.parametrize('ttl', [3601, 86400, 0, -5])
+def test_a_ttl_outside_one_hour_is_refused(ttl):
+    harness = FakeHarness()
+    with pytest.raises(ValueError):
+        link.make_link(_bundle(_res('Patient', 'p1')), post=harness, ttl=ttl)
+    assert harness.posted == []
+
+
+def test_a_shorter_ttl_and_own_label_are_honoured():
+    now = 1_800_000_000
+    p = shl.parse_shlink(link.make_link(
+        _bundle(_res('Patient', 'p1')), post=FakeHarness(), now=now,
+        ttl=600, label='Connectathon run 3'))
+    assert p['exp'] == now + 600 and p['label'] == 'Connectathon run 3'
+
+
+@pytest.mark.parametrize('link_id', ['', 'a/b', '../x', 'a' * 200, None, 7])
+def test_a_harness_answer_that_is_not_a_plain_id_is_refused(link_id):
+    with pytest.raises(ValueError):
+        link.make_link(_bundle(_res('Patient', 'p1')),
+                       post=FakeHarness(link_id))
+
+
+# --- sandbox_test_patient ------------------------------------------------------
+
+def test_tagging_adds_htest_once_and_keeps_the_vendor_text_verbatim():
+    res = {'resourceType': 'Condition', 'id': 'c1',
+           'meta': {'versionId': '3', 'tag': [{'system': 'x', 'code': 'y'}]},
+           'code': {'coding': [{'code': '1', 'display': VENDOR_TEXT}],
+                    'text': VENDOR_TEXT},
+           'subject': {'reference': 'Patient/p1', 'display': VENDOR_TEXT}}
+    before = json.loads(json.dumps(res))
+    pull.tag_test_data(res)
+    pull.tag_test_data(res)
+    assert res['meta']['tag'] == before['meta']['tag'] + [HTEST]
+    del res['meta'], before['meta']
+    assert res == before
+
+
+class FakeResponse:
+    def __init__(self, status, body=None):
+        self.status_code = status
+        self._body = body or {}
+
+    def json(self):
+        return self._body
+
+
+class FakeSession:
+    """Answers each GET from a queue keyed by resource type."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.calls = []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.calls.append((url, dict(params or {})))
+        rtype = url.rstrip('/').rsplit('/', 2)[-2 if '/Patient/' in url else -1]
+        return self.answers[rtype].pop(0)
+
+
+def _search(rtype, n, extra=()):
+    entries = [{'resource': {'resourceType': rtype, 'id': f'{rtype}-{i}',
+                             'code': {'text': VENDOR_TEXT}}}
+               for i in range(n)]
+    entries += [{'resource': r} for r in extra]
+    return FakeResponse(200, {'resourceType': 'Bundle', 'type': 'searchset',
+                              'entry': entries})
+
+
+def _answers(**over):
+    base = {
+        'Patient': [FakeResponse(200, {'resourceType': 'Patient', 'id': 'p1'})],
+        'Condition': [_search('Condition', 2)],
+        'AllergyIntolerance': [_search('AllergyIntolerance', 1)],
+        'MedicationRequest': [_search('MedicationRequest', 1)],
+        'Immunization': [_search('Immunization', 1)],
+        'Coverage': [_search('Coverage', 0)],
+        'Observation': [_search('Observation', 3)],
+    }
+    base.update(over)
+    return base
+
+
+def test_the_bundle_is_a_tagged_collection_of_the_check_in_types():
+    session = FakeSession(_answers())
+    bundle, counts = pull.build_bundle('oracle', 'p1', session=session)
+    assert bundle['resourceType'] == 'Bundle' and bundle['type'] == 'collection'
+    types = [e['resource']['resourceType'] for e in bundle['entry']]
+    assert types.count('Patient') == 1 and 'Observation' not in types
+    assert counts == {'Patient': 1, 'Condition': 2, 'AllergyIntolerance': 1,
+                      'MedicationRequest': 1, 'Immunization': 1, 'Coverage': 0}
+    # Every entry clears the link script's gate, and keeps the vendor text.
+    link.check_test_only(bundle)
+    assert all(e['resource']['code']['text'] == VENDOR_TEXT
+               for e in bundle['entry'] if 'code' in e['resource'])
+    assert all(e['fullUrl'].startswith(pull.SOURCES['oracle']['base'] + '/')
+               for e in bundle['entry'])
+
+
+def test_oracle_condition_search_is_bounded_and_problem_list_only():
+    session = FakeSession(_answers())
+    pull.build_bundle('oracle', 'p1', session=session)
+    params = {u.rsplit('/', 1)[-1]: p for u, p in session.calls}
+    assert params['Condition'] == {'patient': 'p1',
+                                   'category': 'problem-list-item',
+                                   '_count': '20'}
+    assert all(p.get('_count') == '20' for u, p in session.calls
+               if not u.rsplit('/', 2)[-2] == 'Patient')
+
+
+def test_labs_are_opt_in():
+    session = FakeSession(_answers())
+    bundle, counts = pull.build_bundle('oracle', 'p1', session=session,
+                                       labs=True)
+    assert counts['Observation'] == 3
+    obs = [p for u, p in session.calls if u.endswith('/Observation')]
+    assert obs == [{'patient': 'p1', 'category': 'laboratory', '_count': '20'}]
+
+
+def test_a_504_is_retried_once_then_the_type_is_left_out():
+    session = FakeSession(_answers(
+        Immunization=[FakeResponse(504), FakeResponse(504)],
+        Condition=[FakeResponse(504), _search('Condition', 2)]))
+    bundle, counts = pull.build_bundle('oracle', 'p1', session=session)
+    assert counts['Condition'] == 2
+    assert counts['Immunization'] is None
+    assert sum(u.endswith('/Immunization') for u, _ in session.calls) == 2
+
+
+def test_a_vendor_that_ignores_count_is_cut_to_twenty_and_strays_dropped():
+    """Oracle answered 1503 Conditions to `_count=20`; ingest takes 500."""
+    stray = {'resourceType': 'OperationOutcome', 'id': 'oo'}
+    session = FakeSession(_answers(
+        Condition=[_search('Condition', 45, extra=[stray])]))
+    bundle, counts = pull.build_bundle('oracle', 'p1', session=session)
+    assert counts['Condition'] == 20
+    assert 'OperationOutcome' not in {
+        e['resource']['resourceType'] for e in bundle['entry']}
+
+
+def test_no_patient_no_bundle():
+    session = FakeSession(_answers(Patient=[FakeResponse(404), ]))
+    with pytest.raises(pull.SandboxError):
+        pull.build_bundle('oracle', 'p1', session=session)
