@@ -7,8 +7,10 @@ gate), the file a receiver decrypts (the JWE), and the shape of the bundle
 the puller builds.
 """
 
+import http.server
 import importlib.util
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -403,12 +405,16 @@ def test_the_sandbox_session_ignores_env():
     assert pull.new_session().trust_env is False
 
 
-def _main_ingest(monkeypatch, tmp_path, tenant, engine):
+INGESTED = {'ingested': 1, 'skipped': 0, 'failed': 0}
+
+
+def _main_ingest(monkeypatch, tmp_path, tenant, engine, answer=(200, INGESTED)):
     built, sent = [], []
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'synthetic-secret')
     monkeypatch.setattr(pull, 'build_bundle', lambda *a, **k: built.append(1)
                         or (_bundle(_res('Patient', 'p1')), {'Patient': 1}))
     monkeypatch.setattr(pull, 'ingest',
-                        lambda *a, **k: sent.append(a) or (200, {}))
+                        lambda *a, **k: sent.append(a) or answer)
     try:
         rc = pull.main(['--source', 'smart', '--out', str(tmp_path / 'b.json'),
                         '--ingest', engine, '--tenant', tenant])
@@ -439,13 +445,141 @@ def test_ingest_takes_a_sandbox_tenant_and_a_safe_engine(
     assert sent[0][2] == tenant
 
 
-@pytest.mark.parametrize('tenant', ['sandbox-smart', 'sandbox-epic-x',
-                                    'sandbox-smart-x\n', 'Sandbox-smart-x'])
+@pytest.mark.parametrize('tenant', [
+    'sandbox-smart', 'sandbox-epic-x', 'sandbox-smart-x\n', 'Sandbox-smart-x',
+    # Real tenant shapes the internal secret also reaches.
+    'clinician-0a1b2c3d', 'desktop-demo', 'careagents:agent_0123abcd'])
 def test_ingest_refuses_a_tenant_off_the_sandbox_pattern(
         monkeypatch, tmp_path, tenant):
     rc, built, sent = _main_ingest(monkeypatch, tmp_path, tenant,
                                    'http://localhost:5099')
     assert rc != 0 and built == [] and sent == []
+
+
+def test_ingest_without_the_secret_fails_before_any_request(
+        monkeypatch, tmp_path):
+    rc, built, sent = _main_ingest(monkeypatch, tmp_path, 'sandbox-smart-x',
+                                   'http://localhost:5099')
+    assert rc == 0  # control: the secret is set by the helper
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', ' ')
+    built.clear()
+    sent.clear()
+    with pytest.raises(SystemExit) as exc:
+        pull.main(['--source', 'smart', '--out', str(tmp_path / 'b.json'),
+                   '--ingest', 'http://localhost:5099',
+                   '--tenant', 'sandbox-smart-x'])
+    assert exc.value.code != 0 and built == [] and sent == []
+
+
+@pytest.mark.parametrize('answer', [
+    (200, {'ingested': 0, 'skipped': 0, 'failed': 0}),
+    (200, {'ingested': 2, 'skipped': 0, 'failed': 3}),
+    (200, {}),
+    (200, {'ingested': 2, 'skipped': 0}),
+    (200, {'ingested': True, 'failed': 0}),
+    (200, ['not', 'an', 'object']),
+    (500, INGESTED),
+])
+def test_an_ingest_that_did_not_take_exits_1(monkeypatch, tmp_path, answer):
+    """A 200 alone is not success: nothing ingested, any failure, or a
+    missing count all exit 1."""
+    rc, _, sent = _main_ingest(monkeypatch, tmp_path, 'sandbox-smart-x',
+                               'http://localhost:5099', answer)
+    assert len(sent) == 1 and rc == 1
+
+
+def test_a_type_cut_to_per_type_says_so(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(pull, 'new_session', lambda: FakeSession(
+        _answers(Condition=[_search('Condition', 45)])))
+
+    rc = pull.main(['--source', 'oracle', '--out', str(tmp_path / 'b.json')])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert 'Condition cut to 20 of 45 on the page' in out
+    assert 'AllergyIntolerance cut' not in out
+
+
+REAL_PATIENT = {'resourceType': 'Patient', 'id': 'real-1',
+                'name': [{'family': 'CANARY-Real-Family',
+                          'given': ['CANARY-Real-Given']}]}
+
+
+@pytest.mark.parametrize('bundle', [
+    pytest.param(_bundle(dict(_res('Condition', 'c1'),
+                              contained=[REAL_PATIENT])),
+                 id='untagged-contained-resource'),
+    pytest.param(_bundle(dict(_res('Bundle', 'b1'), type='collection',
+                              entry=[{'resource': REAL_PATIENT}])),
+                 id='nested-bundle-of-untagged-entries'),
+    pytest.param({'resourceType': 'Bundle', 'type': 'collection', 'entry': [
+        {'resource': _res('Patient', 'p1'), 'search': REAL_PATIENT}]},
+        id='untagged-record-beside-the-resource'),
+    pytest.param({'resourceType': 'Bundle', 'type': 'collection',
+                  'signature': REAL_PATIENT,
+                  'entry': [{'resource': _res('Patient', 'p1')}]},
+        id='untagged-record-at-bundle-level'),
+])
+def test_an_untagged_record_anywhere_in_the_file_is_refused(bundle):
+    """The gate checked only entry[].resource.meta at 473ccc72, and the
+    whole file went to the third-party harness."""
+    harness = FakeHarness()
+    with pytest.raises(link.NotTestData):
+        link.make_link(bundle, post=harness)
+    assert harness.posted == []
+
+
+class _Sink(http.server.BaseHTTPRequestHandler):
+    seen = []
+
+    def _any(self):
+        _Sink.seen.append(self.headers.get('X-Internal-Secret'))
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{}')
+
+    do_GET = do_POST = _any
+
+    def log_message(self, *a):
+        pass
+
+
+def _redirector(code, target_port, seen):
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.headers.get('X-Internal-Secret'))
+            self.send_response(code)
+            self.send_header('Location', f'http://localhost:{target_port}/x')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    return Redirect
+
+
+@pytest.mark.parametrize('code', [302, 307])
+def test_ingest_does_not_forward_the_internal_secret_across_a_redirect(code):
+    """Over real sockets: the engine URL answers a redirect to another
+    host. The secret reaches the engine URL and nothing else. MUTATION:
+    drop `allow_redirects=False` in ingest() -> red."""
+    _Sink.seen, at_engine = [], []
+    sink = http.server.HTTPServer(('127.0.0.1', 0), _Sink)
+    red = http.server.HTTPServer(('127.0.0.1', 0),
+                                 _redirector(code, sink.server_port, at_engine))
+    for srv in (sink, red):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        status, _ = pull.ingest({'resourceType': 'Bundle', 'entry': []},
+                                f'http://127.0.0.1:{red.server_port}',
+                                'sandbox-smart-x', 'CANARY-internal-secret')
+    finally:
+        sink.shutdown()
+        red.shutdown()
+    assert status == code
+    assert at_engine == ['CANARY-internal-secret']   # the engine was hit
+    assert _Sink.seen == []                           # the other host was not
 
 
 def _oracle_allergy_with_contained_role():

@@ -43,7 +43,8 @@ No request follows a redirect, and env proxies and CA bundles are ignored.
 Public sandbox patients are synthetic, but this treats them as data
 anyway: it prints counts per type and the output path, never a resource.
 
-Exit status: 0 written (and ingested); 1 no Patient or the ingest failed;
+Exit status: 0 written (and ingested); 1 no Patient, or the ingest did not
+answer 200 with ingested > 0 and failed == 0;
 3 written, but a type's search failed twice and it is left out.
 
 Usage:
@@ -190,22 +191,28 @@ def _get(session, url, params=None):
     return None
 
 
-def _search(session, base, rtype, params):
+def _search(session, base, rtype, params, cut=None):
+    """Up to PER_TYPE resources of `rtype` from one page. When the page had
+    more, `cut[rtype]` is set to how many it had."""
     body = _get(session, f'{base}/{rtype}', params)
     if not isinstance(body, dict) or body.get('resourceType') != 'Bundle':
         return None
     found = [e.get('resource') for e in body.get('entry') or []
              if isinstance(e, dict)]
     # A searchset may carry an OperationOutcome or an _include'd resource.
-    return [r for r in found
-            if isinstance(r, dict) and r.get('resourceType') == rtype][:PER_TYPE]
+    found = [r for r in found
+             if isinstance(r, dict) and r.get('resourceType') == rtype]
+    if len(found) > PER_TYPE and cut is not None:
+        cut[rtype] = len(found)
+    return found[:PER_TYPE]
 
 
 def build_bundle(source, patient_id, *, session=None, labs=False,
-                 dropped_contained=None):
+                 dropped_contained=None, cut=None):
     """(bundle, counts): the tagged collection Bundle, and the count kept
     per type (None for a type whose search failed). Contained resources
-    dropped are counted by type into `dropped_contained`, if given."""
+    dropped are counted by type into `dropped_contained`, and a type cut
+    to PER_TYPE maps to its page size in `cut`, each if given."""
     if dropped_contained is None:
         dropped_contained = Counter()
     if session is None:
@@ -225,7 +232,7 @@ def build_bundle(source, patient_id, *, session=None, labs=False,
         searches.append(('Observation', {'category': 'laboratory'}))
     for rtype, extra in searches:
         params = {'patient': patient_id, **extra, '_count': str(PER_TYPE)}
-        found = _search(session, base, rtype, params)
+        found = _search(session, base, rtype, params, cut)
         counts[rtype] = None if found is None else len(found)
         resources.extend(found or [])
 
@@ -259,6 +266,16 @@ def ingest(bundle, engine, tenant, secret):
     return resp.status_code, body
 
 
+def _count(body, key):
+    n = body.get(key)
+    return n if isinstance(n, int) and not isinstance(n, bool) else None
+
+
+def _ingest_succeeded(body):
+    ingested, failed = _count(body, 'ingested'), _count(body, 'failed')
+    return ingested is not None and ingested > 0 and failed == 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--source', choices=sorted(SOURCES), required=True)
@@ -280,12 +297,14 @@ def main(argv=None):
         parser.error('--tenant must match ^sandbox-(oracle|smart)-[a-z0-9-]+$')
     if args.ingest and not check_engine_url(args.ingest):
         parser.error('--ingest must be https (http only for localhost)')
+    if args.ingest and not secret.strip():
+        parser.error('--ingest needs INTERNAL_TOKEN_MINT_SECRET')
 
     patient_id = args.patient or SOURCES[args.source]['patient']
     try:
-        dropped = Counter()
+        dropped, cut = Counter(), {}
         bundle, counts = build_bundle(args.source, patient_id, labs=args.labs,
-                                      dropped_contained=dropped)
+                                      dropped_contained=dropped, cut=cut)
     except SandboxError as e:
         print(f'{args.source}: {e}', file=sys.stderr)
         return 1
@@ -293,19 +312,25 @@ def main(argv=None):
     Path(args.out).write_text(json.dumps(bundle, indent=2), encoding='utf-8')
     for rtype, n in counts.items():
         print(f'  {rtype:<20} {"search failed, left out" if n is None else n}')
+    for rtype, n in cut.items():
+        print(f'  {rtype} cut to {PER_TYPE} of {n} on the page')
     for rtype, n in sorted(dropped.items()):
         print(f'  contained {rtype} dropped: {n}')
     print(f'{len(bundle["entry"])} resources -> {args.out}')
 
     if args.ingest:
         status, body = ingest(bundle, args.ingest, args.tenant, secret)
+        if not isinstance(body, dict):
+            body = {}
         # The answer carries counts and stable error codes, never content.
         print(f'ingest: HTTP {status} ingested={body.get("ingested")} '
               f'skipped={body.get("skipped")} failed={body.get("failed")}')
         for err in body.get('errors') or []:
             print(f'  entry {err.get("index")}: {err.get("resourceType")} '
                   f'{err.get("code")}')
-        if status != 200:
+        # A 200 is not success by itself: the engine must say it ingested
+        # something and failed nothing. A missing count is not examined.
+        if status != 200 or not _ingest_succeeded(body):
             return 1
     failed = [t for t, n in counts.items() if n is None]
     return 3 if failed else 0

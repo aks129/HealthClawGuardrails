@@ -32,7 +32,8 @@ MedicationRequest, Immunization and Coverage (when the sandbox has one). Add
 `--labs` to also pull `category=laboratory` Observations. The script searches
 each type once with `_count=20` and keeps at most 20 results, because Oracle
 ignores `_count` on Condition: it returned 1503 Conditions for one patient,
-and ingest accepts at most 500 entries. On Oracle, Condition is also filtered
+and ingest accepts at most 500 entries. A type cut this way prints
+`<Type> cut to 20 of <N> on the page`. On Oracle, Condition is also filtered
 by `category=problem-list-item`. SMART's Conditions have no category, so that
 filter is not used there.
 
@@ -66,11 +67,14 @@ INTERNAL_TOKEN_MINT_SECRET=<same secret> uv run python scripts/sandbox_test_pati
 `--ingest` posts `{"bundle": ...}` to `POST /r6/fhir/internal/ingest-bundle`
 with `X-Tenant-Id` and `X-Internal-Secret`. The secret is read from
 `INTERNAL_TOKEN_MINT_SECRET` and is never a command-line flag. The tenant
-must match `^sandbox-(oracle|smart)-[a-z0-9-]+$`, and the engine URL must be
-https (plain http only for `localhost` and `127.0.0.1`). Both are checked
-before the sandbox is read. No request the script makes follows a redirect,
-and proxy and CA-bundle environment variables are ignored. The script
-prints the counts and error codes from the engine's response.
+must match `^sandbox-(oracle|smart)-[a-z0-9-]+$`, the engine URL must be
+https (plain http only for `localhost` and `127.0.0.1`), and the secret must
+be set. All three are checked before the sandbox is read. No request the
+script makes follows a redirect, and proxy and CA-bundle environment
+variables are ignored. The script prints the counts and error codes from
+the engine's response. It exits 1 unless the engine answers 200 with an
+integer `ingested` above 0 and `failed` equal to 0; a missing count counts
+as a failure.
 
 To run the export afterwards, mint a token with
 `POST /r6/fhir/internal/step-up-token` using `purpose` `ktc` or `checkin`
