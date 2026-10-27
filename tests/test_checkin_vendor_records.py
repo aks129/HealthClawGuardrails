@@ -315,6 +315,72 @@ def test_a_patient_keeps_only_its_rebuilt_race_extension(app, client):
     assert v.CANARY not in resp.get_data(as_text=True)
 
 
+_DAR = {'extension': [{
+    'url': 'http://hl7.org/fhir/StructureDefinition/data-absent-reason',
+    'valueCode': 'unknown'}]}
+
+
+def test_a_claimed_record_whose_required_value_was_only_an_extension_is_held(
+        app, client):
+    """A primitive given only as data-absent-reason (`_occurrenceDateTime`,
+    `_gender`) has no value once the export strips `_` keys, so the
+    claimed record no longer meets its claim (#1062 re-check).
+
+    MUTATION: skip the re-check of claimed records the profile changed ->
+    red."""
+    imm = _claimed(v.oracle_immunization('dar-imm', '207'),
+                   'us-core-immunization')
+    imm.pop('occurrenceDateTime')
+    imm['_occurrenceDateTime'] = _DAR
+    pt = _claimed(v.patient(), 'us-core-patient')
+    pt.pop('gender')
+    pt['_gender'] = _DAR
+    f.seed(app, pt, imm)
+    resp = _export(client)
+    text = resp.get_data(as_text=True)
+    assert 'dar-imm' not in text
+    assert f.resources(resp, 'Patient') == []
+    assert json.loads(resp.headers['X-Records-Held']) == {
+        'Immunization': {'missing-details': 1},
+        'Patient': {'no-gender': 1}}
+
+
+def _empties(obj, path='$'):
+    if isinstance(obj, dict):
+        if not obj:
+            yield path
+        for key, value in obj.items():
+            yield from _empties(value, f'{path}.{key}')
+    elif isinstance(obj, list):
+        if not obj:
+            yield path
+        for i, value in enumerate(obj):
+            yield from _empties(value, f'{path}[{i}]')
+
+
+@pytest.mark.parametrize('profile', ['checkin', 'ktc'])
+def test_no_empty_object_or_list_leaves(app, client, profile):
+    """FHIR ele-1: an element has a value or children. A requester that
+    carried only an extension, and an empty manufacturer, do not go out as
+    `{}`.
+
+    MUTATION: skip the empty-element prune in _checkin_profile -> red."""
+    med = v.oracle_medication('em-med')
+    med['requester'] = {'extension': [{'url': 'urn:example:x',
+                                       'valueString': v.CANARY}]}
+    imm = v.oracle_immunization('em-imm', '207')
+    imm['manufacturer'] = {}
+    imm['reasonCode'] = []
+    f.seed(app, *v.oracle_records(), med, imm)
+    resp = (_export(client) if profile == 'checkin'
+            else _ktc_export(client))
+    assert resp.status_code == 200
+    out = {r['id']: r for r in f.resources(resp)}
+    assert 'requester' not in out['em-med']
+    assert 'manufacturer' not in out['em-imm']
+    assert list(_empties(resp.get_json()['entry'])) == []
+
+
 def test_ktc_holds_entered_in_error_records_too(app, client):
     f.seed(app, v.patient(),
            _eie(v.oracle_condition('eie-cond', '91302008', True)))

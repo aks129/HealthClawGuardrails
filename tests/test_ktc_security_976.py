@@ -55,7 +55,7 @@ def _hostile_records():
     # Was modifierExtension: since the #1062 security review a record that
     # carries one is held whole (tests/test_checkin_vendor_records.py), so
     # the text it carried now rides a plain extension, which is stripped.
-    pt['_gender'] = {'extension': _ext()}
+    pt['_birthDate'] = {'extension': _ext()}
     pt['link'] = [{'other': {'reference': f'Patient/{f.SIBLING}',
                              'display': C}, 'type': 'seealso'}]
     pt['patientName'] = C  # non-FHIR (FHI-66)

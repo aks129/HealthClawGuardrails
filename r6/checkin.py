@@ -188,31 +188,40 @@ def drop_dangling_references(node, present):
     `present` (#1058): an Encounter, Practitioner or Location the bundle
     does not carry, a `#contained` id after `contained` went, an absolute
     URL. Dropped rather than kept as a pointer a receiver cannot follow, the
-    way the payor and subscriber checks already drop theirs. A list item
-    left empty goes, then a list left empty, and so does a backbone element
-    whose required reference went (_REQUIRED_REFERENCE)."""
-    if isinstance(node, list):
-        for item in node:
-            drop_dangling_references(item, present)
-        return
-    if not isinstance(node, dict):
-        return
-    for key in list(node):
-        value = node[key]
-        if _dangles(value, present):
-            del node[key]
-        elif isinstance(value, list):
-            kept = [i for i in value if not _dangles(i, present) and not (
-                isinstance(i, dict) and any(_dangles(i.get(k), present)
-                                            for k in _REQUIRED_REFERENCE))]
-            drop_dangling_references(kept, present)
-            kept = [i for i in kept if i != {}]
-            if kept:
-                node[key] = kept
-            else:
-                del node[key]
+    way the payor and subscriber checks already drop theirs. A backbone
+    element whose required reference went goes too (_REQUIRED_REFERENCE),
+    and then every object or list left empty, children first.
+
+    An explicit stack, not recursion, so a record nested past the frame
+    limit cannot turn the export into a 500 (#1062 re-check, F5)."""
+    order = []
+    stack = [node]
+    while stack:
+        item = stack.pop()
+        order.append(item)
+        if isinstance(item, dict):
+            for key in list(item):
+                value = item[key]
+                if _dangles(value, present):
+                    del item[key]
+                elif isinstance(value, list):
+                    value[:] = [i for i in value if not _dangles(
+                        i, present) and not (isinstance(i, dict) and any(
+                            _dangles(i.get(k), present)
+                            for k in _REQUIRED_REFERENCE))]
+                    stack.append(value)
+                elif isinstance(value, dict):
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(i for i in item if isinstance(i, (dict, list)))
+    for item in reversed(order):
+        if isinstance(item, dict):
+            for key in [k for k, v in item.items()
+                        if isinstance(v, (dict, list)) and not v]:
+                del item[key]
         else:
-            drop_dangling_references(value, present)
+            item[:] = [v for v in item
+                       if not (isinstance(v, (dict, list)) and not v)]
 
 
 def _payor_ids(resource):
@@ -257,9 +266,10 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
     References naming nothing in the bundle are dropped
     (drop_dangling_references), except the named patient's: a Condition's
     `subject` is required, and the clinic knows whose check-in it is. Any
-    record a drop changes is checked again: an unclaimed one by `classify`,
-    one claimed on arrival for the required references the drop could take
-    (`lost_reference`), so no claim goes out on a record our drop broke."""
+    record the export changes is checked again: an unclaimed one by
+    `classify`, one claimed on arrival for the required elements and
+    references the export's drops and strips could take (`lost_required`),
+    so no claim goes out on a record the export broke."""
     rows = R6Resource.query.filter(
         R6Resource.tenant_id == tenant.id,
         R6Resource.is_deleted == False,  # noqa: E712
@@ -292,13 +302,18 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
             hold(row.resource_type, reason)
             continue
         claimed = has_claim(stored)
+        # Whether a claimed record met its required elements as stored (a
+        # value given only as `_x` counts): if it did and the export's own
+        # strips and drops take one away, it is held below.
+        met = claimed and _us_core_profiles.lost_required(
+            stored, as_stored=True) is None
         resource = profile(
             stored, patient_id=patient_id, stored_meta=stored_meta(row))
         if full_url(resource) is not None:
-            candidates.append((resource, claimed))
+            candidates.append((resource, claimed, met))
 
     payor_ids = set()
-    for resource, _ in candidates:
+    for resource, _, _ in candidates:
         payor_ids |= _payor_ids(resource)
     orgs = []
     if payor_ids:
@@ -313,15 +328,17 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
             if full_url(resource) is not None:
                 orgs.append(resource)
 
-    present = {own} | {_key(r) for r, _ in candidates} | {_key(o) for o in orgs}
+    present = ({own} | {_key(r) for r, _, _ in candidates}
+               | {_key(o) for o in orgs})
     kept = []
-    for resource, claimed in candidates:
-        changed = _drop_changed(resource, present)
+    for resource, claimed, met in candidates:
+        drop_dangling_references(resource, present)
         if claimed:
-            # The claim arrived with the record; a drop that took a
-            # required reference (a Coverage's only payor) breaks it.
-            reason = (_us_core_profiles.lost_reference(resource)
-                      if changed else None)
+            # The claim arrived with the record; what the export took from
+            # it (a Coverage's only payor, a gender given only as
+            # `_gender`) can break it. One that never met it upstream is
+            # the upstream's claim, sent as before.
+            reason = _us_core_profiles.lost_required(resource) if met else None
             if reason:
                 hold(resource['resourceType'], reason)
                 continue
@@ -335,7 +352,7 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
                 if not isinstance(meta, dict):
                     meta = resource['meta'] = {}
                 meta['profile'] = [claim]
-        kept.append((resource, claimed))
+        kept.append((resource, claimed, met))
 
     # A held record takes its payor with it, and nothing kept may point at
     # it; a record the drop changes is checked again, as above, until
@@ -343,26 +360,27 @@ def collect(tenant, types, patient_id, profile, *, stamp=True):
     # named by reference.
     while True:
         payor_ids = set()
-        for resource, _ in kept:
+        for resource, _, _ in kept:
             payor_ids |= _payor_ids(resource)
         orgs = [o for o in orgs if o['id'] in payor_ids]
-        present = ({own} | {_key(r) for r, _ in kept}
+        present = ({own} | {_key(r) for r, _, _ in kept}
                    | {_key(o) for o in orgs})
         still = []
-        for resource, claimed in kept:
+        for resource, claimed, met in kept:
             reason = None
             if _drop_changed(resource, present):
-                reason = (_us_core_profiles.lost_reference(resource)
-                          if claimed
-                          else _us_core_profiles.classify(resource)[1])
+                if not claimed:
+                    reason = _us_core_profiles.classify(resource)[1]
+                elif met:
+                    reason = _us_core_profiles.lost_required(resource)
             if reason:
                 hold(resource['resourceType'], reason)
             else:
-                still.append((resource, claimed))
+                still.append((resource, claimed, met))
         if len(still) == len(kept):
             break
         kept = still
-    kept = [r for r, _ in kept] + orgs
+    kept = [r for r, _, _ in kept] + orgs
 
     entries = [_entry(r) for r in kept]
     return entries, {r['resourceType'] for r in kept}, held

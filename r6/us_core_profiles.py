@@ -325,11 +325,18 @@ def _concept_malformed(value):
 
 
 def _has_modifier_extension(node):
-    if isinstance(node, list):
-        return any(_has_modifier_extension(i) for i in node)
-    if isinstance(node, dict):
-        return bool(node.get('modifierExtension')) or any(
-            _has_modifier_extension(v) for v in node.values())
+    """A non-empty modifierExtension at any depth. An explicit stack, not
+    recursion: a record nested past the frame limit must not raise
+    (#1062 re-check, F5)."""
+    stack = [node]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if item.get('modifierExtension'):
+                return True
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
     return False
 
 
@@ -382,6 +389,48 @@ def lost_reference(resource):
         if not any(_has_ref(i) for i in items):
             return reason
     return None
+
+
+#: The elements each type requires, by presence alone: (keys, reason),
+#: met when any of the keys has a value. What the export's own stripping
+#: (`_` keys, extensions, empty elements) could take from a claimed record.
+_REQUIRED_ELEMENTS = {
+    'Patient': ((('identifier',), 'no-identifier'), (('name',), 'no-name'),
+                (('gender',), 'no-gender')),
+    'Condition': ((('code',), 'no-standard-code'),),
+    'AllergyIntolerance': ((('code',), 'no-standard-code'),),
+    'MedicationRequest': (
+        (('medicationCodeableConcept', 'medicationReference'),
+         'no-standard-code'),
+        (('status',), 'missing-details'), (('intent',), 'missing-details')),
+    'Immunization': (
+        (('vaccineCode',), 'no-standard-code'),
+        (('status',), 'missing-details'),
+        (('occurrenceDateTime', 'occurrenceString'), 'missing-details')),
+    'Coverage': ((('status',), 'missing-details'),),
+}
+
+
+def lost_required(resource, *, as_stored=False):
+    """The reason code when a record that arrived claimed lacks an element
+    or reference its type requires; else None.
+
+    The re-check for what the export itself took away (#1062): a
+    dangling reference dropped, a value given only as `_x` (a
+    data-absent-reason) stripped, an element left empty and pruned. The
+    claim was the upstream's, so only these are checked, not the rest of
+    `classify`. The caller holds a record only when it met these
+    `as_stored` (where `_x` counts as present) and not as it will leave."""
+    def present(key):
+        return (resource.get(key) not in (None, '', [], {})
+                or (as_stored and resource.get('_' + key)
+                    not in (None, '', [], {})))
+
+    for keys, reason in _REQUIRED_ELEMENTS.get(
+            resource.get('resourceType'), ()):
+        if not any(present(k) for k in keys):
+            return reason
+    return lost_reference(resource)
 
 
 _CHECKS = {

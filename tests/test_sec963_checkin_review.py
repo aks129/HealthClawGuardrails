@@ -5,6 +5,8 @@ finding is fixed. The rest pin attacks that the PR already refuses.
 All data is synthetic (tests/checkin_fixtures.py).
 """
 
+import json
+
 import pytest
 
 from r6 import checkin as checkin_mod
@@ -138,9 +140,14 @@ def test_a_sibling_subscriber_and_patient_payor_are_dropped(app, client):
                     {'reference': 'https://evil.example/Organization/x'}]
     f.seed(app, f.patient(), cov, f.organization())
     resp = f.export(client, f.token(client, ['Coverage']), ['Coverage'])
-    c, = f.resources(resp, 'Coverage')
-    assert 'subscriber' not in c and 'payor' not in c
+    # Since #1062 the claimed Coverage left with no payor is held whole
+    # (no-insurer) rather than sent under a claim it no longer meets; the
+    # sibling and the unresolvable payors still never leave.
+    assert f.resources(resp, 'Coverage') == []
     assert f.resources(resp, 'Organization') == []
+    assert f.SIBLING not in resp.get_data(as_text=True)
+    assert json.loads(resp.headers['X-Records-Held']) == {
+        'Coverage': {'no-insurer': 1}}
 
 
 def test_a_contained_related_person_never_leaves(app, client):

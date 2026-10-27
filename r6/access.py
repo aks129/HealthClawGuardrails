@@ -1762,19 +1762,35 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
     # and ethnicity, rebuilt from empty by allow-list (_patient_extensions),
     # go back on afterwards. A record carrying a modifierExtension is held
     # before it gets here (r6/checkin.py collect).
-    def strip_extensions(node):
-        if isinstance(node, list):
-            for item in node:
-                strip_extensions(item)
-        elif isinstance(node, dict):
+    #
+    # Then every object or list left empty goes, children first (FHIR
+    # ele-1: a requester that carried only an extension is not sent as
+    # `{}`). A required element that goes this way is caught by collect's
+    # re-check. Both walks use an explicit stack, not recursion: a record
+    # nested deeper than the interpreter's frame limit must not turn the
+    # export into a 500 (#1062 re-check, F5).
+    order = []
+    stack = [res]
+    while stack:
+        node = stack.pop()
+        order.append(node)
+        if isinstance(node, dict):
             for key in [k for k in node if isinstance(k, str) and (
                     k.startswith('_')
                     or k in ('extension', 'modifierExtension'))]:
                 node.pop(key)
-            for value in node.values():
-                strip_extensions(value)
-
-    strip_extensions(res)
+            stack.extend(v for v in node.values()
+                         if isinstance(v, (dict, list)))
+        elif isinstance(node, list):
+            stack.extend(v for v in node if isinstance(v, (dict, list)))
+    for node in reversed(order):
+        if isinstance(node, dict):
+            for key in [k for k, v in node.items()
+                        if isinstance(v, (dict, list)) and not v]:
+                node.pop(key)
+        else:
+            node[:] = [v for v in node
+                       if not (isinstance(v, (dict, list)) and not v)]
     if rtype == 'Patient' and exts:
         res['extension'] = exts
     # FHI-66 slot: a per-resource element allow-list belongs here, the one
