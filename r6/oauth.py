@@ -772,7 +772,7 @@ def register_oauth_routes(blueprint):
         audience = resource or fhir_resource()
         policy = policies[audience]
 
-        from r6.command_center.access import is_public
+        from r6.tenancy import is_public
         if policy == 'careagents':
             # §13.3 outbound: park the request, send the browser to sign in
             # and decide. Nothing about the client rides in the URL; the

@@ -107,7 +107,7 @@ def purge_tenant(tenant_id):
     # Not for a public tenant: purging one is open by design (the demo
     # resets), and a permanent tombstone would close it for good.
     from models import db
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     from r6.fasten.models import TenantClosure
     if (not is_public(tenant_id)
             and db.session.get(TenantClosure, tenant_id) is None):

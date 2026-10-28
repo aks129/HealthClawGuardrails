@@ -49,7 +49,7 @@ from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
 from r6.internal_auth import internal_secret_presented
-from r6.brief.engine import MEDICINE_UNNAMED
+from r6.actions.vocabulary import MEDICINE_UNNAMED
 from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire

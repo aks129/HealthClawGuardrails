@@ -18,7 +18,7 @@ sufficient for SMS bodies. The booking-reason field must ADDITIONALLY use a
 structured question set or a classifier held to a zero-false-negative eval
 gate — that lives in the booking rail (post-webinar), not here.
 """
-from r6.smbp.triage import SYMPTOMS
+from r6.actions.vocabulary import SYMPTOMS
 
 # Expansion beyond cardiac/stroke: mental-health crisis, anaphylaxis, OB.
 # triage.SYMPTOMS covers the BP-specific 7-item screen (chest pain, one-sided

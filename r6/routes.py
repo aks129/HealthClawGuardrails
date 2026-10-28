@@ -1806,7 +1806,7 @@ def _internal_mint_authorized(tenant_id):
     - Fail-closed: if `INTERNAL_TOKEN_MINT_SECRET` is unset, non-public mints are
       REFUSED in production and allowed only in dev (backward compatible locally).
     """
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     if is_public(tenant_id):
         return True
     mint_secret = internal_mint_secret()
@@ -2073,7 +2073,7 @@ def fasten_revoke_route():
         tenant_id = tenant_from_request(sources=(TenantSource.BODY,)).id
     except TenantRejected:
         return jsonify({'error': 'tenant_id is required'}), 400
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     if is_public(tenant_id):  # never closed; purge leaves them open too
         return jsonify({'error': 'public tenant cannot be revoked'}), 422
     from r6.fasten.revoke import revoke_tenant

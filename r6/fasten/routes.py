@@ -667,7 +667,7 @@ def agent_access(org_connection_id):
     if tenant_closed(tenant_id):
         return jsonify({'error': 'connection disconnected'}), 403
 
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     if is_public(tenant_id):
         return jsonify({'error': 'public tenant — no token needed'}), 409
     if conn.agent_token_issued_at is not None:
