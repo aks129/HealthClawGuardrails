@@ -152,7 +152,7 @@ $("signin-code-input").addEventListener("keydown", (e) => {
 // What an item would send, in plain words: one line per record it asked
 // for (checkin_answer.js recordNames), or why there is nothing to send.
 function describe(m) {
-  if (m.unsupported) return ["This wallet can't answer this. Nothing is sent for it."];
+  if (m.unsupported) return ["This wallet can't answer this. The website will be told it wasn't answered."];
   if (m.form) return m.form.displays;
   if (!m.entries.length) return ["Nothing on file. The website will be told that."];
   return recordNames(m);

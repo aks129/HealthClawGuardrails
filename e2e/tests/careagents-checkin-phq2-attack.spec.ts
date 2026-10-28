@@ -307,11 +307,12 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
   const refused = async (page: Page, quest: unknown) => {
     const wallet = await checkIn(page, formRequest(quest));
     const item = wallet.locator('#wallet-items li[data-item=f]');
-    await expect(item).toContainText("This wallet can't answer this. Nothing is sent for it.");
+    await expect(item).toContainText("This wallet can't answer this. The website will be told it wasn't answered.");
     await expect(item.locator('fieldset, .checkin-group')).toHaveCount(0);
     await wallet.locator('#wallet-send').click();
     const r = await result(page);
     expect(r.json.artifacts).toEqual([]);
+    // What the line above promises: the website is told it wasn't answered.
     expect(r.json.requestStatus).toEqual([{ item: 'f', status: 'unsupported' }]);
   };
 
