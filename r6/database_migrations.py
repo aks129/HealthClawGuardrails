@@ -45,13 +45,13 @@ def register_model_metadata() -> None:
     import r6.actions.confirmations  # noqa: F401
     import r6.actions.events  # noqa: F401
     import r6.actions.models  # noqa: F401
-    import r6.agent_runs.models  # noqa: F401
-    import r6.command_center.models  # noqa: F401
     import r6.fasten.models  # noqa: F401
     import r6.models  # noqa: F401
     import r6.shl_links  # noqa: F401
-    import r6.smbp.models  # noqa: F401
     import r6.wearables.models  # noqa: F401
+    # Optional modules' tables, through the extension registry.
+    from r6.extensions import import_model_modules
+    import_model_modules()
 
 
 def _unstamped_adoption_revision(connection) -> str | None:

@@ -485,7 +485,7 @@ def unredacted_response(payload, *, endpoint: str, reason: str,
 
 def outcome_response(severity: str, code: str, diagnostics: str, *,
                      status: int):
-    """Build a FHIR OperationOutcome. This is r6/routes.py:3705-3716 with a
+    """Build a FHIR OperationOutcome. This is r6/routes.py:3639-3650 with a
     status attached.
 
     Separate from fhir_response because an OperationOutcome carries text this

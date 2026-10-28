@@ -37,6 +37,7 @@ def purge_tenant(tenant_id):
     if not tenant_id:
         raise ValueError("tenant_id is required")
 
+    from r6.extensions import get_registry
     from r6.models import ContextEnvelope, ContextItem, R6Resource, TelegramBinding
 
     deleted = {}
@@ -80,16 +81,11 @@ def purge_tenant(tenant_id):
     # they are logged and re-raised.
     for import_path, attr, label in (
             ("r6.actions.models", "ProposedAction", "proposed_actions"),
-            ("r6.agent_runs.models", "AgentRunEvent", "agent_run_events"),
-            ("r6.agent_runs.models", "AgentToolCall", "agent_tool_calls"),
-            ("r6.agent_runs.models", "AgentRun", "agent_runs"),
-            ("r6.command_center.models", "ConversationMessage", "messages"),
-            ("r6.command_center.models", "Conversation", "conversations"),
-            ("r6.command_center.models", "AgentTask", "agent_tasks"),
             ("r6.fasten.models", "FastenConnection", "fasten_connections"),
             ("r6.fasten.models", "FastenJob", "fasten_jobs"),
-            ("r6.smbp.models", "SMBPSession", "smbp_sessions"),
             ("r6.wearables.models", "WearableConnection", "wearable_connections"),
+            # Tables the loaded extensions own (r6/extensions.py).
+            *get_registry().purge_models,
     ):
         try:
             module = __import__(import_path, fromlist=[attr])
