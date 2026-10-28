@@ -9,8 +9,10 @@ obvious for a guardrailed system:
   * PURGED — every store that can hold PHI or PHI-adjacent detail: clinical
     resources, context envelopes and their items, proposed actions and their
     lifecycle events and approval records, agent
-    conversation/tasks, BP sessions, and the connector rows that could pull
-    more data (Fasten, wearables, Telegram binding).
+    conversation/tasks, BP sessions, SMART Health Link files, and the
+    connector rows that could pull more data (Fasten, wearables, Telegram
+    binding). tests/test_purge_shl_links.py holds every tenant-keyed table
+    to this list or to a stated exemption.
   * RETAINED — AuditEventRecord. The audit trail is the immutable record of
     what happened to the data, it is PHI-free by contract, and destroying it
     on request would let a deletion erase evidence of the access that
@@ -90,6 +92,9 @@ def purge_tenant(tenant_id):
             ("r6.fasten.models", "FastenJob", "fasten_jobs"),
             ("r6.smbp.models", "SMBPSession", "smbp_sessions"),
             ("r6.wearables.models", "WearableConnection", "wearable_connections"),
+            # SMART Health Link files hold the patient's encrypted bundle; a
+            # link shared before the purge must not keep serving after it.
+            ("r6.shl_links", "ShlLink", "shl_links"),
     ):
         try:
             module = __import__(import_path, fromlist=[attr])
