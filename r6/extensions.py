@@ -19,9 +19,11 @@ contribution at the point where it belongs:
   the like on each app ``create_app`` builds.
 - ``add_model_module(name)`` — a module whose import declares SQLAlchemy
   tables, so ``create_all`` and the migration helpers see them.
-- ``add_purge_model(import_path, attr, label)`` — a tenant-owned table the
-  tenant purge must empty. Order is kept: a table whose rows reference
-  another's is listed first.
+
+Tenant purge does not go through the registry. The migrations create every
+optional module's tables whichever modules a process loads, so
+``r6/purge.py`` names every tenant-keyed table itself and empties each one
+the database has.
 
 Discovery, read once per process:
 
@@ -32,7 +34,15 @@ Discovery, read once per process:
   modules bundled with this repository (``BUNDLED``) if they are present.
 
 A named or installed extension that fails to import fails startup. A
-bundled default that is absent is skipped: it is optional by definition.
+bundled default that is absent is skipped with a warning.
+
+Production: set ``HEALTHCLAW_EXTENSIONS`` explicitly. An extension runs
+inside the guardrail process with its full authority, and when the variable
+is unset every installed distribution that declares a
+``healthclaw.extensions`` entry point is loaded. A dependency that ships one,
+deliberately or through a compromised release, would then be imported and
+registered on the next start. Naming the extensions turns that into a
+startup failure instead.
 """
 
 from __future__ import annotations
@@ -67,7 +77,6 @@ class ExtensionRegistry:
         self.r6_routes: list[Callable] = []
         self.app_hooks: list[Callable] = []
         self.model_modules: list[str] = []
-        self.purge_models: list[tuple[str, str, str]] = []
         self.operations: set[str] = set()
 
     def add_r6_routes(self, fn: Callable, operations=()) -> None:
@@ -79,9 +88,6 @@ class ExtensionRegistry:
 
     def add_model_module(self, name: str) -> None:
         self.model_modules.append(name)
-
-    def add_purge_model(self, import_path: str, attr: str, label: str) -> None:
-        self.purge_models.append((import_path, attr, label))
 
     def provides(self, operation: str) -> bool:
         return operation in self.operations
@@ -109,7 +115,10 @@ def _discover() -> list[tuple[str, Callable]]:
         except ModuleNotFoundError as exc:
             if exc.name != spec.partition(":")[0]:
                 raise  # present but broken: fail loudly
-            logger.info("extensions: %s not present", spec)
+            logger.warning(
+                "extensions: bundled %s is not present; its routes are "
+                "absent. Set %s to choose extensions explicitly.",
+                spec, ENV_VAR)
     return found
 
 

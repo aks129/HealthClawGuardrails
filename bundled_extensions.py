@@ -16,7 +16,7 @@ import click
 
 
 def register(registry) -> None:
-    """Declare the bundled modules' routes, tables, purge rows and hooks."""
+    """Declare the bundled modules' routes, tables and hooks."""
     registry.add_r6_routes(_quality_routes)
     registry.add_r6_routes(_labs_routes,
                            operations=("Observation/$interpret",))
@@ -29,18 +29,6 @@ def register(registry) -> None:
     registry.add_model_module("r6.agent_runs.models")
     registry.add_model_module("r6.command_center.models")
     registry.add_model_module("r6.smbp.models")
-
-    # Child rows first: an agent run references its conversation message.
-    for import_path, attr, label in (
-            ("r6.agent_runs.models", "AgentRunEvent", "agent_run_events"),
-            ("r6.agent_runs.models", "AgentToolCall", "agent_tool_calls"),
-            ("r6.agent_runs.models", "AgentRun", "agent_runs"),
-            ("r6.command_center.models", "ConversationMessage", "messages"),
-            ("r6.command_center.models", "Conversation", "conversations"),
-            ("r6.command_center.models", "AgentTask", "agent_tasks"),
-            ("r6.smbp.models", "SMBPSession", "smbp_sessions"),
-    ):
-        registry.add_purge_model(import_path, attr, label)
 
     registry.add_app_hook(_register_app)
 
@@ -155,7 +143,7 @@ def _lab_trends_app(blueprint, helpers):
 def _register_app(flask_app) -> None:
     import logging
 
-    from main import _is_true
+    from r6.runtime_config import config_flag
 
     logger = logging.getLogger("main")
 
@@ -167,7 +155,7 @@ def _register_app(flask_app) -> None:
 
     flask_app.register_blueprint(smbp_blueprint)
 
-    if _is_true(flask_app.config.get("DISABLE_COMMAND_CENTER")):
+    if config_flag(flask_app.config.get("DISABLE_COMMAND_CENTER")):
         logger.info("Command Center disabled via DISABLE_COMMAND_CENTER")
     else:
         from r6.command_center.routes import command_center_blueprint

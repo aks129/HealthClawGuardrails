@@ -3677,6 +3677,13 @@ for _add_routes in _extensions.r6_routes:
 
 def _operation_not_installed(operation):
     def view():
+        # Authenticate exactly as the operation itself does, so a caller who
+        # may not read this tenant gets the same refusal whether or not the
+        # operation is installed.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+        auth_err = authenticate_tenant_read(tenant_id)
+        if auth_err is not None:
+            return auth_err[0], auth_err[1]
         return _operation_outcome(
             'error', 'not-supported',
             f'{operation} is not supported by this server'), 501

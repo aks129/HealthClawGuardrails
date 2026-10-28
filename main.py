@@ -25,6 +25,7 @@ from r6.database_migrations import register_model_metadata, upgrade_database
 from r6.log_safety import (id_hash, loggable_id, loggable_request_id,
                            scrub as scrub_credentials, scrub_request_line,
                            warn_if_unkeyed)
+from r6.runtime_config import config_flag as _is_true
 from r6.runtime_config import (validate_runtime_environment,
                                warn_on_padded_secrets)
 from r6.safe_read import StrictJSONProvider
@@ -33,7 +34,6 @@ from r6.safe_read import StrictJSONProvider
 logger = logging.getLogger(__name__)
 request_logger = logging.getLogger("request")
 _ROOT_DIR = Path(__file__).resolve().parent
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 class _ScrubCredentials(logging.Filter):
@@ -69,12 +69,6 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
-
-
-def _is_true(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in _TRUE_VALUES
 
 
 def _configure_logging(app_env: str) -> None:

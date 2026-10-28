@@ -124,6 +124,17 @@ def _create_missing_baseline_tables(connection) -> list[str]:
     register_model_metadata()
     present = set(inspect(connection).get_table_names())
     missing = sorted(_baseline_tables() - present)
+    # A table is built from the model that defines it. An optional module
+    # that is not loaded (r6/extensions.py) defines none, so adopting this
+    # database now would stamp a schema it does not have. Refuse, by name.
+    undefined = [name for name in missing if name not in db.metadata.tables]
+    if undefined:
+        raise RuntimeError(
+            "Cannot adopt this database: baseline tables "
+            + ", ".join(undefined)
+            + " are missing and no loaded module defines them. Run init-db "
+              "with the extensions that own them loaded "
+              "(HEALTHCLAW_EXTENSIONS).")
     if missing:
         db.metadata.create_all(
             bind=connection,
