@@ -248,6 +248,30 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       await expect(wallet.locator('#signin-passkey')).toBeDisabled();
     });
 
+  // #1061 follow-up: a person already signed in is not shown the sign-in
+  // section at all, so a message inside it was never seen. The page said
+  // nothing. It says so at page level, without claiming sign-in failed.
+  test('already signed in and the script never loads: the page says so',
+    async ({ page }) => {
+      test.setTimeout(60_000);
+      await serveRelay(page);
+      const first = await openVerifier(page, hostile);
+      await signIn(first);
+      await first.close();
+      await page.context().route(`${CARE_BASE_URL}/static/checkin_wallet.js*`,
+        (route) => route.abort());
+      const wallet = await openVerifier(page, hostile);
+      await expect(wallet.locator('#wallet')).toHaveAttribute('data-signed-in', '1');
+      await expect(wallet.locator('#wallet-signin')).toBeHidden();
+      const stalled = wallet.locator('#signin-stalled');
+      await expect(stalled).toBeVisible({ timeout: 15_000 });
+      await expect(stalled).toHaveText('This page could not start. Reload the page.');
+      await expect(stalled).toHaveAttribute('role', 'alert');
+      await wallet.setViewportSize({ width: 375, height: 812 });
+      fs.mkdirSync(SHOTS, { recursive: true });
+      await wallet.screenshot({ path: path.join(SHOTS, 'signed-in-stalled-375.png') });
+    });
+
   test('a slow script: the message shows, then goes once sign-in can start',
     async ({ page }) => {
       test.setTimeout(60_000);
