@@ -621,6 +621,11 @@ BY_ID = {row.id: row for row in MATRIX}
 # ---------------------------------------------------------------------------
 
 NON_CLINICAL_MUTATORS = {
+    # Present only when no extension provides the operation
+    # (r6/extensions.py): a fixed 501 not-supported that reads and writes
+    # nothing, so there is no guard for a row to hold.
+    "r6.not_installed_Observation__interpret": "absent operation: fixed 501",
+    "r6.not_installed_Patient__care_gaps": "absent operation: fixed 501",
     # Durable agent-run queue: execution bookkeeping, not patient data.
     # The old NOTE here said none of these emitted an AuditEvent and called
     # that a decision. Half of it was: claim and heartbeat are polled by every
@@ -760,9 +765,16 @@ def audit_rows(client, tenant):
 # 1. Anonymous refusal — the property the whole matrix exists for
 # ---------------------------------------------------------------------------
 
+#: Blueprints an optional module registers (r6/extensions.py). Their rows
+#: run in the full suite and are deselected in the core-only job.
+_EXTENSION_BLUEPRINTS = ("smbp.", "command_center.", "agent_runs.")
+
+
 def _params(rows, defect_marks=None):
     for row in rows:
         marks = list((defect_marks or {}).get(row.id, ()))
+        if row.endpoint.startswith(_EXTENSION_BLUEPRINTS):
+            marks.append(pytest.mark.extension)
         yield pytest.param(row, id=row.id, marks=marks)
 
 
@@ -774,7 +786,6 @@ def _params(rows, defect_marks=None):
 # caught by test_every_mutating_route_is_classified below.
 
 
-@pytest.mark.extension
 @pytest.mark.parametrize("row", list(_params(MATRIX)))
 def test_a_mutating_route_refuses_an_anonymous_caller(client, app, row,
                                                       secrets):
@@ -796,7 +807,6 @@ def test_a_mutating_route_refuses_an_anonymous_caller(client, app, row,
         f"this row: {sorted(row.guards)}")
 
 
-@pytest.mark.extension
 @pytest.mark.parametrize("row", list(_params(MATRIX)))
 def test_authorization_is_decided_before_the_body_is_parsed(client, app, row,
                                                             secrets):
@@ -853,8 +863,7 @@ def test_internal_seed_refuses_a_private_tenant_without_the_secret(client,
 STEP_UP_ROWS = [r for r in MATRIX if r.has(STEP_UP)]
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(STEP_UP_ROWS)))
 def test_step_up_row_refuses_a_missing_token(client, app, row, secrets):
     """A step-up row refuses when the tenant header is present but no token is.
 
@@ -872,8 +881,7 @@ def test_step_up_row_refuses_a_missing_token(client, app, row, secrets):
         f"step-up token; pinned status is {row.step_up_missing_status}")
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(STEP_UP_ROWS)))
 def test_step_up_row_refuses_a_foreign_tenants_token(client, app, row,
                                                      secrets):
     """A valid token for tenant B never authorizes a write to tenant A.
@@ -894,8 +902,7 @@ def test_step_up_row_refuses_a_foreign_tenants_token(client, app, row,
         f"bound to a different tenant; expected {row.step_up_missing_status}")
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(STEP_UP_ROWS)))
 def test_step_up_row_refuses_an_expired_token(client, app, row, secrets):
     """Expiry is enforced on every step-up row, not only in stepup.py's unit test.
 
@@ -912,8 +919,7 @@ def test_step_up_row_refuses_an_expired_token(client, app, row, secrets):
         f"({resp.status_code})")
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(STEP_UP_ROWS)))
 def test_step_up_row_refuses_an_unknown_scope(client, app, row, secrets):
     """A token whose scope claim is not an allow-listed write scope writes
     nothing (FHI-57).
@@ -944,9 +950,8 @@ def test_step_up_row_refuses_an_unknown_scope(client, app, row, secrets):
 _FOREIGN_AUDIENCES = ("action-approval", "checkin-export")
 
 
-@pytest.mark.extension
 @pytest.mark.parametrize("audience", _FOREIGN_AUDIENCES)
-@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(STEP_UP_ROWS)))
 def test_step_up_row_refuses_a_token_bound_to_another_audience(
         client, app, row, audience, secrets):
     """A token minted for one purpose authorizes that purpose and nothing
@@ -1059,8 +1064,7 @@ def test_a_token_without_an_audience_still_reads(client, app, monkeypatch,
         f"({resp.status_code})")
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", STEP_UP_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(STEP_UP_ROWS)))
 def test_the_step_up_gate_runs_before_the_body_is_parsed(client, app, row,
                                                          secrets):
     """A credentialless caller WITH a tenant header still gets the step-up
@@ -1170,7 +1174,7 @@ def test_confirm_requires_an_action_bound_single_use_token(client, app,
 SECRET_ROWS = [r for r in MATRIX if r.has(INTERNAL_SECRET)]
 
 
-@pytest.mark.parametrize("row", SECRET_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(SECRET_ROWS)))
 def test_internal_secret_row_refuses_a_wrong_secret(client, app, row, secrets):
     """A server-to-server route refuses a caller presenting the WRONG secret.
 
@@ -1227,8 +1231,7 @@ def test_ingest_bundle_and_seed_diverge_on_the_public_tenant_exemption(
 TENANT_ROWS = [r for r in MATRIX if r.has(TENANT_HEADER)]
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", TENANT_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(TENANT_ROWS)))
 def test_tenant_row_refuses_a_missing_tenant_header(client, app, row, secrets):
     """A tenant-scoped route refuses a request with no X-Tenant-Id.
 
@@ -1248,8 +1251,7 @@ def test_tenant_row_refuses_a_missing_tenant_header(client, app, row, secrets):
         f"header; expected 400")
 
 
-@pytest.mark.extension
-@pytest.mark.parametrize("row", TENANT_ROWS, ids=lambda r: r.id)
+@pytest.mark.parametrize("row", list(_params(TENANT_ROWS)))
 def test_tenant_row_validates_the_tenant_id_format(client, app, row, secrets):
     """A tenant id is refused or accepted by format exactly as the matrix says.
 
@@ -1704,7 +1706,6 @@ def _mutating_endpoints(app):
     }
 
 
-@pytest.mark.extension
 def test_every_mutating_route_is_classified(app):
     """A new POST/PUT/PATCH/DELETE route lands in the matrix or is classified.
 
