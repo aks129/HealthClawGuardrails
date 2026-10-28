@@ -307,7 +307,7 @@ test.describe('PHQ-2 wallet, hostile Verifier', () => {
   const refused = async (page: Page, quest: unknown) => {
     const wallet = await checkIn(page, formRequest(quest));
     const item = wallet.locator('#wallet-items li[data-item=f]');
-    await expect(item).toContainText('You can answer it in person instead.');
+    await expect(item).toContainText("This wallet can't answer this. Nothing is sent for it.");
     await expect(item.locator('fieldset, .checkin-group')).toHaveCount(0);
     await wallet.locator('#wallet-send').click();
     const r = await result(page);
