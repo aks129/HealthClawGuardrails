@@ -482,7 +482,7 @@ test.describe('check-in wallet', () => {
     const card = wallet.locator('#wallet-items li[data-item=coverage]');
     await expect(card.locator('.checkin-item-title')).toHaveText('Your insurance card');
     await expect(wallet.locator('#wallet-items li[data-item=phq2]'))
-      .toContainText('You can answer it in person instead.');
+      .toContainText("This wallet can't answer this. The website will be told it wasn't answered.");
   });
 
   // #973 patient test, findings 2 and 4: the website's library closes this
@@ -832,7 +832,7 @@ test.describe('check-in wallet', () => {
     for (let n = 0; n < 60; n++)
       q.item.push({ ...structuredClone(q.item[1]), linkId: `extra-${n}` });
     const wallet = await checkIn(page, req);
-    await expect(phq2(wallet)).toContainText('You can answer it in person instead.');
+    await expect(phq2(wallet)).toContainText("This wallet can't answer this. The website will be told it wasn't answered.");
     await expect(phq2(wallet).locator('fieldset')).toHaveCount(0);
     await wallet.locator('#wallet-send').click();
     await done(page).toMatchObject({ status: 'completed' });

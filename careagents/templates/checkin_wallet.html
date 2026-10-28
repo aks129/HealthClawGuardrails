@@ -97,6 +97,13 @@
       records on your CareAgents account. You choose what the website gets.</p>
 
     <div id="wallet-err" class="form-error" role="alert" hidden></div>
+    {# Signed in, the sign-in section below is never shown, so its "could
+       not start" would never be seen: say it here instead, and not as a
+       sign-in failure (#1061 follow-up). #}
+    {% if signed_in %}
+    <p class="form-error" id="signin-stalled" role="alert" hidden>This page
+      could not start. Reload the page.</p>
+    {% endif %}
 
     <section id="wallet-signin" {% if signed_in %}hidden{% endif %}>
       <h1>Sign in to answer</h1>
@@ -113,8 +120,10 @@
            leave two dead buttons. #}
         <noscript><p class="form-error">Sign-in could not start. Turn on
           JavaScript, then reload the page.</p></noscript>
+        {% if not signed_in %}
         <p class="form-error" id="signin-stalled" role="alert" hidden>Sign-in
           could not start. Reload the page.</p>
+        {% endif %}
         <script>
           setTimeout(function () {
             if (document.getElementById("signin-passkey").disabled)
