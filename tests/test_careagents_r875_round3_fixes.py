@@ -15,6 +15,8 @@ import pytest
 from careagents import agent, imessage, labs_timeline
 from careagents.agent import _execute_tool
 
+pytestmark = pytest.mark.extension
+
 _V3 = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 UCUM = "http://unitsofmeasure.org"
 

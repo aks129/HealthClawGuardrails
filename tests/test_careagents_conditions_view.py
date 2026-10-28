@@ -17,6 +17,8 @@ from careagents.agent import (SUMMARY_LIMIT, _coding_key, _execute_tool,
                               _withdrawn)
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"
 CLINICAL = conditions_view.CLINICAL_SYSTEM

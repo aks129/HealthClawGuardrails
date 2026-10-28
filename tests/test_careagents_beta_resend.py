@@ -21,6 +21,8 @@ from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _confirm_token, _join, _post, _row, _rows, made, sent)
 
+pytestmark = pytest.mark.extension
+
 
 def _age(svc, seconds):
     """As if every confirmation email went out `seconds` earlier."""

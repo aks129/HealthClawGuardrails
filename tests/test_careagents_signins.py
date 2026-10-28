@@ -26,6 +26,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_beta_signup import made, sent  # noqa: F401
 from tests.test_careagents_funnel import _app, _svc_cfg
 
+pytestmark = pytest.mark.extension
+
 OWNER = "owner@example.com"
 
 

@@ -18,6 +18,8 @@ from careagents import beta, imessage
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, sample_framed, svc)
 
+pytestmark = pytest.mark.extension
+
 HDRS = {"X-Internal-Secret": "mint-secret"}
 PHONE = "+15550100123"
 OTHER_EMAIL = "other@example.com"

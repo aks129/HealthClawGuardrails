@@ -389,6 +389,7 @@ def test_the_one_reason_about_someone_elses_credential_does_not():
 _PRIVATE_TENANT = 'probe-private-tenant'
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('path, payload', [
     ('/command-center/api/conversations',
      {'role': 'user', 'text': 'hello'}),

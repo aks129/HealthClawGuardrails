@@ -21,6 +21,8 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _engine(monkeypatch, secret_env):
     from main import create_app as engine_create_app

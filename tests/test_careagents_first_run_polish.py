@@ -25,6 +25,9 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _post, made, sent)
 from tests.test_careagents_first_run import (EMAIL, _ask, _link_session,
                                               _signed_in_as)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AUTH_JS = (ROOT / "careagents" / "static" / "auth.js").read_text()

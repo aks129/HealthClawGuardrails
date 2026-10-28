@@ -11,6 +11,8 @@ import pytest
 from careagents import beta
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 
+pytestmark = pytest.mark.extension
+
 
 def test_an_invite_is_stored_normalised_and_only_once(svc):  # noqa: F811
     assert svc.invite_real_records(" Tester@Example.COM ", "operator") is True

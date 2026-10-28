@@ -22,6 +22,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_imessage import (
     HDRS, OTHER_EMAIL, PHONE, _acct_id, _inbound, _pair, _run)
 
+pytestmark = pytest.mark.extension
+
 
 def _pointer(origin: str) -> str:
     """The real-records pointer as sent: a refusal, so it carries the 911

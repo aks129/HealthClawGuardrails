@@ -21,6 +21,8 @@ import pytest
 from careagents import beta, routing
 from careagents.worker import _drop_echo
 
+pytestmark = pytest.mark.extension
+
 #: (Spanish, the English the list already matches for the same meaning)
 PARITY = (
     ("no quiero vivir", "i don't want to live"),

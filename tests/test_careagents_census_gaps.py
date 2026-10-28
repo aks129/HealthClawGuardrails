@@ -23,6 +23,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, _sink_code, _turn, cfg, sample_framed,
     svc)
 
+pytestmark = pytest.mark.extension
+
 _CA = pathlib.Path(__file__).resolve().parents[1] / "careagents"
 _HOME_JS = (_CA / "static" / "home.js").read_text()
 _CHAT_JS = (_CA / "static" / "chat.js").read_text()

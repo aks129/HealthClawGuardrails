@@ -20,6 +20,8 @@ import pytest
 from r6.brief.engine import CARE_GAPS_OK, CARE_GAPS_UNAVAILABLE, build_care_gaps
 from r6.caregaps.report import build_consumer_summary
 
+pytestmark = pytest.mark.extension
+
 
 def _result(rule_id, title, status, **extra):
     return {"rule_id": rule_id, "title": title, "status": status,

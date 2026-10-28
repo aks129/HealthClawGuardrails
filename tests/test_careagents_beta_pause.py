@@ -15,6 +15,8 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, sample_framed, svc)
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "gene@example.com"   # the address _login uses
 
 

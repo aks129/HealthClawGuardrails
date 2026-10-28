@@ -38,6 +38,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, _turn, cfg, svc)
 from tests.test_careagents_imessage_demo import _Call, _Turn
 
+pytestmark = pytest.mark.extension
+
 SUMMARY_KEYS = ("conditions", "medications", "medication_statements",
                 "allergies")
 #: What a model must never be handed as fact about a connected person.

@@ -17,6 +17,8 @@ from careagents import llm, routing
 from careagents.config import Config
 from tests.test_careagents_model_routing import TOOLS, _cfg, _fake, _resp, _Text
 
+pytestmark = pytest.mark.extension
+
 TEMPLATES = Path(__file__).resolve().parents[1] / "careagents" / "templates"
 
 # (what the card must say, template file, the same words in that template)

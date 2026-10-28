@@ -18,6 +18,8 @@ import pytest
 
 from r6.labs.interpret import _same_unit, interpret_observation
 
+pytestmark = pytest.mark.extension
+
 
 #: Mixed case, so not UCUM's all-capitals case-insensitive form: the capital
 #: is a prefix. ("MU/L" in capitals alone is ambiguous: case-insensitive

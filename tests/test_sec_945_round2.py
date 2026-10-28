@@ -10,6 +10,8 @@ import pytest
 from careagents.agent import _summarize_bundle
 from tests.test_sec_945_first_answer import DAR, NULLFLAVOR, SNOMED, _allergy
 
+pytestmark = pytest.mark.extension
+
 
 # --- Round 2 (head f25730e): re-attack of the F1/F2 fix ----------------------
 

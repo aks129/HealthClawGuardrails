@@ -21,6 +21,8 @@ import pytest
 from tests.test_879_safe_reads import _strict_body
 from tests.test_labs_subject_matching import PID, _patient, _row
 
+pytestmark = pytest.mark.extension
+
 LOINC = "http://loinc.org"
 CANARY = "CANARY-JANE-DOE-885"
 

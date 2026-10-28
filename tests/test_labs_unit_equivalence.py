@@ -11,6 +11,8 @@ import pytest
 
 from r6.labs.interpret import UNIT_MISMATCH, interpret_observation
 
+pytestmark = pytest.mark.extension
+
 PLATELETS, WBC = "777-3", "6690-2"
 
 #: Every spelling of thousands-per-microlitre the interpreter accepts.

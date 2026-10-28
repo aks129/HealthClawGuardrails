@@ -7,6 +7,9 @@ never an assertion that the screening wasn't done elsewhere.
 
 from r6.caregaps.evaluate import (
     CARE_GAP_RULES, REFERENCES, _cadence_desc, evaluate_care_gaps)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _patient(gender="female", birth="1968-05-01"):

@@ -36,6 +36,8 @@ import pytest
 
 from tests.test_checkin_wallet_phq2 import _run, _status
 
+pytestmark = pytest.mark.extension
+
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "e2e" / "fixtures"
 SPEED = json.loads((FIXTURES / "checkin-request-form-speed.json").read_text())

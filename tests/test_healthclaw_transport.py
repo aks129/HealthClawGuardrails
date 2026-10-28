@@ -42,6 +42,8 @@ import requests
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
                                    HealthClawUnconfirmed)
 
+pytestmark = pytest.mark.extension
+
 # The discard port: nothing listens, so connect() fails immediately.
 DEAD_BASE = "http://127.0.0.1:9"
 

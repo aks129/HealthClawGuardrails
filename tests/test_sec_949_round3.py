@@ -14,6 +14,8 @@ from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_sec_945_first_answer import (
     _audit_details, _free_text, _no_canary, _plant)
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 OID = "urn:oid:2.16.840.1.113883.6.96"
 NKA_SET = {"716186003", "409137002", "428197003", "428607008", "429625007",

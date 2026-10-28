@@ -88,6 +88,7 @@ def _race(app, bodies_and_headers):
     return results
 
 
+@pytest.mark.extension
 def test_two_tenants_racing_one_conversation_id_stay_apart(race_app):
     from sqlalchemy import event
 
@@ -129,6 +130,7 @@ def test_two_tenants_racing_one_conversation_id_stay_apart(race_app):
         assert [m.text for m in msgs] == [f"synthetic {tenant}"]
 
 
+@pytest.mark.extension
 def test_foreign_token_cannot_create_in_victim_tenant(race_app):
     from models import db
     from r6.command_center.models import Conversation, ConversationMessage
@@ -156,6 +158,7 @@ def test_foreign_token_cannot_create_in_victim_tenant(race_app):
     assert ConversationMessage.query.filter_by(tenant_id=victim).count() == 0
 
 
+@pytest.mark.extension
 def test_audit_failure_on_first_turn_leaves_no_conversation(race_app,
                                                             monkeypatch):
     from models import db
@@ -187,6 +190,7 @@ def test_audit_failure_on_first_turn_leaves_no_conversation(race_app,
     assert ConversationMessage.query.filter_by(tenant_id=tenant).count() == 0
 
 
+@pytest.mark.extension
 def test_rolled_back_winner_does_not_strand_the_loser(race_app):
     """Winner inserts, then fails reply_to (400) and rolls back. On Postgres
     the loser's ON CONFLICT waited on the winner and must now insert itself;
@@ -218,6 +222,7 @@ def test_rolled_back_winner_does_not_strand_the_loser(race_app):
     assert Conversation.query.filter_by(tenant_id=tenant, id=conv).count() == 1
 
 
+@pytest.mark.extension
 def test_each_raced_turn_is_audited_without_phi(race_app):
     from sqlalchemy import event
 
@@ -258,6 +263,7 @@ def test_each_raced_turn_is_audited_without_phi(race_app):
                                    if k != "text"})
 
 
+@pytest.mark.extension
 def test_existing_thread_in_other_tenant_does_not_shadow_new_one(race_app):
     """Tenant A already owns conversation X for agent-a. Tenant B's first
     turn on X for agent-b must create B's own row (201), not read A's row

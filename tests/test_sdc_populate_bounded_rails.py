@@ -43,6 +43,8 @@ from r6.models import R6Resource
 from r6.sdc.intake import INITIAL_EXPRESSION_URL, intake_questionnaire
 from tests.test_redaction_probes_multistep import pdf_text
 
+pytestmark = pytest.mark.extension
+
 ALLOWED_FAMILY = "Boundfamilyallowed"
 IDENTIFIER_MARKER = "PHIIDENTIFIERMARKER368"
 CONTACT_MARKER = "PHICONTACTMARKER368"

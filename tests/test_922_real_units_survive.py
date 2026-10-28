@@ -10,6 +10,8 @@ import pytest
 from careagents.labs_timeline import UCUM_ALLOWED
 from r6.redaction import apply_redaction, unit_is_shaped
 
+pytestmark = pytest.mark.extension
+
 #: Units real US lab and EHR feeds send, coded or as text.
 REAL_UNITS = [
     "mg/dL", "mmol/L", "g/dL", "%", "mmol/mol", "10*3/uL", "10*6/uL",

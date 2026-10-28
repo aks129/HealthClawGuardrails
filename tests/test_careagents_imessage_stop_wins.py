@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from careagents.models import Account
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 PHONE = "+15550100123"
 

@@ -25,6 +25,8 @@ from careagents import beta, llm
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _carries_911(text: str) -> bool:
     return (beta.EMERGENCY_LINE in text

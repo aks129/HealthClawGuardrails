@@ -15,6 +15,9 @@ from r6.labs.interpret import REFERENCES, UNIT_MISMATCH, interpret_observation
 from r6.labs.report import build_consumer_summary
 from r6.labs import trend
 from r6.labs.trend import CREATININE_LOINC, kdigo_consumer_line
+import pytest
+
+pytestmark = pytest.mark.extension
 
 T0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
 

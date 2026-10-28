@@ -13,6 +13,8 @@ from careagents.app import create_app
 from careagents.config import Config
 from tests.test_careagents import FakeClient
 
+pytestmark = pytest.mark.extension
+
 
 def _app():
     cfg = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",

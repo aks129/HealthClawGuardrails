@@ -37,6 +37,7 @@ def _refusals(tenant):
 
 # --- SMBP --------------------------------------------------------------------
 
+@pytest.mark.extension
 def test_an_smbp_reading_into_a_closed_tenant_is_refused(
         client, tenant_id, auth_headers):
     """MUTATION: drop require_open_tenant from smbp reading -> 201."""
@@ -50,6 +51,7 @@ def test_an_smbp_reading_into_a_closed_tenant_is_refused(
     assert len(_refusals(tenant_id)) == 1
 
 
+@pytest.mark.extension
 def test_the_smbp_report_still_reads_but_files_nothing(
         client, tenant_id, auth_headers):
     """The report is a read and stays open; the DocumentReference it would

@@ -19,6 +19,8 @@ import pytest
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, _turn, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 CANARY = "Qzvrandt"          # a made-up nickname, searched for everywhere
 APOS = "Mo'm' onx='1"        # breaks a single-quoted attribute if unescaped
 TAGS = '<img src=x onerror=alert(1)>'[:24]

@@ -4,6 +4,8 @@ import pytest
 from careagents.agent import _summarize_bundle
 from r6.redaction import apply_redaction, unit_is_shaped
 
+pytestmark = pytest.mark.extension
+
 
 def _view(code, system):
     r = {"resourceType": "Condition", "id": "c",

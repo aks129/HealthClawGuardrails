@@ -25,6 +25,8 @@ import pytest
 from tests.test_checkin_relay import _careagents, _FakeClient, _post
 from tests.test_checkin_wallet import _account, _sign_in
 
+pytestmark = pytest.mark.extension
+
 TYPES = {"resource_types": ["Patient", "Coverage"]}
 
 

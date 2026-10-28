@@ -19,6 +19,8 @@ from careagents.worker import CHARGED_EVENT, REFUNDED_EVENT, RunWorker
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _used(svc):  # noqa: F811
     with svc.session() as s:

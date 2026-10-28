@@ -17,6 +17,8 @@ from tests.careagents_stage1_helpers import allowlist_cfg, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "gene@example.com"
 MAILTO = '<a href="mailto:contactus@healthclaw.io">contactus@healthclaw.io</a>'
 HOME_JS = (pathlib.Path(__file__).resolve().parents[1]

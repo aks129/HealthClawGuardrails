@@ -22,6 +22,8 @@ from careagents.agent import _execute_tool
 from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 
+pytestmark = pytest.mark.extension
+
 #: Spellings #1036 scores (tests/test_labs_unit_equivalence.py EQUIVALENT)
 #: that UCUM_ALLOWED does not list.
 UNLISTED = ["thou/uL", "10*3/µL", "10*3/μL", "10E3/uL", "x10^9/L"]

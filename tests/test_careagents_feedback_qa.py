@@ -17,6 +17,9 @@ import re
 from careagents import beta_signup
 from tests import test_careagents_feedback as fb
 from tests.test_careagents_feedback import MARKER, _send, _signed_in
+import pytest
+
+pytestmark = pytest.mark.extension
 
 # The PR's fixtures, shared by name (pytest finds them as module globals).
 made = fb.made

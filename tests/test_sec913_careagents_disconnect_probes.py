@@ -19,6 +19,8 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _status(svc, conn_id):  # noqa: F811
     with svc.session() as s:

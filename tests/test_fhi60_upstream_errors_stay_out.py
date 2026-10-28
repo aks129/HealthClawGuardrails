@@ -102,6 +102,7 @@ def test_oauth_start_still_reaches_upstream_for_a_valid_tenant(
 
 # --- CareAgents' engine -----------------------------------------------------
 
+@pytest.mark.extension
 def test_the_careagents_engine_hides_bound_parameters(tmp_path):
     from careagents.models import make_engine
     engine = make_engine(f"sqlite:///{tmp_path}/careagents.db")

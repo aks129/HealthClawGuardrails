@@ -22,6 +22,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_crisis_fixed_replies import (
     _answers, _queue, _work)
 
+pytestmark = pytest.mark.extension
+
 # The model's live answers, shortened to their shape: sympathy, then 911.
 ANSWER = ("I'm sorry you're going through this. Please act now.\n\n"
           "Call 911 (or your local emergency number) right now, or call "

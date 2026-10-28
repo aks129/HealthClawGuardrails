@@ -20,6 +20,9 @@ from __future__ import annotations
 
 from tests.test_careagents import FakeClient, cfg, svc  # noqa: F401
 from tests.test_careagents_beta_weekly import _real_agent
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_voice_and_tenant_come_from_the_same_connection(

@@ -19,6 +19,9 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
 from tests.test_careagents_imessage import (_acct_id, _inbound, _link_token,
                                             _pair)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 PHONE = "+15550100321"
 LEGACY_RAW = "QA.Legacy@iCloud.com"     # as a pre-#866 row stored it

@@ -30,6 +30,8 @@ from tests.test_careagents import FakeClient, _login, _make_direct_conn
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
 
+pytestmark = pytest.mark.extension
+
 cfg = _cfg_fixture
 svc = _svc_fixture
 

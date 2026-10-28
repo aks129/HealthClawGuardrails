@@ -17,6 +17,9 @@ from r6.brief.engine import (
     build_problems,
 )
 from r6.models import R6Resource, db
+import pytest
+
+pytestmark = pytest.mark.extension
 
 PLANTED = "Jane Secret"
 ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"

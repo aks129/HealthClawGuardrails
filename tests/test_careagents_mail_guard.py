@@ -15,6 +15,8 @@ import pytest
 from careagents import mail
 from careagents.config import Config
 
+pytestmark = pytest.mark.extension
+
 _BASE = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
          "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
          "RESEND_API_KEY": "re_real_looking_key"}

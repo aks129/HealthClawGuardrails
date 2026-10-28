@@ -26,6 +26,8 @@ from r6.smbp.demo_history import (
 from r6.smbp.monitoring import averages, slot_of
 from r6.smbp.triage import classify
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.fixture(scope="module")
 def resources():

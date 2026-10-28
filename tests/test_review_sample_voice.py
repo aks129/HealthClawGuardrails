@@ -181,6 +181,7 @@ def test_the_sample_gate_is_tied_to_the_button(app):
                      style)
 
 
+@pytest.mark.extension
 def test_the_banner_is_careagents_own_sentence():
     """One sentence in two places; they may not drift apart."""
     from careagents import beta

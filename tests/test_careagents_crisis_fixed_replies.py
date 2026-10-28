@@ -25,6 +25,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 from tests.test_careagents_imessage import PHONE, _acct_id, _inbound, _pair
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "gene@example.com"   # the address _login uses
 URGENT = ("chest pain", "me duele el pecho", "no puedo respirar")
 SELF_HARM = ("quiero morir", "I want to kill myself", "me quiero hacer daño")

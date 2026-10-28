@@ -1,6 +1,9 @@
 import re
 
 from r6.caregaps.report import build_caregaps_summary, build_consumer_summary
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _BANNED = re.compile(r"diagnos|prescrib|treatment", re.IGNORECASE)
 

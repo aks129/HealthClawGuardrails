@@ -30,6 +30,8 @@ import pytest
 from r6.log_safety import id_hash, scrub, warn_if_unkeyed
 from r6.stepup import generate_step_up_token
 
+pytestmark = pytest.mark.extension
+
 _HASH = re.compile(r"t:[0-9a-f]{10}")
 
 

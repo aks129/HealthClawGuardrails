@@ -17,6 +17,8 @@ import pytest
 
 from careagents import consent
 
+pytestmark = pytest.mark.extension
+
 #: The HealthClaw decoder lands with #568's consent-handoff PR. Until it is on
 #: main the cross-layer rows below skip, and `_reference_decode` holds the
 #: format on this side; once it lands they run against the real thing.

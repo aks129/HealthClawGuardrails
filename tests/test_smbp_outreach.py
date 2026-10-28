@@ -1,4 +1,7 @@
 from r6.smbp.outreach import reminder_action, voice_reading_script
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_reminder_action_is_valid_sms_payload():

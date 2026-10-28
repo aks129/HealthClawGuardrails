@@ -16,6 +16,8 @@ import pytest
 
 from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
 
+pytestmark = pytest.mark.extension
+
 #: Words that turn "there is an audit log" into "you can look at it".
 _VIEW_WORDS = re.compile(
     r"\b(see|sees|seen|view|views|visible|look|browse|open|check|review)\b",

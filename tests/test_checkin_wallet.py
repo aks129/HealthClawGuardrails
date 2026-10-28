@@ -30,6 +30,8 @@ from sqlalchemy import func, inspect, select, table
 
 from careagents.config import Config
 
+pytestmark = pytest.mark.extension
+
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "careagents" / "static"
 VENDOR = STATIC / "vendor" / "smart-health-checkin-client" / "0.4.4"

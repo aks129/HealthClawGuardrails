@@ -92,6 +92,8 @@ from tests.test_redaction_coverage_inventory import (
     NAME_MARKER, OBS_DISPLAY_MARKER, OBS_TEXT_MARKER,
 )
 
+pytestmark = pytest.mark.extension
+
 # One marker per field, so a hit names WHICH field leaked. NAME_MARKER,
 # OBS_DISPLAY_MARKER and OBS_TEXT_MARKER are the inventory file's, reused so a
 # grep for a marker finds every probe that watches that field.

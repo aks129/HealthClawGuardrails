@@ -19,6 +19,8 @@ import pytest
 
 from r6.labs.interpret import interpret_observation
 
+pytestmark = pytest.mark.extension
+
 UCUM = "http://unitsofmeasure.org"
 
 

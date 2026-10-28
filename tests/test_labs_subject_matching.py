@@ -100,6 +100,7 @@ OTHER_PATIENT = [
 ]
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("ref", SAME_PATIENT)
 def test_each_reference_form_for_the_patient_matches(
         app, client, tenant_id, tenant_headers, ref):
@@ -109,6 +110,7 @@ def test_each_reference_form_for_the_patient_matches(
     assert ids == ["o1"] and summary["ignored"] == 0
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("ref", OTHER_PATIENT)
 def test_another_patients_reference_does_not_match(
         app, client, tenant_id, tenant_headers, ref):
@@ -118,6 +120,7 @@ def test_another_patients_reference_does_not_match(
     assert ids == []
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("ref,expected", [
     ("Patient/p1", "p1"),
     ("Patient/p1/_history/2", "p1"),
@@ -143,6 +146,7 @@ def test_the_reference_forms_the_matcher_accepts(ref, expected):
     assert referenced_patient_id(ref) == expected
 
 
+@pytest.mark.extension
 def test_a_109_character_id_matches(app, client, tenant_id, tenant_headers):
     """Live Epic Patient ids reach 109 characters (#878 security)."""
     long_id = ("e" + "Xy3.-" * 22)[:109]
@@ -154,6 +158,7 @@ def test_a_109_character_id_matches(app, client, tenant_id, tenant_headers):
     assert sorted(ids) == ["o1", "o2"]
 
 
+@pytest.mark.extension
 def test_an_identifier_only_subject_is_not_counted_as_malformed(
         app, client, tenant_id, tenant_headers):
     """No reference to resolve is not a broken row: it is not this
@@ -166,6 +171,7 @@ def test_an_identifier_only_subject_is_not_counted_as_malformed(
     assert ids == [] and summary["ignored"] == 0
 
 
+@pytest.mark.extension
 def test_no_subject_belongs_to_the_only_patient(
         app, client, tenant_id, tenant_headers):
     _patient(app, tenant_id)
@@ -174,6 +180,7 @@ def test_no_subject_belongs_to_the_only_patient(
     assert ids == ["o1"]
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("patients", [[], [PID, "p-two"]],
                          ids=["no-patient", "two-patients"])
 def test_no_subject_belongs_to_nobody_unless_one_patient(
@@ -185,6 +192,7 @@ def test_no_subject_belongs_to_nobody_unless_one_patient(
     assert ids == []
 
 
+@pytest.mark.extension
 def test_no_subject_does_not_belong_to_a_patient_the_tenant_lacks(
         app, client, tenant_id, tenant_headers):
     """The caller asks about p-other; the tenant's one Patient is PID."""
@@ -194,6 +202,7 @@ def test_no_subject_does_not_belong_to_a_patient_the_tenant_lacks(
     assert ids == []
 
 
+@pytest.mark.extension
 def test_mixed_reference_styles_lose_nothing_to_the_subject(
         app, client, tenant_id, tenant_headers):
     """The total with ?subject= equals the total without it on a
@@ -210,6 +219,7 @@ def test_mixed_reference_styles_lose_nothing_to_the_subject(
     assert sorted(ids_with) == sorted(ids_without)
 
 
+@pytest.mark.extension
 def test_the_creatinine_rise_is_found_across_reference_styles(
         app, client, tenant_id, tenant_headers):
     _patient(app, tenant_id)
@@ -222,6 +232,7 @@ def test_the_creatinine_rise_is_found_across_reference_styles(
     assert trend["kdigo_criterion"] == ["B"]
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("ref", [f"urn:uuid:{PID}",
                                  f"https://ehr.example.org/fhir/Patient/{PID}"])
 def test_a_resolved_reference_still_selects_the_sex_specific_range(
@@ -239,6 +250,7 @@ def test_a_resolved_reference_still_selects_the_sex_specific_range(
 
 # --- the cap ------------------------------------------------------------------
 
+@pytest.mark.extension
 def test_the_subject_branch_is_capped_like_the_fallback(
         app, client, tenant_id, tenant_headers):
     """Newest 200 by last update, the fallback's order: with one Patient
@@ -259,6 +271,7 @@ def test_the_subject_branch_is_capped_like_the_fallback(
     assert "o000" not in ids_with and f"o{n - 1:03d}" in ids_with
 
 
+@pytest.mark.extension
 def test_at_the_cap_a_last_update_tie_is_broken_by_id(
         app, client, tenant_id, tenant_headers):
     """Every row updated at the same instant: which 200 are kept is decided
@@ -275,6 +288,7 @@ def test_at_the_cap_a_last_update_tie_is_broken_by_id(
     assert "o000" not in ids_with and f"o{n - 1:03d}" in ids_with
 
 
+@pytest.mark.extension
 def test_the_cap_counts_the_patients_rows_not_everyones(
         app, client, tenant_id, tenant_headers):
     """Another person's newer rows must not use up this patient's slots."""
@@ -292,6 +306,7 @@ def test_the_cap_counts_the_patients_rows_not_everyones(
 
 # --- care gaps and the brief read through the same matcher -------------------
 
+@pytest.mark.extension
 def test_care_gaps_reads_the_same_rows(app, tenant_id):
     from r6.caregaps.routes import subject_resources
     _patient(app, tenant_id)
@@ -305,6 +320,7 @@ def test_care_gaps_reads_the_same_rows(app, tenant_id):
     assert got == {"o0", "o1", "o2", "o3"}
 
 
+@pytest.mark.extension
 def test_the_brief_finds_the_rise_across_reference_styles(
         app, client, tenant_id, tenant_headers):
     _patient(app, tenant_id)

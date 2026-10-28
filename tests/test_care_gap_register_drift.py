@@ -28,6 +28,9 @@ import pathlib
 import re
 
 from r6.caregaps.evaluate import CARE_GAP_RULES
+import pytest
+
+pytestmark = pytest.mark.extension
 
 REGISTER = (pathlib.Path(__file__).resolve().parent.parent
             / "docs" / "clinical" / "care-gap-rule-register.md")

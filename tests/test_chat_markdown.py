@@ -21,6 +21,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.extension
+
 CHAT_JS = (pathlib.Path(__file__).resolve().parents[1]
            / "careagents" / "static" / "chat.js")
 

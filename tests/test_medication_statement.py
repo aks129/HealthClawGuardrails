@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 from r6.models import R6Resource
+import pytest
 
 RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
 # A name an upstream feed could put in free text. It must never be served.
@@ -192,6 +193,7 @@ class _HC:
                 "code": {"text": "Atorvastatin 20 mg"}}
 
 
+@pytest.mark.extension
 def test_search_records_offers_it():
     from careagents.agent import TOOLS
 
@@ -200,6 +202,7 @@ def test_search_records_offers_it():
     assert "MedicationStatement" in enum
 
 
+@pytest.mark.extension
 def test_the_synced_record_count_includes_statements():
     """COUNTED_TYPES is what the patient can reach; a statement now is.
     A record count, not a medication count, so no dedup question arises."""
@@ -208,6 +211,7 @@ def test_the_synced_record_count_includes_statements():
     assert "MedicationStatement" in HealthClawClient.COUNTED_TYPES
 
 
+@pytest.mark.extension
 def test_health_summary_keeps_statements_apart_from_requests():
     """Store both, keep them apart, never merge (the #377 ruling). A merged
     list needs a dedup rule the decision doc says code cannot supply.
@@ -224,6 +228,7 @@ def test_health_summary_keeps_statements_apart_from_requests():
     assert hc.reads == ["Medication/m1"]
 
 
+@pytest.mark.extension
 def test_search_records_chases_a_statement_reference():
     from careagents.agent import _execute_tool
 

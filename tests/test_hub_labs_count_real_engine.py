@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 CAT = "http://terminology.hl7.org/CodeSystem/observation-category"
 

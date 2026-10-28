@@ -136,6 +136,7 @@ def test_smbp_reading_into_a_closed_tenant(client, secret):
     assert _count() == 0
 
 
+@pytest.mark.extension
 def test_smbp_enroll_and_report_into_a_closed_tenant(client, secret):
     _close()
     h = {"X-Tenant-Id": CLOSED, "X-Step-Up-Token": _token()}

@@ -132,6 +132,7 @@ def test_patient_not_asked_is_never_worded_as_no_allergies():
     assert "no known" not in _qualified(STATUS).lower()
 
 
+@pytest.mark.extension
 def test_the_brief_engine_has_no_copy_of_its_own():
     from r6.brief import engine
     assert not hasattr(engine, "_ABSENCE_CONCEPTS")
@@ -242,6 +243,7 @@ def test_an_ordinary_resolver_answer_is_still_a_label(monkeypatch, label):
 
 # --- the brief: a dropped code is still a recorded entry ---------------------
 
+@pytest.mark.extension
 def test_a_condition_whose_code_redaction_dropped_reads_unnamed_not_unknown():
     """Redaction drops a malformed SNOMED code and leaves the system. That
     entry was recorded; "Unknown · Active" read like a mystery illness
@@ -257,6 +259,7 @@ def test_a_condition_whose_code_redaction_dropped_reads_unnamed_not_unknown():
     assert field.label == engine.UNLABELLED
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("code", [None, {"coding": [{}]}, {"coding": []}])
 def test_a_condition_with_nothing_coded_still_reads_unknown(code):
     """No code element, or codings with neither a code nor a system: there

@@ -20,6 +20,9 @@ from careagents.models import Connection
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 FAILED_MESSAGE = ("We couldn't confirm the disconnect. "
                   "Please try again in a minute.")

@@ -13,6 +13,9 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
 from tests.test_careagents_imessage import (
     OTHER_EMAIL, PHONE, _inbound, _link_token, _pair)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 DAY = 86400.0
 STRANGER = "+15550100199"

@@ -1,4 +1,7 @@
 from r6.smbp.triage import classify, SYMPTOMS
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 # --- BP axis (no symptoms), 2025 AHA/ACC bands against 130/80 ---

@@ -23,6 +23,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, app, cfg, svc)
 from tests.test_careagents_sendblue import _make_real
 
+pytestmark = pytest.mark.extension
+
 
 def _agent(c):
     conn = c.post("/api/connections/sample").get_json()["id"]

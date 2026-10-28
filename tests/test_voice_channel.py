@@ -20,18 +20,21 @@ def _post(app, client, **body):
                              "text": "hi", **body})
 
 
+@pytest.mark.extension
 def test_voice_is_a_known_channel():
     from r6.command_center.models import KNOWN_CHANNELS, audit_channel
     assert "voice" in KNOWN_CHANNELS
     assert audit_channel("voice") == "voice"
 
 
+@pytest.mark.extension
 def test_a_voice_turn_is_accepted_and_keeps_its_channel(app, client):
     r = _post(app, client, surface="voice")
     assert r.status_code == 201, r.get_data(as_text=True)
     assert r.get_json()["channel"] == "voice"
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("value", ["Voice", "voice ", "VOICE", "voice\n"])
 def test_near_misses_of_voice_are_still_refused(app, client, value):
     assert _post(app, client, surface=value).status_code == 400

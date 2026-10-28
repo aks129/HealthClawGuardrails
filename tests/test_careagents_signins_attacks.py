@@ -17,6 +17,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_funnel import _app
 from tests.test_careagents_signins import _passkey
 
+pytestmark = pytest.mark.extension
+
 OWNER = "owner@example.com"
 XSS = '<img src=x onerror="alert(1)">'
 

@@ -12,6 +12,9 @@ from careagents.models import Connection
 from tests.test_careagents import FakeClient, _login
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
+import pytest
+
+pytestmark = pytest.mark.extension
 
 cfg = _cfg_fixture
 svc = _svc_fixture

@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import pathlib
 import re
+import pytest
+
+pytestmark = pytest.mark.extension
 
 TEMPLATE = (pathlib.Path(__file__).resolve().parent.parent
             / "templates" / "mcp_apps" / "lab_trends.html")

@@ -15,6 +15,9 @@ from careagents import imessage
 from careagents.agent import _execute_tool
 from tests.test_beta_acceptance_rows import BASE, TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_a_cholesterol_question_by_text_gets_a_trend_and_a_real_chart(

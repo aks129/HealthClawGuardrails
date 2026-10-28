@@ -251,6 +251,7 @@ NON_MATRIX_GATES = [
 ]
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('method,path,body', NON_MATRIX_GATES,
                          ids=[p for _, p, _ in NON_MATRIX_GATES])
 def test_a_non_matrix_write_gate_refuses_an_unknown_scope(

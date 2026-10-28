@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from models import db
 from r6.models import R6Resource, AuditEventRecord
 from r6.command_center import projector
+import pytest
+
+pytestmark = pytest.mark.extension
 
 TENANT = "test-tenant"
 OTHER_TENANT = "other-tenant"

@@ -68,3 +68,8 @@ follow_imports = "skip"
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+
+[tool.pytest.ini_options]
+markers = [
+    "extension: needs an optional module (r6/extensions.py); the core-only CI job deselects these",
+]

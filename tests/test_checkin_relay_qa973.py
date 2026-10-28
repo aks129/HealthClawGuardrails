@@ -20,6 +20,8 @@ from tests import checkin_fixtures as f
 from tests.test_checkin_relay import (  # noqa: F401  (fixtures)
     RELAY, _account, _careagents, _Engine, _sign_in, chain, relay)
 
+pytestmark = pytest.mark.extension
+
 
 def test_a_well_formed_body_over_the_cap_is_refused(relay):  # noqa: F811
     """Only the one allowed key, so nothing but the size cap can refuse it."""

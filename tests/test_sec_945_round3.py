@@ -13,6 +13,8 @@ from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_sec_945_first_answer import CANARY, SNOMED, _plant
 
+pytestmark = pytest.mark.extension
+
 NA = "1631000175102"
 SILENT = "don't say whether"
 

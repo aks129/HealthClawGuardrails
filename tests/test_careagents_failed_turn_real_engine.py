@@ -13,6 +13,9 @@ from __future__ import annotations
 from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, _turn, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _rows(chain):

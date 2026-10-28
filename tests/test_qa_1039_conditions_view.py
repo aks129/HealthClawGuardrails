@@ -26,6 +26,8 @@ import pytest
 from careagents.agent import _execute_tool
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 CLINICAL = ("http://terminology.hl7.org/CodeSystem/"
             "condition-clinical")

@@ -30,6 +30,8 @@ from tests.test_careagents_first_answer import _first_turn
 from tests.test_sec_945_first_answer import (
     _audit_details, _free_text, _no_canary, _plant)
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 OID = "urn:oid:2.16.840.1.113883.6.96"
 NKA, NKDA, STATUS = "716186003", "409137002", "1631000175102"

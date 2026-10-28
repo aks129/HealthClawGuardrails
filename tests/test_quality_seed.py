@@ -3,6 +3,9 @@ from datetime import date
 from scripts.seed_quality_demo import build_quality_cohort, _demo_observation_date
 from r6.smbp.monitoring import build_bp_observation  # noqa: F401  (namespace-package import check)
 from r6.quality.measures import evaluate_population
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_demo_observation_date_stays_in_current_year():

@@ -24,6 +24,8 @@ from careagents.models import Account, Base, ImessageLink, make_engine
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 PG = os.environ.get("CARE_TEST_DATABASE_URL", "")
 pg_only = pytest.mark.skipif(not PG.startswith("postgres"),
                              reason="needs a database with row locks")

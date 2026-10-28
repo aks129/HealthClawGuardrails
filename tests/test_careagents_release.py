@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.extension
+
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
     "careagents_release", ROOT / "scripts" / "careagents_release.py")

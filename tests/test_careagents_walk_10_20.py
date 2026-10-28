@@ -27,6 +27,9 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _past_the_resend_wait, app, cfg, svc)
 from tests.test_careagents_beta_signup import made  # noqa: F401  (fixture)
 from tests.test_careagents_rewalk_fixes import _link_session
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _STATIC = _ROOT / "careagents" / "static"

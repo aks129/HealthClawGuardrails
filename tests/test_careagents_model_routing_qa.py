@@ -13,6 +13,8 @@ import pytest
 
 from careagents import routing
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.mark.parametrize("text", [
     "thanks 45", "hi 300", "ok 911", "bye 2", "good night 0",

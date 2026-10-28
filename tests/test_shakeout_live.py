@@ -13,6 +13,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.extension
+
 _spec = importlib.util.spec_from_file_location(
     "shakeout_live",
     pathlib.Path(__file__).resolve().parent.parent / "scripts" / "shakeout_live.py")
