@@ -125,6 +125,7 @@ def test_an_empty_setting_loads_no_extension(monkeypatch):
 
 
 def test_unset_loads_the_bundled_modules(monkeypatch):
+    pytest.importorskip("bundled_extensions")
     monkeypatch.delenv(extensions.ENV_VAR, raising=False)
     names = [name for name, _ in extensions._discover()]
     assert names[-len(extensions.BUNDLED):] == list(extensions.BUNDLED)
