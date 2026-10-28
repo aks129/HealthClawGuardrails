@@ -97,12 +97,25 @@ def purge_tenant(tenant_id):
     # the loaded extensions: the migrations create every one of these tables
     # whichever optional modules a process loads, so a deployment started
     # without a module still holds that module's rows and must still delete
-    # them. A table this database does not have is skipped.
+    # them. A migrated database has every one, and a database built with
+    # create_all has every table a loaded model defines. A table missing
+    # where it should exist means the schema is not the one this purge was
+    # written for, or reflection came back short: refuse rather than report
+    # a deletion that skipped it. Only a table no model defines, in a
+    # database the migrations never ran on, can hold no rows and is skipped.
     from sqlalchemy import inspect, text
 
     from models import db
 
     present = set(inspect(db.session.connection()).get_table_names())
+    migrated = "alembic_version" in present
+    missing = [table for table, _label in _TENANT_TABLES
+               if table not in present
+               and (migrated or table in db.metadata.tables)]
+    if missing:
+        raise RuntimeError(
+            "purge: tenant tables missing from the database: "
+            + ", ".join(missing))
     purged = [(table, label) for table, label in _TENANT_TABLES
               if table in present]
     for table, label in purged:
