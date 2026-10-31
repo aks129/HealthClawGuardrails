@@ -165,6 +165,11 @@ export function hasGrantMarker(headers: Record<string, string> | undefined): boo
 
 // Arguments that would name a tenant. On the grant path the introspected
 // tenant is the only one sent, so any of these is dropped before the call.
+// Top-level keys only: allow-listed tools take flat arguments, and the nested
+// FHIR resources fhir_validate and questionnaire_populate carry are never a
+// tenant source. On the grant path the tenant reaches the engine only as the
+// X-Tenant-Id header executeAsGrant sets. A tool whose nested input could
+// select a tenant needs its own strip before it joins the allow-list.
 const TENANT_ARGUMENT = /tenant/i;
 
 function readOnlyRefusal(toolName: string): Record<string, unknown> {

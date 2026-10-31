@@ -395,6 +395,34 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
   });
 });
 
+describe("the tenant a consented connection reaches", () => {
+  // The strip is top-level only. A tenant nested in a FHIR body is not a
+  // tenant source: the engine takes the tenant from the header the grant path
+  // sets, and only /internal/* routes read one from a body.
+  test("a tenant nested in a resource body leaves the grant tenant as the only one sent", async () => {
+    const sessionId = await session();
+    await call(sessionId, "fhir_validate", {
+      resource: { resourceType: "Patient", meta: { tag: [{ code: "victim-tenant" }] }, tenant_id: "victim-tenant" },
+    });
+    expect(flaskReads()).toHaveLength(1);
+    expect(flaskReads()[0].init.headers["X-Tenant-Id"]).toBe(TENANT);
+    expect(mints().map((m) => JSON.parse(m.init.body).tenant_id)).toEqual([TENANT]);
+  });
+});
+
+describe("the URL guard applies to token-mode sessions too", () => {
+  // A change from main, stated in the PR: an id carrying an encoded slash,
+  // backslash, $, ? or # used to be sent as one encoded segment.
+  test("a static-token fhir_read with a slash in the id is refused before the engine", async () => {
+    const init = await initialize(`Bearer ${STATIC_TOKEN}`);
+    const res = await call(init.headers["mcp-session-id"], "fhir_read",
+      { resource_type: "Patient", resource_id: "p/../x" }, `Bearer ${STATIC_TOKEN}`);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("invalid_request_path");
+    expect(flaskReads()).toHaveLength(0);
+  });
+});
+
 describe("an allow-listed tool reaches only the path it was built for", () => {
   // Caught by fetch/search's own validation: a type the read tools accept and
   // an id in the engine's charset. None of these trip the URL guard.
