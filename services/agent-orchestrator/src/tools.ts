@@ -23,6 +23,8 @@
 import {
   fetchWithTimeout,
   BackendTimeoutError,
+  EngineUrlRefusedError,
+  engineUrlRefusedResult,
   backendTimeoutResult,
 } from "./fetch-timeout";
 import {
@@ -214,6 +216,55 @@ export function shlGenerateEnabled(env: NodeJS.ProcessEnv = process.env): boolea
   return env.MCP_ENABLE_SHL_GENERATE === "true" || env.MCP_ENABLE_SHL_GENERATE === "1";
 }
 
+// The resource types fhir_read, fhir_search, fetch and search accept.
+const FHIR_RESOURCE_TYPES: readonly string[] = [
+  "Patient",
+  "Encounter",
+  "Observation",
+  "AuditEvent",
+  "Consent",
+  "Permission",
+  "SubscriptionTopic",
+  "Subscription",
+  "NutritionIntake",
+  "NutritionProduct",
+  "DeviceAlert",
+  "DeviceAssociation",
+  "Requirements",
+  "ActorDefinition",
+  "Condition",
+  "Provenance",
+  "AllergyIntolerance",
+  "Immunization",
+  "MedicationRequest",
+  "MedicationStatement",
+  "Medication",
+  "MedicationDispense",
+  "Procedure",
+  "DiagnosticReport",
+  "CarePlan",
+  "CareTeam",
+  "Goal",
+  "DocumentReference",
+  "Location",
+  "Organization",
+  "Practitioner",
+  "PractitionerRole",
+  "RelatedPerson",
+  "Coverage",
+  "ServiceRequest",
+  "Specimen",
+  "FamilyMemberHistory",
+];
+
+// The engine's resource-id charset and width (r6/resource_ids.py), so a
+// path segment taken from input can never be "..", "$op" or free text.
+const RESOURCE_ID_PATTERN = /^[A-Za-z0-9\-.]{1,255}$/;
+
+function isResourceId(value: string): boolean {
+  return RESOURCE_ID_PATTERN.test(value) && value !== "." && value !== "..";
+}
+
 // The tools a consented connection (an OAuth session, spec §13.6) may list and
 // call. An allow-list, not a deny-list: a tool added later stays hidden from
 // connected agents until someone decides it is a read and adds it here. The
@@ -376,45 +427,7 @@ export class FHIRTools {
           properties: {
             resource_type: {
               type: "string",
-              enum: [
-                "Patient",
-                "Encounter",
-                "Observation",
-                "AuditEvent",
-                "Consent",
-                "Permission",
-                "SubscriptionTopic",
-                "Subscription",
-                "NutritionIntake",
-                "NutritionProduct",
-                "DeviceAlert",
-                "DeviceAssociation",
-                "Requirements",
-                "ActorDefinition",
-                "Condition",
-                "Provenance",
-                "AllergyIntolerance",
-                "Immunization",
-                "MedicationRequest",
-                "MedicationStatement",
-                "Medication",
-                "MedicationDispense",
-                "Procedure",
-                "DiagnosticReport",
-                "CarePlan",
-                "CareTeam",
-                "Goal",
-                "DocumentReference",
-                "Location",
-                "Organization",
-                "Practitioner",
-                "PractitionerRole",
-                "RelatedPerson",
-                "Coverage",
-                "ServiceRequest",
-                "Specimen",
-                "FamilyMemberHistory",
-              ],
+              enum: [...FHIR_RESOURCE_TYPES],
             },
             resource_id: { type: "string", description: "The resource ID" },
           },
@@ -449,45 +462,7 @@ export class FHIRTools {
           properties: {
             resource_type: {
               type: "string",
-              enum: [
-                "Patient",
-                "Encounter",
-                "Observation",
-                "AuditEvent",
-                "Consent",
-                "Permission",
-                "SubscriptionTopic",
-                "Subscription",
-                "NutritionIntake",
-                "NutritionProduct",
-                "DeviceAlert",
-                "DeviceAssociation",
-                "Requirements",
-                "ActorDefinition",
-                "Condition",
-                "Provenance",
-                "AllergyIntolerance",
-                "Immunization",
-                "MedicationRequest",
-                "MedicationStatement",
-                "Medication",
-                "MedicationDispense",
-                "Procedure",
-                "DiagnosticReport",
-                "CarePlan",
-                "CareTeam",
-                "Goal",
-                "DocumentReference",
-                "Location",
-                "Organization",
-                "Practitioner",
-                "PractitionerRole",
-                "RelatedPerson",
-                "Coverage",
-                "ServiceRequest",
-                "Specimen",
-                "FamilyMemberHistory",
-              ],
+              enum: [...FHIR_RESOURCE_TYPES],
             },
             patient: {
               type: "string",
@@ -1246,6 +1221,7 @@ export class FHIRTools {
       return await this.executeToolInner(toolName, input, headers);
     } catch (e) {
       if (e instanceof BackendTimeoutError) return backendTimeoutResult(e);
+      if (e instanceof EngineUrlRefusedError) return engineUrlRefusedResult(e);
       throw e;
     }
   }
@@ -2469,8 +2445,8 @@ export class FHIRTools {
     const qIdx = query.indexOf("?");
     const resourceType = qIdx === -1 ? query : query.slice(0, qIdx);
     const rawParams = qIdx === -1 ? "" : query.slice(qIdx + 1);
-    if (!resourceType) {
-      return { error: "query must start with a FHIR resource type" };
+    if (!FHIR_RESOURCE_TYPES.includes(resourceType)) {
+      return { error: "query must start with a supported FHIR resource type" };
     }
 
     const params = new URLSearchParams(rawParams);
@@ -2519,8 +2495,8 @@ export class FHIRTools {
     const slashIdx = id.indexOf("/");
     const resourceType = slashIdx === -1 ? "" : id.slice(0, slashIdx);
     const resourceId = slashIdx === -1 ? "" : id.slice(slashIdx + 1);
-    if (!resourceType || !resourceId) {
-      return { error: "id must be in 'ResourceType/id' format" };
+    if (!FHIR_RESOURCE_TYPES.includes(resourceType) || !isResourceId(resourceId)) {
+      return { error: "id must be in 'ResourceType/id' format with a supported resource type" };
     }
 
     const resp = await fetchWithTimeout(

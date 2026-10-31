@@ -385,6 +385,31 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
   });
 });
 
+describe("an allow-listed tool reaches only the path it was built for", () => {
+  // Caught by fetch/search's own validation: a type the read tools accept and
+  // an id in the engine's charset. None of these trip the URL guard.
+  test.each([
+    ["fetch", { id: "Foo/p-1" }],
+    ["fetch", { id: "Patient/a b" }],
+    ["search", { query: "Foo?status=active" }],
+  ])("%s %j is refused before any call to the engine", async (name, args) => {
+    const sessionId = await session();
+    const res = await call(sessionId, name, args);
+    expect(res.body.result.isError).toBe(true);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
+  // Caught by the URL guard alone: context_get validates nothing about its id,
+  // so this is the shape of the next tool that forgets to.
+  test.each(["..", "."])("context_get with id %s never leaves /context", async (contextId) => {
+    const sessionId = await session();
+    const res = await call(sessionId, "context_get", { context_id: contextId });
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("invalid_request_path");
+    expect(flaskReads()).toHaveLength(0);
+  });
+});
+
 describe("R8 on the SSE transport, where the overrides live", () => {
   const overrides = {
     _tenantId: "victim-tenant",
