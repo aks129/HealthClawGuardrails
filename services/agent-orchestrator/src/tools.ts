@@ -183,6 +183,18 @@ function readOnlyRefusal(toolName: string): Record<string, unknown> {
   };
 }
 
+// A read-tier tool that is simply not on the allow-list: say so, without
+// implying it is a write.
+export const OFF_LIST_REFUSAL = "This tool is not available on a consented connection.";
+
+function offListRefusal(toolName: string): Record<string, unknown> {
+  return {
+    error: OFF_LIST_REFUSAL,
+    tool: toolName,
+    message: "A consented connection can call only the read tools it lists.",
+  };
+}
+
 export function resetGrantReadTokenCacheForTests(): void {
   GRANT_READ_TOKEN_CACHE.clear();
 }
@@ -1346,9 +1358,8 @@ export class FHIRTools {
     grant: OAuthGrantMarker,
     agentId: string | undefined
   ): Promise<Record<string, unknown>> {
-    if (tool.tier === "write" || !OAUTH_READ_TOOL_NAMES.has(toolName)) {
-      return readOnlyRefusal(toolName);
-    }
+    if (tool.tier === "write") return readOnlyRefusal(toolName);
+    if (!OAUTH_READ_TOOL_NAMES.has(toolName)) return offListRefusal(toolName);
     input = Object.fromEntries(
       Object.entries(input ?? {}).filter(([key]) => !TENANT_ARGUMENT.test(key))
     );

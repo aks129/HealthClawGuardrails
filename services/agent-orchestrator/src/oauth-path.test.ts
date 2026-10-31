@@ -23,7 +23,7 @@ import {
   resetRateLimitForTests,
   sessionCredential,
 } from "./index";
-import { OAUTH_READ_TOOL_NAMES, resetGrantReadTokenCacheForTests } from "./tools";
+import { OAUTH_READ_TOOL_NAMES, OFF_LIST_REFUSAL, resetGrantReadTokenCacheForTests } from "./tools";
 
 const mockFetch = fetch as unknown as jest.Mock;
 
@@ -355,7 +355,7 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
     const sessionId = await session();
     const res = await call(sessionId, name, args);
     expect(res.body.result.isError).toBe(true);
-    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(res.body.result.content[0].text).toContain(OFF_LIST_REFUSAL);
     expect(mints()).toHaveLength(0);
     expect(flaskReads()).toHaveLength(0);
   });
@@ -365,7 +365,9 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
     const res = await call(sessionId, "guardrail_conformance", { fresh: true });
     expect(res.status).toBe(200);
     expect(res.body.result.isError).toBe(true);
-    expect(res.body.result.content[0].text).toContain("read-only");
+    // Its own refusal: the tool is not a write, so the write-rail text is wrong.
+    expect(res.body.result.content[0].text).toContain(OFF_LIST_REFUSAL);
+    expect(res.body.result.content[0].text).not.toContain("read-only");
     expect(mints()).toHaveLength(0);
     expect(flaskReads()).toHaveLength(0);
   });

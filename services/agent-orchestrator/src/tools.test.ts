@@ -383,6 +383,7 @@ describe("Tool Schema Tests", () => {
 
   it("every allow-listed tool exists, is read tier, and claims read-only", () => {
     const definitions = tools.getToolSchemas();
+    expect(OAUTH_READ_TOOL_NAMES.size).toBeGreaterThan(0);
     for (const name of OAUTH_READ_TOOL_NAMES) {
       const definition = definitions.find((t) => t.name === name);
       expect(definition?.tier).toBe("read");
