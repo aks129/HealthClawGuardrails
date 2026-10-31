@@ -35,9 +35,34 @@ CHECKIN_JS_SHA256 = (
 
 @pytest.fixture
 def wallet():
-    app, svc = _app(_config(CARE_CHECKIN_WALLET="1"))
+    # With the test patient, so a fresh account can finish the form and
+    # the hub links to it.
+    app, svc = _app(_config(CARE_CHECKIN_WALLET="1",
+                            CARE_CHECKIN_TEST_PATIENT="1"))
     yield app, svc
     svc.engine.dispose()
+
+
+LINK = "Try a sample new-patient form"
+
+
+def test_no_link_where_the_form_cannot_be_answered(monkeypatch):
+    # The wallet on, the test patient off: an account with only the made-up
+    # sample would stop at "can't be used for check-in", so no link. One
+    # with active records of its own gets it.
+    app, svc = _app(_config(CARE_CHECKIN_WALLET="1"))
+    try:
+        client = app.test_client()
+        acct = _account(svc, monkeypatch)
+        _sign_in(client, acct)
+        assert LINK not in client.get("/home").get_data(as_text=True)
+        svc.add_connection(acct.id, "sample", "ca-sample-1073", "Sample records",
+                           provider="Sample records")
+        assert LINK not in client.get("/home").get_data(as_text=True)
+        svc.add_connection(acct.id, "direct", "ca-direct-1073", "My records")
+        assert LINK in client.get("/home").get_data(as_text=True)
+    finally:
+        svc.engine.dispose()
 
 
 def test_flag_off_there_is_no_sample_form_and_no_link(monkeypatch):
@@ -102,8 +127,11 @@ BANNED = (r"\bfetch\s*\(", r"XMLHttpRequest", r"WebSocket", r"EventSource",
 
 def test_the_page_scripts_send_nothing_and_keep_nothing():
     # This page's own script and the module it imports to name records.
-    for name in ("checkin_sample.js", "checkin_answer.js"):
+    for name, known in (("checkin_sample.js", "runCheckin(newRequest()"),
+                        ("checkin_answer.js", "export function recordNames(")):
         src = _code(STATIC / name)
+        # The scan reads real code, not an empty or wrong file.
+        assert len(src) > 1000 and known in src, name
         for banned in BANNED:
             assert not re.search(banned, src), (name, banned)
 

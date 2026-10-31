@@ -26,6 +26,8 @@ Synthetic data only.
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -140,7 +142,26 @@ def test_with_both_flags_the_page_carries_the_offer(tester):
     browser, *_ = tester
     page = browser.get("/checkin/wallet").get_data(as_text=True)
     assert f'data-test-patient="{ROUTE}"' in page
-    assert "Use the connectathon test patient" in page
+    assert "Use a made-up patient's records to try this" in page
+    # Plain words only (#1077).
+    text = re.sub(r"<script.*?</script>|<style.*?</style>|<[^>]+>", " ",
+                  page, flags=re.S).lower()
+    for word in ("connectathon", "test patient", "us core"):
+        assert word not in text, word
+    js = (Path(checkin_wallet.__file__).parent / "static"
+          / "checkin_wallet.js").read_text()
+    strings = " ".join(re.findall(r'"[^"\n]*"', js)).lower()
+    for word in ("connectathon", "test patient", "us core"):
+        assert word not in strings, word
+
+
+def test_a_test_patient_chosen_under_the_old_name_still_counts():
+    old = {"kind": "sample", "provider": "Connectathon test patient"}
+    new = {"kind": "sample", "provider": checkin_wallet.TEST_PROVIDER}
+    assert checkin_wallet._is_test_patient(old)
+    assert checkin_wallet._is_test_patient(new)
+    assert not checkin_wallet._is_test_patient(
+        {"kind": "sample", "provider": "Sample records"})
 
 
 # --- the gate -------------------------------------------------------------------

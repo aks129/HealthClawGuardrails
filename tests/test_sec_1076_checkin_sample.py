@@ -22,7 +22,8 @@ LINK = "Try a sample new-patient form"
 
 @pytest.fixture
 def wallet():
-    app, svc = _app(_config(CARE_CHECKIN_WALLET="1"))
+    app, svc = _app(_config(CARE_CHECKIN_WALLET="1",
+                            CARE_CHECKIN_TEST_PATIENT="1"))
     yield app, svc
     svc.engine.dispose()
 

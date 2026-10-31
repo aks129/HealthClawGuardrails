@@ -1,27 +1,36 @@
 /**
- * The sample new-patient form (#1073), on a phone: a first-timer goes from
- * the hub to a made-up clinic's form, lets the check-in tab answer it, and
- * sees the answers come back on the form's own page; or shares nothing,
- * and the form says it is still blank. No outside site is involved: the
- * form is served by CareAgents and asks with the vendored Verifier library,
- * as any check-in website does.
+ * The sample new-patient form (#1073, #1077), on a phone: a first-timer
+ * goes from the hub to a made-up clinic's form, opens the answering tab,
+ * is offered a made-up patient's records in plain words (a new account has
+ * only the sample, which check-in cannot use), and sees the answers come
+ * back on the form's own page; or shares nothing, and the form says it is
+ * still blank. No outside site is involved: the form is served by
+ * CareAgents and asks with the vendored Verifier library, as any check-in
+ * website does.
  *
- * This suite's CareAgents has no engine behind it (HEALTHCLAW_BASE is a
- * dead port), so the sample tap cannot seed made-up records and the
- * records relay is answered here, by route, with the synthetic test
- * patient's export, as careagents-checkin-wallet.spec.ts does. What this
- * proves is the page, the hand-off and the answer coming back to its tab;
- * the relay on the real engine is tests/test_checkin_relay.py.
+ * The journey runs on the second CareAgents server (CARE_ALLOW_*), which
+ * has the test patient on; the first has it off, and there the hub does
+ * not link to a form the account could not finish.
+ *
+ * Neither server has an engine behind it (HEALTHCLAW_BASE is a dead port),
+ * so the made-up patient cannot really be seeded and the records relay is
+ * answered here, by route: first "only the sample" (as the engine answers
+ * a new account), then, once the made-up patient is chosen, the synthetic
+ * test patient's export. What this proves is the pages, the hand-off, the
+ * words and the answer coming back to its tab; the relay and the seed on
+ * the real engine are tests/test_checkin_relay.py and
+ * tests/test_checkin_wallet_test_patient.py.
  */
 
 import { test, expect, Page } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { CARE_BASE_URL, CARE_LOG } from '../playwright.config';
+import {
+  CARE_ALLOW_BASE_URL, CARE_ALLOW_LOG, CARE_BASE_URL, CARE_LOG,
+} from '../playwright.config';
 import { signIn, uniqueEmail } from './careagents-fixtures';
 
 test.use({
-  baseURL: CARE_BASE_URL,
   viewport: { width: 375, height: 812 },
   isMobile: true,
   hasTouch: true,
@@ -32,51 +41,76 @@ test.use({
 
 const EXPORT = fs.readFileSync(path.join(__dirname, '..', 'fixtures',
   'checkin-export-test-patient.json'), 'utf8');
+const LINK = 'Try a sample new-patient form';
 
-/** From the hub to the sample form, then its tab for answering. */
+// Only the app under test, for both tabs: blockThirdParty, set on the
+// context, and falling back rather than continuing, so the routes added
+// later (tried first) still answer in the second tab.
+test.beforeEach(async ({ page }) => {
+  await page.context().route('**/*', (route) => {
+    const url = route.request().url();
+    if (!url.startsWith('http')) return route.fallback();
+    const host = new URL(url).hostname;
+    return host === 'localhost' || host === '127.0.0.1'
+      ? route.fallback() : route.abort();
+  });
+});
+
+/** From the hub to the sample form, through the made-up patient offer,
+ *  to the answering tab's review. */
 async function openForm(page: Page): Promise<Page> {
+  const base = CARE_ALLOW_BASE_URL;
   const asked: unknown[] = [];
-  await page.context().route(`${CARE_BASE_URL}/checkin/wallet/records`,
-    (route) => {
-      asked.push(route.request().postDataJSON());
-      return route.fulfill({ status: 200, headers: { 'Cache-Control': 'no-store' },
-        contentType: 'application/fhir+json', body: EXPORT });
-    });
-  await signIn(page, uniqueEmail(), CARE_LOG);
-  await page.getByRole('link', { name: 'Try a sample new-patient form' }).click();
-  await expect(page).toHaveURL(`${CARE_BASE_URL}/checkin/sample`);
+  let chosen = false;
+  await page.context().route(`${base}/checkin/wallet/records`, (route) => {
+    asked.push(route.request().postDataJSON());
+    return chosen
+      ? route.fulfill({ status: 200, headers: { 'Cache-Control': 'no-store' },
+        contentType: 'application/fhir+json', body: EXPORT })
+      : route.fulfill({ status: 409, contentType: 'application/json',
+        body: '{"error":"sample_only"}' });
+  });
+  await page.context().route(`${base}/checkin/wallet/test-patient`, (route) => {
+    chosen = true;
+    return route.fulfill({ status: 200, contentType: 'application/json',
+      body: '{"ready":true}' });
+  });
+  await signIn(page, uniqueEmail(), CARE_ALLOW_LOG);
+  await page.getByRole('link', { name: LINK }).click();
+  await expect(page).toHaveURL(`${base}/checkin/sample`);
   await expect(page.locator('.sample-note')).toContainText('made-up clinic');
   const [tab] = await Promise.all([
     page.waitForEvent('popup'), page.locator('#sample-start').click()]);
+
+  // Plain words for the made-up patient (#1077).
+  const offer = tab.locator('#wallet-test-patient');
+  await expect(offer).toBeVisible();
+  const words = (await offer.innerText()).toLowerCase();
+  for (const w of ['connectathon', 'test patient', 'us core']) {
+    expect(words).not.toContain(w);
+  }
+  await tab.getByRole('button', { name: "Use a made-up patient's records to try this" }).click();
+
   await expect(tab.locator('#wallet-review')).toBeVisible();
-  // The wallet asked for the kinds of record the form names, nothing else.
-  expect(asked).toEqual([{ resource_types:
-    ['AllergyIntolerance', 'Condition', 'MedicationRequest'] }]);
+  // The kinds of record the form names, nothing else, before and after.
+  const types = { resource_types: ['AllergyIntolerance', 'Condition', 'MedicationRequest'] };
+  expect(asked).toEqual([types, types]);
   // Every item starts unshared.
-  const choices = tab.locator('#wallet-items .checkin-choice');
-  await expect(choices).toHaveCount(4);
+  await expect(tab.locator('#wallet-items .checkin-choice')).toHaveCount(4);
   await expect(tab.locator('#wallet-items input[value=share]:checked')).toHaveCount(0);
-  // The free-text question is shown as one it does not answer.
-  await expect(tab.locator('#wallet-items li[data-item=intake]'))
-    .toContainText('What brings you in today?');
+  // The free-text question is shown as one it does not answer, and the
+  // line says it is about the question below it.
+  const intake = tab.locator('#wallet-items li[data-item=intake]');
+  await expect(intake).toContainText('What brings you in today?');
+  await expect(intake.locator('.checkin-skipped-why'))
+    .toHaveText("This page can't answer the next question. Nothing is sent for it.");
   return tab;
 }
 
 test.describe('sample new-patient form at 375px', () => {
-  // Only the app under test, for both tabs: blockThirdParty, set on the
-  // context, and falling back rather than continuing, so the relay's route
-  // (added later, so tried first) still answers in the second tab.
-  test.beforeEach(async ({ page }) => {
-    await page.context().route('**/*', (route) => {
-      const url = route.request().url();
-      if (!url.startsWith('http')) return route.fallback();
-      const host = new URL(url).hostname;
-      return host === 'localhost' || host === '127.0.0.1'
-        ? route.fallback() : route.abort();
-    });
-  });
+  test.use({ baseURL: CARE_ALLOW_BASE_URL });
 
-  test('the hub opens it, the records answer it, the answers come back',
+  test('the hub opens it, made-up records answer it, the answers come back',
     async ({ page }) => {
       const tab = await openForm(page);
       for (const id of ['medications', 'allergies', 'problems', 'intake']) {
@@ -101,8 +135,19 @@ test.describe('sample new-patient form at 375px', () => {
     const tab = await openForm(page);
     await tab.locator('#wallet-decline-all').click();
     await expect(page.locator('#sample-result-title')).toHaveText('Nothing was shared');
-    await expect(page.locator('#sample-result-text')).toContainText('still blank');
+    await expect(page.locator('#sample-result-text')).toHaveText(
+      'The answer said no to every item. The form is still blank.');
     await expect(page.locator('#sample-answers > li')).toHaveCount(0);
+  });
+});
+
+test.describe('sample new-patient form, test patient off', () => {
+  test.use({ baseURL: CARE_BASE_URL });
+
+  test('a new account is not sent to a form it cannot finish', async ({ page }) => {
+    await signIn(page, uniqueEmail(), CARE_LOG);
+    await expect(page.locator('#waiting')).toBeVisible();
+    await expect(page.getByRole('link', { name: LINK })).toHaveCount(0);
   });
 
   // The failure paths say so on the page rather than leaving "Waiting…" or
@@ -120,11 +165,23 @@ test.describe('sample new-patient form at 375px', () => {
     await expect(page.locator('#sample-waiting')).toBeHidden();
   });
 
-  test('a script that cannot load says the form could not start', async ({ page }) => {
-    await page.route('**/static/checkin_answer.js*',
-      (route) => route.fulfill({ status: 404, body: '' }));
-    await page.goto('/checkin/sample');
-    await expect(page.locator('#sample-stalled')).toBeVisible();
-    await expect(page.locator('#sample-start')).toBeDisabled();
-  });
+  test('a naming module that cannot load says the form could not start',
+    async ({ page }) => {
+      await page.route('**/static/checkin_answer.js*',
+        (route) => route.fulfill({ status: 404, body: '' }));
+      await page.goto('/checkin/sample');
+      await expect(page.locator('#sample-stalled')).toBeVisible();
+      await expect(page.locator('#sample-start')).toBeDisabled();
+    });
+
+  // The library itself missing: the module never runs, so the page's own
+  // timer says so (8 s).
+  test('a library that cannot load says the form could not start',
+    async ({ page }) => {
+      await page.route('**/static/vendor/smart-health-checkin-client/0.4.4/checkin.js*',
+        (route) => route.fulfill({ status: 404, body: '' }));
+      await page.goto('/checkin/sample');
+      await expect(page.locator('#sample-stalled')).toBeVisible({ timeout: 12_000 });
+      await expect(page.locator('#sample-start')).toBeDisabled();
+    });
 });

@@ -97,8 +97,11 @@ CONNECTION_ID_MAX = 32
 TEST_PATIENT_FILE = (Path(__file__).resolve().parent / "checkin"
                      / "us_core_test_patient.json")
 #: What marks a `sample` connection as the test patient. Set here only.
-TEST_PROVIDER = "Connectathon test patient"
-TEST_LABEL = "Connectathon test patient"
+#: Plain words, since the hub shows both (#1077); the earlier provider
+#: still marks the ones accounts already chose.
+TEST_PROVIDER = "Made-up patient"
+TEST_LABEL = "Made-up patient's records"
+TEST_PROVIDERS = frozenset({TEST_PROVIDER, "Connectathon test patient"})
 
 
 @lru_cache(maxsize=1)
@@ -166,7 +169,7 @@ def connected_how(c) -> str:
 
 
 def _is_test_patient(c) -> bool:
-    return c["kind"] == "sample" and c["provider"] == TEST_PROVIDER
+    return c["kind"] == "sample" and c["provider"] in TEST_PROVIDERS
 
 
 def record_sets(home: dict) -> list[dict]:
@@ -183,6 +186,14 @@ def record_sets(home: dict) -> list[dict]:
             seen.add(c["tenant_id"])
             sets.append(c)
     return sets
+
+
+def sample_form_completes(home: dict, test_patient: bool) -> bool:
+    """Whether the sample new-patient form (#1073) can be answered for
+    this account: the wallet answers from records it accepts, or offers
+    the test patient (its flag). Otherwise the hub does not link to it, as
+    the journey would stop at "can't be used for check-in"."""
+    return test_patient or bool(record_sets(home))
 
 
 def records_tenant(svc, account_id: str, test_patient: bool = False,
