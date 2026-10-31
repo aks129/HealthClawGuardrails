@@ -946,6 +946,7 @@ def _answered_predicate(page: str) -> str:
     return m.group(1)
 
 
+@pytest.mark.extension
 def test_the_page_classifies_a_status_exactly_as_the_relay_does(page):
     """Equivalence, not resemblance.
 

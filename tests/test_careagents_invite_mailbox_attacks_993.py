@@ -17,6 +17,8 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _age_caps, made, sent)
 from tests.test_careagents_invite_links import _code, _join_via
 
+pytestmark = pytest.mark.extension
+
 
 def _live_rows(svc) -> list[str]:  # noqa: F811
     with svc.session() as s:

@@ -11,6 +11,8 @@ import pytest
 
 from careagents import routing
 
+pytestmark = pytest.mark.extension
+
 SPANISH = "¿Cuáles son mis resultados de laboratorio más recientes?"
 ENGLISH = "What are my most recent lab results?"
 

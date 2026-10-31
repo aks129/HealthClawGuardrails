@@ -17,6 +17,8 @@ from sqlalchemy import create_engine, inspect, text
 from careagents import models
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.fixture
 def url(tmp_path):

@@ -215,6 +215,7 @@ AUD_TOKENS = {
 }
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('name', list(AUD_TOKENS))
 def test_an_audience_or_narrow_token_reads_nothing(app, client, monkeypatch,
                                                    name):
@@ -236,6 +237,7 @@ def test_an_audience_or_narrow_token_reads_nothing(app, client, monkeypatch,
                       headers=h).status_code == 403
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('name', list(AUD_TOKENS))
 def test_an_audience_or_narrow_token_writes_nothing(client, name):
     resp = client.post('/r6/fhir/Patient', json={

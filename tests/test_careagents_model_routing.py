@@ -14,6 +14,8 @@ import pytest
 
 from careagents import llm, routing
 
+pytestmark = pytest.mark.extension
+
 # --- the classifier ----------------------------------------------------------
 
 HAIKU = [

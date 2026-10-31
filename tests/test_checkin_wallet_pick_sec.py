@@ -19,6 +19,9 @@ import re
 from careagents.healthclaw import HealthClawError
 from tests.test_checkin_relay import _careagents, _FakeClient, _post
 from tests.test_checkin_wallet import STATIC, _account, _code, _sign_in
+import pytest
+
+pytestmark = pytest.mark.extension
 
 TYPES = ["Patient", "Coverage"]
 

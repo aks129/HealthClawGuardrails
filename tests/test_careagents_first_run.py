@@ -36,6 +36,8 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _confirm_token, _post, made, sent)
 from tests.test_careagents import _login
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "avery@example.com"
 
 

@@ -16,6 +16,9 @@ from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
 from tests.test_careagents_hub_outcomes import (INTAKE, _conn, _section,
                                                 _signed_in, _starters)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 cfg = _cfg_fixture
 svc = _svc_fixture

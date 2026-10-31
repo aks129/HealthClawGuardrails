@@ -25,19 +25,8 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 logger = logging.getLogger(__name__)
 
-def _public_tenants() -> frozenset[str]:
-    """
-    Tenants that are accessible without authentication.
-
-    Configurable via PUBLIC_TENANTS env var (comma-separated). Empty/unset
-    means NO public tenants — every dashboard request requires a signed
-    link or session. Set to "desktop-demo" on demo hosts (healthclaw.io)
-    to keep the synthetic demo tenant browsable.
-    """
-    raw = os.environ.get("PUBLIC_TENANTS", "").strip()
-    if not raw:
-        return frozenset()
-    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+# Moved to the core (r6/tenancy.py); re-exported here for one release.
+from r6.tenancy import _public_tenants, is_public  # noqa: E402,F401
 
 
 PUBLIC_TENANTS = _public_tenants()
@@ -90,14 +79,6 @@ def verify_access_token(token: str) -> dict | None:
     except BadSignature:
         logger.info("Dashboard access token failed signature check")
         return None
-
-
-def is_public(tenant_id: str) -> bool:
-    """Tenants in PUBLIC_TENANTS bypass auth entirely (demo use).
-
-    Re-reads env every call so changes without a restart take effect.
-    """
-    return tenant_id in _public_tenants()
 
 
 def build_dashboard_url(base_url: str, tenant_id: str,

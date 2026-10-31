@@ -17,6 +17,8 @@ from careagents import voice
 from careagents.config import Config, ConfigError
 from tests.test_careagents import _make_account, cfg, svc  # noqa: F401
 
+pytestmark = pytest.mark.extension
+
 FAKE_KEY = "fake-eleven-key-0000"
 VOICE_ID = "StockVoice01"
 SENTINEL = "SENTINEL-echoed-by-provider"

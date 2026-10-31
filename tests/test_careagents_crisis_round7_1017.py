@@ -29,6 +29,8 @@ from careagents import beta, llm, routing
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 PARTIAL = "SYNTHETIC-DECLINED-PREFIX: the amount that would be dangerous is"
 
 

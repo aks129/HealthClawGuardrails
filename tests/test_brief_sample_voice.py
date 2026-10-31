@@ -24,6 +24,8 @@ from r6.brief.engine import DOSE_NOT_LISTED
 from r6.seed import seed_demo_data
 from tests.test_brief_routes import _URL, _store
 
+pytestmark = pytest.mark.extension
+
 SECOND_PERSON = re.compile(r"\b(you|your|yours|yourself)\b", re.IGNORECASE)
 
 

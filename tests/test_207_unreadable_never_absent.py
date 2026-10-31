@@ -16,6 +16,8 @@ from careagents.agent import _summarize_bundle, run_turn
 from careagents.personas import system_prompt
 from r6.redaction import apply_redaction
 
+pytestmark = pytest.mark.extension
+
 
 ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"
 ICD9 = "http://hl7.org/fhir/sid/icd-9-cm"

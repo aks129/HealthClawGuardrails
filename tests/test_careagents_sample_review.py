@@ -17,6 +17,8 @@ import pytest
 from tests.test_careagents import FakeClient, _chat_app, cfg, svc  # noqa: F401
 from tests.test_careagents_beta_weekly import _real_agent
 
+pytestmark = pytest.mark.extension
+
 
 def _record(monkeypatch):
     seen = []

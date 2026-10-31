@@ -29,6 +29,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+#: (table, label) for the tenant-keyed tables purged by name, in delete order.
+#: The labels are the keys of the summary purge_tenant returns.
+_TENANT_TABLES = (
+    ("proposed_actions", "proposed_actions"),
+    ("agent_run_events", "agent_run_events"),
+    ("agent_tool_calls", "agent_tool_calls"),
+    ("agent_runs", "agent_runs"),
+    ("cc_conversation_messages", "messages"),
+    ("cc_conversations", "conversations"),
+    ("cc_agent_tasks", "agent_tasks"),
+    ("fasten_connections", "fasten_connections"),
+    ("fasten_jobs", "fasten_jobs"),
+    ("smbp_sessions", "smbp_sessions"),
+    ("wearable_connections", "wearable_connections"),
+    # SMART Health Link files hold the patient's encrypted bundle; a link
+    # shared before the purge must not keep serving after it.
+    ("shl_links", "shl_links"),
+)
+
+
 def purge_tenant(tenant_id):
     """Delete a tenant's PHI-bearing rows. Returns {table: rows_deleted}.
 
@@ -77,33 +97,44 @@ def purge_tenant(tenant_id):
         deleted[label] = model.query.filter_by(
             tenant_id=tenant_id).delete(synchronize_session=False)
 
-    # Optional modules: each is registered independently, so a deployment may
-    # not have them all. Import failures must not leave PHI behind silently —
-    # they are logged and re-raised.
-    for import_path, attr, label in (
-            ("r6.actions.models", "ProposedAction", "proposed_actions"),
-            ("r6.agent_runs.models", "AgentRunEvent", "agent_run_events"),
-            ("r6.agent_runs.models", "AgentToolCall", "agent_tool_calls"),
-            ("r6.agent_runs.models", "AgentRun", "agent_runs"),
-            ("r6.command_center.models", "ConversationMessage", "messages"),
-            ("r6.command_center.models", "Conversation", "conversations"),
-            ("r6.command_center.models", "AgentTask", "agent_tasks"),
-            ("r6.fasten.models", "FastenConnection", "fasten_connections"),
-            ("r6.fasten.models", "FastenJob", "fasten_jobs"),
-            ("r6.smbp.models", "SMBPSession", "smbp_sessions"),
-            ("r6.wearables.models", "WearableConnection", "wearable_connections"),
-            # SMART Health Link files hold the patient's encrypted bundle; a
-            # link shared before the purge must not keep serving after it.
-            ("r6.shl_links", "ShlLink", "shl_links"),
-    ):
-        try:
-            module = __import__(import_path, fromlist=[attr])
-            model = getattr(module, attr)
-        except (ImportError, AttributeError):
-            logger.info("purge: %s not present in this deployment", label)
-            continue
-        deleted[label] = model.query.filter_by(
-            tenant_id=tenant_id).delete(synchronize_session=False)
+    # Every other tenant-keyed store, by TABLE name and in this order (child
+    # rows before the rows they reference). Named here rather than taken from
+    # the loaded extensions: the migrations create every one of these tables
+    # whichever optional modules a process loads, so a deployment started
+    # without a module still holds that module's rows and must still delete
+    # them. A migrated database has every one, and a database built with
+    # create_all has every table a loaded model defines. A table missing
+    # where it should exist means the schema is not the one this purge was
+    # written for, or reflection came back short: refuse rather than report
+    # a deletion that skipped it. Only a table no model defines, in a
+    # database the migrations never ran on, can hold no rows and is skipped.
+    from sqlalchemy import inspect, text
+
+    from models import db
+
+    present = set(inspect(db.session.connection()).get_table_names())
+    migrated = "alembic_version" in present
+    missing = [table for table, _label in _TENANT_TABLES
+               if table not in present
+               and (migrated or table in db.metadata.tables)]
+    if missing:
+        raise RuntimeError(
+            "purge: tenant tables missing from the database: "
+            + ", ".join(missing))
+    purged = [(table, label) for table, label in _TENANT_TABLES
+              if table in present]
+    for table, label in purged:
+        deleted[label] = db.session.execute(
+            text(f"DELETE FROM {table} WHERE tenant_id = :tenant_id"),
+            {"tenant_id": tenant_id}).rowcount
+
+    # A purge never reports success over rows it left behind.
+    for table, _label in purged:
+        left = db.session.execute(
+            text(f"SELECT COUNT(*) FROM {table} WHERE tenant_id = :tenant_id"),
+            {"tenant_id": tenant_id}).scalar()
+        if left:
+            raise RuntimeError(f"purge: {table} still holds tenant rows")
 
     # The Fasten rows are gone, but a late connection_success, an old
     # connect link or the boot reaper could start a new import into the
@@ -111,8 +142,7 @@ def purge_tenant(tenant_id):
     # is retained, like the audit trail.
     # Not for a public tenant: purging one is open by design (the demo
     # resets), and a permanent tombstone would close it for good.
-    from models import db
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     from r6.fasten.models import TenantClosure
     if (not is_public(tenant_id)
             and db.session.get(TenantClosure, tenant_id) is None):

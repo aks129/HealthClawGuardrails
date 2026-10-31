@@ -31,6 +31,8 @@ from careagents.healthclaw import HealthClawError, HealthClawUnconfirmed
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _turn, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _frames(body: str) -> list[dict]:
     return [json.loads(line[len("data: "):])

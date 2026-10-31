@@ -15,6 +15,9 @@ from __future__ import annotations
 from careagents.agent import (MAX_MEDICATION_DEREFS, _medication_resolver,
                               _summarize_bundle)
 from careagents.healthclaw import HealthClawError
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _med_request(rid, ref=None, code=None, status="active"):

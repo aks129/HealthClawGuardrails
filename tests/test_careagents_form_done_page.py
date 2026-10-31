@@ -14,6 +14,9 @@ import json
 from careagents.healthclaw import HealthClawError
 from tests.test_beta_acceptance_rows import BASE, Chain, ba
 from tests.test_careagents import _chat_app, cfg, svc  # noqa: F401
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _past_review(fake, status, link="https://engine.example/f.pdf?sig=1"):

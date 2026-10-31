@@ -88,6 +88,7 @@ def test_the_heading_and_the_declined_page_read_plainly(app):
     assert "el.disabled = true;" in declined
 
 
+@pytest.mark.extension
 def test_an_unnamed_medicine_reads_as_on_the_brief():
     """#884 G7: the brief and the review say the same sentence."""
     from r6.actions.review import _view_rows

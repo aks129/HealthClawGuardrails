@@ -25,6 +25,9 @@ import pathlib
 import re
 
 from r6.caregaps.report import caller_reasons
+import pytest
+
+pytestmark = pytest.mark.extension
 
 TEMPLATE = (pathlib.Path(__file__).resolve().parent.parent
             / "templates" / "mcp_apps" / "care_gaps.html")

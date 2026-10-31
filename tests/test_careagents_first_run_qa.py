@@ -15,6 +15,9 @@ from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     made, sent)
 from tests.test_careagents_first_run import _ask, _signed_in_as
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_a_confirm_in_someone_elses_browser_plants_no_prefill(

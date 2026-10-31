@@ -21,6 +21,9 @@ from careagents.app import _BRIEF_SECTION_PREFIX
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, _make_direct_conn, _turn, cfg, svc)
 from tests.test_careagents_census_gaps import _all_text_in_careagents_db
+import pytest
+
+pytestmark = pytest.mark.extension
 
 CANARY = "CANARY-PHI-4417"
 

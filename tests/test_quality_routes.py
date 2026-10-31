@@ -4,6 +4,9 @@ import datetime as dt
 import r6.quality.routes as quality_routes
 from r6.models import R6Resource, db
 from r6.quality.routes import _default_measurement_period
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _store(app, resource, tenant_id):

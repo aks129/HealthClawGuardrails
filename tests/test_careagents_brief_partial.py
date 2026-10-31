@@ -23,6 +23,9 @@ from r6.caregaps.report import build_consumer_summary
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
                       "brief-section-care-gaps")

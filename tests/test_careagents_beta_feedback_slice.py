@@ -34,6 +34,8 @@ from tests.test_careagents_feedback import (  # noqa: F401 - fixtures
     _signed_in, made, sent)
 from tests.test_careagents_funnel import _svc_cfg
 
+pytestmark = pytest.mark.extension
+
 MARKER = "okapi-marker-4417"
 RUN = "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b"
 _ROOT = pathlib.Path(__file__).resolve().parents[1]

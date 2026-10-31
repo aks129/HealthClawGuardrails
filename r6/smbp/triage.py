@@ -34,18 +34,9 @@ STAGE2_DIASTOLIC = 90
 CRISIS_SYSTOLIC = 180
 CRISIS_DIASTOLIC = 120
 
-# The 7-item red-flag symptom screen (asked in the patient's language
-# elsewhere). Any endorsed red-flag routes to the emergency pathway regardless
-# of the BP number — these are stroke / heart-attack signs.
-SYMPTOMS = (
-    "chest_pain",
-    "shortness_of_breath",
-    "one_sided_weakness",
-    "trouble_speaking",
-    "vision_change",
-    "severe_headache",
-    "confusion",
-)
+# The 7-item red-flag symptom screen lives in the core, where the action
+# rail's emergency screen shares it (r6/actions/vocabulary.py).
+from r6.actions.vocabulary import SYMPTOMS  # noqa: E402
 
 
 def classify(systolic, diastolic, symptoms=None):

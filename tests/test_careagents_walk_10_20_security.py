@@ -25,6 +25,8 @@ from careagents.models import Account, EmailToken
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _past_the_resend_wait, app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 MEMBER = "member.1010@synthetic.example"
 STRANGER = "stranger.1010@synthetic.example"
 

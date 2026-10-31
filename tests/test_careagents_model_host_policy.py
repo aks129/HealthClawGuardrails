@@ -11,6 +11,8 @@ import pytest
 
 from careagents.config import Config, ConfigError
 
+pytestmark = pytest.mark.extension
+
 BASE = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
         "OPENAI_API_KEY": "sk-test-secret", "HEALTHCLAW_MINT_SECRET": "m"}
 FOREIGN = "https://llm.example-provider.test/v1beta/openai"

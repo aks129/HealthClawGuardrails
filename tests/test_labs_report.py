@@ -3,6 +3,9 @@ from r6.labs.interpret import interpret_observation
 from r6.labs.report import (
     annotate_observation, build_interpretation_summary, build_consumer_summary,
 )
+import pytest
+
+pytestmark = pytest.mark.extension
 
 V3 = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 

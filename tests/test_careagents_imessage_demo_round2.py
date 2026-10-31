@@ -17,6 +17,8 @@ from tests.test_careagents import cfg  # noqa: F401  (pytest fixture)
 from tests.test_careagents_sendblue import (  # noqa: F401
     PHONE, _app, _hook, _pair, sb_cfg, sb_svc)
 
+pytestmark = pytest.mark.extension
+
 ORIGIN = "http://localhost"
 
 

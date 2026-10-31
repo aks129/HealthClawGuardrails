@@ -26,6 +26,8 @@ from tests.test_careagents_brief_lab_trends import _brief_with_trend
 from tests.test_careagents_sample_framing import (
     MODEL_TEXT, _answer, _real_chat_app)
 
+pytestmark = pytest.mark.extension
+
 FRAMED = f"{MODEL_TEXT}\n\n{beta.SAMPLE_FRAME}"
 SECOND_PERSON = re.compile(r"\b(you|your)\b", re.IGNORECASE)
 

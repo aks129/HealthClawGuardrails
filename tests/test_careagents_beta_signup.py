@@ -18,6 +18,8 @@ from careagents.app import create_app
 from careagents.config import Config
 from tests.test_careagents import FakeClient, _login
 
+pytestmark = pytest.mark.extension
+
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _CSS = (_ROOT / "careagents" / "static" / "careagents.css").read_text()
 _JS = (_ROOT / "careagents" / "static" / "beta.js").read_text()

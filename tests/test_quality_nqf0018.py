@@ -5,6 +5,9 @@ from the 130/80 home *diagnostic* threshold used by the SMBP triage engine.
 """
 
 from r6.quality.measures import evaluate_nqf0018, HYPERTENSION_ICD10_PREFIXES
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _patient(birth_date):

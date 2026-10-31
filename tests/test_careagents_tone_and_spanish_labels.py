@@ -32,6 +32,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
 from tests.test_careagents_sample_framing import _real_chat_app
 
+pytestmark = pytest.mark.extension
+
 SPANISH = "¿Cuáles son mis resultados de laboratorio más recientes?"
 ENGLISH = "What are my most recent lab results?"
 

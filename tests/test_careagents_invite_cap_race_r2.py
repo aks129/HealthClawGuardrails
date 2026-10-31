@@ -13,6 +13,8 @@ from careagents import beta, invites
 from careagents.config import Config
 from careagents.models import RealRecordInvite
 
+pytestmark = pytest.mark.extension
+
 URLS = ["sqlite"] + (["pg"] if os.environ.get("CARE_TEST_PG_URL") else [])
 
 

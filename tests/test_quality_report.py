@@ -3,6 +3,9 @@ from r6.quality.report import (
     build_measure_resource, build_individual_report, build_summary_report,
     MEASURE_URL,
 )
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _pop(report, code):

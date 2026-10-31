@@ -13,6 +13,9 @@ import pathlib
 import re
 
 from careagents.labs_timeline import ANALYTES, build_series, keys_for_topic
+import pytest
+
+pytestmark = pytest.mark.extension
 
 LOINC = "http://loinc.org"
 TEMPLATE = (pathlib.Path(__file__).resolve().parent.parent

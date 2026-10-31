@@ -26,6 +26,8 @@ import pytest
 from tests.test_checkin_wallet_phq2 import REQUEST, _run, _status
 from tests.test_checkin_wallet_speed import ALL_FIRST, SPEED, _mutated, _q, _speed_only
 
+pytestmark = pytest.mark.extension
+
 
 def _conformance(qr_items, q_items, path=""):
     problems = []

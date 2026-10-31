@@ -24,6 +24,8 @@ from tests.test_careagents_propose_action_real_engine import (  # noqa: F401
     EMAIL, OTHER, PHONE, SECRET, _action, _audit_details, _confirmations,
     _model_proposes, _pending_sms, world)
 
+pytestmark = pytest.mark.extension
+
 OTHER_TENANT = "ca-sec-other"
 OTHER_EMAIL = "sec-other@example.com"
 CANARY = "Zebulon Canaryfield"

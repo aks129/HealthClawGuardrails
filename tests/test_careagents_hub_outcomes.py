@@ -19,6 +19,9 @@ from tests.test_careagents import FakeClient, _login, consented
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
+import pytest
+
+pytestmark = pytest.mark.extension
 
 #: The CareAgents fixtures, re-exported under their own names.
 cfg = _cfg_fixture

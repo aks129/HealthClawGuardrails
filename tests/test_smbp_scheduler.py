@@ -13,6 +13,9 @@ from types import SimpleNamespace
 from r6.models import R6Resource, db
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.scheduler import reminder_due, due_reminders
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 NOW = datetime(2026, 6, 15, 9, 0, 0)  # naive UTC, matches the model columns

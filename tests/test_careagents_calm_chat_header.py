@@ -32,6 +32,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
 from tests.test_careagents_sample_framing import _real_chat_app
 
+pytestmark = pytest.mark.extension
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CHAT_JS = ROOT / "careagents" / "static" / "chat.js"
 CSS = (ROOT / "careagents" / "static" / "careagents.css").read_text()

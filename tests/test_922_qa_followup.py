@@ -12,6 +12,9 @@ import json
 from careagents.agent import _execute_tool
 from r6.brief.engine import _unit as brief_unit
 from r6.redaction import UNIT_REDACTED, apply_redaction
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_a_refused_coded_unit_is_replaced_so_no_usual_unit_stands_in():

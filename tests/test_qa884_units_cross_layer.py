@@ -16,6 +16,9 @@ from datetime import datetime, timedelta, timezone
 from careagents.agent import _execute_tool
 from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _LOINC = "http://loinc.org"
 _UCUM = "http://unitsofmeasure.org"

@@ -12,6 +12,9 @@ import time
 from careagents import beta_signup
 from tests.test_careagents_beta_signup import (  # noqa: F401 (fixtures)
     _post, _queue, _row, _rows, made, sent)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_purge_gives_a_freed_spot_to_the_queue(made, sent):  # noqa: F811

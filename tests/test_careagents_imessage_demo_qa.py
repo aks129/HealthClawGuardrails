@@ -15,6 +15,9 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_imessage_demo import _ask, _model
 from tests.test_careagents_sendblue import (  # noqa: F401
     FakeSendblue, _app, _pair, sb_cfg, sb_svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 class FailsSecondPart(FakeSendblue):

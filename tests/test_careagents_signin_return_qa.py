@@ -11,6 +11,9 @@ import time
 from careagents import consent
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, _make_account, app, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 KEY = "after_sign_in"
 TARGET = "/chat?agent=agent_abc&chart=blood%20pressure"

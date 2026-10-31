@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 VALID_APP_ENVS = frozenset({"development", "testing", "production"})
 TRUE_VALUES = frozenset({"1", "true", "yes"})
 
+#: What an app config flag (DISABLE_COMMAND_CENTER, VERCEL, ...) reads as on.
+#: Wider than TRUE_VALUES on purpose: it is the set main.py always used.
+CONFIG_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def config_flag(value: object) -> bool:
+    """An app config value read as a boolean flag."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in CONFIG_TRUE_VALUES
+
 _INSECURE_SESSION_SECRETS = frozenset({
     "a-development-secret-key",
     "change-me-in-prod",

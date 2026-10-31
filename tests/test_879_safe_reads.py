@@ -23,6 +23,8 @@ import pytest
 
 from tests.test_labs_subject_matching import PID, _row
 
+pytestmark = pytest.mark.extension
+
 SUBJ = f"Patient/{PID}"
 LOINC = "http://loinc.org"
 _NONFINITE = ("NaN", "Infinity", "-Infinity")

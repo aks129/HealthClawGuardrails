@@ -8,6 +8,9 @@ from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import allowlist_cfg, approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _two_tabs(cfg, svc, monkeypatch, email="gene@example.com"):  # noqa: F811

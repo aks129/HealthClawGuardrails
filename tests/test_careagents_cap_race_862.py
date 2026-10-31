@@ -23,9 +23,9 @@ from careagents.config import Config
 from careagents.models import Account, Base, UsageDay, make_engine
 
 URL = os.environ.get("CARE_TEST_DATABASE_URL", "")
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.extension, pytest.mark.skipif(
     not URL.startswith("postgres"),
-    reason="the lost update needs a database with concurrent writers")
+    reason="the lost update needs a database with concurrent writers")]
 
 
 def _svc():

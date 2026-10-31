@@ -19,6 +19,9 @@ from __future__ import annotations
 
 from tests.test_careagents_what_happened import (  # noqa: F401
     OutcomeClient, _app, _signed_in, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 class _Spy(OutcomeClient):

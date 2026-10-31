@@ -19,6 +19,8 @@ from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _confirm_token, _post, made, sent)
 
+pytestmark = pytest.mark.extension
+
 
 def _code(client) -> str:
     html = client.get("/settings").get_data(as_text=True)

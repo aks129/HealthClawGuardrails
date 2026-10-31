@@ -15,6 +15,9 @@ import json
 
 from r6.seed import seed_demo_data
 from tests.test_brief_routes import _fields, _section, _store, _URL
+import pytest
+
+pytestmark = pytest.mark.extension
 
 PROMPTLY = "Contact your doctor promptly."
 RISE = "creatinine rose from 0.8 to 1.3 mg/dL in 6 days"

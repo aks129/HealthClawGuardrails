@@ -33,6 +33,8 @@ import pytest
 
 from careagents.healthclaw import HealthClawClient, HealthClawError
 
+pytestmark = pytest.mark.extension
+
 
 # --- the counted set ---------------------------------------------------------
 

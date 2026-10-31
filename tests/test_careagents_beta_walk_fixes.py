@@ -21,6 +21,8 @@ from tests.test_careagents import (  # noqa: F401  (fixtures)
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _confirm_token, _post, made, sent)
 
+pytestmark = pytest.mark.extension
+
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _STATIC = _ROOT / "careagents" / "static"
 _TEMPLATES = _ROOT / "careagents" / "templates"

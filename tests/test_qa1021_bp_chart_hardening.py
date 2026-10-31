@@ -20,6 +20,9 @@ from careagents.labs_timeline import build_series, keys_for_topic
 from r6.seed import _built_in_resources
 from tests.test_beta_acceptance_rows import BASE, TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 LOINC = "http://loinc.org"
 _PANELS = {"85354-9", "55284-4"}

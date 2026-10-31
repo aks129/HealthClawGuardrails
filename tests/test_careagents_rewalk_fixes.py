@@ -17,6 +17,9 @@ from careagents import beta_signup
 from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _confirm_token, _post, made)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _HOME_JS = (_ROOT / "careagents" / "static" / "home.js").read_text()

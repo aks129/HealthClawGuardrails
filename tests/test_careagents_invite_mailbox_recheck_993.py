@@ -21,6 +21,8 @@ from tests.careagents_stage1_helpers import allowlist_cfg
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _post, made, sent)
 
+pytestmark = pytest.mark.extension
+
 PG = os.environ.get("CARE_TEST_DATABASE_URL", "")
 URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
 

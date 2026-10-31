@@ -236,6 +236,7 @@ def test_a_seed_bundle_over_http_is_untagged(client, monkeypatch,
     assert "tag" not in got.get_json()["meta"]
 
 
+@pytest.mark.extension
 def test_the_demo_history_cli_tags_its_rows_sample(app):
     """`flask seed-demo-history` loads our own synthetic BP history in
     process, a trusted code path, so it says `sample` explicitly.

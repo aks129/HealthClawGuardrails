@@ -24,6 +24,8 @@ from types import SimpleNamespace
 import pytest
 import requests
 
+pytestmark = pytest.mark.extension
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from beta_acceptance import CODE_RE  # noqa: E402

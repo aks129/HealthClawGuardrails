@@ -9,6 +9,9 @@ from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 TERMS = (Path(__file__).resolve().parents[1] / "careagents" / "templates"
          / tester_terms.TEMPLATE)

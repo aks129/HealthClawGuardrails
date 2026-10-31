@@ -11,6 +11,9 @@ from careagents import checkins, mail
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     cfg, svc)
 from tests.test_careagents_checkins import _aged, _cfg
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_a_send_that_raises_logs_no_address(svc, monkeypatch, caplog):  # noqa: F811

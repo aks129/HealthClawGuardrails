@@ -10,6 +10,9 @@ from __future__ import annotations
 from r6.seed import _built_in_resources
 from tests.test_beta_acceptance_rows import BASE, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _PANELS = {"85354-9", "55284-4"}
 

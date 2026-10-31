@@ -83,6 +83,7 @@ def _post(app, headers, body):
                                   json=body).status_code
 
 
+@pytest.mark.extension
 def test_concurrent_first_turns_create_one_conversation(race_app):
     from sqlalchemy import event
 
@@ -135,6 +136,7 @@ def test_concurrent_first_turns_create_one_conversation(race_app):
         tenant_id=_TENANT, conversation_id=conversation_id).count() == _THREADS
 
 
+@pytest.mark.extension
 def test_a_racing_turn_for_another_agent_is_still_refused(race_app):
     """The row a request finds after losing the race is checked like any
     other: a turn naming a different agent gets the 409, not a message in

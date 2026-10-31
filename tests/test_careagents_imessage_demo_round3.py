@@ -21,6 +21,9 @@ from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_imessage_demo import _Call, _Turn
 from tests.test_careagents_sendblue import (  # noqa: F401
     _app, _deliverer, _hook, _pair, _run, sb_cfg, sb_svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 ORIGIN = "http://localhost"
 SIGNED = ("https://engine.example/r6/sdc/documents/doc-1.pdf"

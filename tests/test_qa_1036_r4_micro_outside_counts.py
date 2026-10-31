@@ -13,6 +13,8 @@ import pytest
 
 from r6.labs.interpret import interpret_observation
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.mark.parametrize("range_unit", ["µmol/L", "μmol/L"])
 def test_a_micro_sign_in_the_labs_range_is_the_same_unit(range_unit):

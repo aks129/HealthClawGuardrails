@@ -73,6 +73,7 @@ def test_the_census_covers_every_require_grant_site():
     assert sites == {row.site for row in ROWS}
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('kind', ['absent', 'rejected'])
 @pytest.mark.parametrize('row', ROWS, ids=lambda r: r.id)
 def test_a_rendered_refusal_is_audited_exactly_once(

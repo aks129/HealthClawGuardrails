@@ -206,6 +206,7 @@ def test_intake_prefill_never_answers_an_allergen_as_no_known_allergies(code):
     _assert_no_bare_name(allergens)
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("code", BYPASSES)
 def test_brief_problem_list_names_no_absence(code):
     from r6.brief import engine

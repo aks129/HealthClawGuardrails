@@ -10,6 +10,8 @@ import pytest
 from careagents.agent import _summarize_bundle
 from r6.brief import engine
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 OID = "urn:oid:2.16.840.1.113883.6.96"
 NKA, STATUS, DM = "716186003", "1631000175102", "44054006"

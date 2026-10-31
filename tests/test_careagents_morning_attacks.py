@@ -19,6 +19,9 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
 from tests.test_careagents_funnel import _app
 from tests.test_careagents_signins import NOW, _make, _ts
+import pytest
+
+pytestmark = pytest.mark.extension
 
 OWNER = "owner@example.com"
 

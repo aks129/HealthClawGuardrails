@@ -14,6 +14,8 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, _make_account, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 NOW = dt.datetime(2026, 10, 7, 12, tzinfo=dt.timezone.utc)   # 2026-W41
 
 

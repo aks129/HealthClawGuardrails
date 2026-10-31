@@ -27,6 +27,7 @@ def _pc(tenant):
                                   scope="read")
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("path", ["/command-center/api/system",
                                   "/command-center/api/openclaw/sessions"])
 def test_both_infra_routes_refuse_a_dead_token_and_accept_a_live_one(
@@ -54,6 +55,7 @@ def test_both_infra_routes_refuse_a_dead_token_and_accept_a_live_one(
     assert c.get(path, headers={"X-Internal-Secret": SECRET}).status_code == 200
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("path", ["/command-center/api/system",
                                   "/command-center/api/openclaw/sessions"])
 def test_public_tenant_still_needs_a_credential_on_infra_routes(

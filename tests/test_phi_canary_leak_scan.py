@@ -728,6 +728,7 @@ def test_the_scan_finds_a_canary_it_is_shown():
     assert canaries_in('{"x": "' + PREFIX + 'FAM"}') == {PREFIX + "FAM"}
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("surface, driver, keeps", READ_ROWS,
                          ids=[r[0] for r in READ_ROWS])
 def test_no_canary_leaves_a_read_surface(scan, surface, driver, keeps):

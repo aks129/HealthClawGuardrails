@@ -23,6 +23,9 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, sample_framed, svc)
 from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _pointer(origin: str) -> str:

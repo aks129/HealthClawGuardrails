@@ -34,6 +34,8 @@ from tests.test_careagents_sendblue import (  # noqa: F401  (fixtures)
     _app as _sb_app, _deliverer, _hook, sb_cfg, sb_svc)
 from tests.test_careagents_sendblue import _pair as _sb_pair
 
+pytestmark = pytest.mark.extension
+
 LEAD = beta.EMERGENCY_LINE
 SELF_HARM_LEAD = beta.EMERGENCY_LINE + "\n" + beta.SELF_HARM_LINE
 

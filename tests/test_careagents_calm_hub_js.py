@@ -15,6 +15,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.extension
+
 HOME_JS = (pathlib.Path(__file__).resolve().parents[1]
            / "careagents" / "static" / "home.js")
 

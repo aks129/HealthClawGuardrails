@@ -17,6 +17,8 @@ from tests.careagents_stage1_helpers import allowlist_cfg
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, _turn, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _row(svc, account_id):  # noqa: F811
     with svc.session() as s:

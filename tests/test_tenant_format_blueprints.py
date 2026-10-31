@@ -46,6 +46,7 @@ def shc_secret(monkeypatch):
 # smbp — /r6/smbp/enroll, /reading, /report/<id>
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extension
 @pytest.mark.parametrize("tenant", MALFORMED)
 def test_smbp_enroll_refuses_a_malformed_tenant_id(client, tenant):
     """MUTATION: return the raw header from r6/smbp/routes.py::_tenant -> red.
@@ -59,6 +60,7 @@ def test_smbp_enroll_refuses_a_malformed_tenant_id(client, tenant):
     assert resp.status_code == 400, resp.get_data(as_text=True)
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("tenant", MALFORMED)
 def test_smbp_reading_refuses_a_malformed_tenant_id(client, tenant):
     """MUTATION: return the raw header from r6/smbp/routes.py::_tenant -> red.
@@ -74,6 +76,7 @@ def test_smbp_reading_refuses_a_malformed_tenant_id(client, tenant):
     assert resp.status_code == 400, resp.get_data(as_text=True)
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("tenant", MALFORMED)
 def test_smbp_report_refuses_a_malformed_tenant_id(client, tenant):
     """MUTATION: return the raw header from r6/smbp/routes.py::_tenant -> red."""
@@ -82,6 +85,7 @@ def test_smbp_report_refuses_a_malformed_tenant_id(client, tenant):
     assert resp.status_code == 400, resp.get_data(as_text=True)
 
 
+@pytest.mark.extension
 def test_smbp_still_refuses_an_absent_tenant_header_in_its_own_dialect(client):
     """The MISSING-tenant answer is unchanged by the migration.
 

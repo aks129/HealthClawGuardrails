@@ -26,6 +26,9 @@ from r6.caregaps.report import build_consumer_summary
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 PLANTED = "Jane Secret"
 ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"

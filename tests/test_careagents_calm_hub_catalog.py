@@ -10,6 +10,8 @@ from careagents import connectors
 from careagents.config import Config
 from tests.test_careagents import FakeClient
 
+pytestmark = pytest.mark.extension
+
 OPERATOR_PHRASES = ("not configured", "deployment", "sidecar", "wired")
 
 CONFIGS = [

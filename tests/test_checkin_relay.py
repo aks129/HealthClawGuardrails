@@ -37,6 +37,8 @@ from tests import checkin_fixtures as f
 from tests.test_beta_acceptance_rows import _to_requests
 from tests.test_checkin_wallet import _account, _config, _sign_in
 
+pytestmark = pytest.mark.extension
+
 RELAY = "/checkin/wallet/records"
 STATIC = Path(__file__).resolve().parent.parent / "careagents" / "static"
 BUNDLE = b'{"resourceType": "Bundle", "type": "collection", "entry": []}'

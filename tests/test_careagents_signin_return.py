@@ -17,6 +17,8 @@ import pytest
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, _make_account, app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 KEY = "after_sign_in"
 AT = "after_sign_in_at"
 

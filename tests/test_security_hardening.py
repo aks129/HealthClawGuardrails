@@ -53,6 +53,7 @@ def test_dashboards_200_with_csp(client, path):
 _UNSWEEPABLE_RULES = {'/r6/fhir/AuditEvent/$stream'}
 
 
+@pytest.mark.extension
 def test_security_headers_on_every_registered_get_route(app, client):
     """MUTATION: early-return `response` from app.py's _security_headers when
     request.path starts with '/r6/fhir' or '/fasten' -> red, naming every
@@ -85,6 +86,7 @@ def test_security_headers_on_every_registered_get_route(app, client):
     assert not failures, failures
 
 
+@pytest.mark.extension
 def test_command_center_has_csp(client):
     # Command center may redirect/login-gate; whatever it returns must still
     # carry the security headers from the global after_request.

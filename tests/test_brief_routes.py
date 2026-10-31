@@ -26,6 +26,9 @@ from r6.brief.engine import (
 from r6.caregaps.report import _NOT_EVALUATED_NOTES
 from r6.models import R6Resource, db
 from r6.seed import _built_in_resources, seed_demo_data
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _URL = "/r6/fhir/AppointmentBrief"
 _SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"

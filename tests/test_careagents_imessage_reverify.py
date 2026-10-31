@@ -25,6 +25,8 @@ from tests.test_careagents_imessage import (
     HDRS, OTHER_EMAIL, PHONE, _acct_id, _confirm, _inbound, _link_token,
     _pair)
 
+pytestmark = pytest.mark.extension
+
 DAY = 86400.0
 
 

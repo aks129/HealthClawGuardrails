@@ -30,6 +30,9 @@ from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, cfg, svc)
 from tests.test_careagents_first_answer import _as_fasten, _first_turn
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_labs_landed_first_the_first_answer_still_says_records_are_arriving(

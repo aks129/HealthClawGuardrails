@@ -18,6 +18,8 @@ from r6.models import R6Resource, AuditEventRecord
 from r6.command_center import agents, projector, gateway
 from r6.command_center.models import Conversation, ConversationMessage
 
+pytestmark = pytest.mark.extension
+
 TENANT = "test-tenant"
 OPERATOR_SECRET = "cc-test-operator-secret"
 

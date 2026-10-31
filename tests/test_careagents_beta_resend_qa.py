@@ -19,6 +19,8 @@ import pytest
 from careagents import beta_signup
 from tests.test_careagents_beta_signup import _cfg
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "quinn.qa979@example.com"
 
 
