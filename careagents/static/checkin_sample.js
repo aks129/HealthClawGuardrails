@@ -6,19 +6,29 @@
    /checkin/wallet in a new tab, sends a SMART Health Check-in request there
    by postMessage, and gets back a sealed answer, which the library opens
    in this tab. So the wallet runs exactly as it does for an outside
-   website. What comes back is shown here and nowhere else: this page calls
-   no server and keeps nothing.
+   website. What comes back is shown here: this file calls no server and
+   keeps nothing (tests/test_checkin_sample.py scans it and
+   checkin_answer.js). The other tab reads the person's records from
+   CareAgents, as it does for any website.
 
    The form is three kinds of record the wallet answers from records
    (medicines, allergies, health problems) and a short questionnaire: one
    pick-one question the person answers in the other tab, and one free-text
    question the wallet does not answer, so it is shown as not answered. */
 import { runCheckin, webWallet } from "./vendor/smart-health-checkin-client/0.4.4/checkin.js";
-// With this file's ?v= build stamp, as the wallet page loads it (#909).
-const { recordNames } = await import(
-  `./checkin_answer.js${new URL(import.meta.url).search}`);
-
 const $ = (id) => document.getElementById(id);
+
+// With this file's ?v= build stamp, as the wallet page loads it (#909).
+// If it cannot load, say so: the button stays off, and silence would read
+// as a button that does nothing.
+let recordNames;
+try {
+  ({ recordNames } = await import(
+    `./checkin_answer.js${new URL(import.meta.url).search}`));
+} catch (e) {
+  $("sample-stalled").hidden = false;
+  throw e;
+}
 
 const US_CORE = "http://hl7.org/fhir/us/core/StructureDefinition/";
 const FORM_URL = `${location.origin}/checkin/sample/Questionnaire/new-patient`;
@@ -93,11 +103,15 @@ function card(heading, lines, none) {
   return li;
 }
 
-const NOT_SHARED = {
-  declined: "Not shared. You chose not to share this.",
+/* What the answer said for an item that carries nothing to show. Only
+   what it said: an item it is silent on is "no answer", not a choice. */
+const SAID = {
+  declined: "Not shared.",
   unavailable: "Nothing on file to share.",
   unsupported: "Couldn't be answered from your records.",
 };
+const NO_ANSWER = "No answer came back for this.";
+const said = (status) => (Object.hasOwn(SAID, status || "") ? SAID[status] : NO_ANSWER);
 
 function showResult(title, text, cards = []) {
   $("sample-form").hidden = true;
@@ -108,29 +122,34 @@ function showResult(title, text, cards = []) {
   $("sample-result-title").focus();
 }
 
-/* The answer, as the clinic would see it. Each record named by the
-   wallet's own words for it (checkin_answer.js recordNames). */
-function showAnswer(json) {
-  const status = new Map((json.requestStatus || []).map((s) => [s.item, s.status]));
-  const value = new Map((json.artifacts || []).map((a) => [a.fulfills[0], a.value]));
-  if (!value.size) {
-    showResult("Nothing was shared", "The form is still blank. The clinic would get nothing from your records.");
+// What this page saw when no answer arrived or it could not be read: not a
+// guess at what happened in the other tab.
+const showNothing = () => showResult("No answers came back",
+  "This page didn't get any answers from the other tab. You can start the form again.");
+
+/* The answer, as the clinic would see it, read through the library's own
+   checked artifacts (`response`, a CheckinResponse: only artifacts it found
+   usable). Each record named by the wallet's own words for it
+   (checkin_answer.js recordNames). */
+function showAnswer(response) {
+  const ids = [...RECORD_ITEMS.map((it) => it.id), "intake"];
+  if (ids.every((id) => response.status(id) === "declined")) {
+    showResult("Nothing was shared", "The answer said no to every item. The form is still blank.");
     return;
   }
   const cards = RECORD_ITEMS.map((it) => {
-    const bundle = value.get(it.id);
-    const entries = (bundle && Array.isArray(bundle.entry)) ? bundle.entry : [];
-    const primary = entries.filter((e) => e && e.resource &&
-      it.types.includes(e.resource.resourceType));
-    return card(it.heading, recordNames({ primary, entries }),
-      NOT_SHARED[status.get(it.id)] || NOT_SHARED.unavailable);
+    const entries = response.entries(it.id);
+    const primary = entries.filter((e) => it.types.includes(e.resource.resourceType));
+    return card(it.heading, recordNames({ primary, entries }), said(response.status(it.id)));
   });
-  const form = value.get("intake");
+  const form = response.form("intake");
   const answered = (form && Array.isArray(form.item)) ? form.item : [];
-  const first = answered.find((q) => q.linkId === "first-visit");
-  const pick = first && first.answer && first.answer[0] && first.answer[0].valueCoding;
-  cards.push(card(QUESTIONS["first-visit"], pick ? [pick.display] : [],
-    NOT_SHARED[status.get("intake")] || NOT_SHARED.declined));
+  const first = answered.find((q) => q && q.linkId === "first-visit");
+  const pick = first && Array.isArray(first.answer) && first.answer[0] &&
+    first.answer[0].valueCoding;
+  const display = pick && typeof pick.display === "string" ? pick.display : "";
+  cards.push(card(QUESTIONS["first-visit"], display ? [display] : [],
+    said(response.status("intake"))));
   cards.push(card(QUESTIONS.reason, [],
     "Not answered from your records. You'd tell the clinic yourself."));
   showResult("Your form, filled in",
@@ -145,11 +164,12 @@ $("sample-start").onclick = () => {
   const running = runCheckin(newRequest(), { wallet });
   $("sample-start").disabled = true;
   $("sample-waiting").hidden = false;
+  // .catch after .then: a throw while drawing the answer lands here too,
+  // rather than leaving "Waiting..." on screen.
   running.then((r) => {
-    if (r.status === "completed" && r.response) showAnswer(r.response.json);
-    else if (r.status === "declined") showResult("Nothing was shared", "The other tab closed before you shared anything. The form is still blank.");
-    else showResult("The form wasn't filled in", "Nothing was shared. You can start the form again.");
-  }, () => showResult("The form wasn't filled in", "Nothing was shared. You can start the form again."));
+    if (r.status === "completed" && r.response) showAnswer(r.response);
+    else showNothing();
+  }).catch(showNothing);
 };
 
 $("sample-again").onclick = () => {

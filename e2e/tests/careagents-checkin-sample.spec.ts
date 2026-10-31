@@ -104,4 +104,27 @@ test.describe('sample new-patient form at 375px', () => {
     await expect(page.locator('#sample-result-text')).toContainText('still blank');
     await expect(page.locator('#sample-answers > li')).toHaveCount(0);
   });
+
+  // The failure paths say so on the page rather than leaving "Waiting…" or
+  // a dead button. The library is stood in for here, so no tab opens.
+  test('an answer it cannot read says no answers came back', async ({ page }) => {
+    await page.route('**/static/vendor/smart-health-checkin-client/0.4.4/checkin.js*',
+      (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: `
+        export const webWallet = () => ({});
+        // Completed, but its entries carry no resource: drawing it throws.
+        export const runCheckin = async () => ({ status: 'completed', response: {
+          status: () => undefined, entries: () => [{}], form: () => undefined } });` }));
+    await page.goto('/checkin/sample');
+    await page.locator('#sample-start').click();
+    await expect(page.locator('#sample-result-title')).toHaveText('No answers came back');
+    await expect(page.locator('#sample-waiting')).toBeHidden();
+  });
+
+  test('a script that cannot load says the form could not start', async ({ page }) => {
+    await page.route('**/static/checkin_answer.js*',
+      (route) => route.fulfill({ status: 404, body: '' }));
+    await page.goto('/checkin/sample');
+    await expect(page.locator('#sample-stalled')).toBeVisible();
+    await expect(page.locator('#sample-start')).toBeDisabled();
+  });
 });

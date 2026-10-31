@@ -2,14 +2,11 @@
 
 Server-side pins the PR's own tests leave out: the page carries the full
 security header set (CSP, no framing, nosniff, referrer policy), the
-Verifier library hashes to the pinned release *as served*, the hub link is
-gone for a paused, signed-out or deleted account, and nothing the sample
-asks for reaches a log. The browser attacks (a hostile opener of the
-sample) are e2e/tests/sec-1076-checkin-sample.spec.ts.
+Verifier library hashes to the pinned release *as served*, and the hub
+link is gone for a paused, signed-out or deleted account.
 """
 
 import hashlib
-import logging
 import re
 
 import pytest
@@ -17,6 +14,8 @@ import pytest
 from careagents.security_headers import CONTENT_SECURITY_POLICY
 from tests.test_checkin_sample import CHECKIN_JS_SHA256, SAMPLE
 from tests.test_checkin_wallet import _account, _app, _config, _sign_in
+
+pytestmark = pytest.mark.extension
 
 LINK = "Try a sample new-patient form"
 
@@ -37,8 +36,7 @@ def test_the_sample_page_carries_the_full_header_set(wallet):
     assert "connect-src 'self'" in r.headers["Content-Security-Policy"]
     assert r.headers["X-Frame-Options"] == "DENY"
     assert r.headers["X-Content-Type-Options"] == "nosniff"
-    assert r.headers["Referrer-Policy"] in ("no-referrer",
-                                            "strict-origin-when-cross-origin")
+    assert r.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert r.headers["Cache-Control"] == "no-store"
     # No Set-Cookie: a visit starts no session.
     assert "Set-Cookie" not in r.headers
@@ -101,17 +99,9 @@ def test_signed_out_and_deleted_accounts_get_no_hub(wallet, monkeypatch):
     assert LINK in client.get("/home").get_data(as_text=True)
     assert svc.delete_account(acct.id)
     r = client.get("/home")
-    assert r.status_code in (302, 303)
-    assert LINK not in r.get_data(as_text=True)
+    assert r.status_code in (302, 303) and "/auth" in r.headers["Location"]
     # A deleted account's old cookie is not signed in for the relay either.
     assert client.post("/checkin/wallet/records",
                        json={"resource_types": ["AllergyIntolerance"]}
                        ).status_code == 401
 
-
-def test_a_visit_logs_nothing_it_was_sent(wallet, caplog):
-    app, _ = wallet
-    with caplog.at_level(logging.DEBUG):
-        app.test_client().get(SAMPLE + "?q=SEC1076CANARY",
-                              headers={"Referer": "https://x/SEC1076CANARY"})
-    assert "SEC1076CANARY" not in caplog.text

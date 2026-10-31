@@ -6,8 +6,9 @@ It is a requester like any other: it sends a real SMART Health Check-in
 request to /checkin/wallet with the organizers' Verifier library, and the
 answer comes back to its own tab. These tests pin the server side: the
 route exists only with the wallet, it is read-only and not cached, the
-links to it, the vendored library, and that the page's script keeps the
-answer in the tab. The round trip in a browser:
+links to it, the vendored library, and that the page's own scripts make no
+network call and keep nothing. The round trip, a malformed answer and a
+script that fails to load, in a browser:
 e2e/tests/careagents-checkin-sample.spec.ts.
 """
 
@@ -19,6 +20,8 @@ import pytest
 from tests.test_checkin_wallet import (
     STATIC, VENDOR, _account, _app, _code, _config, _sign_in,
 )
+
+pytestmark = pytest.mark.extension
 
 SAMPLE = "/checkin/sample"
 
@@ -57,7 +60,7 @@ def test_the_page_is_a_made_up_clinic_and_says_so(wallet):
     assert "Cross-Origin-Opener-Policy" not in r.headers
     html = " ".join(r.get_data(as_text=True).split())
     assert "made-up clinic" in html
-    assert "Nothing is sent anywhere else" in html
+    assert "This page doesn't send it on or save it." in html
     # Patient-facing words: none of ours.
     text = re.sub(r"<script.*?</script>|<style.*?</style>|<[^>]+>", " ",
                   html, flags=re.S).lower()
@@ -75,7 +78,9 @@ def test_the_page_loads_the_verifier_library_from_this_site(wallet):
     # person's own tap when it does.
     assert ('from "./vendor/smart-health-checkin-client/0.4.4/checkin.js"'
             in page)
-    assert "/checkin/wallet" in page
+    # The wallet page itself, not a route beneath it.
+    assert re.findall(r"walletUrl: (.+)", page) == [
+        "`${location.origin}/checkin/wallet` });"]
 
 
 def test_the_vendored_verifier_is_the_0_4_4_release():
@@ -83,12 +88,24 @@ def test_the_vendored_verifier_is_the_0_4_4_release():
                           ).hexdigest() == CHECKIN_JS_SHA256
 
 
-def test_the_answer_stays_in_the_tab():
-    page = _code(STATIC / "checkin_sample.js")
-    for banned in ("fetch(", "localStorage", "sessionStorage", "indexedDB",
-                   "sendBeacon", "console.", "XMLHttpRequest", "WebSocket",
-                   "EventSource", "innerHTML", "document.cookie"):
-        assert banned not in page, banned
+#: What would send or keep something, as source text. A scan of source
+#: text, so it misses a name built at run time (`window["fe" + "tch"]`)
+#: and anything the vendored checkin.js does: that file contains `fetch(`
+#: for its server-custody mode, which this page never configures, and is
+#: held to the release by its hash instead.
+BANNED = (r"\bfetch\s*\(", r"XMLHttpRequest", r"WebSocket", r"EventSource",
+          r"sendBeacon", r"\bImage\s*\(", r"\.src\s*=", r"postMessage",
+          r"window\.open", r"\bnavigator\s*\[", r"localStorage",
+          r"sessionStorage", r"indexedDB", r"document\.cookie", r"console\.",
+          r"innerHTML", r"outerHTML", r"insertAdjacentHTML")
+
+
+def test_the_page_scripts_send_nothing_and_keep_nothing():
+    # This page's own script and the module it imports to name records.
+    for name in ("checkin_sample.js", "checkin_answer.js"):
+        src = _code(STATIC / name)
+        for banned in BANNED:
+            assert not re.search(banned, src), (name, banned)
 
 
 def test_a_visit_writes_nothing(wallet):

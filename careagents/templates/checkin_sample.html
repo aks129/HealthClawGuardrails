@@ -26,8 +26,8 @@
 <main class="setup-wrap">
   <div class="setup-card" id="sample">
     <p class="sample-note"><b>Practice form.</b> Sunnyside Family Clinic is a
-      made-up clinic. What you share comes back to this page only. Nothing is
-      sent anywhere else, and nothing is saved.</p>
+      made-up clinic. What you share is shown on this page only. This page
+      doesn't send it on or save it.</p>
 
     <section id="sample-form">
       <h1>New-patient form</h1>
@@ -45,6 +45,17 @@
         is shared unless you choose it. Then come back to this tab.</p>
       <noscript><p class="form-error">Turn on JavaScript, then reload the
         page.</p></noscript>
+      <p class="form-error" id="sample-stalled" role="alert" hidden>This form
+        could not start. Reload the page.</p>
+      {# The script turns the button on. If it never does (it failed to load
+         or threw first), say so rather than leave a dead button. #}
+      <script>
+        setTimeout(function () {
+          if (document.getElementById("sample-start").disabled &&
+              document.getElementById("sample-waiting").hidden)
+            document.getElementById("sample-stalled").hidden = false;
+        }, 8000);
+      </script>
       <button class="btn-primary btn-block" id="sample-start" disabled>Fill it
         in from my records</button>
       <p class="setup-sub" id="sample-waiting" role="status" hidden>Waiting for
