@@ -336,6 +336,20 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
     expect(flaskReads()).toHaveLength(0);
   });
 
+  // action_status returned the full action payload to a read credential, and
+  // curatr_evaluate persists curation state on the record it grades.
+  test.each([
+    ["action_status", { action_id: "act-1" }],
+    ["curatr_evaluate", { resource_type: "Condition", resource_id: "c-1" }],
+  ])("%s is off the allow-list: refused before any call to the engine", async (name, args) => {
+    const sessionId = await session();
+    const res = await call(sessionId, name, args);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(mints()).toHaveLength(0);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
   test("a read-tier tool outside the allow-list is refused before any call to the engine", async () => {
     const sessionId = await session();
     const res = await call(sessionId, "guardrail_conformance", { fresh: true });

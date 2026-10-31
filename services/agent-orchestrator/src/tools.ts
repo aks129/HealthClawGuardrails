@@ -154,6 +154,28 @@ function parseGrantMarker(raw: string | undefined): OAuthGrantMarker | null {
   return null;
 }
 
+// The one test for "this call is on a consented connection": the marker is
+// present, whether or not it parses. Listing and calling both key off it, so a
+// marker that fails to parse is refused rather than run in token mode.
+export function hasGrantMarker(headers: Record<string, string> | undefined): boolean {
+  return typeof headers?.[OAUTH_GRANT_HEADER] === "string";
+}
+
+// Arguments that would name a tenant. On the grant path the introspected
+// tenant is the only one sent, so any of these is dropped before the call.
+const TENANT_ARGUMENT = /tenant/i;
+
+function readOnlyRefusal(toolName: string): Record<string, unknown> {
+  return {
+    error: "This connection is read-only",
+    tool: toolName,
+    message:
+      "A consented connection can read your records through the " +
+      "guardrails. Writes go through the human-approved action rail, " +
+      "never through this connection.",
+  };
+}
+
 export function resetGrantReadTokenCacheForTests(): void {
   GRANT_READ_TOKEN_CACHE.clear();
 }
@@ -196,13 +218,14 @@ export function shlGenerateEnabled(env: NodeJS.ProcessEnv = process.env): boolea
 // call. An allow-list, not a deny-list: a tool added later stays hidden from
 // connected agents until someone decides it is a read and adds it here. The
 // connector is read-only (§6.5); anything that proposes, stages, writes,
-// sends, or issues a credential is absent, and so is guardrail_conformance,
-// which runs the probe suite and its synthetic writes on demand.
+// sends, or issues a credential is absent. So are guardrail_conformance, which
+// runs the probe suite and its synthetic writes on demand; curatr_evaluate,
+// which persists curation state on the record it grades; and action_status,
+// which returns a full action payload and has nothing to report to a
+// connection that cannot propose actions.
 export const OAUTH_READ_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "action_status",
   "care_gaps",
   "context_get",
-  "curatr_evaluate",
   "fetch",
   "fhir_compiled_truth",
   "fhir_interpret_labs",
@@ -877,7 +900,7 @@ export class FHIRTools {
             input.resource_id as string,
             headers
           ),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
           properties: {
@@ -1113,7 +1136,7 @@ export class FHIRTools {
         tier: "read",
         handler: ({ input, headers }) =>
           this.getActionStatus(input.action_id as string, headers),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -1248,8 +1271,9 @@ export class FHIRTools {
       return { error: `Unknown tool: ${toolName}` };
     }
 
-    const grant = parseGrantMarker(headers?.[OAUTH_GRANT_HEADER]);
-    if (grant) {
+    if (hasGrantMarker(headers)) {
+      const grant = parseGrantMarker(headers?.[OAUTH_GRANT_HEADER]);
+      if (!grant) return readOnlyRefusal(toolName);
       return this.executeAsGrant(tool, toolName, input, grant, headers?.["x-agent-id"]);
     }
 
@@ -1342,15 +1366,11 @@ export class FHIRTools {
     agentId: string | undefined
   ): Promise<Record<string, unknown>> {
     if (tool.tier === "write" || !OAUTH_READ_TOOL_NAMES.has(toolName)) {
-      return {
-        error: "This connection is read-only",
-        tool: toolName,
-        message:
-          "A consented connection can read your records through the " +
-          "guardrails. Writes go through the human-approved action rail, " +
-          "never through this connection.",
-      };
+      return readOnlyRefusal(toolName);
     }
+    input = Object.fromEntries(
+      Object.entries(input ?? {}).filter(([key]) => !TENANT_ARGUMENT.test(key))
+    );
     if (!tool.validate(input)) {
       return {
         error: "Invalid tool input",

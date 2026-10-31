@@ -26,7 +26,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import crypto from "crypto";
-import { FHIRTools, shlGenerateEnabled } from "./tools";
+import { FHIRTools, hasGrantMarker, shlGenerateEnabled } from "./tools";
 import { executeMCPTool } from "./mcp-tool-result";
 import { fetchWithTimeout } from "./fetch-timeout";
 
@@ -580,7 +580,7 @@ function applyToolArgumentOverrides(
   sessionHeaders: Record<string, string>
 ): Record<string, string> {
   const toolHeaders: Record<string, string> = { ...sessionHeaders };
-  if (sessionHeaders[OAUTH_GRANT_HEADER]) {
+  if (hasGrantMarker(sessionHeaders)) {
     stripCredentialArguments(toolArgs);
     return toolHeaders;
   }
@@ -619,7 +619,7 @@ function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
 
   // A consented connection lists only the read allow-list (§13.6); the call
   // path enforces the same list, so a hidden tool is never merely unlisted.
-  const oauth = Boolean(sessionHeaders[OAUTH_GRANT_HEADER]);
+  const oauth = hasGrantMarker(sessionHeaders);
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: fhirTools.getMCPToolSchemas({ oauth }) };
   });
@@ -719,7 +719,7 @@ app.post("/mcp", async (req, res) => {
       }
 
       case "tools/list": {
-        const tools = fhirTools.getMCPToolSchemas({ oauth: Boolean(res.locals.oauthGrant) });
+        const tools = fhirTools.getMCPToolSchemas({ oauth: hasGrantMarker(reqHeaders) });
         return res.json({ jsonrpc: "2.0", id, result: { tools } });
       }
 
@@ -794,7 +794,7 @@ app.post("/mcp", async (req, res) => {
           });
         }
         const toolInput = (rawToolInput ?? {}) as Record<string, unknown>;
-        if (reqHeaders[OAUTH_GRANT_HEADER]) stripCredentialArguments(toolInput);
+        if (hasGrantMarker(reqHeaders)) stripCredentialArguments(toolInput);
 
         const result = await executeMCPTool(
           fhirTools,
@@ -971,7 +971,7 @@ app.post("/mcp/rpc", async (req, res) => {
   try {
     switch (method) {
       case "tools/list": {
-        const tools = fhirTools.getMCPToolSchemas({ oauth: Boolean(res.locals.oauthGrant) });
+        const tools = fhirTools.getMCPToolSchemas({ oauth: hasGrantMarker(reqHeaders) });
         return res.json({ jsonrpc: "2.0", id, result: { tools } });
       }
 
@@ -1000,7 +1000,12 @@ app.post("/mcp/rpc", async (req, res) => {
             error: { code: -32602, message: "Missing contextId" },
           });
         }
-        const context = await fhirTools.getContext(contextId, reqHeaders);
+        // A consented connection goes through the same gate and read-token
+        // mint as tools/call; the raw request headers, grant marker included,
+        // are never forwarded for it.
+        const context = hasGrantMarker(reqHeaders)
+          ? await fhirTools.executeTool("context_get", { context_id: contextId }, reqHeaders)
+          : await fhirTools.getContext(contextId, reqHeaders);
         return res.json({ jsonrpc: "2.0", id, result: context });
       }
 

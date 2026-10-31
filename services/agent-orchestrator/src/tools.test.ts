@@ -145,7 +145,6 @@ const EXPECTED_NETWORK_TOOL_NAMES = EXPECTED_TOOL_NAMES.filter(
 const EXPECTED_NETWORK_TOOL_NAME_SET = new Set(EXPECTED_NETWORK_TOOL_NAMES);
 
 const READ_ONLY_TOOL_NAMES = [
-  "action_status",
   "care_gaps",
   "context_get",
   "fetch",
