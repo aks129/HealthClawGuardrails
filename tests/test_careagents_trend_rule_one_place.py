@@ -33,6 +33,8 @@ from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _interpret_payload, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 CHAT_JS = (pathlib.Path(__file__).resolve().parents[1]
            / "careagents" / "static" / "chat.js")
 

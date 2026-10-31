@@ -21,6 +21,9 @@ from tests.test_careagents_beta_feedback_slice import (  # noqa: F401
     RUN, _flag, _own_run, _signed_in, made, sent)
 from tests.test_careagents_failed_turn_refund import (
     _events, _model_fails, _post, _used, _work)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_a_recovered_run_with_a_checkpoint_is_not_given_back(

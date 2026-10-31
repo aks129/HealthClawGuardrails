@@ -26,6 +26,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_sample_framing import _real_chat_app
 from tests.test_careagents_tone_and_spanish_labels import _labels_for
 
+pytestmark = pytest.mark.extension
+
 SPANISH = "¿Cuáles son mis análisis más recientes?"
 ENGLISH = "What are my most recent labs?"
 

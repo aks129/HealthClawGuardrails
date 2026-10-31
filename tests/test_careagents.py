@@ -22,6 +22,8 @@ from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
 from tests.careagents_legacy_helpers import legacy_agent
 from tests.careagents_consent_helpers import consented
 
+pytestmark = pytest.mark.extension
+
 
 # --- config: fail-closed ------------------------------------------------------
 

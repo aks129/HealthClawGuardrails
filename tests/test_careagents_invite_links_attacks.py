@@ -18,6 +18,8 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
 from tests.test_careagents_invite_links import (_account_id, _code,
                                                 _invite_row, _join_via)
 
+pytestmark = pytest.mark.extension
+
 CONSENT = {"consent": True}
 
 

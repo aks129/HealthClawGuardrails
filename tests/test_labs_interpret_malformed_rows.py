@@ -56,6 +56,7 @@ MALFORMED = [
 ]
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("bad", MALFORMED)
 @pytest.mark.parametrize("path", [
     "/r6/fhir/Observation/$interpret?subject=Patient/p1",
@@ -72,6 +73,7 @@ def test_one_malformed_row_does_not_break_the_call(
     assert summary["total"] >= 1
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("subject", ["Patient/p10", ["Patient/p1"],
                                      {"reference": 7}, None])
 def test_a_row_whose_subject_cannot_be_read_is_counted_as_ignored(
@@ -96,6 +98,7 @@ def test_a_row_whose_subject_cannot_be_read_is_counted_as_ignored(
     assert summary["ignored"] == (0 if subject is None else 1)
 
 
+@pytest.mark.extension
 def test_interpret_observation_reads_a_malformed_code_as_unknown():
     from r6.labs.interpret import UNKNOWN_ANALYTE, interpret_observation
     for code in ("creatinine", ["2160-0"], {"coding": None},
@@ -106,6 +109,7 @@ def test_interpret_observation_reads_a_malformed_code_as_unknown():
         assert res["indeterminate_reason"] == UNKNOWN_ANALYTE
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("field,value", [
     ("valueQuantity", "0.9 mg/dL"),
     ("referenceRange", "0.6-1.3"),
@@ -119,6 +123,7 @@ def test_interpret_observation_survives_other_non_object_fields(field, value):
     assert "flag" in res
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("stored", ["0.6-1.3", {"low": {"value": 0.6}}, None])
 def test_annotating_replaces_a_reference_range_that_is_not_a_list(stored):
     """The stored value is upstream junk: it is replaced by the table range

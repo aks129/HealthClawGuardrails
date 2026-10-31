@@ -21,6 +21,8 @@ from sqlalchemy.exc import OperationalError
 
 import careagents.models as models
 
+pytestmark = pytest.mark.extension
+
 
 def _error(message, table="ca_accounts"):
     return OperationalError("CREATE TABLE %s" % table, {},

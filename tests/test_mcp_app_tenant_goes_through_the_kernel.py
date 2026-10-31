@@ -52,6 +52,7 @@ PAGES = (
 )
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('path,app_name', PAGES)
 def test_the_page_still_opens_cold(client, path, app_name):
     """MUTATION: let `absent` propagate instead of returning '' -> red.
@@ -64,6 +65,7 @@ def test_the_page_still_opens_cold(client, path, app_name):
     assert r.headers['X-MCP-App'] == app_name
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('path,_app', PAGES)
 def test_the_query_string_still_supplies_the_tenant(client, path, _app):
     r = client.get(f'{path}?tenant_id=desktop-demo')
@@ -71,6 +73,7 @@ def test_the_query_string_still_supplies_the_tenant(client, path, _app):
     assert 'desktop-demo' in r.get_data(as_text=True)
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('path,_app', PAGES)
 def test_the_header_still_wins_over_the_query(client, path, _app):
     """The declared order is (HEADER, QUERY), which is the order these four
@@ -87,6 +90,7 @@ def test_the_header_still_wins_over_the_query(client, path, _app):
     assert 'from-query' not in body
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('path,_app', PAGES)
 def test_a_malformed_tenant_is_refused_rather_than_rendered(client, path,
                                                             _app):
@@ -99,6 +103,7 @@ def test_a_malformed_tenant_is_refused_rather_than_rendered(client, path,
     assert '<script>x' not in r.get_data(as_text=True)
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('path,_app', PAGES)
 def test_a_refusal_names_the_rule_it_applied(client, path, _app):
     """A 400 that does not say what would have been acceptable sends the

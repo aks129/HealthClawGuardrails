@@ -80,6 +80,39 @@ jobs:
           --cov=r6 --cov=main --cov=app --cov-report=term-missing
           --cov-fail-under=80
 
+  # The core without its optional modules (r6/extensions.py). An empty
+  # HEALTHCLAW_EXTENSIONS loads no extension, and tests marked `extension`
+  # are deselected, so this proves the guardrail core starts, serves and
+  # passes on its own. tests/test_extension_registry.py adds the stronger
+  # check: the optional modules made unimportable, not just unregistered.
+  # No coverage floor: the full run above owns that.
+  core-only-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install uv
+          uv sync --extra test
+
+      # The ignored file is changed by work in flight and is marked when that
+      # lands (_MARK_PENDING in tests/test_extension_registry.py).
+      - name: Run the core suite with no extension loaded
+        env:
+          HEALTHCLAW_EXTENSIONS: ""
+        run: >-
+          uv run python -m pytest tests/ -v --tb=short -n auto
+          -m "not extension"
+          --ignore=tests/test_careagents_calm_hub_view.py
+
   # ─────────────────────────────────────────────
   # Postgres CI lane — the python-tests job above runs on sqlite:///:memory:
   # (tests/conftest.py), which does not enforce VARCHAR length, foreign keys

@@ -11,6 +11,9 @@ import json
 from careagents.healthclaw import HealthClawError
 from tests.test_careagents_consent import (  # noqa: F401  (fixtures)
     _handle, _signed_in, app, cfg, fake, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_dont_allow_still_says_no_when_healthclaw_is_unreachable(

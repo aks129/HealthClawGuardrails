@@ -108,6 +108,16 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
 
 ## Deploy notes (maintainers)
 
+- **Pin the optional modules in production.** Set `HEALTHCLAW_EXTENSIONS`
+  to the extensions the deployment runs (`bundled_extensions` for the
+  modules in this repository), never leave it unset. Unset, the app also
+  loads every installed package that declares a `healthclaw.extensions`
+  entry point, and an extension runs inside the guardrail process with its
+  full authority, so a dependency that ships one would be loaded on the next
+  start. Named, an unexpected or broken extension fails startup instead. Set
+  it to the empty string to run the core alone. Tenant purge empties every
+  optional module's tables whichever extensions are loaded
+  (`r6/extensions.py`, `r6/purge.py`).
 - Pushing `main` auto-deploys the Flask app (Railway) and the marketing site
   (Vercel).
 - **The MCP server does NOT auto-deploy.** Deploy it from a staging dir so the

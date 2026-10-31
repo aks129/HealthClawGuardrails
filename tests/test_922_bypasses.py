@@ -9,6 +9,8 @@ import pytest
 from careagents.agent import _summarize_bundle
 from r6.redaction import apply_redaction
 
+pytestmark = pytest.mark.extension
+
 NAME = "Quixtrandle"
 
 

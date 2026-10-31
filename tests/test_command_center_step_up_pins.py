@@ -29,6 +29,8 @@ from r6.command_center import access
 from r6.command_center.models import AgentTask
 from r6.stepup import generate_step_up_token
 
+pytestmark = pytest.mark.extension
+
 PRIVATE = 'pin-private-655'
 OTHER = 'pin-other-655'
 MALFORMED = 'bad tenant!'

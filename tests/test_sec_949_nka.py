@@ -20,6 +20,8 @@ from tests.test_careagents_imessage_demo import _Call, _Turn
 from tests.test_sec_945_first_answer import (
     _audit_details, _free_text, _no_canary, _plant)
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 NKA = "716186003"
 PENICILLIN = "91936005"

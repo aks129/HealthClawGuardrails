@@ -18,6 +18,9 @@ import unicodedata
 
 from careagents import beta, personas, routing
 from careagents.worker import _drop_echo
+import pytest
+
+pytestmark = pytest.mark.extension
 
 SURFACES = ("", "web", "imessage", "sms")
 

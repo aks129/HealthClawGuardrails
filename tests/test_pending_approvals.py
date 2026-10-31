@@ -19,6 +19,8 @@ from tests.test_careagents import FakeClient, _login, _make_direct_conn
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
 
+pytestmark = pytest.mark.extension
+
 #: The CareAgents fixtures, re-exported under their own names; the engine's
 #: `app`/`client` fixtures come from conftest and are used only in the
 #: engine-list tests below.

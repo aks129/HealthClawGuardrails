@@ -16,6 +16,8 @@ from careagents.agent import _timeline_in_words
 from r6.labs.report import _undecided_name
 from r6.redaction import unit_is_shaped
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.mark.parametrize("unit", ["911", "123", "12.5", "/100", "12-34", "0"])
 def test_a_unit_with_no_unit_word_is_only_a_letterless_ucum_unit(unit):

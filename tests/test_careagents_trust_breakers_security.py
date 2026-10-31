@@ -20,6 +20,8 @@ from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
 from tests.test_careagents_what_happened import OutcomeClient, _app, _signed_in
 
+pytestmark = pytest.mark.extension
+
 cfg = _cfg_fixture
 svc = _svc_fixture
 

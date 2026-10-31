@@ -23,6 +23,8 @@ from careagents.models import Base
 from tests.test_careagents import FakeClient, _login
 from tests.test_careagents_beta_signup import _cfg, _confirm_token, _visible
 
+pytestmark = pytest.mark.extension
+
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _TEMPLATES = _ROOT / "careagents" / "templates"
 

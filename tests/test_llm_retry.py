@@ -20,6 +20,8 @@ import requests
 
 from careagents import agent, llm, worker
 
+pytestmark = pytest.mark.extension
+
 
 class _Cfg:
     provider = "openai"

@@ -22,6 +22,8 @@ from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_qa884_units_cross_layer import _world as _world_884
 
+pytestmark = pytest.mark.extension
+
 _LOINC = "http://loinc.org"
 
 

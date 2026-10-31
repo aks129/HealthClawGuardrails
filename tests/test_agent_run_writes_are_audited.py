@@ -41,6 +41,8 @@ from models import db
 from r6.agent_runs.models import AgentRun, utcnow
 from r6.models import AuditEventRecord
 
+pytestmark = pytest.mark.extension
+
 TENANT = "test-tenant"
 
 #: A distinctive string that must never reach the audit trail.

@@ -40,6 +40,7 @@ _HOOKED = [
 ]
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('method,path', _HOOKED)
 @pytest.mark.parametrize('headers,expected', [
     ({}, _ABSENT),
@@ -101,6 +102,7 @@ def test_a_malformed_tenant_is_refused_even_in_a_sharp_context(client):
 _CC_DENIED = {'error': 'authentication required for this tenant'}
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('query,headers,status', [
     ('', {}, 200),                                      # default tenant
     ('', {'X-Tenant-Id': 'desktop-demo'}, 200),
@@ -117,6 +119,7 @@ def test_command_center_tenant_resolution(client, query, headers, status):
         assert r.get_json() == _CC_DENIED
 
 
+@pytest.mark.extension
 def test_command_center_session_outranks_query_and_header(client):
     from r6.read_auth import TENANT_SESSION_KEY
     with client.session_transaction() as sess:
@@ -126,6 +129,7 @@ def test_command_center_session_outranks_query_and_header(client):
     assert r.status_code == 200
 
 
+@pytest.mark.extension
 def test_command_center_malformed_session_tenant_is_refused_not_raised(client):
     from r6.read_auth import TENANT_SESSION_KEY
     with client.session_transaction() as sess:

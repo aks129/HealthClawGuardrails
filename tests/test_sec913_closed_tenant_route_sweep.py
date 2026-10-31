@@ -16,6 +16,7 @@ tests/test_sec913_closed_tenant_write_paths.py. Synthetic ids only.
 from models import db
 from r6.fasten.models import TenantClosure
 from r6.models import R6Resource
+import pytest
 
 SECRET = "sec913-sweep-secret"
 CLOSED = "sec913-sweep-closed"
@@ -126,6 +127,7 @@ def test_no_write_route_changes_a_closed_tenants_records(
     assert changed == [], changed
 
 
+@pytest.mark.extension
 def test_control_the_same_sweep_does_write_into_an_open_tenant(
         app, client, monkeypatch):
     """Proves the sweep reaches real writes, so the closed run's empty list

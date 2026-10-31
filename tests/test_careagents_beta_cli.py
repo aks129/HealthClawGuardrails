@@ -11,6 +11,9 @@ from careagents.app import create_app
 from tests.careagents_stage1_helpers import (
     allowlist_cfg, approve_terms, pend_terms)
 from tests.test_careagents import FakeClient, _login
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _runner(**env):

@@ -18,6 +18,9 @@ Both keep unreadable=True: whatever the sentence, the record is never absent
 from __future__ import annotations
 
 from careagents.agent import _summarize_bundle
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _bundle(*resources):

@@ -17,6 +17,9 @@ from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 EMAIL = "gene@example.com"
 

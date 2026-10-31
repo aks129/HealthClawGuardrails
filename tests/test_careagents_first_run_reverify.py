@@ -11,6 +11,8 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     made, sent)
 from tests.test_careagents_first_run import _account, _ask, _signed_in_as
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "avery@example.com"
 CANARY = "Canary Clinic Zephyrine Q7"
 

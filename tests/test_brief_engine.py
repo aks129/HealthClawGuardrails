@@ -29,6 +29,8 @@ from r6.brief.engine import (
     CARE_GAPS_REASON_ENGINE_ERROR,
 )
 
+pytestmark = pytest.mark.extension
+
 
 # ---------------------------------------------------------------------------
 # Absence-string assertions (unknown-never-absent doctrine)

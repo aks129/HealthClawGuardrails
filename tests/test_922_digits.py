@@ -4,6 +4,8 @@ import pytest
 from r6.labs.report import _undecided_name
 from r6.redaction import unit_is_shaped
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.mark.parametrize("code", [
     "5550137-7",                                            # phone digits + check

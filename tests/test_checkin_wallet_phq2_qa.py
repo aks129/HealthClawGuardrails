@@ -26,6 +26,8 @@ import pytest
 
 from tests.test_checkin_wallet_phq2 import STATIC, _phq2_only, _q
 
+pytestmark = pytest.mark.extension
+
 _RUN = """
 const m = await import(process.argv[1]);
 const request = JSON.parse(process.argv[2]);

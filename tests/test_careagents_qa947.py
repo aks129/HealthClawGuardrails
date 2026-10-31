@@ -15,6 +15,9 @@ from __future__ import annotations
 from careagents import models
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_the_chat_stream_itself_names_the_account(cfg, svc, monkeypatch):

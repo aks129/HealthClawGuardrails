@@ -35,6 +35,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.extension
+
 REPO = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO / "deploy" / "careagents" / "Dockerfile"
 

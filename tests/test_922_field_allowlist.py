@@ -13,6 +13,8 @@ from r6.labs.report import annotate_observation
 from r6.models import R6Resource
 from r6.redaction import apply_redaction, unit_is_shaped
 
+pytestmark = pytest.mark.extension
+
 NAME = "Quixtrandle"
 SNOMED = "http://snomed.info/sct"
 ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"

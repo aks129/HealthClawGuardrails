@@ -23,6 +23,9 @@ from careagents import voice
 from careagents.models import (Account, Base, ImessageHandleState,
                                ImessageLink, Surface, VoiceUsageDay)
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 # Every table with a foreign key to ca_accounts.id, each deleted by
 # AccountService.delete_account (InviteLink through invites.delete_for_account).

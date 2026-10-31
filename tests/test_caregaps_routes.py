@@ -3,6 +3,7 @@ import json
 from datetime import date
 
 from r6.models import R6Resource, db
+import pytest
 
 
 def _store(app, resource, tenant_id):
@@ -44,6 +45,7 @@ def _resp_param(body, name):
     return None
 
 
+@pytest.mark.extension
 def test_care_gaps_returns_parameters_with_summary(client, app, tenant_id, tenant_headers):
     _seed_patient(app, tenant_id)
     r = client.post("/r6/fhir/Patient/$care-gaps?subject=Patient/p1",
@@ -61,6 +63,7 @@ def test_care_gaps_returns_parameters_with_summary(client, app, tenant_id, tenan
     assert _resp_param(body, "disclaimer") is not None
 
 
+@pytest.mark.extension
 def test_care_gaps_get_also_works(client, app, tenant_id, tenant_headers):
     _seed_patient(app, tenant_id, pid="p2")
     r = client.get("/r6/fhir/Patient/$care-gaps?subject=Patient/p2",
@@ -74,6 +77,7 @@ def test_care_gaps_requires_tenant(client):
     assert r.status_code == 400
 
 
+@pytest.mark.extension
 def test_care_gaps_unknown_patient_is_ok_but_indeterminate(client, tenant_headers):
     r = client.post("/r6/fhir/Patient/$care-gaps?subject=Patient/does-not-exist",
                     headers=tenant_headers)
@@ -87,6 +91,7 @@ def test_care_gaps_unknown_patient_is_ok_but_indeterminate(client, tenant_header
 # The production call shape: no subject at all
 # ─────────────────────────────────────────────
 
+@pytest.mark.extension
 def test_care_gaps_with_no_subject_uses_the_tenants_own_patient(
         client, app, tenant_id, tenant_headers):
     """The shape both production callers actually send (#389).
@@ -123,6 +128,7 @@ def test_care_gaps_with_no_subject_uses_the_tenants_own_patient(
         "the tenant's stored Condition did not reach the evaluator")
 
 
+@pytest.mark.extension
 def test_care_gaps_with_no_patient_row_says_so_rather_than_no_gaps(
         client, tenant_headers):
     """"Could not look" must not arrive as "looked and found none".
@@ -146,6 +152,7 @@ def test_care_gaps_with_no_patient_row_says_so_rather_than_no_gaps(
     assert "no screenings outstanding" in consumer["unevaluated_note"]
 
 
+@pytest.mark.extension
 def test_care_gaps_with_two_patient_rows_is_ambiguous_not_empty(
         client, app, tenant_id, tenant_headers):
     """Two Patient rows and no subject: the fallback cannot pick one. That is
@@ -165,6 +172,7 @@ def test_care_gaps_with_two_patient_rows_is_ambiguous_not_empty(
     assert consumer["unevaluated"] == "ambiguous-patient"
 
 
+@pytest.mark.extension
 def test_care_gaps_with_a_supplied_subject_reports_that_state(
         client, app, tenant_id, tenant_headers):
     """A caller-supplied subject is not the fallback, and says so."""
@@ -208,6 +216,7 @@ def _soft_delete(app, tenant_id, resource_type, resource_id):
         db.session.commit()
 
 
+@pytest.mark.extension
 def test_a_soft_deleted_patient_no_longer_makes_the_match_ambiguous(
         client, app, tenant_id, tenant_headers):
     """#422, stated as the operator's experience: they deleted the duplicate,
@@ -229,6 +238,7 @@ def test_a_soft_deleted_patient_no_longer_makes_the_match_ambiguous(
     assert resolution == {"state": "tenant-default", "subject": "Patient/p-live"}
 
 
+@pytest.mark.extension
 def test_the_last_patient_being_deleted_reads_as_no_patient_not_a_default(
         client, app, tenant_id, tenant_headers):
     """The other side of the same filter. A tombstone must not be RESOLVED as
@@ -249,6 +259,7 @@ def test_the_last_patient_being_deleted_reads_as_no_patient_not_a_default(
     assert consumer["unevaluated"] == "no-patient"
 
 
+@pytest.mark.extension
 def test_a_supplied_subject_naming_a_deleted_patient_gets_no_demographics(
         client, app, tenant_id, tenant_headers):
     """The half `resolve_subject` cannot cover: a supplied subject never
@@ -288,6 +299,7 @@ def test_a_supplied_subject_naming_a_deleted_patient_gets_no_demographics(
         "the record were still there")
 
 
+@pytest.mark.extension
 def test_a_soft_deleted_observation_no_longer_closes_a_gap(
         client, app, tenant_id, tenant_headers):
     """The most consequential of the three, and the one that reaches a person.
@@ -353,6 +365,7 @@ def test_a_resource_row_is_born_live_rather_than_null(app, tenant_id):
 # What we say when we did not look (#417)
 # ─────────────────────────────────────────────
 
+@pytest.mark.extension
 def test_a_subject_we_hold_no_record_for_claims_nothing_about_that_record(
         client, tenant_headers):
     """A supplied subject naming a row we do not hold reads nothing, so it
@@ -374,6 +387,7 @@ def test_a_subject_we_hold_no_record_for_claims_nothing_about_that_record(
         assert claim not in consumer["unevaluated_note"]
 
 
+@pytest.mark.extension
 def test_the_fallback_path_evaluates_the_patient_it_resolved(
         client, app, tenant_id, tenant_headers):
     """The production call shape, against a record holding birthDate AND gender.
@@ -427,6 +441,7 @@ def test_the_fallback_path_evaluates_the_patient_it_resolved(
         assert demographic not in consumer["unevaluated_note"]
 
 
+@pytest.mark.extension
 def test_the_fallback_path_now_carries_a_reason_that_is_true(
         client, app, tenant_id, tenant_headers):
     """The production shape of #417's partial list, reachable only once the
@@ -474,6 +489,7 @@ def test_the_fallback_path_now_carries_a_reason_that_is_true(
     assert "date of birth" not in note
 
 
+@pytest.mark.extension
 def test_a_partial_screening_list_says_how_much_of_it_is_missing(
         client, app, tenant_id, tenant_headers):
     """A Patient with a birthDate and no gender — routine in real feeds.
@@ -539,6 +555,7 @@ class TestCareGapsMcpApp:
     """The care-gaps MCP App page — layout ported from SmartHealthConnect
     (archived), data path rebuilt on the engine's own $care-gaps operation."""
 
+    @pytest.mark.extension
     def test_serves_html_with_mcp_app_profile(self, client):
         resp = client.get('/r6/fhir/mcp-apps/care-gaps/?tenant_id=desktop-demo')
         assert resp.status_code == 200
@@ -549,6 +566,7 @@ class TestCareGapsMcpApp:
         assert '<title>Care Gaps' in body
         assert 'desktop-demo' in body
 
+    @pytest.mark.extension
     def test_page_reads_through_the_guarded_operation_only(self, client):
         """The page's only data path is the engine's $care-gaps operation —
         no direct table reads, no alternate endpoints (the SHC failure mode)."""
@@ -559,6 +577,7 @@ class TestCareGapsMcpApp:
         fetches = re.findall(r"fetch\('([^']+)'", body)
         assert fetches == ['/r6/fhir/Patient/$care-gaps']
 
+    @pytest.mark.extension
     def test_plain_terms_list_renders_the_message_not_the_object(self, client):
         """`consumer.lines` are objects — {rule_id, title, message}.
 
@@ -572,12 +591,14 @@ class TestCareGapsMcpApp:
         assert 'esc(l.message' in body
         assert 'esc(l)' not in body
 
+    @pytest.mark.extension
     def test_plain_terms_list_shows_what_was_not_checked(self, client):
         """Whatever this box does draw, it must not draw a partial list as a
         whole one (#417)."""
         body = client.get('/r6/fhir/mcp-apps/care-gaps/').get_data(as_text=True)
         assert 'unevaluated_note' in body
 
+    @pytest.mark.extension
     def test_no_tenant_renders_empty_shell(self, client):
         resp = client.get('/r6/fhir/mcp-apps/care-gaps/')
         assert resp.status_code == 200
@@ -613,6 +634,7 @@ def _audit_details(app, tenant_id):
                 if (r.detail or "").startswith("care-gaps;")]
 
 
+@pytest.mark.extension
 def test_an_unresolved_subject_evaluates_no_rules_at_all(
         client, app, tenant_id, tenant_headers):
     """Two Patient rows, no subject: nothing may be decided about either.
@@ -647,6 +669,7 @@ def test_an_unresolved_subject_evaluates_no_rules_at_all(
     assert summary["indeterminate"] == 0
 
 
+@pytest.mark.extension
 def test_the_audit_says_nothing_was_evaluated_when_nothing_was(
         client, app, tenant_id, tenant_headers):
     """One AuditEvent on the caller path, PHI-free, counting what happened.
@@ -665,6 +688,7 @@ def test_the_audit_says_nothing_was_evaluated_when_nothing_was(
         "care-gaps; subject=ambiguous-patient evaluated=0 due=0")
 
 
+@pytest.mark.extension
 def test_no_patient_row_evaluates_nothing_either(
         client, app, tenant_id, tenant_headers):
     """The other caller reason. Same property, and the more common one — a
@@ -680,6 +704,7 @@ def test_no_patient_row_evaluates_nothing_either(
         "care-gaps; subject=no-patient evaluated=0 due=0"]
 
 
+@pytest.mark.extension
 def test_a_subject_we_hold_no_record_for_evaluates_nothing(
         client, app, tenant_id, tenant_headers):
     """`check-incomplete` — a supplied subject naming a row we do not hold.
@@ -698,6 +723,7 @@ def test_a_subject_we_hold_no_record_for_evaluates_nothing(
         "care-gaps; subject=supplied evaluated=0 due=0"]
 
 
+@pytest.mark.extension
 def test_a_resolved_patient_is_still_evaluated_and_says_so(
         client, app, tenant_id, tenant_headers):
     """The guard must not become a blanket refusal to evaluate anyone.

@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 
 from careagents import voice
 from tests.test_careagents import _make_account, cfg, svc  # noqa: F401
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_spend_is_reported_per_account(svc, monkeypatch):  # noqa: F811

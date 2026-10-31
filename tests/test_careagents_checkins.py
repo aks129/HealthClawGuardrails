@@ -18,6 +18,8 @@ from careagents.models import Account, Base, now
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _make_account, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 DAY = 86400
 OWNER = "owner@example.com"
 

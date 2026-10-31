@@ -43,6 +43,8 @@ from models import db
 from r6.models import R6Resource
 from r6.quality.routes import MEASURE_ID
 
+pytestmark = pytest.mark.extension
+
 # Distinct per field, so a hit names WHICH field leaked rather than only that
 # something did.
 NAME_MARKER = "Marguerite"

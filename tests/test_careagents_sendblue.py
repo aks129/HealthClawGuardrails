@@ -18,6 +18,8 @@ from careagents.config import Config
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, sample_framed, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _pointer(origin: str) -> str:
     """The real-records pointer as sent: a refusal, so it carries the 911

@@ -18,6 +18,8 @@ from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, sample_framed, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _turn(c, agent_id, request_id):
     from careagents.worker import RunWorker

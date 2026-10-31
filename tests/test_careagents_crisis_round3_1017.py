@@ -22,6 +22,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_imessage import PHONE, _pair
 from tests.timing_helpers import assert_linear
 
+pytestmark = pytest.mark.extension
+
 
 def _carries_911(text: str) -> bool:
     return (text.startswith(beta.EMERGENCY_LINE)

@@ -205,6 +205,7 @@ def test_padded_engine_secret_still_matches_the_trimmed_header(
     assert minted.status_code == 200
 
 
+@pytest.mark.extension
 def test_careagents_trims_the_mint_secret_and_warns(caplog):
     from careagents.config import Config
 
@@ -215,6 +216,7 @@ def test_careagents_trims_the_mint_secret_and_warns(caplog):
     assert SECRET not in caplog.text
 
 
+@pytest.mark.extension
 def test_both_sides_derive_the_same_consent_handoff_key(monkeypatch):
     from careagents import consent
     from careagents.config import Config
@@ -225,6 +227,7 @@ def test_both_sides_derive_the_same_consent_handoff_key(monkeypatch):
     assert consent.tag(cfg.mint_secret, "req.123") == handoff_tag("req.123")
 
 
+@pytest.mark.extension
 def test_worker_probe_sends_the_trimmed_secret(monkeypatch):
     from careagents import healthcheck
 
@@ -271,6 +274,7 @@ def test_whitespace_only_secret_keeps_every_internal_gate_closed(
                        headers={"X-Internal-Secret": ""}).status_code == 403
 
 
+@pytest.mark.extension
 def test_careagents_refuses_a_whitespace_only_mint_secret():
     from careagents.config import Config, ConfigError
 

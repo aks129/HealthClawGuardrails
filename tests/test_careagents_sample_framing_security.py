@@ -16,6 +16,8 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 MODEL_TEXT = "Creatinine rose from 0.8 to 1.3 mg/dL in 6 days."
 
 

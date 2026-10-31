@@ -15,6 +15,8 @@ from sqlalchemy import create_engine, inspect, text
 
 from careagents import models
 
+pytestmark = pytest.mark.extension
+
 NEW_COLUMNS = {"sample_claim_at", "first_agent_at", "switch_prompted_at"}
 
 

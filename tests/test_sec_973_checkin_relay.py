@@ -36,6 +36,8 @@ from tests.test_beta_acceptance_rows import _to_requests
 from tests.test_checkin_relay import RELAY, TYPES, _careagents, _Engine
 from tests.test_checkin_wallet import _account, _sign_in
 
+pytestmark = pytest.mark.extension
+
 CANARY = "CANARY-sec973-Rivera-Marisol"
 TOKEN = "sec973tok.CANARYSIGNATURE"
 STATIC = Path(__file__).resolve().parent.parent / "careagents" / "static"

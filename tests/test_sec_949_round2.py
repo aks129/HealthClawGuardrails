@@ -12,6 +12,8 @@ from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_first_answer import _first_turn
 from tests.test_sec_945_first_answer import _plant
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 OID = "urn:oid:2.16.840.1.113883.6.96"
 NKA, NKDA, STATUS, PEN = "716186003", "409137002", "1631000175102", "91936005"

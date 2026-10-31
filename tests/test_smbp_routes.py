@@ -2,6 +2,9 @@ import json
 
 from r6.models import R6Resource, db
 from r6.smbp.monitoring import build_bp_observation
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_enroll_creates_session(client, tenant_headers):

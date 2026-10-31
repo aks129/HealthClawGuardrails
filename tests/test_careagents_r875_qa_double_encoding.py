@@ -11,6 +11,8 @@ import pytest
 
 from careagents import imessage
 
+pytestmark = pytest.mark.extension
+
 
 @pytest.mark.parametrize("url", [
     "https://hc.example/r6/sdc/%2564ocuments/d?t=x",     # documents, twice

@@ -17,6 +17,8 @@ from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_sec1021_bp_component_exploits import _ingest, _panel, _part
 
+pytestmark = pytest.mark.extension
+
 _PART = {"valueQuantity": {"value": 140, "unit": "mmHg"}}
 
 MALFORMED = {

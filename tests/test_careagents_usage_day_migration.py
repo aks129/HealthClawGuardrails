@@ -17,6 +17,8 @@ from sqlalchemy.exc import IntegrityError
 
 from careagents.models import Account, Base, UsageDay, make_engine
 
+pytestmark = pytest.mark.extension
+
 PG = os.environ.get("CARE_TEST_DATABASE_URL", "")
 URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
 

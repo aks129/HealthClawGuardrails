@@ -150,6 +150,7 @@ def test_the_web_role_still_honours_its_port_and_worker_overrides(stubs):
     assert argv[argv.index("--workers") + 1] == "7"
 
 
+@pytest.mark.extension
 def test_the_worker_role_starts_the_durable_worker(stubs):
     # The defect in #273: this branch did not exist, so a service configured as
     # the worker started a web process and readiness stayed 503 forever.
@@ -199,6 +200,7 @@ def test_a_hostile_role_value_cannot_truncate_or_reformat_the_refusal(
         f"careagents: unknown CARE_ROLE '{role}' (expected web or worker)")
 
 
+@pytest.mark.extension
 @pytest.mark.skipif(not os.path.exists("/bin/dash"), reason="dash not present")
 @pytest.mark.parametrize("role,expected", [
     ("web", WEB_ARGV),

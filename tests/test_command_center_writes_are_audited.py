@@ -53,6 +53,7 @@ def _events(app, resource_type=None):
 
 # --- conversations ----------------------------------------------------------
 
+@pytest.mark.extension
 def test_logging_a_conversation_turn_is_audited(app, client, step_up):
     """MUTATION: delete the record_audit_event in api_conversations_create -> red."""
     resp = client.post("/command-center/api/conversations",
@@ -67,6 +68,7 @@ def test_logging_a_conversation_turn_is_audited(app, client, step_up):
     assert events[0]["resource_id"] == resp.get_json()["id"]
 
 
+@pytest.mark.extension
 def test_the_conversation_audit_never_carries_the_message(app, client, step_up):
     """The one that would be a leak rather than a gap.
 
@@ -105,6 +107,7 @@ def test_the_conversation_audit_never_carries_the_message(app, client, step_up):
         events[0]["detail"]), events[0]["detail"]
 
 
+@pytest.mark.extension
 def test_an_idempotent_replay_does_not_audit_a_second_write(app, client, step_up):
     """A replay returns the original message and writes nothing.
 
@@ -128,6 +131,7 @@ def test_an_idempotent_replay_does_not_audit_a_second_write(app, client, step_up
 
 # --- tasks ------------------------------------------------------------------
 
+@pytest.mark.extension
 def test_creating_and_updating_a_task_are_both_audited(app, client, step_up):
     """MUTATION: delete either record_audit_event in the task handlers -> red."""
     created = client.post("/command-center/api/tasks",
@@ -146,6 +150,7 @@ def test_creating_and_updating_a_task_are_both_audited(app, client, step_up):
     assert actions == ["create", "update"], _events(app, "AgentTask")
 
 
+@pytest.mark.extension
 def test_the_task_audit_never_carries_the_title(app, client, step_up):
     """A task title is caller-supplied free text and may name a condition.
 
@@ -174,6 +179,7 @@ def test_the_task_audit_never_carries_the_title(app, client, step_up):
 
 # --- the gap this file closes, stated as a property -------------------------
 
+@pytest.mark.extension
 def test_a_refused_write_leaves_no_audit_event(app, client):
     """Evidence of a write that was refused would be worse than none.
 

@@ -14,6 +14,9 @@ from careagents.models import ImessageHandleState, ImessageLink
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
 from tests.test_careagents_imessage import _inbound, _link_token
+import pytest
+
+pytestmark = pytest.mark.extension
 
 N = "+15550104401"
 M = "+15550104402"

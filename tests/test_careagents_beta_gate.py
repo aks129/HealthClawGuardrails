@@ -18,6 +18,8 @@ from tests.careagents_stage1_helpers import (
     allowlist_cfg, approve_terms, pend_terms)
 from tests.test_careagents import FakeClient, _login
 
+pytestmark = pytest.mark.extension
+
 EMAIL = "tester@example.com"
 
 

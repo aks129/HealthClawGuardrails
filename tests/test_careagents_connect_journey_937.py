@@ -23,6 +23,9 @@ from tests.test_careagents import (  # noqa: F401  (fixtures)
     FakeClient, _login, cfg, consented, svc)
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     _confirm_token, _post, made, sent)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _app(cfg, svc):

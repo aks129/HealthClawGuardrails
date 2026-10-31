@@ -1,6 +1,8 @@
 from scripts.seed_winters_demo import build_demo_dataset
+import pytest
 
 
+@pytest.mark.extension
 def test_demo_dataset_has_both_patients_and_readings():
     data = build_demo_dataset()
     labels = {p["label"] for p in data["patients"]}

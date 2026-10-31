@@ -22,6 +22,8 @@ import pytest
 from r6.read_auth import TENANT_SESSION_KEY
 from r6.stepup import generate_step_up_token
 
+pytestmark = pytest.mark.extension
+
 SECRET = "sec941-pre1-operator-secret"
 PRIVATE_TENANT = "ca-sec941pre101"
 CANARY_PEER = "CANARY-PEER-Ozymandias-Vex"

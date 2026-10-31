@@ -18,6 +18,8 @@ import pytest
 from r6.models import AuditEventRecord
 from tests.test_brief_routes import _URL, _store
 
+pytestmark = pytest.mark.extension
+
 
 def _audit_rows(app, tenant_id):
     with app.app_context():

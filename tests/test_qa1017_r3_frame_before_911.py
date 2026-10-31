@@ -22,6 +22,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_crisis_fixed_replies import (
     _answers, _queue, _work)
 
+pytestmark = pytest.mark.extension
+
 ANSWERS = (
     ("Lo siento mucho, eso suena muy serio.\n\n"
      "Llame al 911 ahora mismo.\n\n"

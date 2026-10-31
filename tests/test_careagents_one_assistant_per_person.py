@@ -22,6 +22,8 @@ from careagents.models import Agent, Connection, Person
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, _make_account, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 PG = os.environ.get("CARE_TEST_DATABASE_URL", "")
 URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
 

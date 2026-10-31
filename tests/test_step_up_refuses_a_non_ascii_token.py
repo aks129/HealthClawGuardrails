@@ -200,6 +200,7 @@ def _call(client, row, tenant_id, token):
     return client.open(row.path, method=row.method, **kwargs)
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize('row', ROWS, ids=lambda r: r.id)
 def test_a_non_ascii_token_is_refused_exactly_as_ascii_garbage_is(
         client, tenant_id, step_up_token, row, monkeypatch):

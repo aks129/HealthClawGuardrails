@@ -14,6 +14,7 @@ import hmac
 import re
 from html import unescape
 from urllib.parse import parse_qs, urlsplit
+import pytest
 
 SECRET = "connect-view-test-secret"
 TENANT = "ca-0123456789"
@@ -125,6 +126,7 @@ def test_patient_page_still_closes_a_disconnected_tenant(client, monkeypatch):
     assert "embed.connect.fastenhealth.com" not in html
 
 
+@pytest.mark.extension
 def test_the_link_careagents_builds_opens_the_patient_page(client,
                                                            monkeypatch):
     """Cross-layer: the real CareAgents builder against the real engine

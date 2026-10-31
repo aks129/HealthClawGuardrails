@@ -20,6 +20,7 @@ _BUNDLE = {"resourceType": "Bundle", "type": "collection",
            "entry": [{"resource": {**_OBS, "id": "qa913-o"}}]}
 
 
+@pytest.mark.extension
 @pytest.mark.parametrize("method,path,body,expected", [
     ("post", "/r6/fhir/Observation", _OBS, (401,)),
     ("put", "/r6/fhir/Observation/qa913-o", {**_OBS, "id": "qa913-o"}, (401,)),

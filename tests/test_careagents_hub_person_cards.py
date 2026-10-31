@@ -21,6 +21,9 @@ from careagents import hub as hub_view
 from tests.careagents_legacy_helpers import legacy_agent
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _HOME_JS = (pathlib.Path(__file__).resolve().parents[1]
             / "careagents" / "static" / "home.js").read_text()

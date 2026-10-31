@@ -19,6 +19,9 @@ from careagents.intake_state import (
     READY,
     classify,
 )
+import pytest
+
+pytestmark = pytest.mark.extension
 
 NOW = 1_754_300_000.0
 SOME = {"conditions": 52, "medications": 9, "labs": 186}

@@ -2,6 +2,9 @@
 import json
 
 from r6.labs.routes import STORED_OBSERVATION_CAP as _STORED_CAP
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _obs(loinc, value, unit):

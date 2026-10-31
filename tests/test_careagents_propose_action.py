@@ -28,6 +28,8 @@ from careagents.models import Account, Surface
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 PHONE = "+15555550123"
 OTHER = "+15555550199"
 EMAIL = "gene@example.com"

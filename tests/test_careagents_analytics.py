@@ -19,6 +19,8 @@ from careagents.models import Base, PageViewDay, make_engine
 
 from tests.test_careagents import FakeClient
 
+pytestmark = pytest.mark.extension
+
 
 def _config(env_extra=None):
     import os

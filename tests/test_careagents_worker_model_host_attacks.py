@@ -17,6 +17,8 @@ from careagents.config import Config
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _turn, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _cfg(**env):
     return Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",

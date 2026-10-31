@@ -35,6 +35,8 @@ from tests import checkin_fixtures as f
 from tests.test_checkin_relay import _Engine, _counts
 from tests.test_checkin_wallet import _account, _config, _sign_in
 
+pytestmark = pytest.mark.extension
+
 ROUTE = "/checkin/wallet/test-patient"
 RELAY = "/checkin/wallet/records"
 FLAGS = {"CARE_CHECKIN_WALLET": "1", "CARE_CHECKIN_TEST_PATIENT": "1"}

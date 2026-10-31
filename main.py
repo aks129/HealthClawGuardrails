@@ -25,6 +25,7 @@ from r6.database_migrations import register_model_metadata, upgrade_database
 from r6.log_safety import (id_hash, loggable_id, loggable_request_id,
                            scrub as scrub_credentials, scrub_request_line,
                            warn_if_unkeyed)
+from r6.runtime_config import config_flag as _is_true
 from r6.runtime_config import (validate_runtime_environment,
                                warn_on_padded_secrets)
 from r6.safe_read import StrictJSONProvider
@@ -33,7 +34,6 @@ from r6.safe_read import StrictJSONProvider
 logger = logging.getLogger(__name__)
 request_logger = logging.getLogger("request")
 _ROOT_DIR = Path(__file__).resolve().parent
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 class _ScrubCredentials(logging.Filter):
@@ -69,12 +69,6 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
-
-
-def _is_true(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in _TRUE_VALUES
 
 
 def _configure_logging(app_env: str) -> None:
@@ -205,28 +199,6 @@ def _register_lifecycle_cli(flask_app: Flask) -> None:
         count = seed_demo_tenant(flask_app, tenant_id)
         click.echo(f"Seeded {count} resource(s).")
 
-    @flask_app.cli.command("seed-demo-history")
-    @click.option("--tenant-id", default="desktop-demo",
-                  help="Tenant to load the history into.")
-    def seed_demo_history_command(tenant_id: str) -> None:
-        """Load the multi-year synthetic BP history into a demo tenant.
-
-        Separate from `seed-demo`, which loads the small built-in set that
-        runs before every deploy. This one is bulkier and is loaded on
-        demand: it exists so a demo, a screenshot or an acceptance test has
-        data with a shape worth looking at.
-
-        Idempotent — every resource carries a fixed id, so a second run
-        reports 0.
-        """
-        from r6.seed import seed_demo_data
-        from r6.smbp.demo_history import smbp_history_resources
-        with flask_app.app_context():
-            count = seed_demo_data(tenant_id,
-                                   resources=smbp_history_resources(),
-                                   source='sample')
-        click.echo(f"Seeded {count} resource(s) into {tenant_id}.")
-
     @flask_app.cli.command("recover-zombies")
     def recover_zombies_command() -> None:
         """Retry eligible Fasten jobs stranded by a process restart."""
@@ -277,17 +249,9 @@ def _register_blueprints(flask_app: Flask) -> None:
         ", ".join(action_kinds()),
     )
 
-    from r6.agent_runs.routes import agent_runs_blueprint
-
-    flask_app.register_blueprint(agent_runs_blueprint)
-
     from r6.ops.routes import ops_blueprint
 
     flask_app.register_blueprint(ops_blueprint)
-
-    from r6.smbp.routes import smbp_blueprint
-
-    flask_app.register_blueprint(smbp_blueprint)
 
     # SDC delivery Blueprint — public signed download route for intake PDFs
     # (Task 7). On its OWN blueprint (not r6_blueprint) so it is reachable
@@ -315,12 +279,12 @@ def _register_blueprints(flask_app: Flask) -> None:
 
     flask_app.register_blueprint(email_blueprint)
 
-    if _is_true(flask_app.config.get("DISABLE_COMMAND_CENTER")):
-        logger.info("Command Center disabled via DISABLE_COMMAND_CENTER")
-    else:
-        from r6.command_center.routes import command_center_blueprint
+    # Optional modules add their blueprints and commands through the
+    # extension registry (r6/extensions.py); the core imports none of them.
+    from r6.extensions import get_registry
 
-        flask_app.register_blueprint(command_center_blueprint)
+    for app_hook in get_registry().app_hooks:
+        app_hook(flask_app)
 
     from app import web_blueprint
 

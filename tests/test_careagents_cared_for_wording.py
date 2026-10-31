@@ -31,6 +31,9 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, cfg, svc)
 from tests.test_careagents_hub_person_cards import _client
 from tests.test_careagents_sample_framing import _answer
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _STATIC = pathlib.Path(__file__).resolve().parents[1] / "careagents"
 _HOME_JS = (_STATIC / "static" / "home.js").read_text()

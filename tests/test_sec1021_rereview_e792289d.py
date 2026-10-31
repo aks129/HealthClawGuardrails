@@ -25,6 +25,8 @@ import pytest
 from tests.test_beta_acceptance_rows import Chain, TENANT
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 
+pytestmark = pytest.mark.extension
+
 LOINC = "http://loinc.org"
 
 _SHAPES = {

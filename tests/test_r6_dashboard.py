@@ -21,6 +21,7 @@ import base64
 import json
 from urllib.parse import parse_qs, urlsplit
 import secrets
+import pytest
 
 
 # ===== Health Check =====
@@ -891,6 +892,7 @@ class TestDemoAgentLoop:
             assert search.get_json()['total'] == 1, (
                 f'two demo runs left more than one {resource_type}')
 
+    @pytest.mark.extension
     def test_demo_loop_leaves_care_gaps_answerable(
             self, client, tenant_id, tenant_headers):
         """Step 4 of the 10-minute demo script, after two demo-button presses.

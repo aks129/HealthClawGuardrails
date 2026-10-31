@@ -25,6 +25,8 @@ from tests.test_sec_945_first_answer import (
     CANARY, _allergy, _audit_details, _free_text, _no_canary, _plant,
     _turn_capturing)
 
+pytestmark = pytest.mark.extension
+
 SNOMED = "http://snomed.info/sct"
 LOINC = "http://loinc.org"
 NKA = "716186003"

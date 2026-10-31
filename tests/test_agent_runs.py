@@ -17,6 +17,8 @@ from r6.agent_runs.models import (
 from r6.agent_runs.state import RUN_STATES
 from r6.command_center.models import ConversationMessage
 
+pytestmark = pytest.mark.extension
+
 
 TENANT = "test-tenant"
 

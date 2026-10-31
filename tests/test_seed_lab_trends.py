@@ -17,6 +17,9 @@ from datetime import datetime
 
 from r6.labs.trend import evaluate_creatinine_aki
 from r6.seed import _built_in_resources
+import pytest
+
+pytestmark = pytest.mark.extension
 
 UCUM = "http://unitsofmeasure.org"
 

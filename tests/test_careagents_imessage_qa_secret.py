@@ -12,6 +12,9 @@ from __future__ import annotations
 from careagents.accounts import secret_matches
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_an_empty_expected_secret_matches_nothing():

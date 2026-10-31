@@ -20,6 +20,8 @@ import pytest
 from r6.caregaps.evaluate import CARE_GAP_RULES, evaluate_care_gaps
 from tests.test_labs_subject_matching import PID, _row
 
+pytestmark = pytest.mark.extension
+
 AS_OF = "2026-07-01"
 CVX = "http://hl7.org/fhir/sid/cvx"
 

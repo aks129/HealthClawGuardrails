@@ -19,6 +19,9 @@ from __future__ import annotations
 
 from tests.test_careagents import (  # noqa: F401  (fixtures)
     FakeClient, _login, cfg, consented, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _app(cfg, svc):

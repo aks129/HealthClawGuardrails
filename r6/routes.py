@@ -80,7 +80,6 @@ from r6.curatr import (
     persist_curation_state as _persist_curation_state,
 )
 from r6.health_context import get as _hc_get
-from r6.caregaps.report import caller_reasons as _caregaps_caller_reasons
 
 _curatr_engine = CuratrEngine()
 
@@ -1806,7 +1805,7 @@ def _internal_mint_authorized(tenant_id):
     - Fail-closed: if `INTERNAL_TOKEN_MINT_SECRET` is unset, non-public mints are
       REFUSED in production and allowed only in dev (backward compatible locally).
     """
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     if is_public(tenant_id):
         return True
     mint_secret = internal_mint_secret()
@@ -2073,7 +2072,7 @@ def fasten_revoke_route():
         tenant_id = tenant_from_request(sources=(TenantSource.BODY,)).id
     except TenantRejected:
         return jsonify({'error': 'tenant_id is required'}), 400
-    from r6.command_center.access import is_public
+    from r6.tenancy import is_public
     if is_public(tenant_id):  # never closed; purge leaves them open too
         return jsonify({'error': 'public tenant cannot be revoked'}), 422
     from r6.fasten.revoke import revoke_tenant
@@ -3227,58 +3226,6 @@ def mcp_app_compiled_truth(resource_type, resource_id):
     return resp
 
 
-@r6_blueprint.route('/mcp-apps/care-gaps/', methods=['GET'])
-@r6_blueprint.route('/mcp-apps/care-gaps', methods=['GET'])
-def mcp_app_care_gaps():
-    """
-    MCP App: Preventive Care Gaps.
-
-    Renders the Patient/$care-gaps Parameters response (summary buckets,
-    per-rule cards, consumer lines, disclaimer). Linked from the
-    `care_gaps` MCP tool via `_meta.ui.resourceUri`. Layout ported from
-    SmartHealthConnect's care-gaps view (archived); data path rebuilt on
-    the engine's own operation so redaction + audit apply by construction.
-    """
-    tenant_id = _mcp_app_tenant()
-    html = render_template(
-        'mcp_apps/care_gaps.html',
-        tenant_id=tenant_id,
-        # The engine's own "nothing was read" list; the page must not copy it (#538).
-        not_evaluated_reasons=_caregaps_caller_reasons(),
-    )
-    resp = Response(html, mimetype='text/html')
-    resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
-    resp.headers['X-MCP-App'] = 'care-gaps'
-    return resp
-
-
-@r6_blueprint.route('/mcp-apps/lab-trends/', methods=['GET'])
-@r6_blueprint.route('/mcp-apps/lab-trends', methods=['GET'])
-def mcp_app_lab_trends():
-    """
-    MCP App: Lab Trends.
-
-    A timeline of one analyte over time — the shape "give me a timeline of my
-    cholesterol results" actually asks for, and which prose answers badly.
-    Linked from the `fhir_interpret_labs` MCP tool via `_meta.ui.resourceUri`.
-
-    Data path is the engine's own Observation/$interpret with an empty body,
-    so redaction, audit and tenant scoping apply by construction AND the
-    normal/high flags drawn here are the engine's verdict rather than a
-    threshold re-implemented in a browser. Reference ranges live in exactly
-    one place (r6/labs/interpret.py) and this view is not a second one.
-    """
-    tenant_id = _mcp_app_tenant()
-    html = render_template(
-        'mcp_apps/lab_trends.html',
-        tenant_id=tenant_id,
-    )
-    resp = Response(html, mimetype='text/html')
-    resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
-    resp.headers['X-MCP-App'] = 'lab-trends'
-    return resp
-
-
 @r6_blueprint.route('/mcp-apps/wearables/', methods=['GET'])
 @r6_blueprint.route('/mcp-apps/wearables', methods=['GET'])
 def mcp_app_wearables():
@@ -3712,34 +3659,43 @@ register_sdc_routes(r6_blueprint, {
     "validator": validator,
 })
 
-# --- Quality measures ($evaluate-measure — NQF 0018) ---
-from r6.quality.routes import register_quality_routes  # noqa: E402
+# --- Optional modules (r6/extensions.py) ---
+# Each extension adds its routes here, in the order it registered them. An
+# optional operation the core knows about and no extension provides answers
+# 501 not-supported rather than a bare 404, so a caller can tell "this server
+# does not do that" from "that resource does not exist".
+from r6.extensions import OPTIONAL_OPERATIONS, get_registry  # noqa: E402
 
-register_quality_routes(r6_blueprint, {
-    "operation_outcome": _operation_outcome,
-    "authenticate_tenant_read": authenticate_tenant_read,
-})
+_extensions = get_registry()
+for _add_routes in _extensions.r6_routes:
+    _add_routes(r6_blueprint, {
+        "operation_outcome": _operation_outcome,
+        "authenticate_tenant_read": authenticate_tenant_read,
+        "mcp_app_tenant": _mcp_app_tenant,
+    })
 
-# --- Lab reference-range interpreter ($interpret) ---
-from r6.labs.routes import register_labs_routes  # noqa: E402
 
-register_labs_routes(r6_blueprint, {
-    "authenticate_tenant_read": authenticate_tenant_read,
-})
+def _operation_not_installed(operation):
+    def view():
+        # Authenticate exactly as the operation itself does, so a caller who
+        # may not read this tenant gets the same refusal whether or not the
+        # operation is installed.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+        auth_err = authenticate_tenant_read(tenant_id)
+        if auth_err is not None:
+            return auth_err[0], auth_err[1]
+        return _operation_outcome(
+            'error', 'not-supported',
+            f'{operation} is not supported by this server'), 501
+    return view
 
-# --- Preventive-care gaps ($care-gaps) ---
-from r6.caregaps.routes import register_caregaps_routes  # noqa: E402
 
-register_caregaps_routes(r6_blueprint, {
-    "authenticate_tenant_read": authenticate_tenant_read,
-})
-
-# --- Appointment Brief ($appointment-brief) ---
-from r6.brief.routes import register_brief_routes  # noqa: E402
-
-register_brief_routes(r6_blueprint, {
-    "authenticate_tenant_read": authenticate_tenant_read,
-})
+for _operation, _methods in OPTIONAL_OPERATIONS.items():
+    if not _extensions.provides(_operation):
+        r6_blueprint.add_url_rule(
+            '/' + _operation,
+            'not_installed_' + re.sub(r'\W', '_', _operation).strip('_'),
+            _operation_not_installed(_operation), methods=list(_methods))
 
 # --- Guardrail conformance self-test ($conformance) ---
 from r6.conformance.routes import register_conformance_routes  # noqa: E402

@@ -29,6 +29,8 @@ from careagents import beta, imessage, routing
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 FRAMES = (beta.SAMPLE_FRAME, beta.sample_frame("your parent"))
 ORIGIN = "https://example.test"
 

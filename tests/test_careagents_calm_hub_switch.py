@@ -7,6 +7,9 @@ from tests.test_careagents import _login
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
+import pytest
+
+pytestmark = pytest.mark.extension
 
 #: The CareAgents fixtures, re-exported under their own names.
 app = _app_fixture

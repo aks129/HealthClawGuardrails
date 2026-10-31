@@ -32,6 +32,8 @@ from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
     made, sent)
 from tests.test_careagents_invite_links import _code, _join_via
 
+pytestmark = pytest.mark.extension
+
 PG = os.environ.get("CARE_TEST_DATABASE_URL", "")
 URLS = ["sqlite"] + (["postgres"] if PG.startswith("postgres") else [])
 

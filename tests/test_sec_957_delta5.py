@@ -58,6 +58,7 @@ def test_control_d4_f1_closed():
     assert "display" not in out["code"]["coding"][0]
 
 
+@pytest.mark.extension
 @pytest.mark.xfail(strict=False, reason="Low: a malformed NKA spelling reads "
                    "as an unnamed active problem on the brief")
 def test_brief_hides_a_condition_whose_only_code_was_a_malformed_absence():

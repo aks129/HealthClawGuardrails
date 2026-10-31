@@ -99,9 +99,9 @@ UNLABELLED = "Recorded, name unavailable"
 #: No code element at all. There is nothing to name.
 UNKNOWN = "Unknown"
 
-#: A medicine on the list whose name we cannot show (#884 G7).
-MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
-                    "Ask your doctor.")
+#: A medicine on the list whose name we cannot show (#884 G7). Shared with
+#: the action rail, so it lives in the core (r6/actions/vocabulary.py).
+from r6.actions.vocabulary import MEDICINE_UNNAMED  # noqa: E402
 
 #: What the brief says where the record holds no value it can show.
 #: Not "Dose not listed": an RxNorm name carries the strength ("Metformin

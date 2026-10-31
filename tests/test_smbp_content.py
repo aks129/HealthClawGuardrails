@@ -1,4 +1,7 @@
 from r6.smbp.content import msg, SYMPTOM_PROMPTS
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_returns_spanish_and_english():

@@ -1,5 +1,8 @@
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.report import build_report, render_html, render_pdf
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def _obs(s, d, when):

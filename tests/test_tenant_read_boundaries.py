@@ -69,6 +69,7 @@ def test_fasten_connection_list_accepts_tenant_bound_oauth(client):
     assert response.status_code == 200
 
 
+@pytest.mark.extension
 def test_fasten_connection_list_accepts_tenant_bound_session(client):
     from r6.command_center import access
 
@@ -390,6 +391,7 @@ def test_rx_read_token_cannot_persist_proposal(client, app):
     assert ProposedAction.query.filter_by(tenant_id=PRIVATE_TENANT).count() == before
 
 
+@pytest.mark.extension
 def test_command_center_private_dashboard_accepts_bound_step_up(client):
     response = client.get(
         "/command-center",
@@ -399,6 +401,7 @@ def test_command_center_private_dashboard_accepts_bound_step_up(client):
     assert response.status_code == 200
 
 
+@pytest.mark.extension
 def test_command_center_private_api_accepts_bound_oauth(client):
     response = client.get(
         "/command-center/api/overview",

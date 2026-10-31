@@ -22,6 +22,8 @@ from careagents.config import Config, ConfigError
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _turn, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 UNAPPROVED = "https://llm.unvetted.example/v1"
 
 

@@ -9,6 +9,9 @@ import re
 from pathlib import Path
 
 from careagents import beta, config, sendblue_surface, tester_terms
+import pytest
+
+pytestmark = pytest.mark.extension
 
 TERMS = (Path(__file__).resolve().parents[1] / "careagents" / "templates"
          / tester_terms.TEMPLATE).read_text()

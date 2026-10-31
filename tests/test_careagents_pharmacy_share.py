@@ -23,6 +23,8 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_sendblue import PHONE, _env, _hook, _pair
 from tests.test_careagents_sendblue import FakeSendblue
 
+pytestmark = pytest.mark.extension
+
 INTAKE = "https://rxgenie.us/pharmacy/api/intake"
 SHLINK = "shlink:/eyJ1cmwiOiJodHRwczovL2VuZ2luZS5leGFtcGxlL3NobC94In0"
 

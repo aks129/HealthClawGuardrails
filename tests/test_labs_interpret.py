@@ -1,5 +1,8 @@
 # tests/test_labs_interpret.py
 from r6.labs.interpret import LOINC_RANGES, REFERENCES
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_every_range_has_a_nonempty_source():

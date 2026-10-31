@@ -25,6 +25,8 @@ from careagents import routing
 from careagents.llm import REFUSAL_TEXT
 from tests.timing_helpers import assert_linear
 
+pytestmark = pytest.mark.extension
+
 # Each one is a direct way of saying an English phrase _CRISIS covers.
 SPANISH_MISSES = (
     # don't want to live / gonna die / end my life

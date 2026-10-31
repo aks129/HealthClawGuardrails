@@ -12,6 +12,8 @@ from tests.careagents_stage1_helpers import approve_terms, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
+pytestmark = pytest.mark.extension
+
 
 def _real_agent(cfg, svc, monkeypatch, email="gene@example.com"):  # noqa: F811
     # Connected before the terms bump: the tests below approve a

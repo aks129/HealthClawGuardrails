@@ -28,6 +28,8 @@ import pytest
 from tests.test_checkin_wallet_test_patient import (  # noqa: F401
     RELAY, _choose, tester)
 
+pytestmark = pytest.mark.extension
+
 #: The relay answers the page treats as "offer the test patient".
 OFFER_REASONS = {"no_records", "sample_only"}
 

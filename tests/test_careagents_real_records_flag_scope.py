@@ -22,6 +22,8 @@ from tests.test_careagents_sendblue import (
     PHONE as SB_PHONE, _app, _deliverer, _env, _hook, _make_real)
 from tests.test_careagents_sendblue import _pair as _sb_pair
 
+pytestmark = pytest.mark.extension
+
 
 def _pointer(origin: str) -> str:
     """The real-records pointer as sent: a refusal, so it carries the 911

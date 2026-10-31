@@ -21,6 +21,9 @@ from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _beta_app, _login, cfg, svc)
+import pytest
+
+pytestmark = pytest.mark.extension
 
 _EMPTY_BUNDLE = json.dumps({"resourceType": "Bundle", "type": "collection",
                             "entry": []})

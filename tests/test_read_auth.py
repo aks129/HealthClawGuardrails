@@ -395,6 +395,7 @@ def _assert_read_refused(resp):
     assert body['issue'][0]['code'] == 'security'
 
 
+@pytest.mark.extension
 def test_read_flag_on_interpret_post_no_token_401(client, monkeypatch):
     """POST Observation/$interpret returns interpreted labs for the tenant.
 
@@ -409,6 +410,7 @@ def test_read_flag_on_interpret_post_no_token_401(client, monkeypatch):
     _assert_read_refused(resp)
 
 
+@pytest.mark.extension
 def test_read_flag_on_care_gaps_post_no_token_401(client, monkeypatch):
     """Patient/$care-gaps is registered for GET *and* POST. The GET is caught
     by the before_request hook; the POST is caught by nothing but the

@@ -1,5 +1,8 @@
 from r6.smbp.models import SMBPSession
 from r6.models import db
+import pytest
+
+pytestmark = pytest.mark.extension
 
 
 def test_smbp_session_persists(app):
