@@ -211,7 +211,7 @@ function formQuestions(form, i) {
       row.className = "checkin-skipped";
       const why = document.createElement("p");
       why.className = "checkin-skipped-why";
-      why.textContent = "This wallet does not answer this question. It is not sent.";
+      why.textContent = "This page can't answer the next question. Nothing is sent for it.";
       const theirs = document.createElement("p");
       theirs.className = "checkin-skipped-website checkin-from-website";
       const label = document.createElement("span");
@@ -583,7 +583,7 @@ function pickNote(text) {
 // which this screen offers instead.
 const OFFER_TEST = {
   no_records: "There are no records on your account yet.",
-  sample_only: "The sample records can't be used for check-in. You can use a made-up connectathon test patient instead.",
+  sample_only: "The made-up records you're exploring with can't be used for check-in.",
 };
 
 /* Resolves to true when the person chose the test patient. */
@@ -600,7 +600,7 @@ function offerTestPatient(why) {
    second time), then read its records. Sends `{}`: nothing about the
    request or the website. Throws the server's fixed code. */
 async function useTestPatient(request, unsupportedItems) {
-  done("Getting the test patient", "This takes a few seconds.");
+  done("Getting the made-up records", "This takes a few seconds.");
   const res = await post(card.dataset.testPatient, {});
   if (!res.ok) throw new Error(typeof res.d.error === "string" ? res.d.error : "records");
   return loadRecords(request, unsupportedItems);
