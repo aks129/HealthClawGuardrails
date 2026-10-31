@@ -311,6 +311,15 @@ def register(app, svc, cfg, hc, full_session) -> None:
             return _refuse("unavailable", 502)
         return _no_store(Response(bundle, mimetype="application/fhir+json"))
 
+    @app.get("/checkin/sample")
+    def checkin_sample():
+        # A made-up clinic's new-patient form (#1073): a check-in page of
+        # our own, so a first-timer can see this wallet answer one without
+        # an outside site. It asks as any website does (static/
+        # checkin_sample.js, the vendored Verifier library) and the answer
+        # comes back to its own tab only. The page reads and writes nothing.
+        return _no_store(Response(render_template("checkin_sample.html")))
+
     if test_patient:
         _register_test_patient(app, svc, hc, signed_in)
 

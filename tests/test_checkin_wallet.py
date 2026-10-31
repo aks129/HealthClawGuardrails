@@ -196,7 +196,9 @@ def test_the_page_is_read_only_and_the_relay_is_the_one_post(wallet):
     app, _ = wallet
     rules = [r for r in app.url_map.iter_rules()
              if r.rule.startswith("/checkin")]
-    assert sorted(r.rule for r in rules) == sorted(ROUTES + (RELAY,))
+    # And the sample new-patient form, a page of its own (#1073).
+    assert sorted(r.rule for r in rules) == sorted(
+        ROUTES + (RELAY, "/checkin/sample"))
     for r in rules:
         allowed = {"POST", "OPTIONS"} if r.rule == RELAY else {
             "GET", "HEAD", "OPTIONS"}
