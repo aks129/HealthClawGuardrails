@@ -23,6 +23,8 @@
 import {
   fetchWithTimeout,
   BackendTimeoutError,
+  EngineUrlRefusedError,
+  engineUrlRefusedResult,
   backendTimeoutResult,
 } from "./fetch-timeout";
 import {
@@ -154,6 +156,33 @@ function parseGrantMarker(raw: string | undefined): OAuthGrantMarker | null {
   return null;
 }
 
+// The one test for "this call is on a consented connection": the marker is
+// present, whether or not it parses. Listing and calling both key off it, so a
+// marker that fails to parse is refused rather than run in token mode.
+export function hasGrantMarker(headers: Record<string, string> | undefined): boolean {
+  return typeof headers?.[OAUTH_GRANT_HEADER] === "string";
+}
+
+// Arguments that would name a tenant. On the grant path the introspected
+// tenant is the only one sent, so any of these is dropped before the call.
+// Top-level keys only: allow-listed tools take flat arguments, and the nested
+// FHIR resources fhir_validate and questionnaire_populate carry are never a
+// tenant source. On the grant path the tenant reaches the engine only as the
+// X-Tenant-Id header executeAsGrant sets. A tool whose nested input could
+// select a tenant needs its own strip before it joins the allow-list.
+const TENANT_ARGUMENT = /tenant/i;
+
+function readOnlyRefusal(toolName: string): Record<string, unknown> {
+  return {
+    error: "This connection is read-only",
+    tool: toolName,
+    message:
+      "A consented connection can read your records through the " +
+      "guardrails. Writes go through the human-approved action rail, " +
+      "never through this connection.",
+  };
+}
+
 export function resetGrantReadTokenCacheForTests(): void {
   GRANT_READ_TOKEN_CACHE.clear();
 }
@@ -191,6 +220,83 @@ const SHL_GENERATE_TOOL_NAME = "shl_generate";
 export function shlGenerateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MCP_ENABLE_SHL_GENERATE === "true" || env.MCP_ENABLE_SHL_GENERATE === "1";
 }
+
+// The resource types fhir_read, fhir_search, fetch and search accept.
+const FHIR_RESOURCE_TYPES: readonly string[] = [
+  "Patient",
+  "Encounter",
+  "Observation",
+  "AuditEvent",
+  "Consent",
+  "Permission",
+  "SubscriptionTopic",
+  "Subscription",
+  "NutritionIntake",
+  "NutritionProduct",
+  "DeviceAlert",
+  "DeviceAssociation",
+  "Requirements",
+  "ActorDefinition",
+  "Condition",
+  "Provenance",
+  "AllergyIntolerance",
+  "Immunization",
+  "MedicationRequest",
+  "MedicationStatement",
+  "Medication",
+  "MedicationDispense",
+  "Procedure",
+  "DiagnosticReport",
+  "CarePlan",
+  "CareTeam",
+  "Goal",
+  "DocumentReference",
+  "Location",
+  "Organization",
+  "Practitioner",
+  "PractitionerRole",
+  "RelatedPerson",
+  "Coverage",
+  "ServiceRequest",
+  "Specimen",
+  "FamilyMemberHistory",
+];
+
+// The engine's resource-id charset and width (r6/resource_ids.py), so a
+// path segment taken from input can never be "..", "$op" or free text.
+const RESOURCE_ID_PATTERN = /^[A-Za-z0-9\-.]{1,255}$/;
+
+function isResourceId(value: string): boolean {
+  return RESOURCE_ID_PATTERN.test(value) && value !== "." && value !== "..";
+}
+
+// The tools a consented connection (an OAuth session, spec §13.6) may list and
+// call. An allow-list, not a deny-list: a tool added later stays hidden from
+// connected agents until someone decides it is a read and adds it here. The
+// connector is read-only (§6.5); anything that proposes, stages, writes,
+// sends, or issues a credential is absent. So are guardrail_conformance, which
+// runs the probe suite and its synthetic writes on demand; curatr_evaluate,
+// which persists curation state on the record it grades; and action_status,
+// which returns a full action payload and has nothing to report to a
+// connection that cannot propose actions.
+export const OAUTH_READ_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "care_gaps",
+  "context_get",
+  "fetch",
+  "fhir_compiled_truth",
+  "fhir_interpret_labs",
+  "fhir_lastn",
+  "fhir_permission_evaluate",
+  "fhir_read",
+  "fhir_search",
+  "fhir_stats",
+  "fhir_subscription_topics",
+  "fhir_validate",
+  "questionnaire_populate",
+  "search",
+  "sources_check",
+  "wearables_sync_status",
+]);
 
 export interface FHIRToolsOptions {
   allowPrivileged?: boolean;
@@ -270,8 +376,9 @@ export class FHIRTools {
    * Return tool schemas in MCP SDK format (for ListToolsRequestSchema handler).
    * Includes annotations required by OpenAI and Anthropic marketplaces.
    */
-  getMCPToolSchemas(): MCPToolSchema[] {
+  getMCPToolSchemas(options: { oauth?: boolean } = {}): MCPToolSchema[] {
     return this.getToolSchemas()
+      .filter((tool) => !options.oauth || OAUTH_READ_TOOL_NAMES.has(tool.name))
       .filter((tool) => this.allowPrivileged || !PRIVILEGED_TOOL_NAMES.has(tool.name))
       .filter((tool) => this.enableShlGenerate || tool.name !== SHL_GENERATE_TOOL_NAME)
       .map((t) => ({
@@ -325,45 +432,7 @@ export class FHIRTools {
           properties: {
             resource_type: {
               type: "string",
-              enum: [
-                "Patient",
-                "Encounter",
-                "Observation",
-                "AuditEvent",
-                "Consent",
-                "Permission",
-                "SubscriptionTopic",
-                "Subscription",
-                "NutritionIntake",
-                "NutritionProduct",
-                "DeviceAlert",
-                "DeviceAssociation",
-                "Requirements",
-                "ActorDefinition",
-                "Condition",
-                "Provenance",
-                "AllergyIntolerance",
-                "Immunization",
-                "MedicationRequest",
-                "MedicationStatement",
-                "Medication",
-                "MedicationDispense",
-                "Procedure",
-                "DiagnosticReport",
-                "CarePlan",
-                "CareTeam",
-                "Goal",
-                "DocumentReference",
-                "Location",
-                "Organization",
-                "Practitioner",
-                "PractitionerRole",
-                "RelatedPerson",
-                "Coverage",
-                "ServiceRequest",
-                "Specimen",
-                "FamilyMemberHistory",
-              ],
+              enum: [...FHIR_RESOURCE_TYPES],
             },
             resource_id: { type: "string", description: "The resource ID" },
           },
@@ -398,45 +467,7 @@ export class FHIRTools {
           properties: {
             resource_type: {
               type: "string",
-              enum: [
-                "Patient",
-                "Encounter",
-                "Observation",
-                "AuditEvent",
-                "Consent",
-                "Permission",
-                "SubscriptionTopic",
-                "Subscription",
-                "NutritionIntake",
-                "NutritionProduct",
-                "DeviceAlert",
-                "DeviceAssociation",
-                "Requirements",
-                "ActorDefinition",
-                "Condition",
-                "Provenance",
-                "AllergyIntolerance",
-                "Immunization",
-                "MedicationRequest",
-                "MedicationStatement",
-                "Medication",
-                "MedicationDispense",
-                "Procedure",
-                "DiagnosticReport",
-                "CarePlan",
-                "CareTeam",
-                "Goal",
-                "DocumentReference",
-                "Location",
-                "Organization",
-                "Practitioner",
-                "PractitionerRole",
-                "RelatedPerson",
-                "Coverage",
-                "ServiceRequest",
-                "Specimen",
-                "FamilyMemberHistory",
-              ],
+              enum: [...FHIR_RESOURCE_TYPES],
             },
             patient: {
               type: "string",
@@ -550,7 +581,7 @@ export class FHIRTools {
             input.operation as string,
             headers
           ),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -674,7 +705,7 @@ export class FHIRTools {
         tier: "read",
         handler: ({ input, headers }) =>
           this.guardrailConformance(input.fresh === true, headers),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -849,7 +880,7 @@ export class FHIRTools {
             input.resource_id as string,
             headers
           ),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
           properties: {
@@ -881,7 +912,7 @@ export class FHIRTools {
             input.record_version as number | undefined,
             input.reason as string | undefined
           ),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -957,7 +988,7 @@ export class FHIRTools {
               "Step-up token issued (5-min TTL). Send it as the X-Step-Up-Token header on subsequent write calls; no write tool accepts it as an argument.",
           };
         },
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -1018,7 +1049,7 @@ export class FHIRTools {
             input.payload as Record<string, unknown>,
             headers
           ),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
           properties: {
@@ -1043,7 +1074,7 @@ export class FHIRTools {
           "Draft a prescription-transfer request: assembles the patient's active medications and stages a phone call to the RECEIVING pharmacy asking it to pull the prescriptions from the current pharmacy (how US transfers actually work). Schedule II medications are refused (never transferable — new prescription required). Returns a draft the patient MUST review; submit with action_commit for the patient's own out-of-band confirmation after they explicitly agree — action_commit does not execute the call itself.",
         tier: "write",
         handler: ({ input, headers }) => this.proposeRxTransfer(input, headers),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
           properties: {
@@ -1085,7 +1116,7 @@ export class FHIRTools {
         tier: "read",
         handler: ({ input, headers }) =>
           this.getActionStatus(input.action_id as string, headers),
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -1195,6 +1226,7 @@ export class FHIRTools {
       return await this.executeToolInner(toolName, input, headers);
     } catch (e) {
       if (e instanceof BackendTimeoutError) return backendTimeoutResult(e);
+      if (e instanceof EngineUrlRefusedError) return engineUrlRefusedResult(e);
       throw e;
     }
   }
@@ -1220,8 +1252,9 @@ export class FHIRTools {
       return { error: `Unknown tool: ${toolName}` };
     }
 
-    const grant = parseGrantMarker(headers?.[OAUTH_GRANT_HEADER]);
-    if (grant) {
+    if (hasGrantMarker(headers)) {
+      const grant = parseGrantMarker(headers?.[OAUTH_GRANT_HEADER]);
+      if (!grant) return readOnlyRefusal(toolName);
       return this.executeAsGrant(tool, toolName, input, grant, headers?.["x-agent-id"]);
     }
 
@@ -1313,16 +1346,12 @@ export class FHIRTools {
     grant: OAuthGrantMarker,
     agentId: string | undefined
   ): Promise<Record<string, unknown>> {
-    if (tool.tier === "write") {
-      return {
-        error: "This connection is read-only",
-        tool: toolName,
-        message:
-          "A consented connection can read your records through the " +
-          "guardrails. Writes go through the human-approved action rail, " +
-          "never through this connection.",
-      };
+    if (tool.tier === "write" || !OAUTH_READ_TOOL_NAMES.has(toolName)) {
+      return readOnlyRefusal(toolName);
     }
+    input = Object.fromEntries(
+      Object.entries(input ?? {}).filter(([key]) => !TENANT_ARGUMENT.test(key))
+    );
     if (!tool.validate(input)) {
       return {
         error: "Invalid tool input",
@@ -2421,8 +2450,8 @@ export class FHIRTools {
     const qIdx = query.indexOf("?");
     const resourceType = qIdx === -1 ? query : query.slice(0, qIdx);
     const rawParams = qIdx === -1 ? "" : query.slice(qIdx + 1);
-    if (!resourceType) {
-      return { error: "query must start with a FHIR resource type" };
+    if (!FHIR_RESOURCE_TYPES.includes(resourceType)) {
+      return { error: "query must start with a supported FHIR resource type" };
     }
 
     const params = new URLSearchParams(rawParams);
@@ -2471,8 +2500,8 @@ export class FHIRTools {
     const slashIdx = id.indexOf("/");
     const resourceType = slashIdx === -1 ? "" : id.slice(0, slashIdx);
     const resourceId = slashIdx === -1 ? "" : id.slice(slashIdx + 1);
-    if (!resourceType || !resourceId) {
-      return { error: "id must be in 'ResourceType/id' format" };
+    if (!FHIR_RESOURCE_TYPES.includes(resourceType) || !isResourceId(resourceId)) {
+      return { error: "id must be in 'ResourceType/id' format with a supported resource type" };
     }
 
     const resp = await fetchWithTimeout(

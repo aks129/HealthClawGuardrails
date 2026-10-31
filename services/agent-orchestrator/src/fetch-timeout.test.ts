@@ -11,9 +11,11 @@ import http from "http";
 import { AddressInfo } from "net";
 import {
   fetchWithTimeout,
+  assertEngineUrl,
   BackendTimeoutError,
   backendTimeoutResult,
   DEFAULT_TIMEOUT_MS,
+  EngineUrlRefusedError,
 } from "./fetch-timeout";
 
 describe("fetchWithTimeout", () => {
@@ -31,9 +33,9 @@ describe("fetchWithTimeout", () => {
     hangingServer = http.createServer(() => {
       /* hold the socket open forever */
     });
-    fastServer.listen(0, () => {
+    fastServer.listen(0, "127.0.0.1", () => {
       fastUrl = `http://127.0.0.1:${(fastServer.address() as AddressInfo).port}/`;
-      hangingServer.listen(0, () => {
+      hangingServer.listen(0, "127.0.0.1", () => {
         hangingUrl = `http://127.0.0.1:${(hangingServer.address() as AddressInfo).port}/`;
         done();
       });
@@ -99,5 +101,38 @@ describe("backendTimeoutResult", () => {
   it("renders the budget in whole seconds (60s for the conformance suite)", () => {
     const result = backendTimeoutResult(new BackendTimeoutError(60_000));
     expect(result.message).toContain("timed out after 60s");
+  });
+});
+
+describe("assertEngineUrl", () => {
+  const base = "http://engine.test/r6/fhir";
+
+  it.each([
+    `${base}/Patient/p-1`,
+    `${base}/Observation?code=4548-4&_count=20`,
+    `${base}/Patient/$validate`,
+    `${base}/context/${encodeURIComponent("ctx a")}`,
+    "http://engine.test",
+  ])("lets a path the code built through: %s", (url) => {
+    expect(() => assertEngineUrl(url)).not.toThrow();
+  });
+
+  it.each([
+    [`${base}/${encodeURIComponent("..")}/actions`, "a dot segment"],
+    [`${base}/Patient/${encodeURIComponent(".")}`, "a single dot"],
+    [`${base}/Patient/%2E%2E/x`, "an encoded dot segment"],
+    [`${base}/${encodeURIComponent("$conformance")}`, "an encoded operation"],
+    [`${base}/Patient/${encodeURIComponent("p/../x")}`, "an encoded slash"],
+    [`${base}/Patient/${encodeURIComponent("p?fresh=1")}`, "an encoded query"],
+    [`${base}/Patient/${encodeURIComponent("p#x")}`, "an encoded fragment"],
+    [`${base}/Patient/${encodeURIComponent("p\\x")}`, "an encoded backslash"],
+  ])("refuses %s (%s)", (url) => {
+    expect(() => assertEngineUrl(url)).toThrow(EngineUrlRefusedError);
+  });
+
+  it("fetchWithTimeout refuses before sending anything", async () => {
+    await expect(fetchWithTimeout(`${base}/${encodeURIComponent("..")}/actions`)).rejects.toBeInstanceOf(
+      EngineUrlRefusedError
+    );
   });
 });

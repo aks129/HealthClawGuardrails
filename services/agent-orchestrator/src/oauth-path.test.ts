@@ -23,7 +23,7 @@ import {
   resetRateLimitForTests,
   sessionCredential,
 } from "./index";
-import { resetGrantReadTokenCacheForTests } from "./tools";
+import { OAUTH_READ_TOOL_NAMES, resetGrantReadTokenCacheForTests } from "./tools";
 
 const mockFetch = fetch as unknown as jest.Mock;
 
@@ -117,11 +117,21 @@ afterEach(() => {
   }
 });
 
-afterAll(() => {
+// supertest's request(app) binds [::]:0 and then dials 127.0.0.1:<port>; a
+// 127.0.0.1 listener another process holds on that port answers instead of
+// this app. One server, bound to the address supertest dials.
+let loopback: http.Server;
+beforeAll(async () => {
+  loopback = http.createServer(app);
+  await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve) => loopback.close(() => resolve()));
   closeMCPServerForTests();
 });
 
-function initialize(authorization?: string, target: Parameters<typeof request>[0] = app) {
+function initialize(authorization?: string, target: Parameters<typeof request>[0] = loopback) {
   const req = request(target).post("/mcp").set("Host", CANONICAL_HOST);
   if (authorization) req.set("Authorization", authorization);
   return req.send({
@@ -139,7 +149,7 @@ async function session(): Promise<string> {
 }
 
 function call(sessionId: string, name: string, args: Record<string, unknown>, authorization = `Bearer ${OAUTH_TOKEN}`) {
-  return request(app)
+  return request(loopback)
     .post("/mcp")
     .set("Host", CANONICAL_HOST)
     .set("Authorization", authorization)
@@ -211,7 +221,7 @@ describe("the refusal chain (§8.2)", () => {
   });
 
   test("a preflight on the transport answers with an allow-origin so the 401 can be read", async () => {
-    const res = await request(app).options("/mcp").set("Origin", "https://claude.ai").set("Host", CANONICAL_HOST);
+    const res = await request(loopback).options("/mcp").set("Origin", "https://claude.ai").set("Host", CANONICAL_HOST);
     expect(res.status).toBe(204);
     expect(res.headers["access-control-allow-origin"]).toBe("*");
   });
@@ -221,14 +231,38 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
   test("A7: a live token initializes and lists tools", async () => {
     const sessionId = await session();
     expect(sessionId).toBeTruthy();
-    const res = await request(app)
+    const res = await request(loopback)
       .post("/mcp")
       .set("Host", CANONICAL_HOST)
       .set("Authorization", `Bearer ${OAUTH_TOKEN}`)
       .set("Mcp-Session-Id", sessionId)
       .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
     expect(res.status).toBe(200);
-    expect(res.body.result.tools.length).toBeGreaterThan(20);
+    const listed = (res.body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    expect(listed).toEqual([...OAUTH_READ_TOOL_NAMES].sort());
+    expect(listed).not.toContain("action_propose");
+  });
+
+  test("the static token still lists the tools that stage actions", async () => {
+    const res = await request(loopback)
+      .post("/mcp")
+      .set("Host", CANONICAL_HOST)
+      .set("Authorization", `Bearer ${STATIC_TOKEN}`)
+      .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
+    const listed = (res.body.result.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(listed).toContain("action_propose");
+    expect(listed).toContain("fhir_propose_write");
+  });
+
+  test("the legacy JSON-RPC listing is the read allow-list on the OAuth path too", async () => {
+    const res = await request(loopback)
+      .post("/mcp/rpc")
+      .set("Host", CANONICAL_HOST)
+      .set("Authorization", `Bearer ${OAUTH_TOKEN}`)
+      .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
+    expect(res.status).toBe(200);
+    const listed = (res.body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    expect(listed).toEqual([...OAUTH_READ_TOOL_NAMES].sort());
   });
 
   test("a read reaches Flask as the introspected tenant with a read-scoped token this server minted", async () => {
@@ -299,6 +333,43 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
     expect(flaskReads()).toHaveLength(0);
   });
 
+  test("action_propose is refused before any call to the engine", async () => {
+    const sessionId = await session();
+    const res = await call(sessionId, "action_propose", {
+      kind: "sms",
+      payload: { to: "Clinic", phone: "+15555550100", body: "Synthetic test message" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(mints()).toHaveLength(0);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
+  // action_status returned the full action payload to a read credential, and
+  // curatr_evaluate persists curation state on the record it grades.
+  test.each([
+    ["action_status", { action_id: "act-1" }],
+    ["curatr_evaluate", { resource_type: "Condition", resource_id: "c-1" }],
+  ])("%s is off the allow-list: refused before any call to the engine", async (name, args) => {
+    const sessionId = await session();
+    const res = await call(sessionId, name, args);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(mints()).toHaveLength(0);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
+  test("a read-tier tool outside the allow-list is refused before any call to the engine", async () => {
+    const sessionId = await session();
+    const res = await call(sessionId, "guardrail_conformance", { fresh: true });
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(mints()).toHaveLength(0);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
   test("the mint refusing, or answering without the read scope, is a refusal here, not a wider call", async () => {
     const sessionId = await session();
     mockFetch.mockImplementation(async (url: string, init: Record<string, any> = {}) => {
@@ -321,6 +392,59 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
     expect(mints()).toHaveLength(1);
     expect(flaskReads()).toHaveLength(2);
     expect(JSON.stringify(calls)).not.toContain(OAUTH_TOKEN.slice(0, 12) + '"');
+  });
+});
+
+describe("the tenant a consented connection reaches", () => {
+  // The strip is top-level only. A tenant nested in a FHIR body is not a
+  // tenant source: the engine takes the tenant from the header the grant path
+  // sets, and only /internal/* routes read one from a body.
+  test("a tenant nested in a resource body leaves the grant tenant as the only one sent", async () => {
+    const sessionId = await session();
+    await call(sessionId, "fhir_validate", {
+      resource: { resourceType: "Patient", meta: { tag: [{ code: "victim-tenant" }] }, tenant_id: "victim-tenant" },
+    });
+    expect(flaskReads()).toHaveLength(1);
+    expect(flaskReads()[0].init.headers["X-Tenant-Id"]).toBe(TENANT);
+    expect(mints().map((m) => JSON.parse(m.init.body).tenant_id)).toEqual([TENANT]);
+  });
+});
+
+describe("the URL guard applies to token-mode sessions too", () => {
+  // A change from main, stated in the PR: an id carrying an encoded slash,
+  // backslash, $, ? or # used to be sent as one encoded segment.
+  test("a static-token fhir_read with a slash in the id is refused before the engine", async () => {
+    const init = await initialize(`Bearer ${STATIC_TOKEN}`);
+    const res = await call(init.headers["mcp-session-id"], "fhir_read",
+      { resource_type: "Patient", resource_id: "p/../x" }, `Bearer ${STATIC_TOKEN}`);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("invalid_request_path");
+    expect(flaskReads()).toHaveLength(0);
+  });
+});
+
+describe("an allow-listed tool reaches only the path it was built for", () => {
+  // Caught by fetch/search's own validation: a type the read tools accept and
+  // an id in the engine's charset. None of these trip the URL guard.
+  test.each([
+    ["fetch", { id: "Foo/p-1" }],
+    ["fetch", { id: "Patient/a b" }],
+    ["search", { query: "Foo?status=active" }],
+  ])("%s %j is refused before any call to the engine", async (name, args) => {
+    const sessionId = await session();
+    const res = await call(sessionId, name, args);
+    expect(res.body.result.isError).toBe(true);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
+  // Caught by the URL guard alone: context_get validates nothing about its id,
+  // so this is the shape of the next tool that forgets to.
+  test.each(["..", "."])("context_get with id %s never leaves /context", async (contextId) => {
+    const sessionId = await session();
+    const res = await call(sessionId, "context_get", { context_id: contextId });
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("invalid_request_path");
+    expect(flaskReads()).toHaveLength(0);
   });
 });
 
@@ -367,7 +491,7 @@ describe("an SSE session is bound to the credential that opened it", () => {
 
   test("a POST to /messages under another token is refused; the same token is accepted", async () => {
     const server = http.createServer(app);
-    await new Promise<void>((resolve) => server.listen(0, resolve));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as AddressInfo).port;
     // The stream stays open while the POSTs below run: closing it would
     // delete the session, and a 400 for a vanished session is not the
@@ -463,7 +587,7 @@ describe("the limiter runs before the credential check", () => {
   //   timeout alone would let a slow run cross the limiter's 60 s window and
   //   reset the count, so the clock stands still: nothing here depends on
   //   elapsed time. One server and a silenced request log also halve the run.
-  // - request(app) listens on [::] and dials 127.0.0.1. On macOS another
+  // - request(loopback) listens on [::] and dials 127.0.0.1. On macOS another
   //   process can bind 127.0.0.1 on that same port and take the request: a
   //   preflight came back 401, which this app never answers to an OPTIONS.
   //   One server bound to 127.0.0.1 itself cannot be shadowed that way.
