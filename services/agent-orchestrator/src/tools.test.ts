@@ -42,6 +42,18 @@ afterAll(() => {
   closeMCPServerForTests();
 });
 
+// supertest's request(app) binds [::]:0 and then dials 127.0.0.1:<port>; a
+// 127.0.0.1 listener another process holds on that port answers instead of
+// this app. One server, bound to the address supertest dials.
+let loopback: http.Server;
+beforeAll(async () => {
+  loopback = http.createServer(app);
+  await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
+});
+afterAll(async () => {
+  await new Promise<void>((resolve) => loopback.close(() => resolve()));
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -84,7 +96,7 @@ async function getStreamingStatus(
       });
     };
 
-    server.listen(0, () => {
+    server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
         finish(undefined, new Error("Expected test server to listen on a TCP port"));
@@ -2549,7 +2561,7 @@ describe("Express App Tests", () => {
 
   describe("GET /health", () => {
     it("returns healthy status with the package version", async () => {
-      const res = await request(app).get("/health");
+      const res = await request(loopback).get("/health");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("healthy");
       expect(res.body.version).toBe(require("../package.json").version);
@@ -2561,14 +2573,14 @@ describe("Express App Tests", () => {
     });
 
     it("reports active session counts", async () => {
-      const res = await request(app).get("/health").expect(200);
+      const res = await request(loopback).get("/health").expect(200);
       expect(res.body.activeSessions).toBeDefined();
       expect(typeof res.body.activeSessions.streamableHttp).toBe("number");
       expect(typeof res.body.activeSessions.sse).toBe("number");
     });
 
     it("reports CORS mode", async () => {
-      const res = await request(app).get("/health").expect(200);
+      const res = await request(loopback).get("/health").expect(200);
       expect(res.body.cors).toBeDefined();
       expect(res.body.cors.mode).toBeDefined();
     });
@@ -2578,7 +2590,7 @@ describe("Express App Tests", () => {
 
   describe("POST /mcp", () => {
     it("initialize returns session ID in Mcp-Session-Id header", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .send({
           jsonrpc: "2.0",
@@ -2603,7 +2615,7 @@ describe("Express App Tests", () => {
     });
 
     it("tools/list omits network-ineligible token-mint and seed tools", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
@@ -2620,11 +2632,11 @@ describe("Express App Tests", () => {
     it.each(["fhir_get_token", "fhir_seed", "shl_generate"])(
       "does not execute %s over Streamable HTTP",
       async (toolName) => {
-        const initRes = await request(app)
+        const initRes = await request(loopback)
           .post("/mcp")
           .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
 
-        const res = await request(app)
+        const res = await request(loopback)
           .post("/mcp")
           .set("Mcp-Session-Id", initRes.headers["mcp-session-id"])
           .send({
@@ -2642,7 +2654,7 @@ describe("Express App Tests", () => {
     );
 
     it("tools/call without session returns 400", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .send({
           jsonrpc: "2.0",
@@ -2661,7 +2673,7 @@ describe("Express App Tests", () => {
 
     it("tools/call with valid session executes the tool", async () => {
       // Step 1: initialize to get session ID
-      const initRes = await request(app)
+      const initRes = await request(loopback)
         .post("/mcp")
         .send({
           jsonrpc: "2.0",
@@ -2675,7 +2687,7 @@ describe("Express App Tests", () => {
       const fhirPatient = { resourceType: "Patient", id: "pt-1" };
       mockFetch.mockResolvedValueOnce(fakeResponse(fhirPatient));
 
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .set("Mcp-Session-Id", sessionId)
         .send({
@@ -2697,7 +2709,7 @@ describe("Express App Tests", () => {
     });
 
     it("invalid JSON-RPC (no jsonrpc field) returns 400", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .send({ not: "jsonrpc" });
 
@@ -2707,7 +2719,7 @@ describe("Express App Tests", () => {
     });
 
     it("unknown method returns JSON-RPC method-not-found error", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 10, method: "unknown/method" });
 
@@ -2719,7 +2731,7 @@ describe("Express App Tests", () => {
     });
 
     it("notifications/initialized returns 204", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
@@ -2732,7 +2744,7 @@ describe("Express App Tests", () => {
   describe("DELETE /mcp", () => {
     it("cleans up session and returns 204", async () => {
       // Create a session first
-      const initRes = await request(app)
+      const initRes = await request(loopback)
         .post("/mcp")
         .send({
           jsonrpc: "2.0",
@@ -2744,13 +2756,13 @@ describe("Express App Tests", () => {
       expect(sessionId).toBeDefined();
 
       // Delete the session
-      const deleteRes = await request(app)
+      const deleteRes = await request(loopback)
         .delete("/mcp")
         .set("Mcp-Session-Id", sessionId);
       expect(deleteRes.status).toBe(204);
 
       // Verify the session is gone: tools/call should fail with 400
-      const callRes = await request(app)
+      const callRes = await request(loopback)
         .post("/mcp")
         .set("Mcp-Session-Id", sessionId)
         .send({
@@ -2793,7 +2805,7 @@ describe("Express App Tests", () => {
           });
         };
 
-        server.listen(0, () => {
+        server.listen(0, "127.0.0.1", () => {
           const address = server.address();
           if (!address || typeof address === "string") {
             finish(new Error("Expected test server to listen on a TCP port"));
@@ -2825,7 +2837,7 @@ describe("Express App Tests", () => {
 
   describe("CORS", () => {
     it("OPTIONS /mcp returns 204 for preflight", async () => {
-      const res = await request(app).options("/mcp");
+      const res = await request(loopback).options("/mcp");
       expect(res.status).toBe(204);
     });
   });
@@ -2834,7 +2846,7 @@ describe("Express App Tests", () => {
 
   describe("POST /mcp/rpc", () => {
     it("tools/list omits network-ineligible token-mint and seed tools", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
@@ -2845,7 +2857,7 @@ describe("Express App Tests", () => {
     it.each(["fhir_get_token", "fhir_seed", "shl_generate"])(
       "does not execute %s over the HTTP bridge",
       async (toolName) => {
-        const res = await request(app)
+        const res = await request(loopback)
           .post("/mcp/rpc")
           .send({
             jsonrpc: "2.0",
@@ -2864,7 +2876,7 @@ describe("Express App Tests", () => {
       const fhirPatient = { resourceType: "Patient", id: "pt-1" };
       mockFetch.mockResolvedValueOnce(fakeResponse(fhirPatient));
 
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp/rpc")
         .send({
           jsonrpc: "2.0",
@@ -2881,7 +2893,7 @@ describe("Express App Tests", () => {
     });
 
     it("invalid JSON-RPC returns 400", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp/rpc")
         .send({ jsonrpc: "1.0", method: "" });
 
@@ -2890,7 +2902,7 @@ describe("Express App Tests", () => {
     });
 
     it("unknown RPC method returns method-not-found error", async () => {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 99, method: "nonexistent" });
 
@@ -2911,13 +2923,13 @@ describe("Express App Tests", () => {
 
     it("evicts a Streamable HTTP session after its inactivity TTL", async () => {
       const now = Date.now();
-      const initRes = await request(app)
+      const initRes = await request(loopback)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
 
       runtime.cleanupExpiredRuntimeStateForTests(now + SESSION_TTL_MS + 10_000);
 
-      const callRes = await request(app)
+      const callRes = await request(loopback)
         .post("/mcp")
         .set("Mcp-Session-Id", initRes.headers["mcp-session-id"])
         .send({
@@ -2941,7 +2953,7 @@ describe("Express App Tests", () => {
     it("refreshes lastActivity when an existing session is used", async () => {
       const createdAt = 10_000;
       const clock = jest.spyOn(Date, "now").mockReturnValue(createdAt);
-      const initRes = await request(app)
+      const initRes = await request(loopback)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
       const sessionId = initRes.headers["mcp-session-id"];
@@ -2949,7 +2961,7 @@ describe("Express App Tests", () => {
       mockFetch.mockResolvedValue(fakeResponse({ resourceType: "Patient", id: "pt-1" }));
 
       clock.mockReturnValue(createdAt + SESSION_TTL_MS - 1_000);
-      await request(app)
+      await request(loopback)
         .post("/mcp")
         .set("Mcp-Session-Id", sessionId)
         .send({
@@ -2963,7 +2975,7 @@ describe("Express App Tests", () => {
       const afterOriginalExpiry = createdAt + SESSION_TTL_MS + 1;
       clock.mockReturnValue(afterOriginalExpiry);
       runtime.cleanupExpiredRuntimeStateForTests(afterOriginalExpiry);
-      await request(app)
+      await request(loopback)
         .post("/mcp")
         .set("Mcp-Session-Id", sessionId)
         .send({
@@ -2977,7 +2989,7 @@ describe("Express App Tests", () => {
       const afterRefreshedExpiry = afterOriginalExpiry + SESSION_TTL_MS + 1;
       clock.mockReturnValue(afterRefreshedExpiry);
       runtime.cleanupExpiredRuntimeStateForTests(afterRefreshedExpiry);
-      const expiredRes = await request(app)
+      const expiredRes = await request(loopback)
         .post("/mcp")
         .set("Mcp-Session-Id", sessionId)
         .send({
@@ -2994,7 +3006,7 @@ describe("Express App Tests", () => {
     });
 
     it("removes expired rate-limit buckets", async () => {
-      await request(app).get("/health").expect(200);
+      await request(loopback).get("/health").expect(200);
       expect(runtime.getRuntimeStateForTests().rateLimitBuckets).toBeGreaterThan(0);
 
       runtime.cleanupExpiredRuntimeStateForTests(Date.now() + 60_001);
@@ -3023,7 +3035,7 @@ describe("Express App Tests", () => {
     ] as const)("requires the configured Bearer token for %s %s", async (method, path) => {
       process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
 
-      const unauthenticated = await request(app)[method](path).send({
+      const unauthenticated = await request(loopback)[method](path).send({
         jsonrpc: "2.0",
         id: 1,
         method: "tools/list",
@@ -3031,7 +3043,7 @@ describe("Express App Tests", () => {
       expect(unauthenticated.status).toBe(401);
       expect(unauthenticated.headers["www-authenticate"]).toBe("Bearer");
 
-      const wrongToken = await request(app)[method](path)
+      const wrongToken = await request(loopback)[method](path)
         .set("Authorization", "Bearer wrong-secret")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
       expect(wrongToken.status).toBe(401);
@@ -3044,7 +3056,7 @@ describe("Express App Tests", () => {
     ] as const)("cannot bypass authentication with uppercase %s %s", async (method, path) => {
       process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
 
-      const res = await request(app)[method](path).send({
+      const res = await request(loopback)[method](path).send({
         jsonrpc: "2.0",
         id: 1,
         method: "tools/list",
@@ -3063,8 +3075,8 @@ describe("Express App Tests", () => {
     it("accepts the configured Bearer token and leaves health public", async () => {
       process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
 
-      await request(app).get("/health").expect(200);
-      const res = await request(app)
+      await request(loopback).get("/health").expect(200);
+      const res = await request(loopback)
         .post("/mcp")
         .set("Authorization", "Bearer mcp-test-secret")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
@@ -3075,7 +3087,7 @@ describe("Express App Tests", () => {
 
     it("does not forward the MCP transport credential to the FHIR backend", async () => {
       process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
-      const initRes = await request(app)
+      const initRes = await request(loopback)
         .post("/mcp")
         .set("Authorization", "Bearer mcp-test-secret")
         .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
@@ -3083,7 +3095,7 @@ describe("Express App Tests", () => {
         fakeResponse({ resourceType: "Patient", id: "pt-1" })
       );
 
-      await request(app)
+      await request(loopback)
         .post("/mcp")
         .set("Authorization", "Bearer mcp-test-secret")
         .set("Mcp-Session-Id", initRes.headers["mcp-session-id"])
@@ -3139,7 +3151,7 @@ describe("Express App Tests", () => {
       delete process.env.MCP_AUTH_TOKEN;
       process.env.MCP_PUBLIC_DEMO = "true";
 
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
@@ -3156,7 +3168,7 @@ describe("Express App Tests", () => {
         fakeResponse({ resourceType: "Patient", id: "pt-1" })
       );
 
-      await request(app)
+      await request(loopback)
         .post("/mcp/rpc")
         .set("X-Tenant-Id", "attacker-real-tenant")
         .send({

@@ -117,11 +117,21 @@ afterEach(() => {
   }
 });
 
-afterAll(() => {
+// supertest's request(app) binds [::]:0 and then dials 127.0.0.1:<port>; a
+// 127.0.0.1 listener another process holds on that port answers instead of
+// this app. One server, bound to the address supertest dials.
+let loopback: http.Server;
+beforeAll(async () => {
+  loopback = http.createServer(app);
+  await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve) => loopback.close(() => resolve()));
   closeMCPServerForTests();
 });
 
-function initialize(authorization?: string, target: Parameters<typeof request>[0] = app) {
+function initialize(authorization?: string, target: Parameters<typeof request>[0] = loopback) {
   const req = request(target).post("/mcp").set("Host", CANONICAL_HOST);
   if (authorization) req.set("Authorization", authorization);
   return req.send({
@@ -139,7 +149,7 @@ async function session(): Promise<string> {
 }
 
 function call(sessionId: string, name: string, args: Record<string, unknown>, authorization = `Bearer ${OAUTH_TOKEN}`) {
-  return request(app)
+  return request(loopback)
     .post("/mcp")
     .set("Host", CANONICAL_HOST)
     .set("Authorization", authorization)
@@ -211,7 +221,7 @@ describe("the refusal chain (§8.2)", () => {
   });
 
   test("a preflight on the transport answers with an allow-origin so the 401 can be read", async () => {
-    const res = await request(app).options("/mcp").set("Origin", "https://claude.ai").set("Host", CANONICAL_HOST);
+    const res = await request(loopback).options("/mcp").set("Origin", "https://claude.ai").set("Host", CANONICAL_HOST);
     expect(res.status).toBe(204);
     expect(res.headers["access-control-allow-origin"]).toBe("*");
   });
@@ -221,7 +231,7 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
   test("A7: a live token initializes and lists tools", async () => {
     const sessionId = await session();
     expect(sessionId).toBeTruthy();
-    const res = await request(app)
+    const res = await request(loopback)
       .post("/mcp")
       .set("Host", CANONICAL_HOST)
       .set("Authorization", `Bearer ${OAUTH_TOKEN}`)
@@ -234,7 +244,7 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
   });
 
   test("the static token still lists the tools that stage actions", async () => {
-    const res = await request(app)
+    const res = await request(loopback)
       .post("/mcp")
       .set("Host", CANONICAL_HOST)
       .set("Authorization", `Bearer ${STATIC_TOKEN}`)
@@ -245,7 +255,7 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
   });
 
   test("the legacy JSON-RPC listing is the read allow-list on the OAuth path too", async () => {
-    const res = await request(app)
+    const res = await request(loopback)
       .post("/mcp/rpc")
       .set("Host", CANONICAL_HOST)
       .set("Authorization", `Bearer ${OAUTH_TOKEN}`)
@@ -453,7 +463,7 @@ describe("an SSE session is bound to the credential that opened it", () => {
 
   test("a POST to /messages under another token is refused; the same token is accepted", async () => {
     const server = http.createServer(app);
-    await new Promise<void>((resolve) => server.listen(0, resolve));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as AddressInfo).port;
     // The stream stays open while the POSTs below run: closing it would
     // delete the session, and a 400 for a vanished session is not the
@@ -549,7 +559,7 @@ describe("the limiter runs before the credential check", () => {
   //   timeout alone would let a slow run cross the limiter's 60 s window and
   //   reset the count, so the clock stands still: nothing here depends on
   //   elapsed time. One server and a silenced request log also halve the run.
-  // - request(app) listens on [::] and dials 127.0.0.1. On macOS another
+  // - request(loopback) listens on [::] and dials 127.0.0.1. On macOS another
   //   process can bind 127.0.0.1 on that same port and take the request: a
   //   preflight came back 401, which this app never answers to an OPTIONS.
   //   One server bound to 127.0.0.1 itself cannot be shadowed that way.

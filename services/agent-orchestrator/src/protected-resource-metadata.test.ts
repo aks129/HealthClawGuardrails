@@ -23,6 +23,7 @@
  * still admits exactly `MCP_AUTH_TOKEN` and nothing else.
  */
 
+import http from "http";
 import request from "supertest";
 import {
   app,
@@ -59,8 +60,20 @@ afterAll(() => {
   closeMCPServerForTests();
 });
 
+// supertest's request(app) binds [::]:0 and then dials 127.0.0.1:<port>; a
+// 127.0.0.1 listener another process holds on that port answers instead of
+// this app. One server, bound to the address supertest dials.
+let loopback: http.Server;
+beforeAll(async () => {
+  loopback = http.createServer(app);
+  await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
+});
+afterAll(async () => {
+  await new Promise<void>((resolve) => loopback.close(() => resolve()));
+});
+
 function initialize(host: string) {
-  return request(app)
+  return request(loopback)
     .post("/mcp")
     .set("Host", host)
     .send({
@@ -74,7 +87,7 @@ function initialize(host: string) {
 describe("with MCP_CANONICAL_RESOURCE unset, nothing changes", () => {
   it("serves no protected-resource metadata at either path", async () => {
     for (const path of [PRM_SUBPATH, PRM_ROOT]) {
-      const res = await request(app).get(path).set("Host", CANONICAL_HOST);
+      const res = await request(loopback).get(path).set("Host", CANONICAL_HOST);
       expect({ path, status: res.status }).toEqual({ path, status: 404 });
     }
   });
@@ -99,7 +112,7 @@ describe("with the constant set, the canonical host serves the metadata", () => 
   });
 
   it("returns the RFC 9728 document at the header-pointed sub-path", async () => {
-    const res = await request(app).get(PRM_SUBPATH).set("Host", CANONICAL_HOST);
+    const res = await request(loopback).get(PRM_SUBPATH).set("Host", CANONICAL_HOST);
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
     expect(res.body).toEqual({
@@ -113,8 +126,8 @@ describe("with the constant set, the canonical host serves the metadata", () => 
   });
 
   it("returns the same document at the root fallback path", async () => {
-    const subPath = await request(app).get(PRM_SUBPATH).set("Host", CANONICAL_HOST);
-    const root = await request(app).get(PRM_ROOT).set("Host", CANONICAL_HOST);
+    const subPath = await request(loopback).get(PRM_SUBPATH).set("Host", CANONICAL_HOST);
+    const root = await request(loopback).get(PRM_ROOT).set("Host", CANONICAL_HOST);
     expect(root.status).toBe(200);
     expect(root.body).toEqual(subPath.body);
   });
@@ -122,13 +135,13 @@ describe("with the constant set, the canonical host serves the metadata", () => 
   it("serves the document to a caller with no credential, with the lock configured", async () => {
     // The PRM sits outside the lock on purpose: a document a client must read
     // before it can authenticate cannot itself require authentication.
-    const res = await request(app).get(PRM_SUBPATH).set("Host", CANONICAL_HOST);
+    const res = await request(loopback).get(PRM_SUBPATH).set("Host", CANONICAL_HOST);
     expect(res.status).toBe(200);
     expect(process.env.MCP_AUTH_TOKEN).toBe(STATIC_TOKEN);
   });
 
   it("carries the CORS header a browser-context client needs to read it", async () => {
-    const res = await request(app)
+    const res = await request(loopback)
       .get(PRM_SUBPATH)
       .set("Host", CANONICAL_HOST)
       .set("Origin", "https://claude.ai");
@@ -136,7 +149,7 @@ describe("with the constant set, the canonical host serves the metadata", () => 
   });
 
   it("does not answer at a well-known sub-path the constant does not name", async () => {
-    const res = await request(app)
+    const res = await request(loopback)
       .get("/.well-known/oauth-protected-resource/something-else")
       .set("Host", CANONICAL_HOST);
     expect(res.status).toBe(404);
@@ -177,7 +190,7 @@ describe("with the constant set, the canonical host serves the metadata", () => 
     // document whose `resource` is not the identifier it inserted into the
     // well-known path, so what we advertise cannot follow the request.
     const spoofed = `${CANONICAL_HOST.toUpperCase()}:8443`;
-    const prm = await request(app).get(PRM_SUBPATH).set("Host", spoofed);
+    const prm = await request(loopback).get(PRM_SUBPATH).set("Host", spoofed);
     expect(prm.status).toBe(200);
     expect(prm.body.resource).toBe(CANONICAL);
 
@@ -199,7 +212,7 @@ describe("with the constant set, a non-canonical host is unchanged", () => {
     // identifier it inserted into the well-known path. Serving this one on the
     // Railway hostname would hand that client a rejection instead of a 404.
     for (const path of [PRM_SUBPATH, PRM_ROOT]) {
-      const res = await request(app).get(path).set("Host", RAILWAY_HOST);
+      const res = await request(loopback).get(path).set("Host", RAILWAY_HOST);
       expect({ path, status: res.status }).toEqual({ path, status: 404 });
     }
   });
@@ -220,7 +233,7 @@ describe("who gets in does not change", () => {
     else process.env.MCP_CANONICAL_RESOURCE = value;
 
     for (const host of [CANONICAL_HOST, RAILWAY_HOST]) {
-      const res = await request(app)
+      const res = await request(loopback)
         .post("/mcp")
         .set("Host", host)
         .set("Authorization", `Bearer ${STATIC_TOKEN}`)
@@ -238,7 +251,7 @@ describe("who gets in does not change", () => {
     else process.env.MCP_CANONICAL_RESOURCE = value;
 
     for (const host of [CANONICAL_HOST, RAILWAY_HOST]) {
-      const res = await request(app).get("/health").set("Host", host);
+      const res = await request(loopback).get("/health").set("Host", host);
       expect({ host, status: res.status }).toEqual({ host, status: 200 });
       expect(res.body.status).toBe("healthy");
     }
@@ -349,7 +362,7 @@ describe("whatever boots, the document agrees with the URL that named it", () =>
     expect(advertised).toBeDefined();
 
     const advertisedURL = new URL(advertised as string);
-    const res = await request(app)
+    const res = await request(loopback)
       .get(advertisedURL.pathname)
       .set("Host", advertisedURL.host);
     expect(res.status).toBe(200);

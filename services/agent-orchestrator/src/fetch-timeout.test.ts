@@ -33,9 +33,9 @@ describe("fetchWithTimeout", () => {
     hangingServer = http.createServer(() => {
       /* hold the socket open forever */
     });
-    fastServer.listen(0, () => {
+    fastServer.listen(0, "127.0.0.1", () => {
       fastUrl = `http://127.0.0.1:${(fastServer.address() as AddressInfo).port}/`;
-      hangingServer.listen(0, () => {
+      hangingServer.listen(0, "127.0.0.1", () => {
         hangingUrl = `http://127.0.0.1:${(hangingServer.address() as AddressInfo).port}/`;
         done();
       });
