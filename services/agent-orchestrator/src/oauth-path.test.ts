@@ -23,7 +23,7 @@ import {
   resetRateLimitForTests,
   sessionCredential,
 } from "./index";
-import { resetGrantReadTokenCacheForTests } from "./tools";
+import { OAUTH_READ_TOOL_NAMES, resetGrantReadTokenCacheForTests } from "./tools";
 
 const mockFetch = fetch as unknown as jest.Mock;
 
@@ -228,7 +228,31 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
       .set("Mcp-Session-Id", sessionId)
       .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
     expect(res.status).toBe(200);
-    expect(res.body.result.tools.length).toBeGreaterThan(20);
+    const listed = (res.body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    expect(listed).toEqual([...OAUTH_READ_TOOL_NAMES].sort());
+    expect(listed).not.toContain("action_propose");
+  });
+
+  test("the static token still lists the tools that stage actions", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .set("Host", CANONICAL_HOST)
+      .set("Authorization", `Bearer ${STATIC_TOKEN}`)
+      .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
+    const listed = (res.body.result.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(listed).toContain("action_propose");
+    expect(listed).toContain("fhir_propose_write");
+  });
+
+  test("the legacy JSON-RPC listing is the read allow-list on the OAuth path too", async () => {
+    const res = await request(app)
+      .post("/mcp/rpc")
+      .set("Host", CANONICAL_HOST)
+      .set("Authorization", `Bearer ${OAUTH_TOKEN}`)
+      .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
+    expect(res.status).toBe(200);
+    const listed = (res.body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    expect(listed).toEqual([...OAUTH_READ_TOOL_NAMES].sort());
   });
 
   test("a read reaches Flask as the introspected tenant with a read-scoped token this server minted", async () => {
@@ -292,6 +316,29 @@ describe("the positive chain on a consented tenant (§13.6)", () => {
       operation: "create",
       _stepUpToken: "a-real-looking-step-up-token",
     });
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(mints()).toHaveLength(0);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
+  test("action_propose is refused before any call to the engine", async () => {
+    const sessionId = await session();
+    const res = await call(sessionId, "action_propose", {
+      kind: "sms",
+      payload: { to: "Clinic", phone: "+15555550100", body: "Synthetic test message" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("read-only");
+    expect(mints()).toHaveLength(0);
+    expect(flaskReads()).toHaveLength(0);
+  });
+
+  test("a read-tier tool outside the allow-list is refused before any call to the engine", async () => {
+    const sessionId = await session();
+    const res = await call(sessionId, "guardrail_conformance", { fresh: true });
     expect(res.status).toBe(200);
     expect(res.body.result.isError).toBe(true);
     expect(res.body.result.content[0].text).toContain("read-only");

@@ -617,8 +617,11 @@ function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
     { capabilities: SHARP_CAPABILITIES }
   );
 
+  // A consented connection lists only the read allow-list (§13.6); the call
+  // path enforces the same list, so a hidden tool is never merely unlisted.
+  const oauth = Boolean(sessionHeaders[OAUTH_GRANT_HEADER]);
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: fhirTools.getMCPToolSchemas() };
+    return { tools: fhirTools.getMCPToolSchemas({ oauth }) };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -716,7 +719,7 @@ app.post("/mcp", async (req, res) => {
       }
 
       case "tools/list": {
-        const tools = fhirTools.getMCPToolSchemas();
+        const tools = fhirTools.getMCPToolSchemas({ oauth: Boolean(res.locals.oauthGrant) });
         return res.json({ jsonrpc: "2.0", id, result: { tools } });
       }
 
@@ -968,7 +971,7 @@ app.post("/mcp/rpc", async (req, res) => {
   try {
     switch (method) {
       case "tools/list": {
-        const tools = fhirTools.getMCPToolSchemas();
+        const tools = fhirTools.getMCPToolSchemas({ oauth: Boolean(res.locals.oauthGrant) });
         return res.json({ jsonrpc: "2.0", id, result: { tools } });
       }
 

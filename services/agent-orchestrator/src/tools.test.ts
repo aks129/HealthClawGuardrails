@@ -7,7 +7,7 @@
  * 3. Express App Tests -- supertest against the exported Express app.
  */
 
-import { FHIRTools, MCPToolSchema, shlGenerateEnabled } from "./tools";
+import { FHIRTools, MCPToolSchema, OAUTH_READ_TOOL_NAMES, shlGenerateEnabled } from "./tools";
 import http from "http";
 
 // Mock node-fetch before importing anything that uses it.
@@ -153,7 +153,6 @@ const READ_ONLY_TOOL_NAMES = [
   "fhir_search",
   "fhir_validate",
   "fhir_stats",
-  "guardrail_conformance",
   "fhir_interpret_labs",
   "fhir_lastn",
   "fhir_permission_evaluate",
@@ -354,10 +353,35 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("fhir_propose_write has readOnlyHint: true (preview only, no side effects)", () => {
+  it("fhir_propose_write has readOnlyHint: false (it stages a write)", () => {
     const propose = schemas.find((t) => t.name === "fhir_propose_write")!;
-    expect(propose.annotations.readOnlyHint).toBe(true);
+    expect(propose.annotations.readOnlyHint).toBe(false);
     expect(propose.annotations.destructiveHint).toBe(false);
+  });
+
+  // Hosts auto-run tools that claim to be read-only. Only a tool a consented
+  // connection may call is a read; anything that proposes, stages, writes,
+  // sends, or issues a credential must say so.
+  it("no tool outside the OAuth read allow-list claims readOnlyHint: true", () => {
+    const claimsReadOnly = schemas
+      .filter((t) => t.annotations.readOnlyHint)
+      .map((t) => t.name)
+      .filter((name) => !OAUTH_READ_TOOL_NAMES.has(name));
+    expect(claimsReadOnly).toEqual([]);
+  });
+
+  it("every allow-listed tool exists, is read tier, and claims read-only", () => {
+    const definitions = tools.getToolSchemas();
+    for (const name of OAUTH_READ_TOOL_NAMES) {
+      const definition = definitions.find((t) => t.name === name);
+      expect(definition?.tier).toBe("read");
+      expect(definition?.annotations.readOnlyHint).toBe(true);
+    }
+  });
+
+  it("an OAuth listing is exactly the read allow-list", () => {
+    const listed = tools.getMCPToolSchemas({ oauth: true }).map((t) => t.name).sort();
+    expect(listed).toEqual([...OAUTH_READ_TOOL_NAMES].sort());
   });
 
   it("fhir_commit_write has destructiveHint: true and readOnlyHint: false", () => {
