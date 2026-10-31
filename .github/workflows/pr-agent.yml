@@ -75,7 +75,7 @@ jobs:
         if: steps.keycheck.outputs.has_key == 'true'
         # Pinned to a commit: a tag can be moved, and this step holds the
         # API key and a token that writes to pull requests.
-        uses: The-PR-Agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
+        uses: The-PR-Agent/pr-agent@efdde4afe14aa401a3889012c7f3e9ef3081a430 # v0.49.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The same secret name claude-pr-review.yml reads; no OpenAI key.
