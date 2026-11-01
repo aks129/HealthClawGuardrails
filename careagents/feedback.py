@@ -425,7 +425,7 @@ def register(app, svc, cfg) -> None:
         path = back.split("?")[0]
         label = ("Back to your chat" if path == "/chat" else
                  "Back to your visit brief" if path == "/brief" else
-                 "Back to your hub" if path == "/home" else
+                 "Back to your home page" if path == "/home" else
                  "Back to CareAgents" if path == "/" else
                  "Back to where you were")
         return render_template(

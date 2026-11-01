@@ -726,6 +726,11 @@ def create_app(config: Config | None = None,
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
+    @app.get("/hub")
+    def hub_redirect():
+        # The page was called the hub; an old link or a guess still lands.
+        return redirect(url_for("home"))
+
     @app.get("/home")
     @login_required
     def home():
@@ -766,8 +771,17 @@ def create_app(config: Config | None = None,
                    and svc.real_records_invited(acct.email))
         menu = hub_view.menu_items(
             connectors.catalog(cfg, real_records=real_open), real_open)
+        # The invite card (#1080): the same link Settings shows, under the
+        # same rule (#928 F6: made only after a full sign-in), and not for
+        # a paused account, which can add nothing.
+        invite = None
+        if not paused and not session.get(_VIA_LINK):
+            try:
+                invite = invites.settings_row(svc, cfg, acct.id)
+            except Exception:  # noqa: BLE001 - the card is left out, not the page
+                logger.warning("invite link not shown on the hub")
         return render_template(
-            "home.html", me=acct,
+            "home.html", me=acct, invite=invite,
             stale_link_note=stale,
             connect_next=_connect_next(acct, view, menu, real_open, paused),
             # A confirm-link session connects only after a code (#920 F1):

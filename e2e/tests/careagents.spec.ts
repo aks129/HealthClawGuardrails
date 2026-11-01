@@ -98,10 +98,10 @@ test.describe('CareAgents auth', () => {
     // passkey"). It goes straight to the hub on every browser.
     await expect(page).toHaveURL(/\/home$/);
     await expect(page.locator('#step-passkey')).toBeHidden();
-    await expect(page).toHaveTitle(/Your hub — CareAgents/);
-    // "Your hub", not "Welcome back": a brand-new account lands here too
+    await expect(page).toHaveTitle(/Your home page — CareAgents/);
+    // "Your home page", not "Welcome back": a brand-new account lands here too
     // (#847, shipped in #853).
-    await expect(page.locator('main.hub h1')).toHaveText('Your hub');
+    await expect(page.locator('main.hub h1')).toHaveText('Your home page');
     await expect(page.locator('.hub-sub')).toContainText(email);
     // NOT asserted: connection/agent/surface dialogs (#224 rebuild).
   });

@@ -1102,6 +1102,14 @@ textarea:focus-visible {
   user-select: all; }
 .invite-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .invite-actions .pill { min-height: 44px; }
+/* The hub (#1080): seats used as filled slots, wrapping on a phone, and
+   one plain sentence under every section header. */
+.invite-slots { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.invite-slot { width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--accent); }
+.invite-slot.is-used { background: var(--accent); }
+.section-line { color: var(--ink-soft); font-size: 16px; margin: -4px 0 12px; }
+.waiting .section-line { margin: 0 0 4px; }
 /* The chat's pointer to the hub's "Connect your records". */
 .chat-next { margin: 8px 0 0; font-size: 16px; text-align: center; }
 .chat-next a { color: var(--accent-ink); font-weight: 600; }

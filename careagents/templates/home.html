@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Your hub — CareAgents{% endblock %}
+{% block title %}Your home page — CareAgents{% endblock %}
 {% block bodyclass %}page-home{% endblock %}
 {% block head %}<link rel="manifest" href="/manifest.webmanifest">{% endblock %}
 {% block content %}
@@ -7,8 +7,9 @@
 <main class="hub">
   <div class="hub-head">
     <div>
-      {# Not "Welcome back": a brand-new account lands here too (#847). #}
-      <h1>Your hub</h1>
+      {# Not "Welcome back": a brand-new account lands here too (#847).
+         Not "hub", a word a first-timer didn't know (#1080). #}
+      <h1>Your home page</h1>
       <p class="hub-sub hub-email" title="{{ me.email }}">{{ me.email }}</p>
     </div>
     <a class="pill" href="/settings">Settings</a>
@@ -52,7 +53,10 @@
      (hub critique 2026-10). How many assistants there are, and what adding
      one means, belong to a separate design pass. #}
   <section class="hub-section ask" id="ask-section">
+    {# One plain sentence under every section header (#1080): what the
+       section is for, in the patient's words. A test checks each h2. #}
     <div class="section-head"><h2>Ask your assistant</h2></div>
+    <p class="section-line">Ask about your records and get answers in plain words.</p>
     <div class="card-grid" id="agents" data-records='{{ hub.move_choices | tojson }}'>
       {# One card per assistant, from hub.assistants (one assistant per
          person spec, 4 and 8): whose it is, its tone, and what it focuses
@@ -73,9 +77,9 @@
           <a href="/settings#assistant-settings">Change in Settings</a></p>
         {% if a.legacy_extra %}
         <p class="card-note">An extra assistant from before. You can keep it or remove it.</p>
-        {% else %}
-        <p class="card-note">Visit brief: a one-page summary of {% if a.reads == "Sample records" %}these made-up records, to show how it works{% elif a.person.kind == "other" %}their records to bring to an appointment{% else %}your records to bring to an appointment{% endif %}.</p>
         {% endif %}
+        {# Every card says what its Visit brief button opens (#1080). #}
+        <p class="card-note">Visit brief: a one-page summary of {% if a.reads == "Sample records" %}these made-up records, to show how it works{% elif a.person.kind == "other" %}their records to bring to an appointment{% else %}your records to bring to an appointment{% endif %}.</p>
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
           <a class="pill" href="/brief?agent={{ a.id }}">Visit brief</a>
@@ -110,8 +114,8 @@
            when the first records arrive. #}
         <div class="hub-card agent-card is-waiting">
           <div class="hub-card-name">Your assistant, waiting for records</div>
-          {# Paused: "Add a source" is left out, so point at nothing. #}
-          {% if not paused %}<p class="card-note">Add a source below. Made-up
+          {# Paused: "Add records" is left out, so point at nothing. #}
+          {% if not paused %}<p class="card-note">Add records below. Made-up
             records work too, to see how it works.</p>{% endif %}
         </div>
         {% endif %}
@@ -149,6 +153,7 @@
      never rendered as zero (calm hub spec section 3). #}
   <section class="waiting" id="waiting" data-state="checking" aria-live="polite">
     <h2>Waiting for your OK</h2>
+    <p class="section-line">Your assistant asks you here before it does anything for you.</p>
     <p class="waiting-line">Checking for requests…</p>
   </section>
 
@@ -159,6 +164,7 @@
   {% if switch_prompt or news %}
   <section class="hub-section whats-new" id="whats-new">
     <div class="section-head"><h2>What's new in your records</h2></div>
+    <p class="section-line">Records that arrived recently.</p>
     {% for n in news %}
     <p class="news-line">{{ n.line }}</p>
     {% endfor %}
@@ -203,11 +209,47 @@
   </section>
   {% endif %}
 
+  {# The account's personal invite link (#1080), the one Settings shows
+     (careagents/invites.py). app.py leaves `invite` out for a paused
+     account and a confirm-link session; a signed-out or deleted one never
+     reaches this page. Used up or turned off is said as Settings says it,
+     with nothing to share. invite.js shares, or copies without a share
+     sheet. #}
+  {% if invite %}
+  <section class="hub-section" id="invite-section">
+    <div class="section-head"><h2>Invite someone</h2></div>
+    <p class="section-line">Give someone their own health assistant. Their records stay theirs.</p>
+    <div class="invite-row">
+      <div class="invite-row-head">
+        <b>Your link</b>
+        <span class="invite-used">{% if invite.revoked %}turned off{% else %}{{ invite.used }} of {{ invite.cap }} used{% endif %}</span>
+      </div>
+      {% if not invite.revoked %}
+      {# The count again as slots; the words above are what is read out. #}
+      <div class="invite-slots" aria-hidden="true">{% for i in range(invite.cap) %}<span class="invite-slot{% if i < invite.used %} is-used{% endif %}"></span>{% endfor %}</div>
+      <code class="invite-url" id="invite-url">{{ invite.url }}</code>
+      {% endif %}
+    </div>
+    {% if invite.revoked %}
+    <p class="card-note">This link no longer lets anyone join.</p>
+    {% elif invite.used >= invite.cap %}
+    <p class="card-note">All {{ invite.cap }} places on your link are used.</p>
+    {% else %}
+    <div class="invite-actions">
+      <button type="button" class="pill pill-cta" id="invite-share"
+              data-fallback="copy" hidden>Share your link</button>
+    </div>
+    {% endif %}
+    <p class="inline-msg" id="invite-msg" role="status" aria-live="polite" hidden></p>
+  </section>
+  {% endif %}
+
   {# 4. Where you can reach your assistant (the same words as Settings). The web always; iMessage as this account
      can use it. No email channel exists, so none is listed. Setting up a
      phone stays on Settings: no second control to bind here. #}
   <section class="hub-section reach" id="reach-section">
     <div class="section-head"><h2>Where you can reach your assistant</h2></div>
+    <p class="section-line">The places you can message your assistant from.</p>
     <ul class="reach-list">
       <li><b>Web</b> <span>Here on the web, any time.</span></li>
       {% if reach_phones %}
@@ -233,7 +275,7 @@
   {% if sample_form and not paused %}
   <section class="hub-section" id="sample-form-section">
     <div class="section-head"><h2>Fill in a form from your records</h2></div>
-    <p class="card-note">See how a clinic's new-patient form fills itself in
+    <p class="section-line">See how a clinic's new-patient form fills itself in
       from your records. The clinic is made up, and you choose each answer
       before it's shared.</p>
     <p class="hub-link"><a id="sample-form-link" href="{{ url_for('checkin_sample') }}">Try a sample new-patient form</a></p>
@@ -296,15 +338,16 @@
       </div>
   {% endmacro %}
 
-  <!-- 5. YOUR SOURCES -->
+  <!-- 5. WHERE YOUR RECORDS COME FROM (was "Your sources", #1080) -->
   <section class="hub-section" id="records-section">
-    <div class="section-head"><h2>Your sources</h2></div>
+    <div class="section-head"><h2>Where your records come from</h2></div>
+    <p class="section-line">Each place your records come from, and how it's doing.</p>
     <div class="card-grid source-list" id="connections">
       {% for c in hub.sources %}
       {{ source_row(c) }}
       {% endfor %}
       {% if not hub.sources %}
-      {# Paused: "Add a source" is left out below, so point at nothing. #}
+      {# Paused: "Add records" is left out below, so point at nothing. #}
       <div class="empty">No records yet.{% if not paused %} Add some below.{% endif %}</div>
       {% endif %}
     </div>
@@ -325,7 +368,7 @@
     {% endif %}
   </section>
 
-  <!-- 6. ADD A SOURCE -->
+  <!-- 6. ADD RECORDS (was "Add a source", #1080) -->
   {# `menu` is hub.menu_items: with real records closed it holds no
      coming-soon source, so the groups below render nothing in that state.
      Paused: nothing can be added, the sample included, and the pause line at
@@ -335,7 +378,8 @@
      (#920 F1): home.js offers that sign-in on the tap (patient tester on
      #944), as the Connect your records card does. #}
   <section class="hub-section" id="connect-section"{% if link_session %} data-link-session="1"{% endif %}>
-    <div class="section-head"><h2>Add a source</h2></div>
+    <div class="section-head"><h2>Add records</h2></div>
+    <p class="section-line">Bring in records for your assistant to read.</p>
     {% if not menu_open %}
     <button type="button" class="btn-primary btn-block connector-tile"
             id="explore-sample" data-connector="sample">Explore with made-up records</button>
@@ -554,4 +598,5 @@
 </div>
 
 <script src="{{ url_for('static', filename='home.js') }}"></script>
+{% if invite %}<script src="{{ url_for('static', filename='invite.js') }}"></script>{% endif %}
 {% endblock %}
