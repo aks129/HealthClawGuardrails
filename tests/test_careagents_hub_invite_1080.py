@@ -29,7 +29,8 @@ from tests.test_careagents_connect_journey_937 import _join_plain
 pytestmark = pytest.mark.extension
 
 EMAIL = "robin.card@example.com"
-LINE = "Give someone their own health assistant. Their records stay theirs."
+LINE = ("Invite someone to try CareAgents, free during the beta. They start "
+        "with made-up records.")
 
 
 def _section(html: str) -> str | None:
@@ -53,32 +54,66 @@ def _set(svc, **fields):
             setattr(row, k, v)
 
 
+def _left(card: str) -> str:
+    return re.search(r'class="invite-used">([^<]*)<', card).group(1)
+
+
 def test_a_new_account_sees_the_card_with_its_settings_link(made, monkeypatch):  # noqa: F811
     c, _ = _signed_in(made, monkeypatch)
     html = c.get("/home").get_data(as_text=True)
     card = _section(html)
     assert card is not None
     assert LINE in card
-    assert "0 of 5 used" in card
-    # Five slots, none filled.
+    assert _left(card) == "5 left"
+    # Five slots, none filled, said in words to a screen reader.
     assert card.count('class="invite-slot"') == 5
     assert "is-used" not in card
+    assert 'role="img" aria-label="0 of 5 places used"' in card
     # One Share button that copies where there is no share sheet.
     assert card.count("<button") == 1
     assert 'id="invite-share"' in card and 'data-fallback="copy"' in card
     assert "invite.js" in html
-    link = re.search(r"/i\?c=[0-9a-f]{32}", card).group(0)
+    # The long link is behind "Show link", not the card's main line.
+    box = card[card.index('<details class="invite-link-box">'):]
+    box = box[:box.index("</details>")]
+    assert "<summary>Show link</summary>" in box
+    link = re.search(r"/i\?c=[0-9a-f]{32}", box).group(0)
+    assert len(re.findall(r"/i\?c=", card)) == 1
     assert link in c.get("/settings").get_data(as_text=True)
 
 
-def test_used_seats_are_filled_slots(made, monkeypatch):  # noqa: F811
+def test_the_line_promises_what_the_link_opens(made, monkeypatch):  # noqa: F811
+    # The friend's page (/i?c=, beta.html) is the free beta sign-up and
+    # starts on made-up records. The hub's line and the share-sheet text
+    # say the same, and claim nothing about their own records.
+    c, _ = _signed_in(made, monkeypatch)
+    card = _section(c.get("/home").get_data(as_text=True))
+    code = re.search(r"/i\?c=([0-9a-f]{32})", card).group(1)
+    landing = _visible(
+        c.application.test_client().get(f"/i?c={code}").get_data(as_text=True))
+    assert "free during the beta" in landing and "made-up sample records" in landing
+    assert "free during the beta" in LINE and "made-up records" in LINE
+    share = (pathlib.Path(__file__).resolve().parents[1] / "careagents" /
+             "static" / "invite.js").read_text()
+    text = re.search(r'text: "([^"]*)"', share).group(1)
+    assert "free during the beta" in text and "made-up records" in text
+    for claim in ("their own health assistant", "records stay theirs",
+                  "own records"):
+        assert claim not in card and claim not in text
+
+
+@pytest.mark.parametrize("used,left,filled", [
+    (0, "5 left", 0), (2, "3 left", 2), (4, "1 left", 4),
+    (5, "All used", 5), (7, "All used", 5)])
+def test_places_left_lead_the_card(made, monkeypatch, used, left, filled):  # noqa: F811
     c, svc = _signed_in(made, monkeypatch)
     c.get("/home")
-    _set(svc, used=2)
+    _set(svc, used=used)
     card = _section(c.get("/home").get_data(as_text=True))
-    assert "2 of 5 used" in card
-    assert card.count("invite-slot is-used") == 2
-    assert card.count('class="invite-slot"') == 3
+    assert _left(card) == left
+    assert card.count("invite-slot is-used") == filled
+    assert f'aria-label="{filled} of 5 places used"' in card
+    assert ("invite-share" in card) is (used < 5)
 
 
 def test_a_paused_account_has_no_card(made, monkeypatch):  # noqa: F811
@@ -96,8 +131,8 @@ def test_a_used_up_link_says_so_and_offers_nothing_to_share(made, monkeypatch): 
     c.get("/home")
     _set(svc, used=5)
     card = _section(c.get("/home").get_data(as_text=True))
+    assert _left(card) == "All used"
     assert "All 5 places on your link are used." in card
-    assert card.count("invite-slot is-used") == 5
     assert "invite-share" not in card
 
 
@@ -108,9 +143,10 @@ def test_a_turned_off_link_says_so_and_shows_no_link(made, monkeypatch):  # noqa
         code = s.query(invites.InviteLink).one().code
     assert invites.revoke(svc.session, code)
     card = _section(c.get("/home").get_data(as_text=True))
-    assert "turned off" in card
+    assert _left(card) == "Turned off"
     assert "This link no longer lets anyone join." in card
     assert "/i?c=" not in card and "invite-share" not in card
+    assert "invite-slot" not in card
 
 
 def test_a_confirm_link_session_gets_no_card_and_no_link_made(

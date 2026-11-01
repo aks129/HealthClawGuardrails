@@ -30,10 +30,16 @@ test.describe('hub invite card at 375px', () => {
       const card = page.locator('#invite-section');
       await expect(card).toBeVisible();
       await expect(card.locator('.section-line')).toHaveText(
-        'Give someone their own health assistant. Their records stay theirs.');
-      await expect(card.locator('.invite-used')).toHaveText('0 of 5 used');
+        'Invite someone to try CareAgents, free during the beta. They start with made-up records.');
+      // Places left lead; the slots are decoration with a label.
+      await expect(card.locator('.invite-used')).toHaveText('5 left');
+      await expect(card.getByRole('img', { name: '0 of 5 places used' })).toBeVisible();
       await expect(card.locator('.invite-slot')).toHaveCount(5);
       await expect(card.locator('.invite-slot.is-used')).toHaveCount(0);
+      // The long link waits behind "Show link".
+      await expect(card.locator('#invite-url')).toBeHidden();
+      await card.getByText('Show link').click();
+      await expect(card.locator('#invite-url')).toBeVisible();
       await expect(card.locator('#invite-url')).toContainText('/i?c=');
       await expect(card.getByRole('button')).toHaveCount(1);
       await expect(card.getByRole('button', { name: 'Share your link' })).toBeVisible();
@@ -60,10 +66,10 @@ test.describe('hub invite card at 375px', () => {
       };
     });
     await signIn(page, uniqueEmail(), CARE_LOG);
-    const link = (await page.locator('#invite-url').innerText()).trim();
+    const link = ((await page.locator('#invite-url').textContent()) || '').trim();
     await page.getByRole('button', { name: 'Share your link' }).click();
     await expect.poll(() => page.evaluate(() => (window as any).__shared))
-      .toMatchObject({ url: link });
+      .toMatchObject({ url: link, text: expect.stringContaining('made-up records') });
   });
 
   test('without a share sheet, Share copies the link', async ({ page }) => {

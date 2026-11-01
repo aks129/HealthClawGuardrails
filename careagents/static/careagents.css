@@ -1108,6 +1108,9 @@ textarea:focus-visible {
 .invite-slot { width: 22px; height: 22px; border-radius: 50%;
   border: 2px solid var(--accent); }
 .invite-slot.is-used { background: var(--accent); }
+.invite-link-box { margin-top: 8px; font-size: 15px; }
+.invite-link-box summary { min-height: 44px; display: flex; align-items: center;
+  cursor: pointer; color: var(--accent-ink); }
 .section-line { color: var(--ink-soft); font-size: 16px; margin: -4px 0 12px; }
 .waiting .section-line { margin: 0 0 4px; }
 /* The chat's pointer to the hub's "Connect your records". */

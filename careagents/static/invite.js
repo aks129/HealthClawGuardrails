@@ -18,7 +18,10 @@
       await navigator.clipboard.writeText(link);
       say("Link copied.");
     } catch (e) {
-      // No clipboard access: select the link so a long press copies it.
+      // No clipboard access: select the link so a long press copies it,
+      // opening the hub's "Show link" first.
+      const box = url.closest("details");
+      if (box) box.open = true;
       const range = document.createRange();
       range.selectNodeContents(url);
       const sel = window.getSelection();
@@ -43,7 +46,8 @@
       try {
         await navigator.share({
           title: "CareAgents",
-          text: "Try CareAgents with me. It starts on made-up records.",
+          // The same promise as the hub's line (#1085 patient walk).
+          text: "Try CareAgents with me. It's free during the beta, and you start with made-up records.",
           url: link,
         });
       } catch (e) {
