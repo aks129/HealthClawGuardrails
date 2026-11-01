@@ -23,7 +23,7 @@ import {
 // earlier deploy never runs against this page (#909). A static import
 // cannot carry it.
 const {
-  buildResponse, itemHeading, madeUp, matchItems, prepareRecords, recordNames,
+  MADE_UP_MESSAGE, buildResponse, itemHeading, matchItems, prepareRecords, recordNames,
   requestedTypes, unowned, websiteHeading,
 } = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
@@ -68,7 +68,7 @@ async function post(url, body) {
     body: JSON.stringify(body === undefined ? {} : body),
   });
   const d = await r.json().catch(() => ({}));
-  return { ok: r.ok, d };
+  return { ok: r.ok, d, headers: r.headers };
 }
 
 $("signin-passkey").addEventListener("click", async () => {
@@ -283,7 +283,7 @@ function isolate(s, max) {
    {kind: "closed"} or, after a pick, {kind: "back"}. Every choice starts
    at "Don't share", each time the review is drawn. `using` is the set the
    person picked (setLine), or null when there was nothing to pick. `made`
-   says the records are the made-up patient's (madeUp, #1081): the review
+   says the records are the made-up patient's (the relay's header, #1081): the review
    is labelled so, on a return visit too, and claims none of them. */
 function review(request, origin, matches, using, made) {
   $("wallet-made-up").hidden = !made;
@@ -486,7 +486,10 @@ async function loadRecords(request, unsupportedItems, connectionId) {
       c && typeof c.id === "string" && typeof c.label === "string") : [];
     throw e;
   }
-  return prepareRecords(res.d);
+  // The server's word on whose records these are, never the records' own
+  // (checkin_answer.js, #1086 security F1).
+  return { ...prepareRecords(res.d),
+    made: res.headers.get("X-Checkin-Records") === "made-up" };
 }
 
 // Why the records could not be read, in plain words. The website is told
@@ -670,7 +673,8 @@ function start() {
         return { error: CANT_SHARE };
       }
       let matches = matchItems(request, unsupportedItems, records);
-      let choice = await review(request, origin, matches, using, madeUp(records.entries));
+      let made = records.made === true;
+      let choice = await review(request, origin, matches, using, made);
       while (choice.kind === "back") {
         // Back to the sets; whatever was chosen on the review is dropped,
         // and the next review starts every item at "Don't share" again.
@@ -678,10 +682,16 @@ function start() {
         if (got.kind !== "records") return finish(request, got);
         using = got.using;
         matches = matchItems(request, unsupportedItems, got.records);
-        choice = await review(request, origin, matches, using, madeUp(got.records.entries));
+        made = got.records.made === true;
+        choice = await review(request, origin, matches, using, made);
       }
       if (choice.kind !== "send") return finish(request, choice);
       const response = buildResponse(request, matches, choice.share, choice.answers);
+      // Our own sample clinic is told the records were made up, so its
+      // result can say so; no other website is told anything more.
+      if (made && origin === location.origin) {
+        response.requestStatus.forEach((row) => { row.message = MADE_UP_MESSAGE; });
+      }
       if (checkWalletResponse(request, response).length) {
         await untilOk("Couldn't answer", "Something went wrong building the answer. Nothing was shared. Tap OK to tell the website.");
         return { error: CANT_SHARE };

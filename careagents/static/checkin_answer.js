@@ -524,32 +524,20 @@ const HEADINGS = {
 
 /* --- Made-up records (#1081) ---------------------------------------------
 
-   The made-up patient's records (careagents/checkin/us_core_test_patient.
-   json) each carry HL7's HTEST "test data" marker, which the engine's
-   check-in export keeps and builds from empty (r6/access.py _test_markers);
-   no other record keeps it. Records that all carry it are made up: the
-   wallet's review and the sample clinic's result say so, and name none of
-   them as the person's own. Matched by system AND code, as the engine
-   matches it. */
+   Whether the records are the made-up patient's is the server's word, never
+   the records' own: a feed can stamp HTEST "test data" on a person's real
+   records and the engine keeps it (#1086 security F1). The relay says so in
+   a header (careagents/checkin_wallet.py MADE_UP_HEADER), and the wallet
+   passes it on to our own sample clinic as MADE_UP_MESSAGE on the answer's
+   status rows, and to no other website. */
 
-const HTEST = ["http://terminology.hl7.org/CodeSystem/v3-ActReason", "HTEST"];
+export const MADE_UP_MESSAGE = "Answered from a made-up patient's records.";
 
-function testMarked(resource) {
-  const meta = own(resource, "meta");
-  return ["tag", "security"].some((slot) => {
-    const list = own(meta, slot);
-    return Array.isArray(list) && list.some((c) =>
-      own(c, "system") === HTEST[0] && own(c, "code") === HTEST[1]);
-  });
-}
-
-/* True when there are records and every one is the made-up patient's. */
-export function madeUp(entries) {
-  const list = Array.isArray(entries) ? entries : [];
-  // `resource` read plainly: the clinic page's entries come from the
-  // check-in library, not from JSON.
-  return list.length > 0 && list.every((e) =>
-    e !== null && typeof e === "object" && testMarked(e.resource));
+/* Did our wallet say this answer came from the made-up patient? `items` is
+   the check-in library's response.items(). */
+export function saidMadeUp(items) {
+  return Array.isArray(items) && items.some((i) =>
+    i !== null && typeof i === "object" && i.message === MADE_UP_MESSAGE);
 }
 
 /* Our words without the claim that the records are the person's:

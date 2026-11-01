@@ -68,7 +68,9 @@ async function openForm(page: Page,
   await page.context().route(`${base}/checkin/wallet/records`, (route) => {
     asked.push(route.request().postDataJSON());
     return chosen
-      ? route.fulfill({ status: 200, headers: { 'Cache-Control': 'no-store' },
+      // The made-up patient answers, and the relay says so (#1086).
+      ? route.fulfill({ status: 200, headers: { 'Cache-Control': 'no-store',
+        'X-Checkin-Records': 'made-up' },
         contentType: 'application/fhir+json', body: EXPORT })
       : route.fulfill({ status: 409, contentType: 'application/json',
         body: '{"error":"sample_only"}' });

@@ -259,7 +259,7 @@ def test_the_browser_code_sends_nothing_but_sign_in(wallet):
     # key, Object.assign, spread or other value can be added unseen
     # (tests/test_checkin_wallet_pick_sec.py pins the rest of the page).
     load = page[page.index("async function loadRecords"):]
-    load = load[:load.index("return prepareRecords(res.d);")]
+    load = load[:load.index("return { ...prepareRecords(res.d),")]
     assert [ln.strip() for ln in load.splitlines()
             if re.search(r"\bbody\b", ln)] == [
         "const body = { resource_types: types };",

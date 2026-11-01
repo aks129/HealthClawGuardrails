@@ -1,11 +1,14 @@
 """Made-up records are labelled made up on the check-in review and on the
 sample clinic's result (#1081).
 
-The made-up patient's records each carry HL7's HTEST "test data" marker,
-which the engine's check-in export keeps (r6/access.py _test_markers).
-careagents/static/checkin_answer.js madeUp() reads it, under node here;
-both pages label the records and drop "Your" from what they call them,
-on a return visit too, where no offer screen comes first. The 375px view:
+Whose records answered is the server's word, never the records' own (#1086
+security F1: a feed can stamp HTEST on a person's real records). The relay
+sets `X-Checkin-Records: made-up` only when it answered from the account's
+own made-up test patient; the wallet reads only that, and tells our own
+sample clinic through a fixed message on the answer's status rows. Both
+pages label the records and drop "Your" from what they call them, on a
+return visit too, where no offer screen comes first. Through the real
+engine: tests/test_sec_1086_made_up_label_exploits.py. The 375px view:
 e2e/tests/careagents-checkin-sample.spec.ts.
 
 Synthetic data only.
@@ -13,7 +16,6 @@ Synthetic data only.
 
 from __future__ import annotations
 
-import copy
 import json
 import re
 import shutil
@@ -22,81 +24,108 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_checkin_wallet_test_patient import (  # noqa: F401  (fixture)
+    RELAY, tester)
+
 pytestmark = pytest.mark.extension
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "careagents" / "static"
 TEMPLATES = ROOT / "careagents" / "templates"
-EXPORT = json.loads((ROOT / "e2e" / "fixtures" /
-                     "checkin-export-test-patient.json").read_text())
-HTEST = {"system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
-         "code": "HTEST"}
+HEADER = "X-Checkin-Records"
+TYPES = {"resource_types": ["Condition"]}
+
+
+# --- the relay says it, from the connection it chose ------------------------
+
+def test_the_test_patient_answer_carries_the_header(tester):  # noqa: F811
+    browser, hc, svc, acct = tester
+    assert browser.post("/checkin/wallet/test-patient", json={}).status_code == 200
+    r = browser.post(RELAY, json=TYPES)
+    assert r.status_code == 200
+    assert r.headers.get(HEADER) == "made-up"
+
+
+def test_own_records_never_carry_it(tester):  # noqa: F811
+    browser, hc, svc, acct = tester
+    svc.add_connection(acct.id, "direct", "ca-own-1086", "Upload")
+    r = browser.post(RELAY, json=TYPES)
+    assert r.status_code == 200
+    assert HEADER not in r.headers
+
+
+def test_a_real_connection_beside_the_test_patient_wins_without_it(tester):  # noqa: F811
+    browser, hc, svc, acct = tester
+    assert browser.post("/checkin/wallet/test-patient", json={}).status_code == 200
+    svc.add_connection(acct.id, "direct", "ca-own-1086b", "Upload")
+    r = browser.post(RELAY, json=TYPES)
+    assert r.status_code == 200
+    assert hc.exports[-1] == "ca-own-1086b"
+    assert HEADER not in r.headers
+
+
+def test_a_refusal_carries_no_header(tester):  # noqa: F811
+    browser, *_ = tester
+    r = browser.post(RELAY, json=TYPES)
+    assert r.status_code == 409
+    assert HEADER not in r.headers
+
+
+# --- the words -------------------------------------------------------------
 
 _RUN = """
 const m = await import(process.argv[1]);
 const cases = JSON.parse(process.argv[2]);
 console.log(JSON.stringify({
-  madeUp: cases.entries.map((e) => m.madeUp(e)),
   unowned: cases.lines.map((l) => m.unowned(l)),
-  prepared: m.madeUp(m.prepareRecords(cases.bundle).entries),
+  said: cases.items.map((i) => m.saidMadeUp(i)),
+  message: m.MADE_UP_MESSAGE,
+  contentReader: typeof m.madeUp,
 }));
 """
 
 
-def _node(entries, lines=(), bundle=None):
+def _node(lines=(), items=()):
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
     out = subprocess.run(
         [node, "--input-type=module", "-e", _RUN,
          str(STATIC / "checkin_answer.js"),
-         json.dumps({"entries": entries, "lines": list(lines),
-                     "bundle": bundle or EXPORT})],
+         json.dumps({"lines": list(lines), "items": list(items)})],
         capture_output=True, text=True, check=True, timeout=30)
     return json.loads(out.stdout)
 
 
-def _entries(meta_list):
-    return [{"fullUrl": f"urn:x:{i}",
-             "resource": {"resourceType": "Condition", "id": str(i),
-                          **({"meta": m} if m is not None else {})}}
-            for i, m in enumerate(meta_list)]
-
-
-def test_the_made_up_patients_export_reads_as_made_up():
-    out = _node([EXPORT["entry"]])
-    assert out["madeUp"] == [True]
-    # Through the wallet's own preparation as well.
-    assert out["prepared"] is True
-
-
-def test_real_or_mixed_records_never_read_as_made_up():
-    mixed = copy.deepcopy(EXPORT["entry"])
-    del mixed[0]["resource"]["meta"]
-    out = _node([
-        mixed,
-        [],                                            # nothing at all
-        _entries([None, None]),                        # no marker
-        _entries([{"tag": [{**HTEST, "system": "http://example.org"}]}]),
-        _entries([{"tag": [{**HTEST, "code": "htest"}]}]),
-        _entries([{"tag": {"not": "a list"}}]),
-        [None, "x"],
-    ])
-    assert out["madeUp"] == [False] * 7
-
-
-def test_the_marker_counts_in_either_slot():
-    out = _node([_entries([{"security": [HTEST]}, {"tag": [HTEST]}])])
-    assert out["madeUp"] == [True]
-
-
 def test_made_up_records_are_never_called_yours():
-    out = _node([], lines=["Your medicines", "Your health problems",
-                           "Your name, birth date and contact details",
-                           "Lisinopril 10 mg", "Yours", ""])
+    out = _node(lines=["Your medicines", "Your health problems",
+                       "Your name, birth date and contact details",
+                       "Lisinopril 10 mg", "Yours", ""])
     assert out["unowned"] == ["Medicines", "Health problems",
                               "Name, birth date and contact details",
                               "Lisinopril 10 mg", "Yours", ""]
+
+
+def test_the_clinic_reads_only_our_wallets_message():
+    msg = _node()["message"]
+    out = _node(items=[
+        [{"id": "a", "status": "fulfilled", "message": msg}],
+        [{"id": "a", "status": "fulfilled"}],
+        [{"id": "a", "status": "declined", "message": "something else"}],
+        [], None, [None, "x"]])
+    assert out["said"] == [True, False, False, False, False, False]
+    # No reader of record content is left (#1086 security F1).
+    assert out["contentReader"] == "undefined"
+
+
+def test_only_our_own_clinic_is_told():
+    js = _code(STATIC / "checkin_wallet.js")
+    assert ("if (made && origin === location.origin) {\n"
+            "        response.requestStatus.forEach((row) => { row.message = "
+            "MADE_UP_MESSAGE; });") in js
+    assert 'made: res.headers.get("X-Checkin-Records") === "made-up"' in js
+    assert "HTEST" not in js
+    assert "HTEST" not in _code(STATIC / "checkin_sample.js")
 
 
 # --- the pages ------------------------------------------------------------
@@ -112,7 +141,9 @@ def test_the_review_is_labelled_whichever_way_the_records_came():
     js = _code(STATIC / "checkin_wallet.js")
     # The first review (a return visit opens it straight away) and a
     # review after a pick both pass the label's answer.
-    assert js.count("review(request, origin, matches, using, madeUp(") == 2
+    assert js.count("review(request, origin, matches, using, made);") == 2
+    assert "let made = records.made === true;" in js
+    assert "made = got.records.made === true;" in js
     assert '$("wallet-made-up").hidden = !made;' in js
     assert "made ? unowned(itemHeading(m)) : itemHeading(m)" in js
     assert "made ? recordNames(m).map(unowned) : recordNames(m)" in js

@@ -121,12 +121,17 @@ async function signInInTab(wallet: Page) {
 /** Answer the records relay for every page in the context with `bundle`
  *  (or, with a status, the relay's refusal), and keep each body the wallet
  *  sent it. */
-async function serveRelay(page: Page, bundle: unknown = EXPORT, status = 200) {
+async function serveRelay(page: Page, bundle: unknown = EXPORT, status = 200,
+  madeUp = false) {
   const asked: unknown[] = [];
+  // `madeUp`: the relay's word that the made-up test patient answered
+  // (careagents/checkin_wallet.py MADE_UP_HEADER, #1086).
+  const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
+  if (madeUp) headers['X-Checkin-Records'] = 'made-up';
   await page.context().route(`${CARE_BASE_URL}/checkin/wallet/records`,
     (route) => {
       asked.push(route.request().postDataJSON());
-      return route.fulfill({ status, headers: { 'Cache-Control': 'no-store' },
+      return route.fulfill({ status, headers,
         contentType: status === 200 ? 'application/fhir+json' : 'application/json',
         body: JSON.stringify(bundle) });
     });
@@ -419,16 +424,14 @@ test.describe('check-in wallet', () => {
         'Practitioner', 'Bundle', 'FHIR']) {
         expect(text, type).not.toContain(type);
       }
-      // The made-up patient's records: labelled, and never "Your" (#1081).
-      for (const plain of ['Made-up patient.', 'Allergies', 'Penicillin', 'Medicines',
-        'Lisinopril 10 mg', 'Insurance card',
+      for (const plain of ['Your allergies', 'Penicillin', 'Your medicines',
+        'Lisinopril 10 mg', 'Your insurance card',
         'Synthetic Test Health Plan, member ID ending 0001',
-        'Vaccines', 'Influenza vaccine, 1 October 2025',
-        'Casey Testpatient, born 4 July 1985', 'Address, phone, email',
+        'Your vaccines', 'Influenza vaccine, 1 October 2025',
+        'Casey Testpatient, born 4 July 1985', 'Your address, phone, email',
         'Hypertensive disorder']) {
         expect(text, plain).toContain(plain);
       }
-      expect(text).not.toContain('Your ');
       // The member ID is masked.
       expect(text).not.toContain('FAKE-MEMBER-0000001');
       // The relay was asked for the six kinds of record, and nothing else:
@@ -474,24 +477,39 @@ test.describe('check-in wallet', () => {
 
   // #973 patient test, finding 3: the heading does not depend on whether
   // there is anything on file. And a form says what to do instead.
-  // Without the test-data marker, as the person's own records come: their
-  // headings say "Your", and no made-up label shows (#1081).
   test('an item with nothing on file still has our heading', async ({ page }) => {
     await serveRelay(page, { ...EXPORT, entry: EXPORT.entry.filter((e: any) =>
-      !['Immunization', 'Coverage', 'Organization'].includes(e.resource.resourceType))
-      .map((e: any) => ({ ...e, resource: { ...e.resource, meta: undefined } })) });
+      !['Immunization', 'Coverage', 'Organization'].includes(e.resource.resourceType)) });
     const wallet = await checkIn(page, { items: REQUEST.items });
     await expect(wallet.locator('#wallet-review')).toBeVisible();
-    await expect(wallet.locator('#wallet-made-up')).toBeHidden();
-    await expect(wallet.locator('#wallet-note')).toContainText('records on your CareAgents account');
-    await expect(wallet.locator('#wallet-review-title')).toHaveText(
-      'A website is asking for your health information');
     const vaccines = wallet.locator('#wallet-items li[data-item=immunizations]');
     await expect(vaccines.locator('.checkin-item-title')).toHaveText('Your vaccines');
     const card = wallet.locator('#wallet-items li[data-item=coverage]');
     await expect(card.locator('.checkin-item-title')).toHaveText('Your insurance card');
     await expect(wallet.locator('#wallet-items li[data-item=phq2]'))
       .toContainText("This wallet can't answer this. The website will be told it wasn't answered.");
+    // Every record here carries HTEST, but the relay did not say the
+    // made-up patient answered: these are the person's own (#1086 F1).
+    await expect(wallet.locator('#wallet-made-up')).toBeHidden();
+    await expect(wallet.locator('#wallet-review-title')).toHaveText(
+      'A website is asking for your health information');
+  });
+
+  // #1081: only the relay's header says the made-up patient answered. Its
+  // own code budget: the spec's 30 sign-ins per address are all used.
+  test.describe('made-up label', () => {
+    test.use({ extraHTTPHeaders: { 'X-Real-IP': '203.0.113.86' } });
+    test('records the relay calls made up are labelled and not "yours"', async ({ page }) => {
+      await serveRelay(page, EXPORT, 200, true);
+      const wallet = await checkIn(page, { items: REQUEST.items });
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      await expect(wallet.locator('#wallet-made-up')).toBeVisible();
+      await expect(wallet.locator('#wallet-review-title')).toHaveText(
+        "A website is asking for the made-up patient's health information");
+      await expect(wallet.locator('#wallet-items li[data-item=immunizations] .checkin-item-title'))
+        .toHaveText('Vaccines');
+      await expect(wallet.locator('#wallet-items')).not.toContainText('Your ');
+    });
   });
 
   // #973 patient test, findings 2 and 4: the website's library closes this
@@ -819,9 +837,9 @@ test.describe('check-in wallet', () => {
     // And the lines under it carry theirs.
     await expect(phq2(wallet).locator('.checkin-website-says')).toHaveText('The website asks:');
     await expect(phq2(wallet).locator('.checkin-from-website')).toHaveCount(1);
-    // Ours stays ours (the made-up patient's, so not "Your", #1081).
+    // Ours stays ours.
     await expect(wallet.locator('#wallet-items li[data-item=patient] .checkin-item-title'))
-      .toHaveText('Name, birth date and contact details');
+      .toHaveText('Your name, birth date and contact details');
   });
 
   test("a long website title is capped at 80, the isolate intact", async ({ page }) => {

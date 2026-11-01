@@ -172,6 +172,24 @@ def _is_test_patient(c) -> bool:
     return c["kind"] == "sample" and c["provider"] in TEST_PROVIDERS
 
 
+#: Set on the relay's answer only when it came from the account's own
+#: made-up test patient (#1081). The page labels the records from this,
+#: never from their content: a feed can stamp HTEST on a person's own
+#: records, and the engine keeps it (#1086 security F1).
+MADE_UP_HEADER = "X-Checkin-Records"
+MADE_UP_VALUE = "made-up"
+
+
+def answered_from_test_patient(svc, account_id: str, tenant: str) -> bool:
+    """Is `tenant` this account's active made-up test patient? Decided
+    by the connection the server chose, not by what the records say."""
+    home = svc.list_home(account_id)
+    me = {p["id"] for p in home["people"] if p["kind"] == "self"}
+    return any(_is_test_patient(c) and c["tenant_id"] == tenant
+               and c["status"] == "active" and c["person_id"] in me
+               for c in home["connections"])
+
+
 def record_sets(home: dict) -> list[dict]:
     """The sets of records a check-in may answer from: the account holder's
     own active, non-sample connections, one per tenant, oldest first.
@@ -320,7 +338,10 @@ def register(app, svc, cfg, hc, full_session) -> None:
             if exc.code == "no_patient":
                 return _refuse("no_patient", 409)
             return _refuse("unavailable", 502)
-        return _no_store(Response(bundle, mimetype="application/fhir+json"))
+        resp = Response(bundle, mimetype="application/fhir+json")
+        if answered_from_test_patient(svc, account_id, tenant):
+            resp.headers[MADE_UP_HEADER] = MADE_UP_VALUE
+        return _no_store(resp)
 
     @app.get("/checkin/sample")
     def checkin_sample():

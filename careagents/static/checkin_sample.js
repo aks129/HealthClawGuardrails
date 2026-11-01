@@ -21,9 +21,9 @@ const $ = (id) => document.getElementById(id);
 // With this file's ?v= build stamp, as the wallet page loads it (#909).
 // If it cannot load, say so: the button stays off, and silence would read
 // as a button that does nothing.
-let madeUp, recordNames, unowned;
+let saidMadeUp, recordNames, unowned;
 try {
-  ({ madeUp, recordNames, unowned } = await import(
+  ({ saidMadeUp, recordNames, unowned } = await import(
     `./checkin_answer.js${new URL(import.meta.url).search}`));
 } catch (e) {
   $("sample-stalled").hidden = false;
@@ -140,9 +140,9 @@ function showAnswer(response) {
     showResult("Nothing was shared", "No records or answers came back, so the form is still blank.");
     return;
   }
-  // The made-up patient's records (checkin_answer.js madeUp) are labelled
+  // The made-up patient's records, as our wallet said (saidMadeUp), are labelled
   // so and never called the person's own (#1081).
-  const made = madeUp(RECORD_ITEMS.flatMap((it) => response.entries(it.id)));
+  const made = saidMadeUp(response.items());
   const words = (line) => (made ? unowned(line) : line);
   // "your records" said of them is untrue too.
   const whose = (line) => (made ? line.replace("your records", "the made-up records") : line);
