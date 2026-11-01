@@ -93,7 +93,9 @@
        data-signed-in="{{ '1' if signed_in else '0' }}"
        data-records="{{ url_for('checkin_wallet_records') }}"
        {% if test_patient %}data-test-patient="{{ url_for('checkin_wallet_test_patient') }}"{% endif %}>
-    <p class="checkin-test-note"><b>Test version.</b> This answers from the
+    {# Plain words, not "Test version" (#1080). The review swaps it for the
+       made-up patient's line when those records answer (#1081). #}
+    <p class="checkin-test-note" id="wallet-note">This answers from the
       records on your CareAgents account. You choose what the website gets.</p>
 
     <div id="wallet-err" class="form-error" role="alert" hidden></div>
@@ -211,6 +213,11 @@
       <p class="checkin-using" id="wallet-using" hidden></p>
       <button class="linkish checkin-repick" id="wallet-repick" hidden>Choose different records</button>
       <p class="setup-sub" id="wallet-purpose" hidden></p>
+      {# The made-up patient's records, said where they are listed, on a
+         return visit too, when no offer came first (#1081). #}
+      <p class="checkin-test-note" id="wallet-made-up" hidden><b>Made-up
+        patient.</b> These records are made up. They aren't yours or anyone
+        real's.</p>
       <p class="setup-sub">Choose what to share. Nothing is shared unless you
         choose it.</p>
       <ul class="checkin-items" id="wallet-items"></ul>

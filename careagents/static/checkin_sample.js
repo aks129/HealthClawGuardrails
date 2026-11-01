@@ -21,9 +21,9 @@ const $ = (id) => document.getElementById(id);
 // With this file's ?v= build stamp, as the wallet page loads it (#909).
 // If it cannot load, say so: the button stays off, and silence would read
 // as a button that does nothing.
-let recordNames;
+let madeUp, recordNames, unowned;
 try {
-  ({ recordNames } = await import(
+  ({ madeUp, recordNames, unowned } = await import(
     `./checkin_answer.js${new URL(import.meta.url).search}`));
 } catch (e) {
   $("sample-stalled").hidden = false;
@@ -113,8 +113,9 @@ const SAID = {
 const NO_ANSWER = "No answer came back for this.";
 const said = (status) => (Object.hasOwn(SAID, status || "") ? SAID[status] : NO_ANSWER);
 
-function showResult(title, text, cards = []) {
+function showResult(title, text, cards = [], made = false) {
   $("sample-form").hidden = true;
+  $("sample-made-up").hidden = !made;
   $("sample-result-title").textContent = title;
   $("sample-result-text").textContent = text;
   $("sample-answers").replaceChildren(...cards);
@@ -134,13 +135,20 @@ const showNothing = () => showResult("No answers came back",
 function showAnswer(response) {
   const ids = [...RECORD_ITEMS.map((it) => it.id), "intake"];
   if (ids.every((id) => response.status(id) === "declined")) {
-    showResult("Nothing was shared", "The answer said no to every item. The form is still blank.");
+    // Said for a "Don't share" on the review and for a no to the made-up
+    // records alike: this page cannot tell them apart (#1081).
+    showResult("Nothing was shared", "No records or answers came back, so the form is still blank.");
     return;
   }
+  // The made-up patient's records (checkin_answer.js madeUp) are labelled
+  // so and never called the person's own (#1081).
+  const made = madeUp(RECORD_ITEMS.flatMap((it) => response.entries(it.id)));
+  const words = (line) => (made ? unowned(line) : line);
   const cards = RECORD_ITEMS.map((it) => {
     const entries = response.entries(it.id);
     const primary = entries.filter((e) => it.types.includes(e.resource.resourceType));
-    return card(it.heading, recordNames({ primary, entries }), said(response.status(it.id)));
+    return card(words(it.heading), recordNames({ primary, entries }).map(words),
+      said(response.status(it.id)));
   });
   const form = response.form("intake");
   const answered = (form && Array.isArray(form.item)) ? form.item : [];
@@ -152,9 +160,9 @@ function showAnswer(response) {
     said(response.status("intake"))));
   cards.push(card(QUESTIONS.reason, [],
     "Not answered from your records. You'd tell the clinic yourself."));
-  showResult("Your form, filled in",
+  showResult(made ? "The form, filled in from made-up records" : "Your form, filled in",
     "This is what the clinic would get. It stays on this page and is gone when you close it.",
-    cards);
+    cards, made);
 }
 
 $("sample-start").onclick = () => {

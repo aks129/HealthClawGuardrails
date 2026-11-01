@@ -57,11 +57,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 /** From the hub to the sample form, through the made-up patient offer,
- *  to the answering tab's review. */
-async function openForm(page: Page): Promise<Page> {
+ *  to the answering tab's review. `returning`: the account already holds
+ *  the made-up patient, so the review opens straight away (#1081).
+ *  `decline`: stop at the offer, for the caller to answer it. */
+async function openForm(page: Page,
+  { returning = false, decline = false } = {}): Promise<Page> {
   const base = CARE_ALLOW_BASE_URL;
   const asked: unknown[] = [];
-  let chosen = false;
+  let chosen = returning;
   await page.context().route(`${base}/checkin/wallet/records`, (route) => {
     asked.push(route.request().postDataJSON());
     return chosen
@@ -78,9 +81,13 @@ async function openForm(page: Page): Promise<Page> {
   await signIn(page, uniqueEmail(), CARE_ALLOW_LOG);
   await page.getByRole('link', { name: LINK }).click();
   await expect(page).toHaveURL(`${base}/checkin/sample`);
-  await expect(page.locator('.sample-note')).toContainText('made-up clinic');
+  await expect(page.locator('.sample-note').first()).toContainText('made-up clinic');
   const [tab] = await Promise.all([
     page.waitForEvent('popup'), page.locator('#sample-start').click()]);
+  if (returning) {
+    await expect(tab.locator('#wallet-review')).toBeVisible();
+    return tab;
+  }
 
   // Plain words for the made-up patient (#1077).
   const offer = tab.locator('#wallet-test-patient');
@@ -89,6 +96,7 @@ async function openForm(page: Page): Promise<Page> {
   for (const w of ['connectathon', 'test patient', 'us core']) {
     expect(words).not.toContain(w);
   }
+  if (decline) return tab;
   await tab.getByRole('button', { name: "Use a made-up patient's records to try this" }).click();
 
   await expect(tab.locator('#wallet-review')).toBeVisible();
@@ -119,7 +127,10 @@ test.describe('sample new-patient form at 375px', () => {
       await tab.locator('#wallet-items li[data-item=intake]').getByLabel('Yes').check();
       await tab.locator('#wallet-send').click();
 
-      await expect(page.locator('#sample-result-title')).toHaveText('Your form, filled in');
+      // Made-up records, said so, and not called "your" (#1081).
+      await expect(page.locator('#sample-result-title'))
+        .toHaveText('The form, filled in from made-up records');
+      await expect(page.locator('#sample-made-up')).toBeVisible();
       const answers = page.locator('#sample-answers > li');
       await expect(answers.nth(0)).toContainText('Lisinopril 10 mg');
       await expect(answers.nth(1)).toContainText('Penicillin');
@@ -136,9 +147,48 @@ test.describe('sample new-patient form at 375px', () => {
     await tab.locator('#wallet-decline-all').click();
     await expect(page.locator('#sample-result-title')).toHaveText('Nothing was shared');
     await expect(page.locator('#sample-result-text')).toHaveText(
-      'The answer said no to every item. The form is still blank.');
+      'No records or answers came back, so the form is still blank.');
     await expect(page.locator('#sample-answers > li')).toHaveCount(0);
+    await expect(page.locator('#sample-made-up')).toBeHidden();
   });
+
+  test('saying no to the made-up records says they were not used',
+    async ({ page }) => {
+      const tab = await openForm(page, { decline: true });
+      await tab.locator('#wallet-test-patient-no').click();
+      await expect(tab.locator('#wallet-done-text')).toContainText(
+        "You didn't use the made-up records, so nothing was sent.");
+      await expect(page.locator('#sample-result-title')).toHaveText('Nothing was shared');
+      await expect(page.locator('#sample-result-text')).toHaveText(
+        'No records or answers came back, so the form is still blank.');
+    });
+
+  // A return visit (#1081): the account already holds the made-up
+  // patient, so the review opens with no offer screen before it. The
+  // records are still said to be made up, there and on the result.
+  test('a return visit labels the made-up records on the review and the result',
+    async ({ page }) => {
+      const tab = await openForm(page, { returning: true });
+      await expect(tab.locator('#wallet-test-patient')).toBeHidden();
+      await expect(tab.locator('#wallet-made-up')).toBeVisible();
+      await expect(tab.locator('#wallet-made-up')).toContainText('Made-up patient.');
+      await expect(tab.locator('#wallet-note')).toContainText(
+        "a made-up patient's records, not yours");
+      const meds = tab.locator('#wallet-items li[data-item=medications]');
+      await expect(meds.locator('.checkin-item-title')).toHaveText('Medicines');
+      await expect(tab.locator('#wallet-items')).not.toContainText('Your ');
+      await meds.locator('input[value=share]').check();
+      await tab.locator('#wallet-send').click();
+
+      await expect(page.locator('#sample-made-up')).toBeVisible();
+      await expect(page.locator('#sample-result-title'))
+        .toHaveText('The form, filled in from made-up records');
+      const first = page.locator('#sample-answers > li').nth(0);
+      await expect(first.locator('.sample-q')).toHaveText('Medicines');
+      await expect(first).toContainText('Lisinopril 10 mg');
+      expect(await page.evaluate(() =>
+        document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    });
 });
 
 test.describe('sample new-patient form, test patient off', () => {

@@ -522,6 +522,43 @@ const HEADINGS = {
   Coverage: "Your insurance card",
 };
 
+/* --- Made-up records (#1081) ---------------------------------------------
+
+   The made-up patient's records (careagents/checkin/us_core_test_patient.
+   json) each carry HL7's HTEST "test data" marker, which the engine's
+   check-in export keeps and builds from empty (r6/access.py _test_markers);
+   no other record keeps it. Records that all carry it are made up: the
+   wallet's review and the sample clinic's result say so, and name none of
+   them as the person's own. Matched by system AND code, as the engine
+   matches it. */
+
+const HTEST = ["http://terminology.hl7.org/CodeSystem/v3-ActReason", "HTEST"];
+
+function testMarked(resource) {
+  const meta = own(resource, "meta");
+  return ["tag", "security"].some((slot) => {
+    const list = own(meta, slot);
+    return Array.isArray(list) && list.some((c) =>
+      own(c, "system") === HTEST[0] && own(c, "code") === HTEST[1]);
+  });
+}
+
+/* True when there are records and every one is the made-up patient's. */
+export function madeUp(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  // `resource` read plainly: the clinic page's entries come from the
+  // check-in library, not from JSON.
+  return list.length > 0 && list.every((e) =>
+    e !== null && typeof e === "object" && testMarked(e.resource));
+}
+
+/* Our words without the claim that the records are the person's:
+   "Your medicines" becomes "Medicines". */
+export function unowned(line) {
+  return typeof line === "string" && line.startsWith("Your ")
+    ? line.charAt(5).toUpperCase() + line.slice(6) : line;
+}
+
 /* Our heading for an item, from what it matched, or, with nothing on
    file, from the one kind of record it asks for: the same heading either
    way. The website's own title only when there is no one kind to name it
