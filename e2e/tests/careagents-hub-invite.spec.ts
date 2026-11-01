@@ -47,6 +47,9 @@ test.describe('hub invite card at 375px', () => {
       const heads = page.locator('main.hub h2');
       const n = await heads.count();
       expect(n).toBeGreaterThanOrEqual(5);
+      // This checks each sentence is shown at 375px. That each one sits
+      // directly under its own header is pytest's to check
+      // (test_every_hub_section_header_has_one_plain_sentence).
       for (let i = 0; i < n; i++) {
         const line = heads.nth(i).locator(
           'xpath=(following::p[contains(@class,"section-line")])[1]');

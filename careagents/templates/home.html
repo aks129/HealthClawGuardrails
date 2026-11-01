@@ -230,8 +230,9 @@
         <span class="invite-used">{% if invite.revoked %}Turned off{% elif left == 0 %}All used{% else %}{{ left }} left{% endif %}</span>
       </div>
       {% if not invite.revoked %}
-      {# The count again as slots, for the eye; the label says it in words. #}
-      <div class="invite-slots" role="img" aria-label="{{ [invite.used, invite.cap] | min }} of {{ invite.cap }} places used">{% for i in range(invite.cap) %}<span class="invite-slot{% if i < invite.used %} is-used{% endif %}"></span>{% endfor %}</div>
+      {# The count again as slots, for the eye; the label says it in words.
+         At most 12 drawn: an operator can set any cap (#1085 review). #}
+      <div class="invite-slots" role="img" aria-label="{{ [invite.used, invite.cap] | min }} of {{ invite.cap }} places used">{% for i in range([invite.cap, 12] | min) %}<span class="invite-slot{% if i < invite.used %} is-used{% endif %}"></span>{% endfor %}</div>
       {# The long link is not the main thing: Share is. It stays here,
          selectable, for whoever wants to see or copy it. #}
       <details class="invite-link-box">

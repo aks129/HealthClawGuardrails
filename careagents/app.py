@@ -778,8 +778,10 @@ def create_app(config: Config | None = None,
         if not paused and not session.get(_VIA_LINK):
             try:
                 invite = invites.settings_row(svc, cfg, acct.id)
-            except Exception:  # noqa: BLE001 - the card is left out, not the page
-                logger.warning("invite link not shown on the hub")
+            except Exception as exc:  # noqa: BLE001 - the card is left out, not the page
+                # The class only: never str(exc), which can carry a code.
+                logger.warning("invite link not shown on the hub (%s)",
+                               type(exc).__name__)
         return render_template(
             "home.html", me=acct, invite=invite,
             stale_link_note=stale,

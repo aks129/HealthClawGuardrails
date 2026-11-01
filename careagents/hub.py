@@ -154,7 +154,7 @@ def _real_has_records(records: list[dict]) -> bool:
 
 
 def _sources(records: list[dict]) -> list[dict]:
-    """The rows "Your sources" lists. Samples leave once a real source has
+    """The rows "Where your records come from" lists. Samples leave once a real source has
     records (they wait in a quiet drawer instead). Nothing else is hidden:
     a hidden empty upload made Delete look like it did nothing (patient
     tester on #944). A second Upload tap reuses the empty row instead

@@ -696,7 +696,7 @@ def test_link_done_without_an_assistant_asks_for_records(
     assert "One more step: choose your records" in page
     assert "Choose my records" in page
     assert "Go back to Messages" not in page
-    assert "Go to your hub" not in page
+    assert "Go to your home page" not in page
 
 
 def test_auth_says_why_while_a_link_is_waiting(cfg, svc, monkeypatch):  # noqa: F811

@@ -1001,7 +1001,7 @@ textarea:focus-visible {
    breaks where it must. */
 .hub-head > div { min-width: 0; }
 .hub-sub { overflow-wrap: anywhere; }
-/* The address under Settings and Your hub on one line: broken mid-word it
+/* The address under Settings and Your home page on one line: broken mid-word it
    read as "example.co / m" (10-20 patient walk). The whole of it is in the
    title. */
 .hub-sub.hub-email { white-space: nowrap; overflow: hidden;

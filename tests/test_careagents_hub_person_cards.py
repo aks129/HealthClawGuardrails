@@ -274,7 +274,8 @@ def test_add_someone_waits_until_you_have_your_own_assistant(
 # --- patient tester on #951 ------------------------------------------------------
 
 def _source_rows(body: str) -> dict:
-    """Each source row's markup in Your sources, by connection id."""
+    """Each source row's markup in Where your records come from, by
+    connection id."""
     start = body.index('id="records-section"')
     sec = body[start:body.index("</section>", start)]
     out = {}

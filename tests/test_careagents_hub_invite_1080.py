@@ -162,7 +162,8 @@ def test_a_confirm_link_session_gets_no_card_and_no_link_made(
 
 def test_signed_out_and_deleted_accounts_never_reach_the_card(made, monkeypatch):  # noqa: F811
     app, svc = made()
-    assert app.test_client().get("/home").status_code == 302
+    r = app.test_client().get("/home")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
     c = app.test_client()
     _login(c, svc, monkeypatch, email=EMAIL)
     assert _section(c.get("/home").get_data(as_text=True)) is not None
@@ -171,8 +172,7 @@ def test_signed_out_and_deleted_accounts_never_reach_the_card(made, monkeypatch)
         aid = s.query(Account).filter_by(email=EMAIL).one().id
     assert svc.delete_account(aid) is True
     r = c.get("/home")
-    assert r.status_code == 302
-    assert "invite-section" not in r.get_data(as_text=True)
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
 
 
 # --- plain words ----------------------------------------------------------
@@ -181,12 +181,11 @@ def test_every_hub_section_header_has_one_plain_sentence(made, monkeypatch):  # 
     c, _ = _signed_in(made, monkeypatch)
     html = c.get("/home").get_data(as_text=True)
     main = html[html.index('<main class="hub">'):html.index("</main>")]
-    heads = re.findall(r"<h2>([^<]+)</h2>", main)
+    heads = list(re.finditer(r"<h2\b[^>]*>.*?</h2>", main, flags=re.S))
     assert len(heads) >= 5, heads
-    for h in heads:
-        after = main[main.index(f"<h2>{h}</h2>") + len(f"<h2>{h}</h2>"):]
-        after = re.sub(r"^\s*(</div>)?\s*", "", after)
-        assert after.startswith('<p class="section-line">'), h
+    for m in heads:
+        after = re.sub(r"^\s*(</div>)?\s*", "", main[m.end():])
+        assert after.startswith('<p class="section-line">'), m.group(0)
 
 
 def test_every_section_header_in_the_template_has_its_sentence():
@@ -195,9 +194,9 @@ def test_every_section_header_in_the_template_has_its_sentence():
     tpl = (pathlib.Path(__file__).resolve().parents[1] / "careagents" /
            "templates" / "home.html").read_text()
     main = tpl[:tpl.index("</main>")]
-    heads = re.findall(r"<h2>.*?</h2>", main)
+    heads = re.findall(r"<h2\b[^>]*>.*?</h2>", main, flags=re.S)
     assert len(heads) >= 8, heads
-    for m in re.finditer(r"<h2>.*?</h2>", main):
+    for m in re.finditer(r"<h2\b[^>]*>.*?</h2>", main, flags=re.S):
         after = re.sub(r"^\s*(</div>)?\s*", "", main[m.end():])
         assert after.startswith('<p class="section-line">'), m.group(0)
 
@@ -207,6 +206,8 @@ def test_the_hub_has_no_word_a_first_timer_did_not_know(made, monkeypatch):  # n
     html = c.get("/home").get_data(as_text=True)
     main = html[html.index('<main class="hub">'):html.index("</main>")]
     words = _visible(main).lower()
+    # The text examined is the hub's own, not an empty string.
+    assert "ask your assistant" in words and "invite someone" in words
     for w in ("hub", "sources?", "wallet", "test version"):
         assert not re.search(rf"\b{w}\b", words), w
     title = re.search(r"<title>([^<]*)</title>", html).group(1)
@@ -214,6 +215,9 @@ def test_the_hub_has_no_word_a_first_timer_did_not_know(made, monkeypatch):  # n
 
 
 def test_every_visit_brief_button_is_explained():
+    """A template check: within the card loop, the explanation sits under
+    no {% if %} a card can skip. It does not see an {% if %} outside the
+    loop, or the whitespace-trimming {%- if %} form."""
     tpl = (pathlib.Path(__file__).resolve().parents[1] / "careagents" /
            "templates" / "home.html").read_text()
     card = tpl[tpl.index("{% for a in people_view.assistants %}"):
@@ -238,3 +242,31 @@ def test_landing_and_404_name_where_the_button_goes(made, monkeypatch):  # noqa:
     missing = c.get("/no-such-page").get_data(as_text=True)
     assert "Back to your home page" in missing
     assert "Back to your assistant" not in missing
+
+
+def test_at_most_twelve_slots_are_drawn(made, monkeypatch):  # noqa: F811
+    # An operator can set any cap; the card draws at most 12 slots and
+    # still says the count in words.
+    c, svc = _signed_in(made, monkeypatch)
+    c.get("/home")
+    _set(svc, cap=50, used=3)
+    card = _section(c.get("/home").get_data(as_text=True))
+    assert card.count("invite-slot") - card.count("invite-slots") == 12
+    assert card.count("invite-slot is-used") == 3
+    assert _left(card) == "47 left"
+    assert 'aria-label="3 of 50 places used"' in card
+
+
+def test_used_up_and_turned_off_say_what_settings_says(made, monkeypatch):  # noqa: F811
+    c, svc = _signed_in(made, monkeypatch)
+    c.get("/home")
+    _set(svc, used=5)
+    full = "All 5 places on your link are used."
+    assert full in _section(c.get("/home").get_data(as_text=True))
+    assert full in c.get("/settings").get_data(as_text=True)
+    with svc.session() as s:
+        code = s.query(invites.InviteLink).one().code
+    assert invites.revoke(svc.session, code)
+    off = "This link no longer lets anyone join."
+    assert off in _section(c.get("/home").get_data(as_text=True))
+    assert off in c.get("/settings").get_data(as_text=True)
