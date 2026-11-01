@@ -47,8 +47,9 @@ test.describe('hub invite card at 375px', () => {
       const heads = page.locator('main.hub h2');
       const n = await heads.count();
       expect(n).toBeGreaterThanOrEqual(5);
-      // This checks each sentence is shown at 375px. That each one sits
-      // directly under its own header is pytest's to check
+      // This checks that some sentence follows each header and is shown at
+      // 375px. That each one sits directly under its own header is pytest's
+      // to check
       // (test_every_hub_section_header_has_one_plain_sentence).
       for (let i = 0; i < n; i++) {
         const line = heads.nth(i).locator(
@@ -82,7 +83,8 @@ test.describe('hub invite card at 375px', () => {
     });
     await signIn(page, uniqueEmail(), CARE_LOG);
     await page.getByRole('button', { name: 'Share your link' }).click();
-    // Copied, or, with no clipboard access, the link is selected to copy.
+    // Both messages are success: copied, or, with no clipboard access, the
+    // link is selected to copy. Silence is the failure (mutation M8).
     await expect(page.locator('#invite-msg'))
       .toHaveText(/^(Link copied\.|Press and hold the link to copy it\.)$/);
   });
