@@ -55,7 +55,7 @@ def _signed_in_with_link(app, svc, monkeypatch):  # noqa: F811
 def test_the_key_is_enforced_here(app, enforced, monkeypatch):  # noqa: F811
     # The control: a bare row delete, leaving the link, is refused, so the
     # test below would see a delete path that forgot the link.
-    svc = enforced
+    svc = enforced  # noqa: F811
     _, aid = _signed_in_with_link(app, svc, monkeypatch)
     with pytest.raises(IntegrityError):
         with svc.session() as s:
@@ -64,7 +64,7 @@ def test_the_key_is_enforced_here(app, enforced, monkeypatch):  # noqa: F811
 
 def test_deleting_an_account_that_opened_the_hub_removes_its_link(
         app, enforced, monkeypatch):  # noqa: F811
-    svc = enforced
+    svc = enforced  # noqa: F811
     c, aid = _signed_in_with_link(app, svc, monkeypatch)
     assert svc.delete_account(aid) is True
     with svc.session() as s:
