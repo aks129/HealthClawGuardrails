@@ -17,6 +17,7 @@ Synthetic data only.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -65,9 +66,11 @@ def test_a_real_connection_beside_the_test_patient_wins_without_it(tester):  # n
     assert HEADER not in r.headers
 
 
-def test_a_failed_look_after_the_export_omits_the_header(tester, monkeypatch):  # noqa: F811
+def test_a_failed_look_after_the_export_omits_the_header(
+        tester, monkeypatch, caplog):  # noqa: F811
     # The account read that decides the header fails after a good export:
-    # the answer still goes, without the header (fail closed), not a 500.
+    # the answer still goes, without the header (it fails to unlabelled),
+    # not a 500, and the log says so in a fixed, greppable line.
     browser, hc, svc, acct = tester
     assert browser.post("/checkin/wallet/test-patient", json={}).status_code == 200
     before, real = len(hc.exports), svc.list_home
@@ -78,10 +81,13 @@ def test_a_failed_look_after_the_export_omits_the_header(tester, monkeypatch):  
         return real(account_id)
 
     monkeypatch.setattr(svc, "list_home", flaky)
+    caplog.set_level(logging.WARNING, logger="careagents.checkin_wallet")
     r = browser.post(RELAY, json=TYPES)
     assert len(hc.exports) == before + 1
     assert r.status_code == 200
     assert HEADER not in r.headers
+    assert "checkin_made_up_header_omitted (RuntimeError)" in caplog.text
+    assert "database unavailable" not in caplog.text
 
 
 def test_a_refusal_carries_no_header(tester):  # noqa: F811

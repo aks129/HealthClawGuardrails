@@ -86,15 +86,17 @@ document.getElementById('go').onclick = () => {
 
 /** Answer the relay: no id -> the sets to pick from; an id in `removed`
  *  -> `unknown_records`, as the server says for a set gone since it was
- *  listed; any other id -> the export. Keep each body the wallet sent. */
-async function serveRelay(page: Page, removed: string[] = []) {
+ *  listed; any other id -> the export, with the made-up header when
+ *  `madeUp`. Keep each body the wallet sent. */
+async function serveRelay(page: Page, removed: string[] = [], madeUp = false) {
   const asked: any[] = [];
   await page.context().route(`${CARE_BASE_URL}/checkin/wallet/records`,
     (route) => {
       const body = route.request().postDataJSON();
       asked.push(body);
       const json = (status: number, b: unknown) => route.fulfill({ status,
-        headers: { 'Cache-Control': 'no-store' },
+        headers: { 'Cache-Control': 'no-store',
+          ...(madeUp && status === 200 ? { 'X-Checkin-Records': 'made-up' } : {}) },
         contentType: status === 200 ? 'application/fhir+json' : 'application/json',
         body: JSON.stringify(b) });
       if (!('connection_id' in body))
@@ -293,6 +295,21 @@ test.describe('check-in wallet, more than one set of records', () => {
       const r = JSON.stringify(await result(page));
       expect(r).toContain("couldn't share records this time");
       expect(r).not.toContain('unknown_records');
+    });
+
+  // The review after a pick reads the relay's header like the first one
+  // (#1086 review, R7): the wiring, shown in a browser. Today a set to pick
+  // from is always real, so the server never sends the header here.
+  test('the review after a pick follows the relay\'s made-up header',
+    async ({ page }) => {
+      await serveRelay(page, [], true);
+      const wallet = await checkIn(page);
+      await expect(wallet.locator('#wallet-pick')).toBeVisible();
+      await wallet.locator('#wallet-pick-list .checkin-set').first().click();
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      await expect(wallet.locator('#wallet-made-up')).toBeVisible();
+      await expect(wallet.locator('#wallet-review-title')).toHaveText(
+        "A website is asking for the made-up patient's health information");
     });
 
   test('"Don\'t share anything" on the picker shares nothing',
