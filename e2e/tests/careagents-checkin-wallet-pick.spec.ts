@@ -297,8 +297,9 @@ test.describe('check-in wallet, more than one set of records', () => {
       expect(r).not.toContain('unknown_records');
     });
 
-  // The review after a pick reads the relay's header like the first one
-  // (#1086 review, R7): the wiring, shown in a browser. Today a set to pick
+  // The review after a pick, and after picking again, reads the relay's
+  // header like the first one (#1086 review, R7): the wiring, shown in a
+  // browser. Today a set to pick
   // from is always real, so the server never sends the header here.
   test('the review after a pick follows the relay\'s made-up header',
     async ({ page }) => {
@@ -310,6 +311,12 @@ test.describe('check-in wallet, more than one set of records', () => {
       await expect(wallet.locator('#wallet-made-up')).toBeVisible();
       await expect(wallet.locator('#wallet-review-title')).toHaveText(
         "A website is asking for the made-up patient's health information");
+      // Back to the sets and a second pick: that review reads it again.
+      await wallet.locator('#wallet-repick').click();
+      await expect(wallet.locator('#wallet-pick')).toBeVisible();
+      await wallet.locator('#wallet-pick-list .checkin-set').nth(1).click();
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      await expect(wallet.locator('#wallet-made-up')).toBeVisible();
     });
 
   test('"Don\'t share anything" on the picker shares nothing',
