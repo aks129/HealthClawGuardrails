@@ -141,7 +141,7 @@ test.describe('#1061 skipped questions, hostile Verifier', () => {
       await expect(question).toHaveCount(1);
       await expect(row.locator('.checkin-skipped-text')).toHaveText(SPOOF);
       await expect(row.locator('.checkin-skipped-why')).toHaveText(
-        'This wallet does not answer this question. It is not sent.');
+        "This page can't answer the next question. Nothing is sent for it.");
       fs.mkdirSync(SHOTS, { recursive: true });
       await wallet.screenshot({ path: path.join(SHOTS, 'finding2-skipped-spoof-375.png'), fullPage: true });
 

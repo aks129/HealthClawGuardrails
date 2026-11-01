@@ -176,6 +176,12 @@ export default defineConfig({
         // used: nothing in the spec starts a Fasten flow.
         FASTEN_PUBLIC_KEY: 'e2e-not-a-real-fasten-key',
         CARE_WEARABLES_ENABLED: '1',
+        // The check-in wallet with its made-up patient, for the sample
+        // new-patient form's journey (careagents-checkin-sample.spec.ts).
+        // The first server keeps the patient off, so the wallet specs'
+        // "no records" replies stay as they are.
+        CARE_CHECKIN_WALLET: '1',
+        CARE_CHECKIN_TEST_PATIENT: '1',
       },
     },
   ],

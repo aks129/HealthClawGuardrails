@@ -167,6 +167,8 @@
       <h1>Nothing to answer</h1>
       <p class="setup-sub">This page answers check-in requests. Open it from a
         check-in page, and it will show you what the website asks for.</p>
+      <p class="hub-link"><a href="{{ url_for('checkin_sample') }}">Try a sample
+        new-patient form</a></p>
     </section>
 
     {% if test_patient %}
@@ -174,11 +176,12 @@
     <section id="wallet-test-patient" hidden>
       <h1>No records to share yet</h1>
       <p class="setup-sub" id="wallet-test-patient-why"></p>
-      <p class="setup-sub">Testing check-in? Use our connectathon test
-        patient: a made-up person with US Core records, kept on your account
-        only. You still choose each item before anything is sent.</p>
+      <p class="setup-sub">You can try this with a made-up patient's
+        records instead. They are not yours and not anyone real's, and they
+        stay on your account. You still choose each item before anything is
+        sent.</p>
       <button class="btn-primary btn-block" id="wallet-test-patient-use">
-        Use the connectathon test patient</button>
+        Use a made-up patient's records to try this</button>
       <button class="btn-secondary btn-block" id="wallet-test-patient-no">
         Don't share anything</button>
     </section>

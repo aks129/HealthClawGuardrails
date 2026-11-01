@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{# The sample new-patient form (careagents/checkin_wallet.py, #1073). A
+   made-up clinic's check-in page, served here so a first-timer can watch
+   their records answer an intake form without an outside site. It asks
+   the way any check-in website does (static/checkin_sample.js); what is
+   shared comes back to this tab and goes nowhere else. #}
+{% block title %}Sample new-patient form — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{% block head %}
+<style>
+  .sample-note { background: var(--practice-bg); color: var(--practice-ink);
+    border: 1px solid var(--practice-line); border-radius: var(--radius-sm);
+    padding: 8px 12px; font-size: 14px; margin: 0 0 16px; }
+  .sample-asks { margin: 0 0 16px; padding-left: 20px; }
+  .sample-asks li { margin: 0 0 4px; }
+  .sample-answers { list-style: none; padding: 0; margin: 0 0 16px; }
+  .sample-answers > li { border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+    padding: 12px; margin: 0 0 8px; overflow-wrap: anywhere; }
+  .sample-q { font-weight: 700; }
+  .sample-a { margin: 4px 0 0; padding-left: 18px; }
+  .sample-none { color: var(--ink-soft); margin: 4px 0 0; }
+  #sample-start:disabled { opacity: 0.55; cursor: not-allowed; }
+</style>
+{% endblock %}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card" id="sample">
+    <p class="sample-note"><b>Practice form.</b> Sunnyside Family Clinic is a
+      made-up clinic. What you share is shown on this page only. This page
+      doesn't send it on or save it.</p>
+
+    <section id="sample-form">
+      <h1>New-patient form</h1>
+      <p class="setup-sub">Sunnyside Family Clinic (made up)</p>
+      <p>This form asks for:</p>
+      <ul class="sample-asks">
+        <li>Your medicines</li>
+        <li>Your allergies</li>
+        <li>Your health problems</li>
+        <li>Is this your first visit to our clinic?</li>
+        <li>What brings you in today?</li>
+      </ul>
+      <p class="setup-sub">Tap the button and a new tab opens. Sign in there
+        if it asks, look over each answer, and choose what to share. Nothing
+        is shared unless you choose it. Then come back to this tab.</p>
+      <noscript><p class="form-error">Turn on JavaScript, then reload the
+        page.</p></noscript>
+      <p class="form-error" id="sample-stalled" role="alert" hidden>This form
+        could not start. Reload the page.</p>
+      {# The script turns the button on. If it never does (it failed to load
+         or threw first), say so rather than leave a dead button. #}
+      <script>
+        setTimeout(function () {
+          if (document.getElementById("sample-start").disabled &&
+              document.getElementById("sample-waiting").hidden)
+            document.getElementById("sample-stalled").hidden = false;
+        }, 8000);
+      </script>
+      <button class="btn-primary btn-block" id="sample-start" disabled>Fill it
+        in from my records</button>
+      <p class="setup-sub" id="sample-waiting" role="status" hidden>Waiting for
+        your answers in the other tab…</p>
+    </section>
+
+    <section id="sample-result" hidden>
+      <h1 id="sample-result-title" tabindex="-1"></h1>
+      <p class="setup-sub" id="sample-result-text"></p>
+      <ul class="sample-answers" id="sample-answers"></ul>
+      <button class="btn-secondary btn-block" id="sample-again">Start the form again</button>
+    </section>
+
+    <p class="hub-link"><a href="{{ url_for('home') }}">Back to your home page</a></p>
+  </div>
+</main>
+<script type="module" src="{{ url_for('static', filename='checkin_sample.js') }}"></script>
+{% endblock %}
