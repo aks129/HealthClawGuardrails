@@ -816,6 +816,11 @@ def create_app(config: Config | None = None,
                           if x["kind"] == "imessage"
                           and x["status"] == "active"],
             imessage_handle=cfg.imessage_handle,
+            # The sample new-patient form exists only with the wallet,
+            # and is linked only where it can be answered (#1073).
+            sample_form=(cfg.checkin_wallet_enabled
+                         and checkin_wallet.sample_form_completes(
+                             data, cfg.checkin_test_patient_enabled)),
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",

@@ -227,6 +227,19 @@
     </ul>
   </section>
 
+  {# The sample new-patient form (#1073): the one place a first-timer can
+     watch their records fill in an intake form. A made-up clinic, served
+     here; the answers come back to that page only. #}
+  {% if sample_form and not paused %}
+  <section class="hub-section" id="sample-form-section">
+    <div class="section-head"><h2>Fill in a form from your records</h2></div>
+    <p class="card-note">See how a clinic's new-patient form fills itself in
+      from your records. The clinic is made up, and you choose each answer
+      before it's shared.</p>
+    <p class="hub-link"><a id="sample-form-link" href="{{ url_for('checkin_sample') }}">Try a sample new-patient form</a></p>
+  </section>
+  {% endif %}
+
   {# One compact row per source with ONE status (hub critique 2026-10):
      the chip is the only status a row shows, chosen by hub.status_chip.
      Refresh, Disconnect and Delete wait in the row's menu; Delete is
