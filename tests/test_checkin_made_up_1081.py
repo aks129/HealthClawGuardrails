@@ -17,6 +17,7 @@ Synthetic data only.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -64,6 +65,25 @@ def test_a_real_connection_beside_the_test_patient_wins_without_it(tester):  # n
     assert HEADER not in r.headers
 
 
+def test_a_failed_look_after_the_export_omits_the_header(tester, monkeypatch):  # noqa: F811
+    # The account read that decides the header fails after a good export:
+    # the answer still goes, without the header (fail closed), not a 500.
+    browser, hc, svc, acct = tester
+    assert browser.post("/checkin/wallet/test-patient", json={}).status_code == 200
+    before, real = len(hc.exports), svc.list_home
+
+    def flaky(account_id):
+        if len(hc.exports) > before:
+            raise RuntimeError("database unavailable")
+        return real(account_id)
+
+    monkeypatch.setattr(svc, "list_home", flaky)
+    r = browser.post(RELAY, json=TYPES)
+    assert len(hc.exports) == before + 1
+    assert r.status_code == 200
+    assert HEADER not in r.headers
+
+
 def test_a_refusal_carries_no_header(tester):  # noqa: F811
     browser, *_ = tester
     r = browser.post(RELAY, json=TYPES)
@@ -88,6 +108,9 @@ console.log(JSON.stringify({
 def _node(lines=(), items=()):
     node = shutil.which("node")
     if not node:
+        # A skip would read as green in CI (#1086 review): there, fail.
+        if os.environ.get("CI"):
+            pytest.fail("node is required in CI for this test")
         pytest.skip("node is not installed")
     out = subprocess.run(
         [node, "--input-type=module", "-e", _RUN,
@@ -123,7 +146,7 @@ def test_only_our_own_clinic_is_told():
     assert ("if (made && origin === location.origin) {\n"
             "        response.requestStatus.forEach((row) => { row.message = "
             "MADE_UP_MESSAGE; });") in js
-    assert 'made: res.headers.get("X-Checkin-Records") === "made-up"' in js
+    assert "made: relaySaysMadeUp(res.headers) };" in js
     assert "HTEST" not in js
     assert "HTEST" not in _code(STATIC / "checkin_sample.js")
 
@@ -166,7 +189,7 @@ def test_declining_the_made_up_records_says_they_were_not_used():
     js = _code(STATIC / "checkin_wallet.js")
     offer = js[js.index("await offerTestPatient("):]
     offer = offer[:offer.index("declineAll(request)")]
-    assert "You didn't use the made-up records, so nothing was sent." in offer
+    assert "You didn't use the made-up records, so no records were sent." in offer
 
 
 def test_the_review_heading_claims_nothing_for_made_up_records():

@@ -533,6 +533,13 @@ const HEADINGS = {
 
 export const MADE_UP_MESSAGE = "Answered from a made-up patient's records.";
 
+/* Did the relay say the made-up patient answered? `headers` is the relay
+   response's Headers. Only this header, never the records (#1086 F1). */
+export function relaySaysMadeUp(headers) {
+  return Boolean(headers) && typeof headers.get === "function" &&
+    headers.get("X-Checkin-Records") === "made-up";
+}
+
 /* Did our wallet say this answer came from the made-up patient? `items` is
    the check-in library's response.items(). */
 export function saidMadeUp(items) {

@@ -339,7 +339,14 @@ def register(app, svc, cfg, hc, full_session) -> None:
                 return _refuse("no_patient", 409)
             return _refuse("unavailable", 502)
         resp = Response(bundle, mimetype="application/fhir+json")
-        if answered_from_test_patient(svc, account_id, tenant):
+        # A failed look leaves the header off: the page then calls the
+        # records the person's own, as before #1081 (fail closed).
+        try:
+            made_up = answered_from_test_patient(svc, account_id, tenant)
+        except Exception:  # noqa: BLE001 - the label is left off, not the answer
+            logger.warning("checkin made-up check unavailable")
+            made_up = False
+        if made_up:
             resp.headers[MADE_UP_HEADER] = MADE_UP_VALUE
         return _no_store(resp)
 

@@ -23,8 +23,8 @@ import {
 // earlier deploy never runs against this page (#909). A static import
 // cannot carry it.
 const {
-  MADE_UP_MESSAGE, buildResponse, itemHeading, matchItems, prepareRecords, recordNames,
-  requestedTypes, unowned, websiteHeading,
+  MADE_UP_MESSAGE, buildResponse, itemHeading, matchItems, prepareRecords,
+  recordNames, relaySaysMadeUp, requestedTypes, unowned, websiteHeading,
 } = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
 const $ = (id) => document.getElementById(id);
@@ -489,7 +489,7 @@ async function loadRecords(request, unsupportedItems, connectionId) {
   // The server's word on whose records these are, never the records' own
   // (checkin_answer.js, #1086 security F1).
   return { ...prepareRecords(res.d),
-    made: res.headers.get("X-Checkin-Records") === "made-up" };
+    made: relaySaysMadeUp(res.headers) };
 }
 
 // Why the records could not be read, in plain words. The website is told
@@ -658,7 +658,7 @@ function start() {
       }
       if (Object.hasOwn(OFFER_TEST, code) && card.dataset.testPatient) {
         if (!(await offerTestPatient(OFFER_TEST[code]))) {
-          await briefly("Nothing shared", "You didn't use the made-up records, so nothing was sent. The website will be told you chose not to share anything. This tab may close on its own.");
+          await briefly("Nothing shared", "You didn't use the made-up records, so no records were sent. The website will be told you chose not to share anything. This tab may close on its own.");
           return { response: declineAll(request) };
         }
         code = "";

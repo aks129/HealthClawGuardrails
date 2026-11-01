@@ -159,7 +159,7 @@ test.describe('sample new-patient form at 375px', () => {
       const tab = await openForm(page, { decline: true });
       await tab.locator('#wallet-test-patient-no').click();
       await expect(tab.locator('#wallet-done-text')).toContainText(
-        "You didn't use the made-up records, so nothing was sent.");
+        "You didn't use the made-up records, so no records were sent.");
       await expect(page.locator('#sample-result-title')).toHaveText('Nothing was shared');
       await expect(page.locator('#sample-result-text')).toHaveText(
         'No records or answers came back, so the form is still blank.');

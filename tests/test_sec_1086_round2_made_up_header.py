@@ -174,7 +174,10 @@ def test_the_label_is_read_only_from_the_header():
     for src in (wallet, answer, sample):
         assert "HTEST" not in src
         assert "v3-ActReason" not in src
-    assert wallet.count('res.headers.get("X-Checkin-Records") === "made-up"') == 1
+    # The read lives in checkin_answer.js relaySaysMadeUp, so node can run
+    # it (#1086 review); the wallet calls it once, on the relay's headers.
+    assert answer.count('headers.get("X-Checkin-Records") === "made-up"') == 1
+    assert wallet.count("made: relaySaysMadeUp(res.headers)") == 1
     # The message goes only to a requester on the wallet's own origin.
     assert ("if (made && origin === location.origin) {" in wallet)
     assert wallet.count("MADE_UP_MESSAGE") == 2  # the import and the one use

@@ -509,6 +509,14 @@ test.describe('check-in wallet', () => {
       await expect(wallet.locator('#wallet-items li[data-item=immunizations] .checkin-item-title'))
         .toHaveText('Vaccines');
       await expect(wallet.locator('#wallet-items')).not.toContainText('Your ');
+      // An outside website (this Verifier) is not told they were made up:
+      // the message goes only to our own sample clinic (#1086 review).
+      await wallet.locator('#wallet-send').click();
+      await expect.poll(() => page.evaluate(() => (window as any).__result),
+        { timeout: 15_000 }).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus.length).toBeGreaterThan(0);
+      expect(r.json.requestStatus.some((s: any) => 'message' in s)).toBe(false);
     });
   });
 
