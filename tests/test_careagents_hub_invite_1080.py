@@ -252,9 +252,29 @@ def test_at_most_twelve_slots_are_drawn(made, monkeypatch):  # noqa: F811
     _set(svc, cap=50, used=3)
     card = _section(c.get("/home").get_data(as_text=True))
     assert card.count("invite-slot") - card.count("invite-slots") == 12
-    assert card.count("invite-slot is-used") == 3
+    # 3 of 50 scaled to 12 slots, rounded up: one filled, not none.
+    assert card.count("invite-slot is-used") == 1
     assert _left(card) == "47 left"
     assert 'aria-label="3 of 50 places used"' in card
+
+
+@pytest.mark.parametrize("cap,used,filled", [
+    (20, 15, 9), (20, 19, 11), (20, 20, 12), (20, 0, 0), (12, 7, 7)])
+def test_the_slots_agree_with_the_label_over_twelve(
+        made, monkeypatch, cap, used, filled):  # noqa: F811
+    c, svc = _signed_in(made, monkeypatch)
+    c.get("/home")
+    _set(svc, cap=cap, used=used)
+    card = _section(c.get("/home").get_data(as_text=True))
+    drawn = card.count("invite-slot") - card.count("invite-slots")
+    label = re.search(r'aria-label="(\d+) of (\d+) places used"', card)
+    assert (int(label.group(1)), int(label.group(2))) == (used, cap)
+    assert drawn == min(cap, 12)
+    assert card.count("invite-slot is-used") == filled
+    # The share drawn filled is the label's share to within one slot, and
+    # full only when the link is.
+    assert abs(filled / drawn - used / cap) <= 1 / drawn
+    assert (filled == drawn) is (used >= cap)
 
 
 def test_used_up_and_turned_off_say_what_settings_says(made, monkeypatch):  # noqa: F811

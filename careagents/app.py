@@ -543,6 +543,17 @@ def create_app(config: Config | None = None,
             response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+    # The signed-in account pages carry the email and the invite link: not
+    # kept in the browser's cache, so Back after sign-out cannot show them
+    # (#1088).
+    _NO_STORE_ENDPOINTS = frozenset({"home", "settings"})
+
+    @app.after_request
+    def _no_store_on_account_pages(response):
+        if request.endpoint in _NO_STORE_ENDPOINTS:
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.after_request
     def _count_a_public_page_view(response):
         """One integer per day per public page, when the flag says so.

@@ -232,7 +232,13 @@
       {% if not invite.revoked %}
       {# The count again as slots, for the eye; the label says it in words.
          At most 12 drawn: an operator can set any cap (#1085 review). #}
-      <div class="invite-slots" role="img" aria-label="{{ [invite.used, invite.cap] | min }} of {{ invite.cap }} places used">{% for i in range([invite.cap, 12] | min) %}<span class="invite-slot{% if i < invite.used %} is-used{% endif %}"></span>{% endfor %}</div>
+      {# Over 12 places the filled slots are scaled, rounded up and never
+         all filled before the link is: the label says the real count. #}
+      {% set drawn = [invite.cap, 12] | min %}
+      {% set taken = [invite.used, invite.cap] | min %}
+      {% set filled = taken if invite.cap <= 12 else (taken * drawn + invite.cap - 1) // invite.cap %}
+      {% if invite.cap > 12 and taken < invite.cap %}{% set filled = [filled, drawn - 1] | min %}{% endif %}
+      <div class="invite-slots" role="img" aria-label="{{ taken }} of {{ invite.cap }} places used">{% for i in range(drawn) %}<span class="invite-slot{% if i < filled %} is-used{% endif %}"></span>{% endfor %}</div>
       {# The long link is not the main thing: Share is. It stays here,
          selectable, for whoever wants to see or copy it. #}
       <details class="invite-link-box">
