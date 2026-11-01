@@ -144,11 +144,13 @@ function showAnswer(response) {
   // so and never called the person's own (#1081).
   const made = madeUp(RECORD_ITEMS.flatMap((it) => response.entries(it.id)));
   const words = (line) => (made ? unowned(line) : line);
+  // "your records" said of them is untrue too.
+  const whose = (line) => (made ? line.replace("your records", "the made-up records") : line);
   const cards = RECORD_ITEMS.map((it) => {
     const entries = response.entries(it.id);
     const primary = entries.filter((e) => it.types.includes(e.resource.resourceType));
     return card(words(it.heading), recordNames({ primary, entries }).map(words),
-      said(response.status(it.id)));
+      whose(said(response.status(it.id))));
   });
   const form = response.form("intake");
   const answered = (form && Array.isArray(form.item)) ? form.item : [];
@@ -157,9 +159,9 @@ function showAnswer(response) {
     first.answer[0].valueCoding;
   const display = pick && typeof pick.display === "string" ? pick.display : "";
   cards.push(card(QUESTIONS["first-visit"], display ? [display] : [],
-    said(response.status("intake"))));
+    whose(said(response.status("intake")))));
   cards.push(card(QUESTIONS.reason, [],
-    "Not answered from your records. You'd tell the clinic yourself."));
+    whose("Not answered from your records. You'd tell the clinic yourself.")));
   showResult(made ? "The form, filled in from made-up records" : "Your form, filled in",
     "This is what the clinic would get. It stays on this page and is gone when you close it.",
     cards, made);

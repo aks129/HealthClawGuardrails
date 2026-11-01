@@ -174,6 +174,8 @@ test.describe('sample new-patient form at 375px', () => {
       await expect(tab.locator('#wallet-made-up')).toContainText('Made-up patient.');
       await expect(tab.locator('#wallet-note')).toContainText(
         "a made-up patient's records, not yours");
+      await expect(tab.locator('#wallet-review-title')).toHaveText(
+        "A website is asking for the made-up patient's health information");
       const meds = tab.locator('#wallet-items li[data-item=medications]');
       await expect(meds.locator('.checkin-item-title')).toHaveText('Medicines');
       await expect(tab.locator('#wallet-items')).not.toContainText('Your ');
@@ -186,6 +188,10 @@ test.describe('sample new-patient form at 375px', () => {
       const first = page.locator('#sample-answers > li').nth(0);
       await expect(first.locator('.sample-q')).toHaveText('Medicines');
       await expect(first).toContainText('Lisinopril 10 mg');
+      // No "your records" anywhere on the result, the free-text card too.
+      await expect(page.locator('#sample-answers > li').last()).toContainText(
+        "Not answered from the made-up records. You'd tell the clinic yourself.");
+      await expect(page.locator('#sample-result')).not.toContainText('your records');
       expect(await page.evaluate(() =>
         document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     });

@@ -153,6 +153,9 @@ $("signin-code-input").addEventListener("keydown", (e) => {
 // made-up patient's (#1081).
 const OWN_NOTE = "This answers from the records on your CareAgents account. You choose what the website gets.";
 const MADE_UP_NOTE = "This answers from a made-up patient's records, not yours. You choose what the website gets.";
+// The review's heading, the same way (#1086 patient walk).
+const OWN_TITLE = "A website is asking for your health information";
+const MADE_UP_TITLE = "A website is asking for the made-up patient's health information";
 
 // What an item would send, in plain words: one line per record it asked
 // for (checkin_answer.js recordNames), or why there is nothing to send.
@@ -285,6 +288,7 @@ function isolate(s, max) {
 function review(request, origin, matches, using, made) {
   $("wallet-made-up").hidden = !made;
   $("wallet-note").textContent = made ? MADE_UP_NOTE : OWN_NOTE;
+  $("wallet-review-title").textContent = made ? MADE_UP_TITLE : OWN_TITLE;
   // The origin is what the browser reported, shown as a website. Request
   // text is the website's own words: textContent only, never markup.
   $("wallet-origin").textContent = origin;

@@ -136,3 +136,23 @@ def test_declining_the_made_up_records_says_they_were_not_used():
     offer = js[js.index("await offerTestPatient("):]
     offer = offer[:offer.index("declineAll(request)")]
     assert "You didn't use the made-up records, so nothing was sent." in offer
+
+
+def test_the_review_heading_claims_nothing_for_made_up_records():
+    js = _code(STATIC / "checkin_wallet.js")
+    assert ('$("wallet-review-title").textContent = made ? MADE_UP_TITLE '
+            ": OWN_TITLE;") in js
+    title = re.search(r'const MADE_UP_TITLE = "([^"]*)";', js).group(1)
+    assert "made-up patient" in title and "your" not in title.lower()
+    # The person's own records keep the page's own heading.
+    own = re.search(r'const OWN_TITLE = "([^"]*)";', js).group(1)
+    assert own in (TEMPLATES / "checkin_wallet.html").read_text()
+
+
+def test_the_clinic_never_says_your_records_of_made_up_ones():
+    js = _code(STATIC / "checkin_sample.js")
+    assert ('const whose = (line) => (made ? line.replace("your records", '
+            '"the made-up records") : line);') in js
+    # Every "your records" line the result draws goes through it.
+    assert 'whose("Not answered from your records.' in js
+    assert js.count("whose(said(") == 2

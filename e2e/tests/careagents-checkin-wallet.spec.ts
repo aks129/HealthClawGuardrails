@@ -484,6 +484,8 @@ test.describe('check-in wallet', () => {
     await expect(wallet.locator('#wallet-review')).toBeVisible();
     await expect(wallet.locator('#wallet-made-up')).toBeHidden();
     await expect(wallet.locator('#wallet-note')).toContainText('records on your CareAgents account');
+    await expect(wallet.locator('#wallet-review-title')).toHaveText(
+      'A website is asking for your health information');
     const vaccines = wallet.locator('#wallet-items li[data-item=immunizations]');
     await expect(vaccines.locator('.checkin-item-title')).toHaveText('Your vaccines');
     const card = wallet.locator('#wallet-items li[data-item=coverage]');
