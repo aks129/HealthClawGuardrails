@@ -22,6 +22,7 @@
  * cookie.
  */
 
+import http from "http";
 import request from "supertest";
 import { app, closeMCPServerForTests } from "./index";
 
@@ -29,8 +30,20 @@ afterAll(async () => {
   await closeMCPServerForTests();
 });
 
+// supertest's request(app) binds [::]:0 and then dials 127.0.0.1:<port>; a
+// 127.0.0.1 listener another process holds on that port answers instead of
+// this app. One server, bound to the address supertest dials.
+let loopback: http.Server;
+beforeAll(async () => {
+  loopback = http.createServer(app);
+  await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
+});
+afterAll(async () => {
+  await new Promise<void>((resolve) => loopback.close(() => resolve()));
+});
+
 async function initialize(): Promise<string> {
-  const res = await request(app)
+  const res = await request(loopback)
     .post("/mcp")
     .send({
       jsonrpc: "2.0",
@@ -45,7 +58,7 @@ async function initialize(): Promise<string> {
 }
 
 function callTool(sessionId?: string) {
-  const req = request(app).post("/mcp");
+  const req = request(loopback).post("/mcp");
   if (sessionId !== undefined) req.set("Mcp-Session-Id", sessionId);
   return req.send({
     jsonrpc: "2.0",
@@ -66,7 +79,7 @@ describe("an ended session tells the client how to recover", () => {
     // The lived case: initialise, have the session go away (redeploy, TTL),
     // then keep using the id the client is still holding.
     const sessionId = await initialize();
-    await request(app).delete("/mcp").set("Mcp-Session-Id", sessionId);
+    await request(loopback).delete("/mcp").set("Mcp-Session-Id", sessionId);
 
     const res = await callTool(sessionId);
     expect(res.status).toBe(404);
@@ -85,7 +98,7 @@ describe("an ended session tells the client how to recover", () => {
     // Pins the asymmetry that made the failure read as a dead deployment.
     // If tools/list ever starts requiring a session this test should be
     // rewritten deliberately, not deleted.
-    const res = await request(app)
+    const res = await request(loopback)
       .post("/mcp")
       .send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
     expect(res.status).toBe(200);

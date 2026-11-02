@@ -6,3 +6,5 @@ cd2e7f908a7d59340960f23fbe575fe9964beb0e:tests/test_sec913_revoke_probes.py:gene
 2ea7d3ce47167bde5a2cc2d450471c26707c4194:tests/test_sec962_scope_allowlist_attack.py:generic-api-key:28
 # Synthetic canary token in the #973 security review's relay tests (commit-tied fingerprint).
 92af5b7c0a7e61796005fb24e19a4285578ed792:tests/test_sec_973_checkin_relay.py:generic-api-key:40
+# Synthetic mint secret in the #1074 security review's engine exploit tests (commit-tied fingerprint).
+5fb9825efa5ee1899c46fd616b0f6feb2282afc5:tests/test_pr1074_oauth_allowlist_engine_exploits.py:generic-api-key:24

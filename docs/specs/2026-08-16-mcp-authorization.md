@@ -1287,6 +1287,12 @@ under the SHA-256 of the OAuth token, never per tenant, for at most 5 minutes
 and never past the OAuth token's own expiry, so a revoked consent stops
 being served within the cache window.
 
+What a consented connection can list and call is an allow-list of read tools,
+`OAUTH_READ_TOOL_NAMES` in `services/agent-orchestrator/src/tools.ts`, and a
+tool not on it is hidden from `tools/list` and refused at call time before
+the mint. A tool that proposes, stages, writes or sends, or that writes as a
+side effect of a read, stays off the list.
+
 Token exchange (RFC 8693) was the alternative and is the more standard shape;
 it was not chosen because it adds a grant type and a second audience to the
 same outcome.
