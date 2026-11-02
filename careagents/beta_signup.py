@@ -793,7 +793,7 @@ NEXT_STEPS = (
     '"Email me a code".',
     'We email you an 8-digit code. Type it in and tap "Continue".',
     'If it offers a passkey, you can set one up or tap "Skip for now".',
-    'On your hub, tap "Chat" to open the made-up records. Ask a question, '
+    'On your home page, tap "Chat" to open the made-up records. Ask a question, '
     'or tap one of the ideas. Tap "Tell us" to send us what you think.',
 )
 #: The line in a tester email that is the numbered steps.

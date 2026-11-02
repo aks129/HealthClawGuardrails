@@ -2827,8 +2827,12 @@ def test_a_session_whose_account_is_gone_is_treated_as_signed_out(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     assert c.get("/home").status_code == 200          # the session is real
+    # The way the row really goes (self-serve delete), with the rows keyed
+    # to it: a bare row delete broke the invite link's foreign key on
+    # Postgres once the hub made the link (#1085).
     with svc.session() as s:
-        s.delete(s.query(Account).filter_by(email="gene@example.com").one())
+        aid = s.query(Account).filter_by(email="gene@example.com").one().id
+    assert svc.delete_account(aid) is True
 
     # Pages: signed out, exactly like an expired session — never a 5xx.
     for path in ("/home", "/chat?agent=x", "/brief"):

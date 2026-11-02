@@ -14,7 +14,7 @@
     <h1>Something broke on our side.</h1>
     <p class="setup-sub">It's not something you did. Please try again in a minute.</p>
     {% endif %}
-    <a class="btn-primary btn-block" href="{{ home }}">{{ "Back to your assistant" if home == "/home" else "Back to CareAgents" }}</a>
+    <a class="btn-primary btn-block" href="{{ home }}">{{ "Back to your home page" if home == "/home" else "Back to CareAgents" }}</a>
     <p class="beta-fine"><a id="report-problem" href="{{ url_for('feedback_page', screen=screen, error=status) }}">Report a problem</a></p>
   </div>
 </main>

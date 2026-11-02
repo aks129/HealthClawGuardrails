@@ -21,7 +21,7 @@
     {% elif code_for_invite %}
     <p class="setup-sub" id="invite-why">To get your invite link, confirm it's you with a code we email. Then you'll go back to Settings.</p>
     {% elif code_for_connect %}
-    <p class="setup-sub" id="connect-why">To connect your own records, confirm it's you with a code we email. Then you'll go back to your hub.</p>
+    <p class="setup-sub" id="connect-why">To connect your own records, confirm it's you with a code we email. Then you'll go back to your home page.</p>
     {% elif resume %}
     {# A page tapped while signed out is kept (#1016). Never named: no
        page, agent or topic on a screen anyone at the browser can read. #}
@@ -85,7 +85,7 @@
       <button class="btn-primary btn-block" id="add-passkey-btn">
         Create passkey</button>
       <button class="linkish" id="skip-passkey-btn">
-        {% if enroll %}Back to your hub →{% else %}Skip for now →{% endif %}</button>
+        {% if enroll %}Back to your home page →{% else %}Skip for now →{% endif %}</button>
     </div>
   </div>
 </main>

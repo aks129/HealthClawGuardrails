@@ -104,11 +104,11 @@ def test_a_missing_page_says_so_plainly_with_a_way_home(made):  # noqa: F811
     assert 'name="viewport"' in body                  # phone width
 
 
-def test_a_signed_in_404_goes_back_to_the_assistant(made, monkeypatch):  # noqa: F811
+def test_a_signed_in_404_goes_back_to_the_home_page(made, monkeypatch):  # noqa: F811
     app, svc = made()
     c = _signed_in(app, svc, monkeypatch)
     body = c.get("/no-such-page").get_data(as_text=True)
-    assert 'href="/home"' in body and "Back to your assistant" in body
+    assert 'href="/home"' in body and "Back to your home page" in body
 
 
 def test_a_json_route_keeps_a_json_404(made):  # noqa: F811
@@ -777,13 +777,13 @@ def test_the_thanks_page_says_when_they_will_hear_back(made, monkeypatch):  # no
      "Back to your visit brief"),
     ("/agents/agent_abc/approvals", "/agents/agent_abc/approvals",
      "Back to where you were"),
-    ("/home", "/home", "Back to your hub"),
-    ("https://evil.example/chat", "/home", "Back to your hub"),
-    ("//evil.example/chat", "/home", "Back to your hub"),
-    ("javascript:alert(1)", "/home", "Back to your hub"),
+    ("/home", "/home", "Back to your home page"),
+    ("https://evil.example/chat", "/home", "Back to your home page"),
+    ("//evil.example/chat", "/home", "Back to your home page"),
+    ("javascript:alert(1)", "/home", "Back to your home page"),
     ("/chat?agent=x&q=okapi", "/chat?agent=x", "Back to your chat"),
     ("/chat?agent=<script>", "/chat", "Back to your chat"),
-    ("/admin/funnel", "/home", "Back to your hub")])
+    ("/admin/funnel", "/home", "Back to your home page")])
 def test_the_thanks_page_goes_back_where_they_came_from(
         made, monkeypatch, back, href, label):  # noqa: F811
     from urllib.parse import quote

@@ -8,12 +8,12 @@
     <h1>This link is not valid</h1>
     <p class="setup-sub">The request to share your records could not be
     verified. Go back to the app that asked and start again.</p>
-    <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+    <a class="btn-secondary btn-block" href="/home">Back to your home page</a>
   {% elif state == "expired" %}
     <h1>This request has expired</h1>
     <p class="setup-sub">Requests to share your records last ten minutes.
     Go back to the app that asked and start again.</p>
-    <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+    <a class="btn-secondary btn-block" href="/home">Back to your home page</a>
   {% elif state == "unavailable" %}
     <h1>We can't check this request right now</h1>
     <p class="setup-sub">Nothing has been shared. Try again in a minute: reload
@@ -112,7 +112,7 @@
       <a href="/auth?enroll=1">Add a passkey</a>, then come back.</p>
     {% endif %}
     {% if host_recognized %}{{ deny_button("btn-secondary") }}{% endif %}
-    <p class="auth-fine">You can take this back any time from your hub.
+    <p class="auth-fine">You can take this back any time from your home page.
       <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
       policy</a>.</p>
   {% endif %}

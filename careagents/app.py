@@ -543,6 +543,17 @@ def create_app(config: Config | None = None,
             response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+    # The signed-in account pages carry the email and the invite link: not
+    # kept in the browser's cache, so Back after sign-out cannot show them
+    # (#1088).
+    _NO_STORE_ENDPOINTS = frozenset({"home", "settings"})
+
+    @app.after_request
+    def _no_store_on_account_pages(response):
+        if request.endpoint in _NO_STORE_ENDPOINTS:
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.after_request
     def _count_a_public_page_view(response):
         """One integer per day per public page, when the flag says so.
@@ -726,6 +737,11 @@ def create_app(config: Config | None = None,
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
+    @app.get("/hub")
+    def hub_redirect():
+        # The page was called the hub; an old link or a guess still lands.
+        return redirect(url_for("home"))
+
     @app.get("/home")
     @login_required
     def home():
@@ -766,8 +782,19 @@ def create_app(config: Config | None = None,
                    and svc.real_records_invited(acct.email))
         menu = hub_view.menu_items(
             connectors.catalog(cfg, real_records=real_open), real_open)
+        # The invite card (#1080): the same link Settings shows, under the
+        # same rule (#928 F6: made only after a full sign-in), and not for
+        # a paused account, which can add nothing.
+        invite = None
+        if not paused and not session.get(_VIA_LINK):
+            try:
+                invite = invites.settings_row(svc, cfg, acct.id)
+            except Exception as exc:  # noqa: BLE001 - the card is left out, not the page
+                # The class only: never str(exc), which can carry a code.
+                logger.warning("invite link not shown on the hub (%s)",
+                               type(exc).__name__)
         return render_template(
-            "home.html", me=acct,
+            "home.html", me=acct, invite=invite,
             stale_link_note=stale,
             connect_next=_connect_next(acct, view, menu, real_open, paused),
             # A confirm-link session connects only after a code (#920 F1):

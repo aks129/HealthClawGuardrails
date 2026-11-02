@@ -86,8 +86,8 @@ def test_the_hub_reads_ask_waiting_new_reach_sources_add(app, svc,
     assert order == sorted(order)
     assert "<h2>Ask your assistant</h2>" in body
     assert "<h2>Waiting for your OK</h2>" in body
-    assert "<h2>Your sources</h2>" in body
-    assert "<h2>Add a source</h2>" in body
+    assert "<h2>Where your records come from</h2>" in body
+    assert "<h2>Add records</h2>" in body
 
 
 # --- 2. what's new ----------------------------------------------------------
