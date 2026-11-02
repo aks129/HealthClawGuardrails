@@ -121,12 +121,17 @@ async function signInInTab(wallet: Page) {
 /** Answer the records relay for every page in the context with `bundle`
  *  (or, with a status, the relay's refusal), and keep each body the wallet
  *  sent it. */
-async function serveRelay(page: Page, bundle: unknown = EXPORT, status = 200) {
+async function serveRelay(page: Page, bundle: unknown = EXPORT, status = 200,
+  madeUp = false) {
   const asked: unknown[] = [];
+  // `madeUp`: the relay's word that the made-up test patient answered
+  // (careagents/checkin_wallet.py MADE_UP_HEADER, #1086).
+  const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
+  if (madeUp) headers['X-Checkin-Records'] = 'made-up';
   await page.context().route(`${CARE_BASE_URL}/checkin/wallet/records`,
     (route) => {
       asked.push(route.request().postDataJSON());
-      return route.fulfill({ status, headers: { 'Cache-Control': 'no-store' },
+      return route.fulfill({ status, headers,
         contentType: status === 200 ? 'application/fhir+json' : 'application/json',
         body: JSON.stringify(bundle) });
     });
@@ -483,6 +488,36 @@ test.describe('check-in wallet', () => {
     await expect(card.locator('.checkin-item-title')).toHaveText('Your insurance card');
     await expect(wallet.locator('#wallet-items li[data-item=phq2]'))
       .toContainText("This wallet can't answer this. The website will be told it wasn't answered.");
+    // Every record here carries HTEST, but the relay did not say the
+    // made-up patient answered: these are the person's own (#1086 F1).
+    await expect(wallet.locator('#wallet-made-up')).toBeHidden();
+    await expect(wallet.locator('#wallet-review-title')).toHaveText(
+      'A website is asking for your health information');
+  });
+
+  // #1081: only the relay's header says the made-up patient answered. Its
+  // own code budget: the spec's 30 sign-ins per address are all used.
+  test.describe('made-up label', () => {
+    test.use({ extraHTTPHeaders: { 'X-Real-IP': '203.0.113.86' } });
+    test('records the relay calls made up are labelled and not "yours"', async ({ page }) => {
+      await serveRelay(page, EXPORT, 200, true);
+      const wallet = await checkIn(page, { items: REQUEST.items });
+      await expect(wallet.locator('#wallet-review')).toBeVisible();
+      await expect(wallet.locator('#wallet-made-up')).toBeVisible();
+      await expect(wallet.locator('#wallet-review-title')).toHaveText(
+        "A website is asking for the made-up patient's health information");
+      await expect(wallet.locator('#wallet-items li[data-item=immunizations] .checkin-item-title'))
+        .toHaveText('Vaccines');
+      await expect(wallet.locator('#wallet-items')).not.toContainText('Your ');
+      // An outside website (this Verifier) is not told they were made up:
+      // the message goes only to our own sample clinic (#1086 review).
+      await wallet.locator('#wallet-send').click();
+      await expect.poll(() => page.evaluate(() => (window as any).__result),
+        { timeout: 15_000 }).toMatchObject({ status: 'completed' });
+      const r = await page.evaluate(() => (window as any).__result);
+      expect(r.json.requestStatus.length).toBeGreaterThan(0);
+      expect(r.json.requestStatus.some((s: any) => 'message' in s)).toBe(false);
+    });
   });
 
   // #973 patient test, findings 2 and 4: the website's library closes this

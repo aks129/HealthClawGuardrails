@@ -522,6 +522,38 @@ const HEADINGS = {
   Coverage: "Your insurance card",
 };
 
+/* --- Made-up records (#1081) ---------------------------------------------
+
+   Whether the records are the made-up patient's is the server's word, never
+   the records' own: a feed can stamp HTEST "test data" on a person's real
+   records and the engine keeps it (#1086 security F1). The relay says so in
+   a header (careagents/checkin_wallet.py MADE_UP_HEADER), and the wallet
+   passes it on to our own sample clinic as MADE_UP_MESSAGE on the answer's
+   status rows, and to no other website. */
+
+export const MADE_UP_MESSAGE = "Answered from a made-up patient's records.";
+
+/* Did the relay say the made-up patient answered? `headers` is the relay
+   response's Headers. Only this header, never the records (#1086 F1). */
+export function relaySaysMadeUp(headers) {
+  return Boolean(headers) && typeof headers.get === "function" &&
+    headers.get("X-Checkin-Records") === "made-up";
+}
+
+/* Did our wallet say this answer came from the made-up patient? `items` is
+   the check-in library's response.items(). */
+export function saidMadeUp(items) {
+  return Array.isArray(items) && items.some((i) =>
+    i !== null && typeof i === "object" && i.message === MADE_UP_MESSAGE);
+}
+
+/* Our words without the claim that the records are the person's:
+   "Your medicines" becomes "Medicines". */
+export function unowned(line) {
+  return typeof line === "string" && line.startsWith("Your ")
+    ? line.charAt(5).toUpperCase() + line.slice(6) : line;
+}
+
 /* Our heading for an item, from what it matched, or, with nothing on
    file, from the one kind of record it asks for: the same heading either
    way. The website's own title only when there is no one kind to name it

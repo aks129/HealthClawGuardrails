@@ -23,8 +23,8 @@ import {
 // earlier deploy never runs against this page (#909). A static import
 // cannot carry it.
 const {
-  buildResponse, itemHeading, matchItems, prepareRecords, recordNames,
-  requestedTypes, websiteHeading,
+  MADE_UP_MESSAGE, buildResponse, itemHeading, matchItems, prepareRecords,
+  recordNames, relaySaysMadeUp, requestedTypes, unowned, websiteHeading,
 } = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
 const $ = (id) => document.getElementById(id);
@@ -68,7 +68,7 @@ async function post(url, body) {
     body: JSON.stringify(body === undefined ? {} : body),
   });
   const d = await r.json().catch(() => ({}));
-  return { ok: r.ok, d };
+  return { ok: r.ok, d, headers: r.headers };
 }
 
 $("signin-passkey").addEventListener("click", async () => {
@@ -149,13 +149,22 @@ $("signin-code-input").addEventListener("keydown", (e) => {
 
 // --- the review -------------------------------------------------------------
 
+// The line at the top of the page, for the person's own records or the
+// made-up patient's (#1081).
+const OWN_NOTE = "This answers from the records on your CareAgents account. You choose what the website gets.";
+const MADE_UP_NOTE = "This answers from a made-up patient's records, not yours. You choose what the website gets.";
+// The review's heading, the same way (#1086 patient walk).
+const OWN_TITLE = "A website is asking for your health information";
+const MADE_UP_TITLE = "A website is asking for the made-up patient's health information";
+
 // What an item would send, in plain words: one line per record it asked
 // for (checkin_answer.js recordNames), or why there is nothing to send.
-function describe(m) {
+// The made-up patient's records are never called the person's (#1081).
+function describe(m, made) {
   if (m.unsupported) return ["This wallet can't answer this. The website will be told it wasn't answered."];
   if (m.form) return m.form.displays;
   if (!m.entries.length) return ["Nothing on file. The website will be told that."];
-  return recordNames(m);
+  return made ? recordNames(m).map(unowned) : recordNames(m);
 }
 
 /* A form's questions (checkin_answer.js readForm), one radio group each.
@@ -273,8 +282,13 @@ function isolate(s, max) {
 /* Resolves to {kind: "send", share, answers}, {kind: "declined-all"},
    {kind: "closed"} or, after a pick, {kind: "back"}. Every choice starts
    at "Don't share", each time the review is drawn. `using` is the set the
-   person picked (setLine), or null when there was nothing to pick. */
-function review(request, origin, matches, using) {
+   person picked (setLine), or null when there was nothing to pick. `made`
+   says the records are the made-up patient's (the relay's header, #1081): the review
+   is labelled so, on a return visit too, and claims none of them. */
+function review(request, origin, matches, using, made) {
+  $("wallet-made-up").hidden = !made;
+  $("wallet-note").textContent = made ? MADE_UP_NOTE : OWN_NOTE;
+  $("wallet-review-title").textContent = made ? MADE_UP_TITLE : OWN_TITLE;
   // The origin is what the browser reported, shown as a website. Request
   // text is the website's own words: textContent only, never markup.
   $("wallet-origin").textContent = origin;
@@ -298,7 +312,7 @@ function review(request, origin, matches, using) {
     // words never read as ours (#1030 security F3; QA ruling: every piece
     // of website text is labelled where it stands).
     const theirs = websiteHeading(m);
-    if (theirs === null) title.textContent = itemHeading(m);
+    if (theirs === null) title.textContent = made ? unowned(itemHeading(m)) : itemHeading(m);
     else {
       title.classList.add("checkin-website-title");
       const label = document.createElement("span");
@@ -311,7 +325,7 @@ function review(request, origin, matches, using) {
     }
     const what = document.createElement("ul");
     what.className = "checkin-item-what";
-    describe(m).forEach((line) => {
+    describe(m, made).forEach((line) => {
       const row = document.createElement("li");
       row.textContent = line;
       what.append(row);
@@ -472,7 +486,10 @@ async function loadRecords(request, unsupportedItems, connectionId) {
       c && typeof c.id === "string" && typeof c.label === "string") : [];
     throw e;
   }
-  return prepareRecords(res.d);
+  // The server's word on whose records these are, never the records' own
+  // (checkin_answer.js, #1086 security F1).
+  return { ...prepareRecords(res.d),
+    made: relaySaysMadeUp(res.headers) };
 }
 
 // Why the records could not be read, in plain words. The website is told
@@ -641,7 +658,7 @@ function start() {
       }
       if (Object.hasOwn(OFFER_TEST, code) && card.dataset.testPatient) {
         if (!(await offerTestPatient(OFFER_TEST[code]))) {
-          await briefly("Nothing shared", "The website will be told you chose not to share anything. This tab may close on its own.");
+          await briefly("Nothing shared", "You didn't use the made-up records, so no records were sent. The website will be told you chose not to share anything. This tab may close on its own.");
           return { response: declineAll(request) };
         }
         code = "";
@@ -656,7 +673,8 @@ function start() {
         return { error: CANT_SHARE };
       }
       let matches = matchItems(request, unsupportedItems, records);
-      let choice = await review(request, origin, matches, using);
+      let made = records.made === true;
+      let choice = await review(request, origin, matches, using, made);
       while (choice.kind === "back") {
         // Back to the sets; whatever was chosen on the review is dropped,
         // and the next review starts every item at "Don't share" again.
@@ -664,10 +682,16 @@ function start() {
         if (got.kind !== "records") return finish(request, got);
         using = got.using;
         matches = matchItems(request, unsupportedItems, got.records);
-        choice = await review(request, origin, matches, using);
+        made = got.records.made === true;
+        choice = await review(request, origin, matches, using, made);
       }
       if (choice.kind !== "send") return finish(request, choice);
       const response = buildResponse(request, matches, choice.share, choice.answers);
+      // Our own sample clinic is told the records were made up, so its
+      // result can say so; no other website is told anything more.
+      if (made && origin === location.origin) {
+        response.requestStatus.forEach((row) => { row.message = MADE_UP_MESSAGE; });
+      }
       if (checkWalletResponse(request, response).length) {
         await untilOk("Couldn't answer", "Something went wrong building the answer. Nothing was shared. Tap OK to tell the website.");
         return { error: CANT_SHARE };
