@@ -428,7 +428,7 @@ test.describe('check-in wallet', () => {
         'Lisinopril 10 mg', 'Your insurance card',
         'Synthetic Test Health Plan, member ID ending 0001',
         'Your vaccines', 'Influenza vaccine, 1 October 2025',
-        'Casey Testpatient, born 4 July 1985', 'Your address, phone, email',
+        'Casey Synthetic Testpatient, born 4 July 1985', 'Your address, phone, email',
         'Hypertensive disorder']) {
         expect(text, plain).toContain(plain);
       }
