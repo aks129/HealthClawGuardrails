@@ -20,7 +20,7 @@ from r6.actions.models import ProposedAction
 from r6.actions.registry import get_executor
 from r6.curatr import apply_fix, find_fix_provenance
 from r6.models import AuditEventRecord, R6Resource
-from tests.approval_helpers import approval_headers
+from tests.approval_helpers import approval_headers, propose_headers
 
 RID = "c-txn-1"
 FIXES = [{"field_path": "Condition.clinicalStatus.coding[0].code",
@@ -192,7 +192,8 @@ def _staged(client, tenant_headers, auth_headers):
                                        "resource_id": RID, "record_version": 1,
                                        "patient_intent": "it cleared up",
                                        "fixes": FIXES}}}
-    r = client.post("/r6/actions/propose", json=body, headers=tenant_headers)
+    r = client.post("/r6/actions/propose", json=body,
+                    headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     action_id = r.get_json()["id"]
     c = client.post("/r6/actions/%s/commit" % action_id, headers=auth_headers)

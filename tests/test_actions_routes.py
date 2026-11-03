@@ -9,6 +9,7 @@ double-submit, tenant isolation, audit hygiene).
 import json
 
 from r6.actions.models import ProposedAction
+from tests.approval_helpers import propose_headers
 
 
 def _approval_headers(auth_headers, action_id):
@@ -33,9 +34,29 @@ def test_propose_requires_tenant(client):
     assert resp.status_code == 400
 
 
+def test_propose_without_a_grant_is_refused_and_stages_nothing(
+        client, tenant_headers, app):
+    """#1001: propose is a write. A tenant header alone, or a token bound to
+    another tenant, is refused before anything is staged or audited as a
+    proposal."""
+    from r6.stepup import generate_step_up_token
+    tenant = tenant_headers['X-Tenant-Id']
+    foreign = dict(tenant_headers,
+                   **{'X-Step-Up-Token': generate_step_up_token('other-t')})
+    for headers in (tenant_headers, foreign):
+        resp = client.post('/r6/actions/propose', json=PROPOSE_BODY,
+                           headers=headers)
+        assert resp.status_code == 401, resp.get_data(as_text=True)
+    with app.app_context():
+        from r6.models import AuditEventRecord
+        assert ProposedAction.query.filter_by(tenant_id=tenant).count() == 0
+        assert AuditEventRecord.query.filter_by(
+            tenant_id=tenant, resource_type='ProposedAction').count() == 0
+
+
 def test_propose_creates_action(client, tenant_headers, app):
     resp = client.post('/r6/actions/propose', json=PROPOSE_BODY,
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     assert resp.status_code == 201
     data = resp.get_json()
     assert data['status'] == 'proposed'
@@ -49,12 +70,12 @@ def test_propose_creates_action(client, tenant_headers, app):
 def test_propose_rejects_bad_kind(client, tenant_headers):
     resp = client.post('/r6/actions/propose',
                        json={'kind': 'teleport', 'payload': {}},
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     assert resp.status_code == 400
 
 
 def test_propose_emits_audit_event(client, tenant_headers, app):
-    client.post('/r6/actions/propose', json=PROPOSE_BODY, headers=tenant_headers)
+    client.post('/r6/actions/propose', json=PROPOSE_BODY, headers=propose_headers(tenant_headers))
     with app.app_context():
         from r6.models import AuditEventRecord
         events = AuditEventRecord.query.filter_by(
@@ -68,21 +89,21 @@ def test_propose_emits_audit_event(client, tenant_headers, app):
 
 def test_propose_non_object_body_returns_400(client, tenant_headers):
     resp = client.post('/r6/actions/propose', data='[1,2]',
-                       content_type='application/json', headers=tenant_headers)
+                       content_type='application/json', headers=propose_headers(tenant_headers))
     assert resp.status_code == 400
 
 
 def test_propose_non_string_body_returns_400(client, tenant_headers):
     resp = client.post('/r6/actions/propose',
                        json={'kind': 'sms', 'payload': {'body': {'x': 1}}},
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     assert resp.status_code == 400
 
 
 def test_propose_oversize_payload_returns_400(client, tenant_headers):
     resp = client.post('/r6/actions/propose',
                        json={'kind': 'sms', 'payload': {'body': 'x' * 70000}},
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     assert resp.status_code == 400
 
 
@@ -97,7 +118,7 @@ def _propose(client, tenant_headers):
     global _LAST_APP
     _LAST_APP = client.application
     resp = client.post('/r6/actions/propose', json=PROPOSE_BODY,
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     return resp.get_json()['id']
 
 
@@ -114,7 +135,9 @@ def test_status_hides_payload_without_step_up(client, tenant_headers):
     assert 'metformin' not in blob      # message body
     assert d['status'] == 'proposed'
     assert d['id'] == action_id
-    assert d['to'] == 'CVS Pharmacy'    # recipient label is fine
+    # The kind's fixed label, never the free-text `to` (#1001).
+    assert d['to'] == 'a phone number'
+    assert 'CVS Pharmacy' not in blob
 
 
 def test_status_shows_payload_with_step_up(client, tenant_headers, auth_headers):

@@ -15,7 +15,7 @@ from models import db
 from r6.actions import errors
 from r6.actions.models import ProposedAction
 from r6.models import AuditEventRecord, R6Resource
-from tests.approval_helpers import approval_headers
+from tests.approval_helpers import approval_headers, propose_headers
 
 CANARY = 'CANARY-DISPLAY-8841'
 RID = 'c-rail-1'
@@ -57,7 +57,7 @@ def _body(version=1, fixes=None, to='Condition/%s' % RID):
 
 def _propose(client, tenant_headers, body=None):
     return client.post('/r6/actions/propose', json=body or _body(),
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
 
 
 def _staged(client, tenant_headers, auth_headers, body=None):

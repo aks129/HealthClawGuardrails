@@ -18,6 +18,7 @@ from careagents.healthclaw import HealthClawError
 from tests.test_careagents import FakeClient, _login, _make_direct_conn
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
+from tests.approval_helpers import propose_headers
 
 pytestmark = pytest.mark.extension
 
@@ -37,7 +38,7 @@ _MINT = "test-mint-" + "value"
 def _propose(client, tenant_headers, kind="sms", to="Dr. Smith"):
     r = client.post("/r6/actions/propose", json={
         "kind": kind, "payload": {"to": to, "phone": "617-555-0100",
-                                  "body": "Reminder."}}, headers=tenant_headers)
+                                  "body": "Reminder."}}, headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     return r.get_json()["id"]
 
@@ -71,7 +72,7 @@ def test_the_engine_lists_only_live_awaiting_requests_for_the_tenant(
     r = client.get("/r6/actions", headers=tenant_headers)
     assert r.status_code == 200
     body = r.get_json()
-    assert [a["to"] for a in body["actions"]] == ["Waiting"]
+    assert [a["id"] for a in body["actions"]] == [waiting]
     assert body["count"] == 1
     assert set(body["actions"][0]) == {"id", "kind", "to", "status", "expires_at"}
     # Another tenant sees none of it.
@@ -254,6 +255,7 @@ def test_a_correction_proposed_the_way_the_mcp_tool_sends_it_is_found_reviewed_a
 
     # 1. Proposed the way the MCP tool sends it (pinned in tools.test.ts).
     tenant_headers = {"X-Tenant-Id": tenant}
+    step_up = {**tenant_headers, "X-Step-Up-Token": generate_step_up_token(tenant)}
     r = engine.post("/r6/actions/propose", json={
         "kind": "curatr-fix",
         "payload": {"to": "Condition/c-chain",
@@ -264,10 +266,9 @@ def test_a_correction_proposed_the_way_the_mcp_tool_sends_it_is_found_reviewed_a
                                    "fixes": [{"field_path": "Condition.clinicalStatus.coding[0].code",
                                               "new_value": "resolved"}],
                                    "patient_intent": "it cleared up"}}},
-        headers=tenant_headers)
+        headers=step_up)
     assert r.status_code == 201, r.get_data(as_text=True)
     action_id = r.get_json()["id"]
-    step_up = {**tenant_headers, "X-Step-Up-Token": generate_step_up_token(tenant)}
     assert engine.post(f"/r6/actions/{action_id}/commit", headers=step_up).status_code == 202
 
     # 2. The person finds it — the list is the engine's answer, via the relay.

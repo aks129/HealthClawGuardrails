@@ -15,6 +15,7 @@ from r6.actions.review import _absence_only_refs, _is_absence_entry
 from r6.models import R6Resource
 from r6.sdc.populate import POPULATED_ROW_SOURCE_URL
 from r6.terminology import ABSENCE_CONCEPTS, LOINC, SNOMED
+from tests.approval_helpers import propose_headers
 
 TENANT = 'test-tenant'
 PATIENT_ID = 'fhi58-atk-patient'
@@ -56,7 +57,7 @@ def _seed(app, *allergies):
 
 
 def _action(client, tenant_headers, auth_headers):
-    proposed = client.post('/r6/actions/propose', headers=tenant_headers,
+    proposed = client.post('/r6/actions/propose', headers=propose_headers(tenant_headers),
                            json={'kind': 'form-fill',
                                  'payload': {'to': 'Intake portal',
                                              'questionnaire': 'healthclaw-intake',

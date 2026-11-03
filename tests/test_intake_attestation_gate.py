@@ -15,6 +15,7 @@ import pytest
 
 from models import db
 from r6.models import R6Resource
+from tests.approval_helpers import propose_headers
 
 TENANT = 'test-tenant'
 PATIENT_ID = 'gate-patient-1'
@@ -60,7 +61,7 @@ def intake_ready(app, tenant_headers):
 
 
 def _committed_action(client, tenant_headers, auth_headers):
-    proposed = client.post('/r6/actions/propose', headers=tenant_headers,
+    proposed = client.post('/r6/actions/propose', headers=propose_headers(tenant_headers),
                            json={'kind': 'form-fill',
                                  'payload': {'to': 'Intake portal',
                                              'questionnaire': 'healthclaw-intake',

@@ -13,14 +13,15 @@ from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
 from r6.models import AuditEventRecord, R6Resource
-from tests.approval_helpers import approval_headers
+from tests.approval_helpers import approval_headers, propose_headers
 
 CANARY = 'CANARY-DISPLAY-2210'
 RID = 'c-approve-1'
 
 
 def _propose(client, tenant_headers, body):
-    r = client.post('/r6/actions/propose', json=body, headers=tenant_headers)
+    r = client.post('/r6/actions/propose', json=body,
+                    headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     return r.get_json()['id']
 

@@ -26,6 +26,21 @@ PROPOSAL_TTL_MINUTES = 30
 VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call',
                'webhook-poster', 'curatr-fix')
 
+# The recipient as summary() states it: one fixed label per kind, never the
+# payload's free-text `to` (#1001). A raw propose can put a name and number
+# in `to`, and summary() feeds audit detail and every notification, which
+# must stay PHI-free. The raw `to` stays in the payload for execution and
+# the review page. Worded to be true whoever staged the action: an `sms`
+# from the MCP server can text a number that is not the patient's own.
+RECIPIENT_LABELS = {
+    'phone-call': 'a phone number',
+    'sms': 'a phone number',
+    'form-fill': 'a form',
+    'insurance-call': 'an insurer',
+    'webhook-poster': 'a webhook',
+    'curatr-fix': 'your record',
+}
+
 # Legal status transitions. awaiting_confirmation is the out-of-band gate:
 # commit submits (proposed->awaiting_confirmation), the human's approval claims
 # (awaiting_confirmation->executing). expiry from awaiting_confirmation is the
@@ -122,11 +137,10 @@ class ProposedAction(db.Model):
 
     def summary(self):
         """PHI-safe representation — the only shape allowed in audit/notify."""
-        p = self.payload
         return {
             'id': self.id,
             'kind': self.kind,
-            'to': p.get('to'),          # recipient label, e.g. "CVS Pharmacy"
+            'to': RECIPIENT_LABELS.get(self.kind, 'a recipient'),
             'status': self.status,
             'expires_at': self.expires_at.replace(tzinfo=None).isoformat() + 'Z',
         }

@@ -57,4 +57,7 @@ def test_summary_has_no_payload(app):
         assert 'SECRET SCRIPT' not in json.dumps(s)
         assert '617-555-0100' not in json.dumps(s)
         assert s['kind'] == 'phone-call'
-        assert s['to'] == 'CVS'
+        # #1001: the free-text `to` never reaches the summary; the kind's
+        # fixed label does.
+        assert 'CVS' not in json.dumps(s)
+        assert s['to'] == 'a phone number'

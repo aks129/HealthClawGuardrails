@@ -2,8 +2,8 @@
 Action lifecycle API — propose / commit / confirm / status / provider callbacks.
 
 Approve-is-the-commit (Task 10):
-  propose  -> tenant header only; red-flag screened + rail-validated;
-              returns draft for human review
+  propose  -> X-Step-Up-Token (write grant, #1001); red-flag screened +
+              rail-validated; returns draft for human review
   commit   -> X-Step-Up-Token (validated, tuple destructured); SUBMITS the
               action for out-of-band approval (202, awaiting_confirmation).
               Nothing executes here — the spoofable X-Human-Confirmed gate
@@ -380,10 +380,18 @@ def propose_action():
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
 
-    # propose has no step-up gate at all — the tenant header is the whole
-    # credential — so this parse is reachable by anyone who can name a
-    # tenant. There is no auth gate to move above it; bounding the depth is
-    # the fix (#312).
+    # propose stages a write into the tenant's action list, so it needs a
+    # write grant like commit does (#1001); before it, the tenant header was
+    # the whole credential. The gate sits above the parse, so an anonymous
+    # body is never read. The depth bound below still matters (#312): a
+    # token for a public tenant costs nothing to mint.
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        absent_status=401,
+        rejected_status=401,
+    )
+
     body, too_deep = json_body_within_depth()
     if too_deep:
         return _error(400, 'request body nesting is too deep')

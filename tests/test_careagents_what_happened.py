@@ -23,6 +23,7 @@ from careagents.healthclaw import HealthClawError
 from tests.test_careagents import FakeClient, _login
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
+from tests.approval_helpers import propose_headers
 
 pytestmark = pytest.mark.extension
 
@@ -37,7 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def _propose(client, tenant_headers, kind="sms", to="Dr. Smith"):
     r = client.post("/r6/actions/propose", json={
         "kind": kind, "payload": {"to": to, "phone": "617-555-0100",
-                                  "body": "Reminder."}}, headers=tenant_headers)
+                                  "body": "Reminder."}}, headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     return r.get_json()["id"]
 
@@ -73,8 +74,8 @@ def test_the_engine_lists_recently_finished_requests(
     r = client.get("/r6/actions?status=recent", headers=tenant_headers)
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()
-    got = {a["to"]: a["status"] for a in body["actions"]}
-    assert got == {"Done": "completed", "Failed": "failed"}
+    got = {a["id"]: a["status"] for a in body["actions"]}
+    assert got == {done: "completed", failed: "failed"}
     # Summaries only: no payload, no outcome, nothing a list should carry.
     for a in body["actions"]:
         assert set(a) == {"id", "kind", "to", "status", "expires_at",

@@ -181,14 +181,12 @@ def test_with_the_flag_off_no_text_is_approvable(world):  # noqa: F811
 
 # --- V1/V2: audit detail when `to` is not CareAgents' label ------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "pre-existing, not this PR: summary() copies an attacker-chosen `to` "
-    "into every audit detail. propose_action keeps its own `to` fixed; a "
-    "raw propose does not."))
 def test_a_raw_propose_cannot_put_the_number_in_audit_detail(world):  # noqa: F811
+    """Fixed by #1001: summary() labels the recipient by kind, so a raw
+    propose's free-text `to` never reaches audit detail."""
     chain, _c, _twilio = world
     r = chain.engine.post(
-        "/r6/actions/propose", headers={"X-Tenant-Id": TENANT},
+        "/r6/actions/propose", headers=chain.hc._headers(TENANT),
         json={"kind": "sms", "payload": {
             "to": f"{CANARY} {OTHER}", "phone": OTHER, "body": "hello"}})
     assert r.status_code == 201, r.get_data(as_text=True)
@@ -226,7 +224,7 @@ def test_callbacks_need_the_secret_and_the_right_sid(world, monkeypatch):  # noq
 def _stage_raw(chain, payload):
     """The MCP server's / a raw caller's path: propose, then commit."""
     r = chain.engine.post("/r6/actions/propose",
-                          headers={"X-Tenant-Id": TENANT},
+                          headers=chain.hc._headers(TENANT),
                           json={"kind": "sms", "payload": payload})
     assert r.status_code == 201, r.get_data(as_text=True)
     aid = r.get_json()["id"]

@@ -19,6 +19,7 @@ import json
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
+from tests.approval_helpers import propose_headers
 
 # Each clinical row is coded AND carries upstream free text. The page names a
 # row from r6/terminology.py by code, after redaction; the upstream text is
@@ -118,7 +119,7 @@ def _staged_form_fill(client, tenant_headers, auth_headers, subject_ref=None):
         payload['subject'] = {'reference': subject_ref}
         body = dict(FORM_FILL_BODY, payload=payload)
     r = client.post('/r6/actions/propose', json=body,
-                    headers=tenant_headers)
+                    headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     action_id = r.get_json()['id']
     c = client.post('/r6/actions/%s/commit' % action_id, headers=auth_headers)
@@ -299,7 +300,7 @@ def test_get_review_non_form_fill_renders_the_approve_page(
     r = client.post('/r6/actions/propose', json={
         'kind': 'sms',
         'payload': {'to': 'Dr. Smith', 'phone': '617-555-0100',
-                    'body': 'reminder'}}, headers=tenant_headers)
+                    'body': 'reminder'}}, headers=propose_headers(tenant_headers))
     action_id = r.get_json()['id']
     client.post('/r6/actions/%s/commit' % action_id, headers=auth_headers)
     resp = _get(client, auth_headers, action_id)
@@ -319,7 +320,7 @@ def test_get_review_requires_awaiting_confirmation(client, app, tenant_headers,
                                                    auth_headers):
     _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
     r = client.post('/r6/actions/propose', json=FORM_FILL_BODY,
-                    headers=tenant_headers)
+                    headers=propose_headers(tenant_headers))
     action_id = r.get_json()['id']          # proposed, NOT committed
     resp = _get(client, auth_headers, action_id)
     assert resp.status_code == 404

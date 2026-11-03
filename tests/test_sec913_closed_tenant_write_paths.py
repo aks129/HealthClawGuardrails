@@ -16,6 +16,7 @@ import pytest
 from models import db
 from r6.fasten.models import TenantClosure
 from r6.models import AuditEventRecord, R6Resource
+from tests.approval_helpers import propose_headers
 
 SECRET = "sec913-reverify-secret"
 CLOSED = "sec913-closed"
@@ -203,7 +204,7 @@ def test_action_rail_review_writes_into_a_closed_tenant(
     for resource in (_patient(), _medication(), _allergy()):
         _store(resource, tenant)
     _close(tenant)
-    proposed = client.post("/r6/actions/propose", headers=tenant_headers,
+    proposed = client.post("/r6/actions/propose", headers=propose_headers(tenant_headers),
                            json={"kind": "form-fill",
                                  "payload": {"to": "Intake portal",
                                              "questionnaire": "healthclaw-intake",
