@@ -82,8 +82,9 @@ def test_a_session_from_before_the_generation_signs_in_again(
         assert "account_id" not in s
 
 
-def test_a_confirm_link_session_signs_out_only_itself(made, monkeypatch):  # noqa: F811
-    """A forwarded confirm link must not sign the owner out everywhere."""
+def test_a_confirm_link_sign_out_ends_the_other_sessions(made, monkeypatch):  # noqa: F811
+    """A confirm-link session's sign-out ends every session, as any other
+    does: sparing them would leave its own copied cookies working (#1094)."""
     app, svc = made()
     phone = _signed_in(app, svc, monkeypatch)
     with phone.session_transaction() as s:
@@ -94,8 +95,8 @@ def test_a_confirm_link_session_signs_out_only_itself(made, monkeypatch):  # noq
     assert link.get("/home").status_code == 200
     assert link.post("/logout").status_code == 302
     assert link.get("/home").status_code == 302
-    assert svc.get_account(aid).session_generation == gen
-    assert phone.get("/home").status_code == 200
+    assert svc.get_account(aid).session_generation == gen + 1
+    assert phone.get("/home").status_code == 302
 
 
 def test_a_static_file_reads_no_account(made, monkeypatch):  # noqa: F811

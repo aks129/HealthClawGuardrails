@@ -992,9 +992,9 @@ def create_app(config: Config | None = None,
         # Ends this sign-in everywhere, not just in this browser (#1087).
         # This browser first: a database that cannot be reached must not
         # leave the person signed in where they asked to sign out.
-        # A session a confirm link opened (#920 F1) ends only itself: a
-        # forwarded link must not sign the owner out on every device.
-        aid = None if session.get(_VIA_LINK) else session.get("account_id")
+        # A confirm-link session (#920 F1) ends every session too: sparing
+        # the others would leave its own copied cookies working (#1094 F2).
+        aid = session.get("account_id")
         session.clear()
         if aid:
             try:
