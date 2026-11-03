@@ -206,8 +206,10 @@ def test_a_quantity_value_that_is_not_a_number_is_no_value(value):
 
 # --- 4. an unreadable row whose type is not one we list ----------------------
 
+@pytest.mark.parametrize("sibling", [NKA, NOT_ASKED, WITHDRAWN_NKA],
+                         ids=["nka", "not-asked", "withdrawn-nka"])
 def test_an_unreadable_row_of_another_type_never_lets_nka_be_quoted(
-        monkeypatch):
+        monkeypatch, sibling):
     # Defense in depth, not reachable through the engine's API today
     # (ingest and PUT refuse a resourceType that does not match): a row
     # that raises with a type we do not list is listed as type "record",
@@ -220,8 +222,12 @@ def test_an_unreadable_row_of_another_type_never_lets_nka_be_quoted(
         return real(res, *a, **k)
     monkeypatch.setattr(agent, "_carries_absence_code", raising)
     out = _summarize_bundle({"entry": [
-        {"resource": NKA},
+        {"resource": sibling},
         {"resource": {"resourceType": f"AllergyIntolerance {CANARY}",
                       "id": "boom"}}]}, limit=agent.SUMMARY_LIMIT)
-    assert CANARY not in json.dumps(out), out
-    assert "lists no known" not in json.dumps(out), out
+    text = json.dumps(out)
+    assert CANARY not in text, out
+    assert "lists no known" not in text, out
+    assert ALLERGY_STATUS_STATEMENT not in text, out
+    assert "No allergy entries can be shown" not in text, out
+    assert [i["type"] for i in out if i.get("unreadable")] == ["record"], out
