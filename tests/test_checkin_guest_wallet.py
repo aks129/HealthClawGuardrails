@@ -133,3 +133,22 @@ def test_the_signed_in_wallet_is_unchanged_with_the_flag_on(monkeypatch):
             svc.engine.dispose()
     assert pages[0] == pages[1]
     assert 'data-signed-in="1"' in pages[1]
+
+
+def test_what_this_wallet_does_shows_on_the_guest_page_only(monkeypatch):
+    app, svc = _app(_config(**BOTH))
+    try:
+        c = app.test_client()
+        guest_html = c.get(PAGE).get_data(as_text=True)
+        _sign_in(c, _account(svc, monkeypatch))
+        own_html = c.get("/checkin/wallet").get_data(as_text=True)
+    finally:
+        svc.engine.dispose()
+    assert '<details class="checkin-guest-about" id="wallet-guest-about">' in guest_html
+    assert "What this test wallet does" in guest_html
+    # Closed by default, below the hand-off's last screen.
+    assert guest_html.index('id="wallet-done"') < guest_html.index(
+        'id="wallet-guest-about"')
+    assert "<details open" not in guest_html
+    assert "wallet-guest-about" not in own_html
+    assert "What this test wallet does" not in own_html

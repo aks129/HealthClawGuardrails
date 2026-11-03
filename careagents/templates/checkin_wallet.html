@@ -86,6 +86,13 @@
     border: 1px solid var(--hairline); border-radius: var(--radius-sm);
     padding: 10px 14px; margin: 0 0 12px; }
   h1[tabindex="-1"]:focus { outline: none; }
+  .checkin-guest-about { border-top: 1px solid var(--hairline); margin-top: 24px;
+    padding-top: 12px; font-size: 15px; color: var(--ink-soft); }
+  .checkin-guest-about summary { font-weight: 600; color: var(--ink);
+    min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+  .checkin-guest-about h2 { font-size: 15px; color: var(--ink); margin: 12px 0 4px; }
+  .checkin-guest-about ul { margin: 0; padding-left: 20px; }
+  .checkin-guest-about li { margin: 0 0 4px; overflow-wrap: anywhere; }
 </style>
 {% endblock %}
 {% block content %}
@@ -246,6 +253,50 @@
       <p class="setup-sub" id="wallet-done-text"></p>
       <button class="btn-primary btn-block" id="wallet-ok" hidden>OK</button>
     </section>
+
+    {% if guest %}
+    {# For connectathon testers: what this test wallet does, as of today.
+       Fixed text, closed by default, below everything the hand-off shows.
+       Case names in brackets are the organizers' Testing EHR cases. #}
+    <details class="checkin-guest-about" id="wallet-guest-about">
+      <summary>What this test wallet does</summary>
+      <p>Every item starts at "Don't share". Nothing is sent until you tap
+        Share and then Send. These are a made-up patient's records.</p>
+      <h2>Works, and passes the organizers' Testing EHR</h2>
+      <ul>
+        <li>Shares US Core records: patient, problems, allergies, medicines,
+          immunizations and insurance [share-records, any-us-core]</li>
+        <li>Declines every item [decline-all]</li>
+        <li>Answers "can't answer" to a kind of request it doesn't know
+          [unknown-selector]</li>
+        <li>Answers a request that names no kind of record [no-selector]</li>
+        <li>Fills in the PHQ-2 form, including a form name with a version
+          [fill-form, versioned-canonical]</li>
+        <li>Hands off in person at phone width [in-person-handoff]</li>
+      </ul>
+      <h2>Answers honestly instead</h2>
+      <ul>
+        <li>A form given only by its web address: "can't answer"
+          [form-by-reference]</li>
+        <li>Lab results and vital signs: "can't answer", because we don't
+          share those yet [narrowed-family]</li>
+        <li>Immunization and insurance cards: sent as FHIR records, not as
+          SMART Health Cards [health-card, insurance-card]</li>
+      </ul>
+      <h2>Not supported</h2>
+      <ul>
+        <li>Answers over 400 KB [large-response]</li>
+        <li>One record answering two items [shared-artifact]</li>
+        <li>Cross-device, with a QR code to a phone [cross-device]</li>
+        <li>Forms that come filled in [prefilled-form]</li>
+      </ul>
+      <h2>Coming soon</h2>
+      <ul>
+        <li>The physician's form, with questions that show only for some
+          answers [physician-form]</li>
+      </ul>
+    </details>
+    {% endif %}
   </div>
 </main>
 {% if guest %}
