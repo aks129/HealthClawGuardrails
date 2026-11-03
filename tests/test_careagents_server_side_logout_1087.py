@@ -112,6 +112,33 @@ def test_a_static_file_reads_no_account(made, monkeypatch):  # noqa: F811
     r.close()
 
 
+def test_a_lookup_that_fails_does_not_let_a_signed_out_copy_in(
+        made, monkeypatch):  # noqa: F811
+    """Fails closed. The hook's lookup fails once, as on a database hiccup;
+    the copy taken before sign-out gets an error page, not the hub. Caught
+    and skipped instead, the next lookup (login_required's) would succeed
+    and trust the stale cookie."""
+    from sqlalchemy.exc import OperationalError
+    app, svc = made()
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    c = _signed_in(app, svc, monkeypatch)
+    copy = _copy(app, c)
+    c.post("/logout")
+    real = svc.get_account
+    calls = {"n": 0}
+
+    def hiccup(aid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OperationalError("SELECT ca_accounts", {}, Exception("down"))
+        return real(aid)
+    monkeypatch.setattr(svc, "get_account", hiccup)
+    r = copy.get("/home")
+    body = r.get_data(as_text=True)
+    assert 500 <= r.status_code < 600
+    assert "Your home page" not in body and "invite-section" not in body
+
+
 def test_sign_out_without_a_session_is_harmless(made):  # noqa: F811
     app, _ = made()
     assert app.test_client().post("/logout").status_code == 302

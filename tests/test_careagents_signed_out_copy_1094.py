@@ -12,6 +12,7 @@ Synthetic addresses only.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -92,6 +93,10 @@ send('Explain my latest labs').then(() => {
 
 def test_a_401_in_chat_says_signed_out_once_and_does_not_retry():
     if shutil.which("node") is None:
+        # The only thing the patient sees in this state: in CI a missing
+        # node is a failure, not a skip that reads like a pass.
+        if os.environ.get("CI"):
+            pytest.fail("node is not installed, so the chat 401 is untested")
         pytest.skip("node is not installed")
     out = json.loads(subprocess.run(
         ["node", "-e", _HARNESS, "--", str(CHAT_JS)],
