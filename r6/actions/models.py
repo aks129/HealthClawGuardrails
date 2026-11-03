@@ -41,13 +41,16 @@ RECIPIENT_LABELS = {
     'curatr-fix': 'your record',
 }
 
-# The only `to` values summary() passes through: fixed labels a caller
-# writes, never free text. Matched exactly (no strip, no casefold), so a
-# near miss falls back to the kind's label. 'your phone' is CareAgents'
-# text_self.RECIPIENT_LABEL; it is retyped rather than imported because
-# importing careagents loads the whole consumer app into the engine.
-# tests/test_actions_models.py pins the two strings together.
-SAFE_TO_LABELS = frozenset({'your phone'})
+# The only `to` values summary() passes through, per kind: fixed labels a
+# caller writes, never free text. Matched exactly (no strip, no casefold),
+# so a near miss falls back to the kind's label. Scoped by kind so a call
+# to a third party cannot be announced as going to "your phone". 'your
+# phone' is CareAgents' text_self.RECIPIENT_LABEL; it is retyped rather
+# than imported because importing careagents loads the whole consumer app
+# into the engine. tests/test_actions_models.py pins the two together.
+SAFE_TO_LABELS = {
+    'sms': frozenset({'your phone'}),
+}
 
 # Legal status transitions. awaiting_confirmation is the out-of-band gate:
 # commit submits (proposed->awaiting_confirmation), the human's approval claims
@@ -146,7 +149,8 @@ class ProposedAction(db.Model):
     def summary(self):
         """PHI-safe representation — the only shape allowed in audit/notify."""
         to = self.payload.get('to')
-        if not isinstance(to, str) or to not in SAFE_TO_LABELS:
+        if (not isinstance(to, str)
+                or to not in SAFE_TO_LABELS.get(self.kind, ())):
             to = RECIPIENT_LABELS.get(self.kind, 'a recipient')
         return {
             'id': self.id,

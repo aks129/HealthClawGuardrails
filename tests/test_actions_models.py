@@ -68,4 +68,4 @@ def test_the_safe_labels_include_careagents_own_text_label():
     into the engine; this keeps the two strings from drifting apart."""
     from careagents.text_self import RECIPIENT_LABEL
     from r6.actions.models import SAFE_TO_LABELS
-    assert RECIPIENT_LABEL in SAFE_TO_LABELS
+    assert RECIPIENT_LABEL in SAFE_TO_LABELS['sms']

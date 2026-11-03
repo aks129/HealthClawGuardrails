@@ -126,10 +126,8 @@ def test_a_lookalike_of_the_safe_label_falls_back(app, client, auth_headers,
 
 # --- findings ----------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1092 F1: SAFE_TO_LABELS is matched without regard to kind, so a "
-    "phone-call to a third party labelled 'your phone' is announced, "
-    "audited and listed as going to the patient's own phone"))
+# #1092 F1, fixed: SAFE_TO_LABELS is scoped by kind, so only an sms may be
+# labelled 'your phone'.
 @pytest.mark.parametrize("kind,extra", [
     ("phone-call", {"phone": THIRD_PARTY}),
     ("insurance-call", {"phone": THIRD_PARTY}),
