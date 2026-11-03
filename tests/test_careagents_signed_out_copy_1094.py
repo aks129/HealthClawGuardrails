@@ -1,8 +1,8 @@
 """A browser signed out by another device is told so (#1094 patient walk).
 
 - Chat: a 401 says "You were signed out" with a link to /auth, once, not
-  "Connection hiccup" on every retry. Run under node against the real
-  function cut from chat.js, with a minimal DOM.
+  "Connection hiccup" on every retry. Run under node: the real send() loop
+  cut from chat.js, a minimal DOM, and a fetch that answers 401.
 - /auth: a session the generation check ended says why, once. A session
   from before the generation existed gets the shorter line. A plain visit
   to /auth says neither.
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import re
 import shutil
 import subprocess
 
@@ -32,9 +31,12 @@ ELSEWHERE = "because you signed out somewhere else"
 EXPIRED = "You were signed out. Sign in"
 
 _HARNESS = r"""
+// Drives the real send() cut from chat.js, with the real el and
+// addSignedOut, against a fetch that answers 401 every time.
 const src = require('fs').readFileSync(process.argv[1], 'utf8');
 function cutFn(name) {
-  const m = src.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n  }\\n'));
+  const m = src.match(new RegExp('(async )?function ' + name
+                                 + '\\([\\s\\S]*?\\n  }\\n'));
   if (!m) throw new Error('not found: ' + name);
   return m[0];
 }
@@ -46,42 +48,58 @@ class Elem {
   get textContent() { return this.children.map(c => c.textContent).join(''); }
   set textContent(t) { this.children = t ? [new Text(t)] : []; }
   set className(_) {}
+  remove() {}
+  focus() {}
 }
 const document = {
   createElement: t => new Elem(t),
   createTextNode: t => new Text(t),
 };
-const log = new Elem('div');
-const scroll = () => {};
-const code = cutFn('el') + cutFn('addSignedOut') + 'return addSignedOut;';
-new Function('document', 'log', 'scroll', code)(document, log, scroll)();
-const msg = log.children[0];
-const link = msg.children.find(c => c.tagName === 'A');
-process.stdout.write(JSON.stringify({
-  count: log.children.length, text: msg.textContent,
-  link: link ? {text: link.textContent, href: link.href} : null}));
+const calls = [];
+const said = [];
+async function fetch(url, opts) {
+  calls.push(url);
+  const r = {status: 401, ok: false, body: null,
+             headers: {get: () => null},
+             json: async () => ({error: 'sign in'})};
+  r.clone = () => r;
+  return r;
+}
+const env = {
+  document, fetch, window: {}, log: new Elem('div'),
+  box: {value: '', focus() {}}, sendBtn: {disabled: false},
+  scroll() {}, hideSuggestions() {}, showSuggestions() {}, addUser() {},
+  addTyping: () => new Elem('div'),
+  addAgentText: (t) => said.push(t),
+  addLimitFeedback() {}, limitText: () => '',
+  consumeEvents: async () => { throw new Error('not reached'); },
+  pause: async () => {},
+};
+const names = Object.keys(env);
+const code = 'let busy = false; const AGENT = "a"; const CONVERSATION = "c";\n'
+  + cutFn('el') + cutFn('addSignedOut') + cutFn('send') + 'return send;';
+const send = new Function(...names, code)(...names.map(k => env[k]));
+send('Explain my latest labs').then(() => {
+  process.stdout.write(JSON.stringify({
+    calls: calls.length, said,
+    log: env.log.children.map(c => c.textContent),
+    link: (env.log.children[0] || {children: []}).children
+      .filter(c => c.tagName === 'A').map(c => ({text: c.textContent,
+                                                 href: c.href}))}));
+});
 """
 
 
-def test_a_401_in_chat_says_signed_out_with_the_way_back():
+def test_a_401_in_chat_says_signed_out_once_and_does_not_retry():
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     out = json.loads(subprocess.run(
         ["node", "-e", _HARNESS, "--", str(CHAT_JS)],
         capture_output=True, text=True, check=True).stdout)
-    assert out["count"] == 1
-    assert out["text"] == "You were signed out. Sign in again to keep going."
-    assert out["link"] == {"text": "Sign in again", "href": "/auth"}
-
-
-def test_the_chat_loop_stops_on_a_401_before_it_retries():
-    """The 401 branch comes before the line that turns a bad response into
-    a retry, and it returns, so "Connection hiccup" is never reached."""
-    src = CHAT_JS.read_text()
-    branch = re.search(r"if \(resp\.status === 401\) \{\s*typing\.remove\(\);"
-                       r"\s*addSignedOut\(\);\s*return;\s*\}", src)
-    retry = src.index('throw new Error("event stream unavailable")')
-    assert branch and branch.start() < retry
+    assert out["calls"] == 1, out
+    assert not any("Connection hiccup" in t for t in out["said"]), out
+    assert out["log"] == ["You were signed out. Sign in again to keep going."]
+    assert out["link"] == [{"text": "Sign in again", "href": "/auth"}]
 
 
 def _signed_in(app, svc, monkeypatch):
