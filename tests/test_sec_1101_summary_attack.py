@@ -192,3 +192,13 @@ def test_a_numeric_quantity_value_still_reaches_the_model(value):
         "code": {"coding": [{"system": LOINC, "code": "4548-4"}]},
         "valueQuantity": {"value": value, "code": "%"}}}]})
     assert out[0]["value"] == f"{value} %", out
+
+
+@pytest.mark.parametrize("value", [True, "7.1", [7.1], {"v": 7.1}])
+def test_a_quantity_value_that_is_not_a_number_is_no_value(value):
+    # A bool is an int to Python, and never a measurement.
+    out = _summarize_bundle({"entry": [{"resource": {
+        "resourceType": "Observation", "id": "vq-odd", "status": "final",
+        "code": {"coding": [{"system": LOINC, "code": "4548-4"}]},
+        "valueQuantity": {"value": value, "code": "%"}}}]})
+    assert "value" not in out[0], out
