@@ -401,6 +401,7 @@ def test_parallel_people_requests_never_pass_the_cap(tmp_path, monkeypatch,
             c = app.test_client()
             with c.session_transaction() as s:
                 s["account_id"] = acct.id
+                s["session_gen"] = 0  # a fresh account (#1087)
             barrier.wait()
             for _ in range(3):
                 codes.append(c.post("/api/people",

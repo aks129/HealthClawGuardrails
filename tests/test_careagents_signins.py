@@ -418,6 +418,7 @@ def test_a_confirm_link_session_is_not_enough_for_the_csv(svc, monkeypatch):
     c = app.test_client()
     with c.session_transaction() as sess:
         sess["account_id"] = acct.id
+        sess["session_gen"] = 0  # a fresh account (#1087)
         from careagents.app import _VIA_LINK
         sess[_VIA_LINK] = True
     assert c.get("/admin/funnel/testers.csv").status_code == 404
