@@ -20,6 +20,7 @@ import pytest
 from models import db
 from r6.actions.review import _is_absence_entry
 from r6.models import R6Resource
+from tests.approval_helpers import propose_headers
 
 TENANT = 'test-tenant'
 PATIENT_ID = 'fhi58-patient'
@@ -71,7 +72,7 @@ def _seed(app, tenant_id, *allergies):
 
 
 def _committed_action(client, tenant_headers, auth_headers):
-    proposed = client.post('/r6/actions/propose', headers=tenant_headers,
+    proposed = client.post('/r6/actions/propose', headers=propose_headers(tenant_headers),
                            json={'kind': 'form-fill',
                                  'payload': {'to': 'Intake portal',
                                              'questionnaire': 'healthclaw-intake',

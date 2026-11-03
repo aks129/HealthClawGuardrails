@@ -18,6 +18,7 @@ from careagents.healthclaw import HealthClawError
 from tests.test_careagents import FakeClient, _login, _make_direct_conn
 from tests.test_careagents import cfg as _cfg_fixture
 from tests.test_careagents import svc as _svc_fixture
+from tests.approval_helpers import propose_headers
 
 pytestmark = pytest.mark.extension
 
@@ -37,7 +38,7 @@ _MINT = "test-mint-" + "value"
 def _propose(client, tenant_headers, kind="sms", to="Dr. Smith"):
     r = client.post("/r6/actions/propose", json={
         "kind": kind, "payload": {"to": to, "phone": "617-555-0100",
-                                  "body": "Reminder."}}, headers=tenant_headers)
+                                  "body": "Reminder."}}, headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     return r.get_json()["id"]
 
@@ -71,7 +72,7 @@ def test_the_engine_lists_only_live_awaiting_requests_for_the_tenant(
     r = client.get("/r6/actions", headers=tenant_headers)
     assert r.status_code == 200
     body = r.get_json()
-    assert [a["to"] for a in body["actions"]] == ["Waiting"]
+    assert [a["id"] for a in body["actions"]] == [waiting]
     assert body["count"] == 1
     assert set(body["actions"][0]) == {"id", "kind", "to", "status", "expires_at"}
     # Another tenant sees none of it.
@@ -122,6 +123,21 @@ def test_the_approvals_page_lists_the_engines_answer_with_review_links(
     html = r.get_data(as_text=True)
     assert "Intake form" in html
     assert f"/review/{agent}/act-1" in html
+
+
+def test_a_form_names_no_recipient_and_a_text_does(cfg, svc, monkeypatch):
+    """An intake form goes nowhere, so its card says no "To:" (#853); the
+    engine's fixed label for it ("a form", #1001) is never shown."""
+    class Both(FakeClient):
+        def pending_actions(self, tenant):
+            return [{"id": "act-f", "kind": "form-fill", "to": "a form",
+                     "status": "awaiting_confirmation"},
+                    {"id": "act-s", "kind": "sms", "to": "your phone",
+                     "status": "awaiting_confirmation"}]
+    c, agent, _ = _agent(_ca_app(cfg, svc, Both()), svc, monkeypatch)
+    html = c.get(f"/agents/{agent}/approvals").get_data(as_text=True)
+    assert "To: a form" not in html
+    assert "To: your phone" in html
 
 
 def test_an_outage_is_not_an_empty_inbox(cfg, svc, monkeypatch):
@@ -254,6 +270,7 @@ def test_a_correction_proposed_the_way_the_mcp_tool_sends_it_is_found_reviewed_a
 
     # 1. Proposed the way the MCP tool sends it (pinned in tools.test.ts).
     tenant_headers = {"X-Tenant-Id": tenant}
+    step_up = {**tenant_headers, "X-Step-Up-Token": generate_step_up_token(tenant)}
     r = engine.post("/r6/actions/propose", json={
         "kind": "curatr-fix",
         "payload": {"to": "Condition/c-chain",
@@ -264,10 +281,9 @@ def test_a_correction_proposed_the_way_the_mcp_tool_sends_it_is_found_reviewed_a
                                    "fixes": [{"field_path": "Condition.clinicalStatus.coding[0].code",
                                               "new_value": "resolved"}],
                                    "patient_intent": "it cleared up"}}},
-        headers=tenant_headers)
+        headers=step_up)
     assert r.status_code == 201, r.get_data(as_text=True)
     action_id = r.get_json()["id"]
-    step_up = {**tenant_headers, "X-Step-Up-Token": generate_step_up_token(tenant)}
     assert engine.post(f"/r6/actions/{action_id}/commit", headers=step_up).status_code == 202
 
     # 2. The person finds it — the list is the engine's answer, via the relay.

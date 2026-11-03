@@ -1,5 +1,6 @@
 """Provider webhook callbacks — secret verification + status resolution."""
 from r6.actions.models import ProposedAction
+from tests.approval_helpers import propose_headers
 
 PROPOSE_BODY = {
     'kind': 'phone-call',
@@ -9,7 +10,7 @@ PROPOSE_BODY = {
 
 def _executing_action(client, tenant_headers, app):
     resp = client.post('/r6/actions/propose', json=PROPOSE_BODY,
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     action_id = resp.get_json()['id']
     with app.app_context():
         from models import db

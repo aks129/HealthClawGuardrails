@@ -170,7 +170,7 @@ def _setup_fasten_connection(app):
 # POST /r6/fhir/$share-bundle              |  x  | x |    | x  |    |      |  x   |  x
 # POST /r6/fhir/$share-bundle (checkin)    |  x  | x |    | x  |    |      |  x   |  x
 # POST .../QuestionnaireResponse/$extract  |  x  | x | x  | x  |    |      |  x   |  x
-# POST /r6/actions/propose                 |  x  | x |    |    |    |      |  x   |  x
+# POST /r6/actions/propose                 |  x  | x |    | x  |    |      |  x   |  x  <- #1001
 # POST /r6/actions/rx-transfer/propose     |  x  | x | x  | x  |    |      |  x   |  x
 # POST /r6/actions/<id>/commit             |  x  | x |    | x  |    |      |  x   |  x
 # POST /r6/actions/<id>/confirm            |  x  | x |    | x  | x  |      |  x   |  x
@@ -383,16 +383,14 @@ MATRIX: tuple = (
         id="actions-propose",
         method="POST", path="/r6/actions/propose",
         endpoint="actions.propose_action",
-        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER, AUDIT}),
-        anon_refusal=(400,),
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400,), step_up_missing_status=401,
         body={"kind": "sms", "payload": {"phone": "+15555550100",
                                          "body": "appointment reminder"}},
-        note="DISAGREEMENT with the plan: propose persists a ProposedAction "
-             "on the tenant HEADER alone — no read-auth, no step-up — while "
-             "its sibling rx-transfer/propose requires both. Safe only "
-             "because nothing executes before confirm; it is still an "
-             "unauthenticated write into any named tenant's action list, and "
-             "the red-flag screen it runs is the only content control.",
+        note="Was a DISAGREEMENT with the plan: propose persisted a "
+             "ProposedAction on the tenant HEADER alone. #1001 added the "
+             "write grant, checked before the body is parsed.",
     ),
     Row(
         id="actions-rx-transfer-propose",
@@ -1634,15 +1632,16 @@ def test_deep_nesting_is_refused_on_every_write_path(client):
 
 #: The five write paths #312 named, each probed at the depth where CPython's
 #: JSON scanner blows the stack. `needs_token` records what it takes to REACH
-#: the parser: four of the five need nothing but a tenant header, which is
+#: the parser: four of the five needed nothing but a tenant header, which is
 #: what made this an unauthenticated crash lever rather than a nuisance.
+#: actions-propose has gated before its parse since #1001.
 DEEP_BODY_PATHS = (
     pytest.param("POST", "/r6/fhir/Patient", False, id="fhir-create"),
     pytest.param("PUT", "/r6/fhir/Patient/guard-matrix-pt", True,
                  id="fhir-update"),
     pytest.param("POST", "/r6/fhir/Bundle/$ingest-context", False,
                  id="ingest-context"),
-    pytest.param("POST", "/r6/actions/propose", False, id="actions-propose"),
+    pytest.param("POST", "/r6/actions/propose", True, id="actions-propose"),
     pytest.param("POST", "/r6/smbp/enroll", False, id="smbp-enroll"),
 )
 
@@ -1673,8 +1672,9 @@ def test_a_deeply_nested_body_is_refused_not_crashed(client, method, path,
     of these raised out of the handler and 500'd the worker. A few kilobytes,
     no credential.
 
-    `needs_token` is the honest part of this probe. Only PUT gates before it
-    parses, so only PUT needs a token to reach its parser at all — without
+    `needs_token` is the honest part of this probe. PUT and actions-propose
+    (#1001) gate before they parse, so they need a token to reach their
+    parser at all — without
     one it answers 401 and this test would pass for the wrong reason (the
     retro's "what else could make this green?"). The token is not much of a
     barrier either: test-tenant is public, and a public tenant mints a

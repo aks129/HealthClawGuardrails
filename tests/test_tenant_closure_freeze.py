@@ -19,7 +19,7 @@ from models import db
 from r6.actions.models import ProposedAction
 from r6.fasten.models import TenantClosure, tenant_closed
 from r6.models import AuditEventRecord, R6Resource
-from tests.approval_helpers import approval_headers
+from tests.approval_helpers import approval_headers, propose_headers
 
 SECRET = "freeze-test-internal-secret"
 
@@ -102,7 +102,8 @@ def awaiting_fix(app, client, tenant_id, tenant_headers, auth_headers,
                             "fixes": [{"field_path":
                                        "Condition.clinicalStatus.coding[0].code",
                                        "new_value": "resolved"}]}}}
-    r = client.post("/r6/actions/propose", json=body, headers=tenant_headers)
+    r = client.post("/r6/actions/propose", json=body,
+                    headers=propose_headers(tenant_headers))
     assert r.status_code == 201, r.get_data(as_text=True)
     action_id = r.get_json()["id"]
     assert client.post("/r6/actions/%s/commit" % action_id,

@@ -11,6 +11,16 @@ def bound_operation(app, action_id):
         return approval_operation(action_id, action.payload_json)
 
 
+def propose_headers(headers):
+    """The same headers with a tenant-bound write token: propose needs a
+    grant since #1001. Any token already present is replaced."""
+    from r6.stepup import generate_step_up_token
+    headers = dict(headers)
+    headers['X-Step-Up-Token'] = generate_step_up_token(
+        headers['X-Tenant-Id'])
+    return headers
+
+
 def approval_headers(app, auth_headers, action_id):
     from r6.stepup import generate_step_up_token
     headers = dict(auth_headers)

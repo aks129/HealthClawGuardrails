@@ -26,6 +26,32 @@ PROPOSAL_TTL_MINUTES = 30
 VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call',
                'webhook-poster', 'curatr-fix')
 
+# The recipient as summary() states it: one fixed label per kind, never the
+# payload's free-text `to` (#1001), unless `to` is in SAFE_TO_LABELS below. A raw propose can put a name and number
+# in `to`, and summary() feeds audit detail and every notification, which
+# must stay PHI-free. The raw `to` stays in the payload for execution and
+# the review page. Worded to be true whoever staged the action: an `sms`
+# from the MCP server can text a number that is not the patient's own.
+RECIPIENT_LABELS = {
+    'phone-call': 'a phone number',
+    'sms': 'a phone number',
+    'form-fill': 'a form',
+    'insurance-call': 'an insurer',
+    'webhook-poster': 'a webhook',
+    'curatr-fix': 'your record',
+}
+
+# The only `to` values summary() passes through, per kind: fixed labels a
+# caller writes, never free text. Matched exactly (no strip, no casefold),
+# so a near miss falls back to the kind's label. Scoped by kind so a call
+# to a third party cannot be announced as going to "your phone". 'your
+# phone' is CareAgents' text_self.RECIPIENT_LABEL; it is retyped rather
+# than imported because importing careagents loads the whole consumer app
+# into the engine. tests/test_actions_models.py pins the two together.
+SAFE_TO_LABELS = {
+    'sms': frozenset({'your phone'}),
+}
+
 # Legal status transitions. awaiting_confirmation is the out-of-band gate:
 # commit submits (proposed->awaiting_confirmation), the human's approval claims
 # (awaiting_confirmation->executing). expiry from awaiting_confirmation is the
@@ -122,11 +148,14 @@ class ProposedAction(db.Model):
 
     def summary(self):
         """PHI-safe representation — the only shape allowed in audit/notify."""
-        p = self.payload
+        to = self.payload.get('to')
+        if (not isinstance(to, str)
+                or to not in SAFE_TO_LABELS.get(self.kind, ())):
+            to = RECIPIENT_LABELS.get(self.kind, 'a recipient')
         return {
             'id': self.id,
             'kind': self.kind,
-            'to': p.get('to'),          # recipient label, e.g. "CVS Pharmacy"
+            'to': to,
             'status': self.status,
             'expires_at': self.expires_at.replace(tzinfo=None).isoformat() + 'Z',
         }

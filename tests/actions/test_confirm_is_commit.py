@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from models import db
 from r6.actions import errors
 from r6.actions.models import ProposedAction
+from tests.approval_helpers import propose_headers
 
 
 PROPOSE_BODY = {
@@ -34,7 +35,7 @@ def _propose(client, tenant_headers, body=None):
     global _LAST_APP
     _LAST_APP = client.application
     resp = client.post('/r6/actions/propose', json=body or PROPOSE_BODY,
-                       headers=tenant_headers)
+                       headers=propose_headers(tenant_headers))
     assert resp.status_code == 201, resp.get_data(as_text=True)
     return resp.get_json()['id']
 
@@ -510,7 +511,7 @@ def test_propose_emergency_text_refused_and_audited(client, tenant_headers,
         'kind': 'sms',
         'payload': {'to': 'Dr. Smith', 'phone': '617-555-0100',
                     'body': 'Patient reports crushing chest pain since 2am'},
-    }, headers=tenant_headers)
+    }, headers=propose_headers(tenant_headers))
     assert resp.status_code == 422
     data = resp.get_json()
     assert data['error_code'] == errors.EMERGENCY_INDICATED
@@ -534,7 +535,7 @@ def test_propose_executor_validation_422(client, tenant_headers,
     resp = client.post('/r6/actions/propose', json={
         'kind': 'phone-call',
         'payload': {'to': 'CVS Pharmacy', 'body': 'refill please'},
-    }, headers=tenant_headers)
+    }, headers=propose_headers(tenant_headers))
     assert resp.status_code == 422
     data = resp.get_json()
     assert data['error_code'] == errors.PAYLOAD_INVALID

@@ -91,6 +91,7 @@ from r6.models import R6Resource
 from tests.test_redaction_coverage_inventory import (
     NAME_MARKER, OBS_DISPLAY_MARKER, OBS_TEXT_MARKER,
 )
+from tests.approval_helpers import propose_headers
 
 pytestmark = pytest.mark.extension
 
@@ -308,7 +309,7 @@ def _confirm_the_form(client, tenant_headers, auth_headers):
     from tests.approval_helpers import bound_operation
     tenant = tenant_headers["X-Tenant-Id"]
 
-    proposed = client.post("/r6/actions/propose", headers=tenant_headers,
+    proposed = client.post("/r6/actions/propose", headers=propose_headers(tenant_headers),
                            json={"kind": "form-fill",
                                  "payload": {"to": "Intake portal",
                                              "questionnaire": "healthclaw-intake",

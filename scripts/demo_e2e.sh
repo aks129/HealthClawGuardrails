@@ -270,7 +270,7 @@ _blue "Gate 11: Action propose/commit (simulation mode)"
 # Derive the Flask app root from FHIR_BASE (strip /r6/fhir suffix)
 APP_BASE="${FHIR_BASE%/r6/fhir}"
 
-# Refresh step-up token for action commit
+# Refresh step-up token for action propose and commit
 TOKEN_RESP3=$(curl -s -X POST "$FHIR_BASE/internal/step-up-token" \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: $TENANT_ID" \
@@ -281,6 +281,7 @@ STEP_UP_TOKEN3=$(echo "$TOKEN_RESP3" | python3 -c "import sys,json; print(json.l
 PROPOSE_RESP=$(curl -s -X POST "$APP_BASE/r6/actions/propose" \
   -H "Content-Type: application/json" \
   -H "X-Tenant-Id: $TENANT_ID" \
+  -H "X-Step-Up-Token: $STEP_UP_TOKEN3" \
   -d '{"kind":"phone-call","payload":{"to":"Demo Pharmacy","phone":"617-555-0100","body":"Demo refill call script"}}' \
   2>/dev/null || echo '{}')
 ACTION_ID=$(echo "$PROPOSE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")

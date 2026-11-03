@@ -42,6 +42,7 @@ from models import db
 from r6.models import R6Resource
 from r6.sdc.intake import INITIAL_EXPRESSION_URL, intake_questionnaire
 from tests.test_redaction_probes_multistep import pdf_text
+from tests.approval_helpers import propose_headers
 
 pytestmark = pytest.mark.extension
 
@@ -109,7 +110,7 @@ def widened_rail(app, tenant_headers, monkeypatch):
 
 def _propose_and_commit(client, tenant_headers, auth_headers):
     proposed = client.post(
-        "/r6/actions/propose", headers=tenant_headers,
+        "/r6/actions/propose", headers=propose_headers(tenant_headers),
         json={"kind": "form-fill",
               "payload": {"to": "Intake portal",
                           "questionnaire": "Questionnaire/%s" % QUESTIONNAIRE_ID,
