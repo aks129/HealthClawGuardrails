@@ -12,8 +12,9 @@ A status that is not a string now reads as unknown, so the record is still
 listed, with no status. The same unhashable test sat on a coding's `system`
 (the unlabeled-record name) and on a LOINC coding's `code` (the unit lookup);
 each is guarded the same way. And `_summarize_bundle` now fails closed per
-record: a row it cannot read is left out and the list says it is longer than
-shown, never complete. Nothing about the skipped row is logged but a count.
+record: a row it cannot read is listed as one entry with no readable name
+(#207, #949), never absent and never a list cut short. The log names the list
+and the exception class, never the record or the exception's message.
 
 The status and the per-record backstop are driven through the real client
 and the real engine, as the issue's repro was. The engine's redaction drops a
@@ -57,6 +58,18 @@ def _bundle(*resources):
     return {"entry": [{"resource": r} for r in resources]}
 
 
+def _one_unreadable(items, rt):
+    """Exactly one entry that could not be read, shaped as every unreadable
+    record is, and no truncated marker: one entry is on file, the list is
+    not longer than shown (#1101 QA)."""
+    unreadable = [i for i in items if i.get("name") == "unreadable record"]
+    assert len(unreadable) == 1, items
+    [row] = unreadable
+    assert row["type"] == rt and row["unreadable"] is True, row
+    assert "one entry has no readable name here" in row["note"], row
+    assert not any(i.get("truncated") for i in items), items
+
+
 def _rest_intact(out):
     """The other lists came back whole: the sample's condition and the
     planted allergy, and no list marked could_not_read."""
@@ -89,7 +102,7 @@ def test_a_status_that_is_not_a_string_keeps_the_summary(
     assert sorted(i.get("status", "") for i in named) == ["", "active"], meds
 
 
-def test_a_row_that_cannot_be_read_is_left_out_not_the_summary(
+def test_a_row_that_cannot_be_read_is_listed_unreadable_not_lost(
         cfg, svc, monkeypatch, caplog):  # noqa: F811
     # A list in medicationReference: no single guard covers it, so this is
     # the per-record backstop's own trip-wire.
@@ -101,12 +114,11 @@ def test_a_row_that_cannot_be_read_is_left_out_not_the_summary(
     out, _ = _first_turn(chain, monkeypatch)
     _rest_intact(out)
     meds = out["medications"]
-    assert [i.get("name") for i in meds if "type" in i] == [
-        "Metformin 500 mg"], meds
-    # Left out, so the list says it is longer than shown: never complete.
-    assert meds[-1].get("truncated") is True, meds
-    # A count, and nothing from the record.
-    assert "1 unreadable record(s) left out" in caplog.text
+    assert "Metformin 500 mg" in [i.get("name") for i in meds], meds
+    _one_unreadable(meds, "MedicationRequest")
+    # The list and the exception class, and nothing from the record.
+    assert ("1 unreadable MedicationRequest record(s) left out "
+            "(AttributeError)") in caplog.text
     assert CANARY not in caplog.text
     assert "bad-ref-1018" not in caplog.text
 
@@ -134,8 +146,8 @@ def test_a_loinc_code_that_is_not_a_string_keeps_the_row():
 
 def test_a_skipped_allergy_row_never_lets_no_known_allergies_be_quoted(
         monkeypatch, caplog):
-    # Whatever raised, the skipped row may be an allergy: the "no known
-    # allergy" entry beside it must read as a list longer than shown.
+    # Whatever raised, the unread row may be an allergy: the "no known
+    # allergy" entry beside it must read as a disagreement, never a fact.
     caplog.set_level(logging.DEBUG)
     real = agent._nka_kinds
 
@@ -151,9 +163,11 @@ def test_a_skipped_allergy_row_never_lets_no_known_allergies_be_quoted(
         {"resourceType": "AllergyIntolerance", "id": "boom-1018",
          "code": {"coding": [{"system": SNOMED, "code": "91936005"}]}}))
     [nka] = [i for i in out if i.get("no_known_allergy_record")]
-    assert "longer than can be shown" in nka["statement"], nka
-    assert out[-1].get("truncated") is True, out
-    assert "1 unreadable record(s) left out" in caplog.text
+    assert "disagrees" in nka["statement"], nka
+    assert "no known" not in nka["statement"], nka
+    _one_unreadable(out, "AllergyIntolerance")
+    assert ("1 unreadable AllergyIntolerance record(s) left out (TypeError)"
+            in caplog.text)
     assert "boom-1018" not in caplog.text
 
 
@@ -183,14 +197,14 @@ def test_a_medication_whose_code_is_a_list_is_left_out_not_the_summary(
     out, _ = _first_turn(chain, monkeypatch)
     _rest_intact(out)
     meds = out["medications"]
-    assert [i.get("name") for i in meds if "type" in i] == [
-        "Metformin 500 mg"], meds
-    assert meds[-1].get("truncated") is True, meds
+    assert "Metformin 500 mg" in [i.get("name") for i in meds], meds
+    _one_unreadable(meds, "MedicationRequest")
     # The in-process engine logs its own request paths; CareAgents' line
     # is the one held to a count.
     ours = " ".join(r.getMessage() for r in caplog.records
                     if r.name == "careagents.agent")
-    assert "1 unreadable record(s) left out" in ours
+    assert ("1 unreadable MedicationRequest record(s) left out "
+            "(AttributeError)") in ours
     assert "med-list-1018" not in ours
     assert "ref-list-code-1018" not in ours
 

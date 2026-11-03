@@ -551,6 +551,22 @@ def _nka_item(res: dict, kinds: list[str]) -> dict:
 SUMMARY_LIMIT = 50
 
 
+#: Types the summary lists that have no `status` element (_STATUS).
+_UNSTATUSED_TYPES = frozenset({"Condition", "AllergyIntolerance"})
+
+
+def _unreadable_note(date: str) -> str:
+    """A coded record we cannot name, or one we could not read at all. "I
+    couldn't read it... I can't rule anything out" read to people as a
+    mystery illness (#949 patient tester): it is one entry to ask about, no
+    more."""
+    entry = f"one entry from {date}" if date else "one entry"
+    return (f"Say plainly that {entry} has no readable name here, and that "
+            "their doctor can say what it is. It is still a real record, "
+            "never absent. Do not guess what it is or suggest it could be "
+            "serious, and never say you can't rule anything out.")
+
+
 def _summarize_bundle(bundle: dict, limit: int = 12,
                       resolve_ref=None) -> list[dict]:
     """Compact, model-friendly view of a searchset bundle (already redacted).
@@ -573,13 +589,14 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                 != "OperationOutcome")
     out = []
     dropped = 0
-    skipped = 0
+    skipped: dict[tuple[str, str], int] = {}
     withdrawn_nka = False
     for entry in entries[:limit]:
         # Fail closed per record (#1018): a row whose shape raises below is
-        # left out, never the whole summary with it. It stays in `total`, so
-        # the list reads as longer than shown, never as complete: unreadable
-        # is not absent. A failed engine read still fails the list.
+        # listed as one entry that cannot be read, never the whole summary
+        # with it, and never read as absent (#207). A failed engine read
+        # still fails the list.
+        rt = None
         try:
             res = entry.get("resource") or {}
             rt = res.get("resourceType")
@@ -749,25 +766,27 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             if date:
                 item["date"] = date
             if item.get("unreadable") and "note" not in item:
-                # A coded record we cannot name. "I couldn't read it... I can't
-                # rule anything out" read to people as a mystery illness (#949
-                # patient tester): it is one entry to ask about, no more.
-                entry = f"one entry from {date}" if date else "one entry"
-                item["note"] = (
-                    f"Say plainly that {entry} has no readable name here, and "
-                    "that their doctor can say what it is. It is still a real "
-                    "record, never absent. Do not guess what it is or suggest it "
-                    "could be serious, and never say you can't rule anything "
-                    "out.")
+                item["note"] = _unreadable_note(date)
             out.append(item)
         except HealthClawError:
             raise
-        except Exception:  # noqa: BLE001 - the row is left out, not the list
-            skipped += 1
-    if skipped:
-        # A count only: never the record, its fields or the exception, any of
-        # which can carry what the feed put there.
-        logger.warning("summary: %d unreadable record(s) left out", skipped)
+        except Exception as exc:  # noqa: BLE001 - one entry, not the list
+            # The type only when it is one we list: it is the record's own
+            # field. As an allergy entry it still stops any "no known
+            # allergies" reading below, as any recorded allergy does.
+            kind = (rt if isinstance(rt, str)
+                    and (rt in _STATUS or rt in _UNSTATUSED_TYPES)
+                    else "record")
+            out.append({"type": kind, "name": "unreadable record",
+                        "unreadable": True, "note": _unreadable_note("")})
+            key = (kind, type(exc).__name__)
+            skipped[key] = skipped.get(key, 0) + 1
+    for (kind, why), n in skipped.items():
+        # Which list and which exception class only: never the record, its
+        # fields or the exception's message, any of which can carry what the
+        # feed put there.
+        logger.warning("summary: %d unreadable %s record(s) left out (%s)",
+                       n, kind, why)
 
     # The bundle's total, when the engine gives one: the entries are one page
     # (50 by default), so counting them calls a longer list complete.

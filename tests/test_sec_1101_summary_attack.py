@@ -150,9 +150,19 @@ def test_a_skipped_allergy_row_never_reads_as_no_allergies(
     assert "lists no known" not in text, out
     assert ALLERGY_STATUS_STATEMENT not in text, out
     assert "No allergy entries can be shown" not in text, out
-    # Always read as longer than shown.
-    assert out and out[-1].get("truncated") is True, out
-    assert "1 unreadable record(s) left out" in caplog.text
+    # Always one allergy entry on file that cannot be read: present, never
+    # absent, and never a list cut short (#1101 QA).
+    unreadable = [i for i in out if i.get("unreadable")]
+    assert [(i["type"], i["name"]) for i in unreadable] == [
+        ("AllergyIntolerance", "unreadable record")], out
+    assert "one entry has no readable name here" in unreadable[0]["note"]
+    assert not any(i.get("truncated") for i in out), out
+    # Beside it, a "no known allergy" entry reads as a disagreement.
+    for i in out:
+        if i.get("no_known_allergy_record"):
+            assert "disagrees" in i["statement"], i
+    assert ("1 unreadable AllergyIntolerance record(s) left out (TypeError)"
+            in caplog.text)
     assert CANARY not in caplog.text and "boom" not in caplog.text
 
 
