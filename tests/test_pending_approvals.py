@@ -125,6 +125,21 @@ def test_the_approvals_page_lists_the_engines_answer_with_review_links(
     assert f"/review/{agent}/act-1" in html
 
 
+def test_a_form_names_no_recipient_and_a_text_does(cfg, svc, monkeypatch):
+    """An intake form goes nowhere, so its card says no "To:" (#853); the
+    engine's fixed label for it ("a form", #1001) is never shown."""
+    class Both(FakeClient):
+        def pending_actions(self, tenant):
+            return [{"id": "act-f", "kind": "form-fill", "to": "a form",
+                     "status": "awaiting_confirmation"},
+                    {"id": "act-s", "kind": "sms", "to": "your phone",
+                     "status": "awaiting_confirmation"}]
+    c, agent, _ = _agent(_ca_app(cfg, svc, Both()), svc, monkeypatch)
+    html = c.get(f"/agents/{agent}/approvals").get_data(as_text=True)
+    assert "To: a form" not in html
+    assert "To: your phone" in html
+
+
 def test_an_outage_is_not_an_empty_inbox(cfg, svc, monkeypatch):
     class Down(FakeClient):
         def pending_actions(self, tenant):
