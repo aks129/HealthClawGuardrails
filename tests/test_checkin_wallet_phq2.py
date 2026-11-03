@@ -16,7 +16,7 @@ careagents/static/checkin_answer.js under node:
 - Only a small, single-choice form is answered (one level of group is
   allowed, #1049, and an optional question of another kind is left out
   and said to be: tests/test_checkin_wallet_speed.py). Anything else (no
-  inline Questionnaire, too large, nested, required free text, a value set,
+  inline Questionnaire, too large, nested, a required date, a value set,
   too many questions) is `unsupported`, never half-rendered.
 - The answers never reach CareAgents: the form asks the relay for nothing,
   and the page posts nothing new.
@@ -206,18 +206,16 @@ def _big(q):
     pytest.param(_mutated(lambda q: q["item"][1].update(
         item=[{"linkId": "x", "type": "display", "text": "nested"}])),
         id="nested"),
-    # A question that is not one pick is left out only when optional
-    # (tests/test_checkin_wallet_speed.py, the contact-lens form), and
+    # A question of a kind this wallet does not answer (a date) is left
+    # out only when optional (tests/test_checkin_wallet_speed.py), and
     # only beside a question there is to answer.
     pytest.param(_mutated(lambda q: q["item"][1].update(
-        type="string", required=True)), id="required-free-text"),
-    pytest.param(_mutated(lambda q: [i.update(type="string")
+        type="date", required=True)), id="required-date"),
+    pytest.param(_mutated(lambda q: [i.update(type="date")
                                      for i in q["item"][1:]]),
-                 id="only-free-text"),
+                 id="only-dates"),
     pytest.param(_mutated(lambda q: q["item"][1].update(
         answerValueSet="http://example.org/vs")), id="value-set"),
-    pytest.param(_mutated(lambda q: q["item"][1].update(
-        repeats=True, required=True)), id="required-repeats"),
     pytest.param(_mutated(lambda q: q["item"][1].update(enableWhen=[{}])),
                  id="enable-when"),
     pytest.param(_mutated(lambda q: q["item"][1]["answerOption"][0].update(

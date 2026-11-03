@@ -44,6 +44,13 @@
   .checkin-question legend { font-weight: 600; padding: 0; overflow-wrap: anywhere; }
   .checkin-question label { display: flex; align-items: center; gap: 6px; min-height: 44px;
     overflow-wrap: anywhere; }
+  /* A number, words, or a pick-or-type question's own words. */
+  .checkin-question .checkin-typed { display: block; width: 100%; box-sizing: border-box;
+    min-height: 44px; margin: 4px 0; font: inherit; }
+  .checkin-question .checkin-typed-label { display: block; min-height: 0; }
+  .checkin-clear { min-height: 44px; }
+  /* A question or note whose enableWhen does not hold. */
+  .checkin-form [hidden] { display: none; }
   /* A group of questions (#1049): its heading, its notes, then them. The
      heading reads as a section, not one more question: larger, ruled off
      from what is above it. */
