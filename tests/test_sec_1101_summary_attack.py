@@ -202,3 +202,26 @@ def test_a_quantity_value_that_is_not_a_number_is_no_value(value):
         "code": {"coding": [{"system": LOINC, "code": "4548-4"}]},
         "valueQuantity": {"value": value, "code": "%"}}}]})
     assert "value" not in out[0], out
+
+
+# --- 4. an unreadable row whose type is not one we list ----------------------
+
+def test_an_unreadable_row_of_another_type_never_lets_nka_be_quoted(
+        monkeypatch):
+    # Defense in depth, not reachable through the engine's API today
+    # (ingest and PUT refuse a resourceType that does not match): a row
+    # that raises with a type we do not list is listed as type "record",
+    # and still counts as a recorded allergy.
+    real = agent._carries_absence_code
+
+    def raising(res, *a, **k):
+        if res.get("id") == "boom":
+            raise TypeError(f"unhashable type: {CANARY}")
+        return real(res, *a, **k)
+    monkeypatch.setattr(agent, "_carries_absence_code", raising)
+    out = _summarize_bundle({"entry": [
+        {"resource": NKA},
+        {"resource": {"resourceType": f"AllergyIntolerance {CANARY}",
+                      "id": "boom"}}]}, limit=agent.SUMMARY_LIMIT)
+    assert CANARY not in json.dumps(out), out
+    assert "lists no known" not in json.dumps(out), out

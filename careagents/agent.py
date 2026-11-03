@@ -794,8 +794,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     if isinstance(stated, int) and not isinstance(stated, bool):
         total = max(total, stated)
     total -= dropped
-    if total > len(out) or any(i.get("type") == "AllergyIntolerance"
-                               and not i.get("not_an_allergy") for i in out):
+    # Any entry we could not read counts as a recorded allergy, whatever
+    # type it claims: one that raised with a type we do not list is still
+    # a row of this list (#1101 security).
+    if total > len(out) or any(i.get("unreadable")
+                               or (i.get("type") == "AllergyIntolerance"
+                                   and not i.get("not_an_allergy"))
+                               for i in out):
         # "Your records don't say whether you have allergies" holds only for
         # a list known in full to be status records alone. A recorded
         # allergy in this list (#945 security F2), or a cut list whose rest
@@ -811,9 +816,11 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     # with no allergy in it. Beside a recorded allergy, the allergy wins and
     # the entry is a disagreement to confirm; in a cut list, the rest may
     # hold an allergy. Either way it never says "no known" (#946).
-    conflict = any(i.get("type") == "AllergyIntolerance"
-                   and not i.get("not_an_allergy")
-                   and not i.get("no_known_allergy_record") for i in out)
+    conflict = any(i.get("unreadable")
+                   or (i.get("type") == "AllergyIntolerance"
+                       and not i.get("not_an_allergy")
+                       and not i.get("no_known_allergy_record"))
+                   for i in out)
     for i in out:
         if not i.get("no_known_allergy_record"):
             continue
@@ -865,7 +872,7 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                      "or to look again: you cannot."),
         })
     elif withdrawn_nka and not any(i.get("type") == "AllergyIntolerance"
-                                   for i in out):
+                                   or i.get("unreadable") for i in out):
         # Only withdrawn entries were here, and none is sent. An empty
         # allergy list must not read as no allergies; every word below is
         # one the person may hear, and none says why the list is empty.
