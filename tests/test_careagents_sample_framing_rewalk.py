@@ -262,6 +262,8 @@ def test_the_real_chat_page_renders_as_main(cfg, svc, monkeypatch):  # noqa: F81
     # The header is now one ⋯ menu (tests/test_careagents_calm_chat_header.py);
     # what follows it, where a sample-only construct would leak, is as main.
     assert ('<button type="submit">Sign out</button>\n        </form>\n'
+            '        <p class="chat-menu-note">This signs you out on all your '
+            'devices.</p>\n'
             '      </nav>\n    </details>\n  </div>\n\n  \n'
             '  <div class="chat-log" id=') in body
 

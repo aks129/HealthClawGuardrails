@@ -156,6 +156,19 @@
     log.appendChild(p);
   }
 
+  // A 401: this browser was signed out, here or on another device (#1094).
+  // Retrying never works, so it is said once, with the way back, instead
+  // of "Connection hiccup".
+  function addSignedOut() {
+    const p = el("div", "msg agent", "You were signed out. ");
+    const a = el("a", null, "Sign in again");
+    a.href = "/auth";
+    p.appendChild(a);
+    p.appendChild(document.createTextNode(" to keep going."));
+    log.appendChild(p);
+    scroll();
+  }
+
   // The sample's made-up-records line is the sticky banner above the log,
   // so a bubble does not say it again. The worker still opens every stored
   // and texted answer with it; only that exact leading copy is dropped,
@@ -723,6 +736,11 @@
               encodeURIComponent(state.runId) + "/events?" + query.toString());
           }
           initial = false;
+          if (resp.status === 401) {
+            typing.remove();
+            addSignedOut();
+            return;
+          }
           if (resp.status === 429) {
             typing.remove();
             const limit = await resp.json().catch(() => ({}));

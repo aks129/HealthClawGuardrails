@@ -56,7 +56,8 @@
     <a class="btn-primary btn-block" href="/home">Open CareAgents</a>
     {% elif someone_else %}
     <p>Someone else is signed in on this browser. Sign them out, then sign
-      in with {{ done.email }}.</p>
+      in with {{ done.email }}. This signs them out on all their
+      devices.</p>
     <form method="post" action="/logout">
       <button class="btn-primary btn-block" type="submit">Sign out</button>
     </form>

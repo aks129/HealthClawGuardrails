@@ -61,6 +61,10 @@ _VIA_LINK = "via_link"
 #: Session key: the account's session_generation at sign-in. A session whose
 #: value no longer matches was signed out, here or elsewhere (#1087).
 _SESSION_GEN = "session_gen"
+#: One-shot: why /auth opened on a signed-out visitor, set when such a
+#: session is cleared: "elsewhere" (signed out on another device) or
+#: "expired" (signed in before the generation existed). Shown once (#1094).
+_SIGNED_OUT_WHY = "signed_out_why"
 #: Session key: the page a signed-out person asked for, so the sign-in that
 #: follows ends there and not on the hub (beta feedback, 2026-10-22).
 _AFTER_SIGN_IN = "after_sign_in"
@@ -596,7 +600,10 @@ def create_app(config: Config | None = None,
         acct = svc.get_account(aid) if aid else None
         if acct is not None and session.get(
                 _SESSION_GEN) != acct.session_generation:
+            why = ("expired" if session.get(_SESSION_GEN) is None
+                   else "elsewhere")
             session.clear()
+            session[_SIGNED_OUT_WHY] = why
 
     def current_account():
         aid = session.get("account_id")
@@ -735,10 +742,11 @@ def create_app(config: Config | None = None,
         # Set by a beta confirm that could not sign in (beta_signup): the
         # address is filled in and the email code is the first step.
         prefill = session.get(beta_signup.AUTH_EMAIL_KEY)
+        signed_out_why = session.pop(_SIGNED_OUT_WHY, None)
         if via_link and not isinstance(prefill, str):
             prefill = me.email if me else ""
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
-                               back=back,
+                               back=back, signed_out_why=signed_out_why,
                                # "Add a passkey" from a link session: say
                                # why a code comes first (patient walk F1).
                                code_for_passkey=asked_enroll and via_link,
