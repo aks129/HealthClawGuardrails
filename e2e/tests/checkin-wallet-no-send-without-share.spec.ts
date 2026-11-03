@@ -23,7 +23,7 @@
  * Two ways to run it. By default the records relay is answered here by
  * route with the synthetic test patient's export, as
  * careagents-checkin-wallet.spec.ts does, so it needs no engine. With
- * SEC1095_LIVE=1 nothing is routed: CareAgents asks a real engine, the
+ * CHECKIN_NO_SEND_LIVE=1 nothing is routed: CareAgents asks a real engine, the
  * fresh account has no records, and the test takes the connectathon test
  * patient (CARE_CHECKIN_TEST_PATIENT=1 on that server). Synthetic data
  * only; the check-in page is a local one, never the public Testing EHR.
@@ -39,7 +39,7 @@ test.use({ baseURL: CARE_BASE_URL });
 // Its own sign-in code budget (see careagents-checkin-wallet.spec.ts).
 test.use({ extraHTTPHeaders: { 'X-Real-IP': '203.0.113.95' } });
 
-const LIVE = process.env.SEC1095_LIVE === '1';
+const LIVE = process.env.CHECKIN_NO_SEND_LIVE === '1';
 const RESPONSE = 'digital-credentials/web-wallet/response';
 const REQUEST_TYPE = 'digital-credentials/web-wallet/request';
 
@@ -49,7 +49,7 @@ const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..',
 // The Testing EHR's no-selector case (connectathon requests/no-selector.json),
 // with an id of our own.
 const NO_SELECTOR = {
-  type: 'smart-health-checkin-request', version: '1', id: 'sec-1095-no-selector',
+  type: 'smart-health-checkin-request', version: '1', id: 'no-send-no-selector',
   purpose: 'Pre-visit check-in', fhirVersions: ['4.0.1'],
   items: [{
     id: 'anything', title: "Anything you'd like your doctor to see",
@@ -63,7 +63,7 @@ const item = (id: string, profile: string) => ({
   accept: ['application/fhir+json'],
 });
 const RECORDS = {
-  type: 'smart-health-checkin-request', version: '1', id: 'sec-1095-records',
+  type: 'smart-health-checkin-request', version: '1', id: 'no-send-records',
   fhirVersions: ['4.0.1'],
   items: [item('patient', 'us-core-patient'),
     item('problems', 'us-core-condition-problems-health-concerns'),
@@ -95,7 +95,7 @@ window.open = function (...a) { const w = open.apply(this, a); window.__w = w; r
 <script type="module">
 import { runCheckin, webWallet } from '/checkin.js';
 document.getElementById('go').onclick = () => {
-  const wallet = webWallet({ id: 'sec1095', name: 'sec1095',
+  const wallet = webWallet({ id: 'no-send-wallet', name: 'no-send-wallet',
     walletUrl: ${JSON.stringify(`${CARE_BASE_URL}/checkin/wallet`)} });
   window.__t0 = performance.now();
   runCheckin(window.__req, { wallet }).then((r) => {
@@ -150,7 +150,7 @@ async function toReview(page: Page, req: unknown) {
 const raw = (page: Page) => page.evaluate(() => (window as any).__raw);
 const result = (page: Page) => page.evaluate(() => (window as any).__result);
 
-test.describe('sec-1095: no send without Share', () => {
+test.describe('check-in wallet: no send without Share', () => {
   test('every item starts at "Don\'t share", nothing picked', async ({ page }) => {
     const wallet = await toReview(page, RECORDS);
     const share = wallet.locator('#wallet-items input[value="share"]');
