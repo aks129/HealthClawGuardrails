@@ -27,12 +27,13 @@ CANARY = 'Zelda Canaryfield 617-555-0142'
 EXPECTED = {
     ('phone-call', 'a phone number'):
         'Approval needed: a phone call.',
+    # No recipient for a text, whatever the label (#1099 security F1).
     ('sms', 'your phone'):
-        'Approval needed: a text message to your phone.',
+        'Approval needed: a text message.',
     ('sms', 'patient'):
-        'Approval needed: a text message to you.',
+        'Approval needed: a text message.',
     ('sms', 'a phone number'):
-        'Approval needed: a text message to a phone number.',
+        'Approval needed: a text message.',
     ('insurance-call', 'an insurer'):
         'Approval needed: a call to your insurer.',
     ('form-fill', 'a form'):

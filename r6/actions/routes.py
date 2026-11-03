@@ -80,23 +80,16 @@ _PUSH_KIND_NAMES = {
     'curatr-fix': 'a correction to your health record',
 }
 
-# How a text's recipient reads in the push, keyed by summary()['to'] only,
-# never the raw payload. Anything else is the kind's fixed 'a phone number'.
-_PUSH_SMS_RECIPIENTS = {
-    'your phone': 'your phone',
-    'patient': 'you',
-}
-
 
 def _approval_push(summary):
-    """The approval push, built from summary() alone: no payload field and
-    no raw `to` can reach it. An unknown kind gets a generic sentence."""
-    what = _PUSH_KIND_NAMES.get(summary.get('kind'))
-    if what is None:
-        what = 'a request from your assistant'
-    elif summary.get('kind') == 'sms':
-        what = '%s to %s' % (what, _PUSH_SMS_RECIPIENTS.get(
-            summary.get('to'), 'a phone number'))
+    """The approval push, built from summary()['kind'] alone: no payload
+    field and no `to` can reach it. An unknown kind gets a generic sentence.
+
+    It names no recipient, not even a safe `to` label. Any write-token
+    holder can stage 'patient' or 'your phone' beside somebody else's
+    number; the review relay checks the number, and the push cannot."""
+    what = _PUSH_KIND_NAMES.get(summary.get('kind'),
+                                'a request from your assistant')
     return ('🔔 Approval needed: %s. Open CareAgents — it is under "%s" '
             'on your agent.' % (what, APPROVALS_SECTION))
 

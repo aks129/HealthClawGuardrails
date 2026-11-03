@@ -14,9 +14,9 @@ def reminder_action(patient_ref, phone, lang, completed, prescribed):
 
     The recipient number goes in `payload.phone` — the key the SMS executor
     reads. `payload.to` is a fixed, PHI-free label: ProposedAction.summary()
-    passes "patient" through to audit and the approval push (#1093), and
-    names the kind's own label for anything else (#1001). The number must
-    never go in it.
+    passes "patient" through to audit (#1093), and names the kind's own
+    label for anything else (#1001). The approval push names no recipient.
+    The number must never go in it.
     """
     body = msg("reading_prompt", lang)
     return {

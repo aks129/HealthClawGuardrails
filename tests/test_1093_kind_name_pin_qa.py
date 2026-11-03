@@ -29,12 +29,12 @@ def test_the_push_and_the_page_name_the_same_kinds():
 
 @pytest.mark.parametrize('kind,to,sentence', [
     ('phone-call', CANARY, 'Approval needed: a phone call.'),
-    ('sms', 'your phone', 'Approval needed: a text message to your phone.'),
-    ('sms', 'patient', 'Approval needed: a text message to you.'),
-    ('sms', CANARY, 'Approval needed: a text message to a phone number.'),
-    # Matched exactly, as summary() matches: a near miss is not "you".
-    ('sms', 'Patient', 'Approval needed: a text message to a phone number.'),
-    ('sms', 'patient ', 'Approval needed: a text message to a phone number.'),
+    # A text names no recipient, whatever the label (#1099 security F1).
+    ('sms', 'your phone', 'Approval needed: a text message.'),
+    ('sms', 'patient', 'Approval needed: a text message.'),
+    ('sms', CANARY, 'Approval needed: a text message.'),
+    ('sms', 'Patient', 'Approval needed: a text message.'),
+    ('sms', 'patient ', 'Approval needed: a text message.'),
     ('insurance-call', CANARY, 'Approval needed: a call to your insurer.'),
     ('form-fill', CANARY, 'Approval needed: an intake form.'),
     ('webhook-poster', CANARY,
