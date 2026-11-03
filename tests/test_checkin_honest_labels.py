@@ -94,6 +94,15 @@ def test_a_profile_only_for_a_kind_never_sent_is_unsupported():
     assert _status(out) == {"labs": "unsupported"}
 
 
+def test_a_profile_this_wallet_does_not_know_is_unsupported():
+    # Deliberate: a Condition under a profile outside PROFILE_TYPES asks the
+    # relay for nothing (requestedTypes), so the wallet can't claim it.
+    out = _run([_item("other", resourceTypes=["Condition"],
+                      profiles=["http://example.org/StructureDefinition/c"])])
+    assert out["types"] == []
+    assert _status(out) == {"other": "unsupported"}
+
+
 def test_a_kind_we_share_with_none_on_file_is_still_unavailable():
     out = _run([_item("problems", resourceTypes=["Condition"]),
                 _item("mixed", resourceTypes=["Observation", "Condition"])])
