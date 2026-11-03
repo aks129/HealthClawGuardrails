@@ -5,7 +5,9 @@
    The rules, per request item:
      unsupported  the library said so, or it is neither a FHIR selection
                   this wallet can send nor a small inline form it can show
-                  (readForm)
+                  (readForm), or it asks only for kinds of record this
+                  wallet never shares (requestedTypes finds none), which
+                  the account may well hold
      unavailable  nothing on file claims the requested profile. Nothing is
                   stamped with a claim to make it fit, and "no known
                   allergies" is never sent: an allergy goes only when it
@@ -435,7 +437,13 @@ export function matchItems(request, unsupportedItems, records) {
     // Only what the item asks for makes it answerable: a payer that would
     // ride along by reference is not, on its own, something to share.
     const primary = sendable.filter((e) => selects(content, e.resource));
-    if (!primary.length) return { item, unsupported: false, entries: [], primary: [] };
+    if (!primary.length) {
+      // Nothing to send. If the item asks only for kinds this wallet never
+      // shares (Observation labs, say), "nothing on file" would be untrue
+      // for an account that holds them: the wallet can't answer it.
+      const never = !requestedTypes({ items: [item] }, []).length;
+      return { item, unsupported: never, entries: [], primary: [] };
+    }
     // The Patient has an item of its own; elsewhere it is not pulled along.
     const asksForPatient = primary.some((e) => e.fullUrl === records.patientFullUrl);
     const exclude = asksForPatient || !records.patientFullUrl ? [] : [records.patientFullUrl];
@@ -626,8 +634,9 @@ export function recordNames(match) {
     switch (r.resourceType) {
       case "Patient": {
         const n = (Array.isArray(r.name) && r.name[0]) || {};
-        const given = Array.isArray(n.given) ? n.given[0] : "";
-        const who = [given, n.family].filter(Boolean).join(" ") || "Your name";
+        const given = Array.isArray(n.given) ? n.given.filter((g) =>
+          typeof g === "string" && g.trim()) : [];
+        const who = [...given, n.family].filter(Boolean).join(" ") || "Your name";
         const lines = [r.birthDate ? `${who}, born ${day(r.birthDate)}` : who];
         // What else goes with it, named but not repeated here.
         const also = [
@@ -642,7 +651,7 @@ export function recordNames(match) {
         const payerRef = Array.isArray(r.payor) && r.payor[0] && r.payor[0].reference;
         const payer = byUrl.get(payerRef);
         const insurer = (payer && payer.resourceType === "Organization" &&
-          typeof payer.name === "string" && payer.name) || "Your insurer";
+          typeof payer.name === "string" && payer.name.trim()) || "Your insurer";
         return `${insurer}, member ID ${masked(r.subscriberId)}`;
       }
       case "Immunization": {
@@ -656,6 +665,10 @@ export function recordNames(match) {
         return labelOf(r.code) || "An allergy";
       case "Condition":
         return labelOf(r.code) || "A health problem";
+      case "Organization":
+        // Its own name, as a Coverage names its payer above; never its
+        // narrative `text` or a type's words.
+        return (typeof r.name === "string" && r.name.trim()) || "An organization";
       default:
         return "A record";
     }
