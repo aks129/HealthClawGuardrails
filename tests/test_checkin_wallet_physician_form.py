@@ -359,6 +359,18 @@ SDC = "http://hl7.org/fhir/uv/sdc/StructureDefinition/sdc-questionnaire-"
     pytest.param(_cond(question="questions"), id="a-later-question"),
     pytest.param(_cond(question="missed-why"), id="itself"),
     pytest.param(_cond(question="intro"), id="a-display-line"),
+    pytest.param(_mutated(lambda q: (
+        q["item"].insert(1, {"linkId": "when", "type": "date",
+                             "text": "When?"}),
+        _item(q, "missed-why")["enableWhen"][0].update(question="when"))),
+        id="a-skipped-question"),
+    pytest.param(_mutated(lambda q: (
+        q["item"].insert(1, {"linkId": "grp", "type": "group",
+                             "text": "Shots",
+                             "item": [_item(q, "doses-taken")]}),
+        q["item"].remove(_item(q, "doses-taken")),
+        _item(q, "missed-why")["enableWhen"][0].update(question="grp"))),
+        id="a-group"),
     pytest.param(_cond(answerInteger=1), id="two-answers"),
     pytest.param(_mutated(lambda q: _item(q, "missed-why")["enableWhen"][0]
                           .pop("answerCoding")), id="no-answer"),

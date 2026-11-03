@@ -13,9 +13,11 @@ careagents/static/checkin_answer.js under node:
   vendored library's own pre-flight check finds the response clean.
 - Per-item consent: unchosen is declined, and so is an incomplete or
   tampered set of answers. Nothing is guessed.
-- Only a small, single-choice form is answered (one level of group is
-  allowed, #1049, and an optional question of another kind is left out
-  and said to be: tests/test_checkin_wallet_speed.py). Anything else (no
+- Only a small form is answered (one level of group is allowed, #1049;
+  numbers, words and pick-several are answered, and an optional question
+  of a kind it does not answer is left out and said to be:
+  tests/test_checkin_wallet_speed.py,
+  tests/test_checkin_wallet_physician_form.py). Anything else (no
   inline Questionnaire, too large, nested, a required date, a value set,
   too many questions) is `unsupported`, never half-rendered.
 - The answers never reach CareAgents: the form asks the relay for nothing,

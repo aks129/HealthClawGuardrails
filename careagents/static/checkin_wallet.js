@@ -324,7 +324,9 @@ function formQuestions(form, i) {
     }
     if (note) {
       const line = document.createElement("p");
-      line.className = "checkin-group-note checkin-form-note";
+      // Set apart as the website's, as its other lines are: it appears on
+      // a tap, where it could pass for the wallet's own reply (#1030 F3).
+      line.className = "checkin-group-note checkin-form-note checkin-from-website";
       line.textContent = note.text;
       gated.push([line, note.linkId, false]);
       into.append(line);
