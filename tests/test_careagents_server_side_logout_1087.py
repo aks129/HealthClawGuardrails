@@ -153,3 +153,38 @@ def test_an_existing_account_gains_generation_zero(url):
                        "INTEGER NOT NULL DEFAULT 0")
     engine.dispose()
     legacy.dispose()
+
+
+# --- concurrency -------------------------------------------------------------
+
+def test_sign_outs_at_once_each_count(made, tmp_path):  # noqa: F811
+    """end_sessions is one UPDATE, so N at once on one account add N. A
+    read-then-write would let two read the same value and lose one. A file
+    database, so every thread sees the same rows; Postgres when
+    CARE_TEST_DATABASE_URL names one."""
+    import threading
+
+    from careagents.models import Account
+    env = os.environ.get("CARE_TEST_DATABASE_URL", "")
+    extra = ({} if env and not env.startswith("sqlite")
+             else {"CARE_DATABASE_URL": f"sqlite:///{tmp_path / 'gen.db'}"})
+    _app, svc = made(**extra)
+    with svc.session() as s:
+        s.add(Account(id="acct_gen_race", email="genrace1087@example.test"))
+    n = 8
+    barrier = threading.Barrier(n)
+    errors = []
+
+    def out():
+        barrier.wait()
+        try:
+            svc.end_sessions("acct_gen_race")
+        except Exception as exc:              # pragma: no cover - reported
+            errors.append(repr(exc))
+    ts = [threading.Thread(target=out) for _ in range(n)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert errors == []
+    assert svc.get_account("acct_gen_race").session_generation == n
