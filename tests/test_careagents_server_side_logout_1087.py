@@ -139,6 +139,21 @@ def test_a_lookup_that_fails_does_not_let_a_signed_out_copy_in(
     assert "Your home page" not in body and "invite-section" not in body
 
 
+def test_a_sign_out_everywhere_logs_a_count_and_nothing_else(
+        made, monkeypatch, caplog):  # noqa: F811
+    import logging
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    with c.session_transaction() as s:
+        aid = s["account_id"]
+    with caplog.at_level(logging.INFO, logger="careagents.app"):
+        c.post("/logout")
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "careagents.app" and "sign-out" in r.getMessage()]
+    assert lines == ["sign-out ended every session (1 account)"]
+    assert aid not in caplog.text and EMAIL not in caplog.text
+
+
 def test_sign_out_without_a_session_is_harmless(made):  # noqa: F811
     app, _ = made()
     assert app.test_client().post("/logout").status_code == 302

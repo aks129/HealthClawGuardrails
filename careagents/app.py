@@ -1014,7 +1014,11 @@ def create_app(config: Config | None = None,
         session.clear()
         if aid:
             try:
-                svc.end_sessions(aid)
+                ended = svc.end_sessions(aid)
+                # A count, never the account: the audit line for the
+                # sign-out that reached every device.
+                logger.info("sign-out ended every session (%d account)",
+                            ended)
             except SQLAlchemyError:
                 # No parameters: the statement carries the account id.
                 logger.warning("sign-out could not end other sessions")

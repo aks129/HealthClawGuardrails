@@ -386,12 +386,14 @@ class AccountService:
             acct = s.get(Account, account_id)
             return _detach(acct) if acct else None
 
-    def end_sessions(self, account_id: str) -> None:
+    def end_sessions(self, account_id: str) -> int:
         """End every session this account has signed in, on any device
-        (#1087). One UPDATE, so two sign-outs at once both count."""
+        (#1087). One UPDATE, so two sign-outs at once both count. Returns
+        the rows it moved: 1, or 0 for an account that is gone."""
         with self.session() as s:
-            s.execute(update(Account).where(Account.id == account_id).values(
-                session_generation=Account.session_generation + 1))
+            return s.execute(update(Account).where(
+                Account.id == account_id).values(
+                session_generation=Account.session_generation + 1)).rowcount
 
     # --- WebAuthn: registration ---------------------------------------------
 
