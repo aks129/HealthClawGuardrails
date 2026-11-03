@@ -415,12 +415,18 @@ def test_non_owners_get_404(svc, monkeypatch, path):
 def test_a_confirm_link_session_is_not_enough_for_the_csv(svc, monkeypatch):
     app = _app(svc, CARE_OWNER_EMAILS=OWNER)
     acct = svc.first_run_account(OWNER)
+    from careagents.app import _SESSION_GEN, _VIA_LINK
     c = app.test_client()
     with c.session_transaction() as sess:
         sess["account_id"] = acct.id
-        from careagents.app import _VIA_LINK
+        sess[_SESSION_GEN] = 0  # a fresh account (#1087)
         sess[_VIA_LINK] = True
     assert c.get("/admin/funnel/testers.csv").status_code == 404
+    # The same owner session without the link mark gets the CSV, so the 404
+    # above is the link's refusal, not a session that never signed in.
+    with c.session_transaction() as sess:
+        sess.pop(_VIA_LINK)
+    assert c.get("/admin/funnel/testers.csv").status_code == 200
 
 
 def test_the_csv_is_owner_only_no_store_and_has_the_rows(svc, monkeypatch):

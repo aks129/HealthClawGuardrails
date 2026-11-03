@@ -386,6 +386,15 @@ class AccountService:
             acct = s.get(Account, account_id)
             return _detach(acct) if acct else None
 
+    def end_sessions(self, account_id: str) -> int:
+        """End every session this account has signed in, on any device
+        (#1087). One UPDATE, so two sign-outs at once both count. Returns
+        the rows it moved: 1, or 0 for an account that is gone."""
+        with self.session() as s:
+            return s.execute(update(Account).where(
+                Account.id == account_id).values(
+                session_generation=Account.session_generation + 1)).rowcount
+
     # --- WebAuthn: registration ---------------------------------------------
 
     def registration_options(self, account: Account) -> tuple[dict, str]:
@@ -1904,7 +1913,8 @@ class _Row:
 
 def _detach(acct: Account) -> _Row:
     return _Row(id=acct.id, email=acct.email,
-                email_verified_at=acct.email_verified_at)
+                email_verified_at=acct.email_verified_at,
+                session_generation=acct.session_generation or 0)
 
 
 def _conn_dict(c: Connection) -> dict:

@@ -58,6 +58,14 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: Session key: the account's session_generation at sign-in. A session whose
+#: value no longer matches was signed out, here or elsewhere (#1087).
+_SESSION_GEN = "session_gen"
+#: One-shot: why /auth opened on a signed-out visitor, set when such a
+#: session is cleared: "elsewhere" (signed out on another device) or
+#: "expired" (signed in before the generation existed), or "partial" (signed
+#: out here, the other devices not reached). Shown once (#1087).
+_SIGNED_OUT_WHY = "signed_out_why"
 #: Session key: the page a signed-out person asked for, so the sign-in that
 #: follows ends there and not on the hub (beta feedback, 2026-10-22).
 _AFTER_SIGN_IN = "after_sign_in"
@@ -577,6 +585,29 @@ def create_app(config: Config | None = None,
 
     # --- auth plumbing -------------------------------------------------------
 
+    @app.before_request
+    def _end_signed_out_session():
+        # A cookie signed in before a sign-out on any device is a signed-out
+        # visitor (#1087). Here, not in login_required: pages outside that
+        # gate read session["account_id"] too. A session from before the
+        # generation existed has none, and signs in again. A vanished
+        # account is login_required's to end, so it is left alone here.
+        # Nothing carries over: a copied cookie's parked state is not the
+        # visitor's own. A static file reads no account, so it costs no
+        # lookup and cannot fail on a database that is down. A lookup that
+        # fails anywhere else is not caught, on purpose: with the database
+        # down, a page errors rather than trusting a cookie it cannot check.
+        if request.endpoint == "static":
+            return
+        aid = session.get("account_id")
+        acct = svc.get_account(aid) if aid else None
+        if acct is not None and session.get(
+                _SESSION_GEN) != acct.session_generation:
+            why = ("expired" if session.get(_SESSION_GEN) is None
+                   else "elsewhere")
+            session.clear()
+            session[_SIGNED_OUT_WHY] = why
+
     def current_account():
         aid = session.get("account_id")
         return svc.get_account(aid) if aid else None
@@ -656,6 +687,7 @@ def create_app(config: Config | None = None,
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
+        session[_SESSION_GEN] = account.session_generation
         if (isinstance(consent_req, str)
                 and consent.parse_handle(consent_req, cfg.mint_secret)):
             session["consent_req"] = consent_req
@@ -674,7 +706,12 @@ def create_app(config: Config | None = None,
 
     @app.get("/")
     def landing():
-        return render_template("landing.html", me=current_account())
+        # Only sign-out's own reason; the others are /auth's to say.
+        partial = session.get(_SIGNED_OUT_WHY) == "partial"
+        if partial:
+            session.pop(_SIGNED_OUT_WHY)
+        return render_template("landing.html", me=current_account(),
+                               signed_out_partly=partial)
 
     @app.get("/auth")
     def auth():
@@ -713,10 +750,11 @@ def create_app(config: Config | None = None,
         # Set by a beta confirm that could not sign in (beta_signup): the
         # address is filled in and the email code is the first step.
         prefill = session.get(beta_signup.AUTH_EMAIL_KEY)
+        signed_out_why = session.pop(_SIGNED_OUT_WHY, None)
         if via_link and not isinstance(prefill, str):
             prefill = me.email if me else ""
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
-                               back=back,
+                               back=back, signed_out_why=signed_out_why,
                                # "Add a passkey" from a link session: say
                                # why a code comes first (patient walk F1).
                                code_for_passkey=asked_enroll and via_link,
@@ -967,7 +1005,25 @@ def create_app(config: Config | None = None,
 
     @app.post("/logout")
     def logout():
+        # Ends this sign-in everywhere, not just in this browser (#1087).
+        # This browser first: a database that cannot be reached must not
+        # leave the person signed in where they asked to sign out.
+        # A confirm-link session (#920 F1) ends every session too: sparing
+        # the others would leave its own copied cookies working.
+        aid = session.get("account_id")
         session.clear()
+        if aid:
+            try:
+                ended = svc.end_sessions(aid)
+                # A count, never the account: the audit line for the
+                # sign-out that reached every device.
+                logger.info("sign-out ended every session (%d account)",
+                            ended)
+            except SQLAlchemyError:
+                # No parameters: the statement carries the account id.
+                logger.warning("sign-out could not end other sessions")
+                # The buttons say "all your devices"; say when it was not.
+                session[_SIGNED_OUT_WHY] = "partial"
         return redirect(url_for("landing"))
 
     # --- email code auth -----------------------------------------------------

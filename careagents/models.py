@@ -61,6 +61,11 @@ class Account(Base):
     # set, no chat turn reaches a model and no new real connection starts.
     # A timestamp, not PHI.
     real_paused_at = Column(Float, nullable=True)
+    # Which sign-ins still count (#1087). A session carries the value it was
+    # signed in under; /logout adds one, so every copy of an older cookie
+    # stops working. A counter, not PHI.
+    session_generation = Column(Integer, nullable=False, default=0,
+                                server_default="0")
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -530,6 +535,9 @@ def _ensure_columns(engine) -> None:
         if "last_login_method" not in cols:
             _add_column(engine, "ca_accounts", "last_login_method",
                         "VARCHAR(16)")
+        if "session_generation" not in cols:
+            _add_column(engine, "ca_accounts", "session_generation",
+                        "INTEGER NOT NULL DEFAULT 0")
     if "ca_surfaces" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
         if "code_exp" not in cols:

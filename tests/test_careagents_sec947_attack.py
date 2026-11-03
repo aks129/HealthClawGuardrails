@@ -401,6 +401,8 @@ def test_parallel_people_requests_never_pass_the_cap(tmp_path, monkeypatch,
             c = app.test_client()
             with c.session_transaction() as s:
                 s["account_id"] = acct.id
+                from careagents.app import _SESSION_GEN
+                s[_SESSION_GEN] = 0  # a fresh account (#1087)
             barrier.wait()
             for _ in range(3):
                 codes.append(c.post("/api/people",
@@ -417,6 +419,9 @@ def test_parallel_people_requests_never_pass_the_cap(tmp_path, monkeypatch,
         assert others <= MAX_OTHER_PEOPLE, codes
         assert conns == others and agents == others, (conns, agents, others)
         assert 500 not in codes, codes
+        # Some got in: a cap that holds because every request was turned
+        # away at sign-in proves nothing (#1087).
+        assert 200 in codes, codes
     finally:
         svc.engine.dispose()
 

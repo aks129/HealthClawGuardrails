@@ -4,6 +4,10 @@
 {% include "_beta_banner.html" %}
 <main class="hero">
   <div class="hero-inner">
+    {% if signed_out_partly %}
+    {# Once, when sign-out could not reach the other devices (#1087). #}
+    <p class="inline-msg deleted-note" role="status">Signed out here. We couldn't sign out your other devices. Try again in a minute.</p>
+    {% endif %}
     {% if request.args.get("deleted") == "1" %}
     {# The note is read from ?deleted=1, then the address bar is set to
        plain "/" (#884 G7): a reload or a shared link does not repeat it. #}
