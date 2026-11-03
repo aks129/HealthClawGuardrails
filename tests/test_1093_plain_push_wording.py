@@ -155,3 +155,19 @@ def test_both_declined_branches_settle_the_card():
     assert ok.index('settleDeclined();') < ok.index('return;')
     poll = js[js.index("if (status === 'declined')"):]
     assert poll.index('settleDeclined();') < poll.index('return;')
+
+
+def test_a_settled_card_cannot_be_rearmed_or_submitted():
+    """#1099 security F2: on the status-read path the box stayed live, and
+    re-ticking it re-armed Approve. Both pages share this handler.
+
+    MUTATION: drop the input loop from settleDeclined, or the `settled`
+    check from the submit handler -> red."""
+    js = _handlers()
+    body = _function(js, 'settleDeclined')
+    assert 'settled = true' in body
+    assert "form.querySelectorAll('input')" in body
+    assert 'el.disabled = true' in body
+    submit = js[js.index("form.addEventListener('submit'"):]
+    assert submit.index('if (settled || !evaluate())') < submit.index(
+        'fetch(')
