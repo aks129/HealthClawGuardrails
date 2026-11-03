@@ -785,7 +785,7 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         # Which list and which exception class only: never the record, its
         # fields or the exception's message, any of which can carry what the
         # feed put there.
-        logger.warning("summary: %d unreadable %s record(s) left out (%s)",
+        logger.warning("summary: %d %s record(s) listed as unreadable (%s)",
                        n, kind, why)
 
     # The bundle's total, when the engine gives one: the entries are one page

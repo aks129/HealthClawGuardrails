@@ -117,7 +117,7 @@ def test_a_row_that_cannot_be_read_is_listed_unreadable_not_lost(
     assert "Metformin 500 mg" in [i.get("name") for i in meds], meds
     _one_unreadable(meds, "MedicationRequest")
     # The list and the exception class, and nothing from the record.
-    assert ("1 unreadable MedicationRequest record(s) left out "
+    assert ("1 MedicationRequest record(s) listed as unreadable "
             "(AttributeError)") in caplog.text
     assert CANARY not in caplog.text
     assert "bad-ref-1018" not in caplog.text
@@ -166,7 +166,7 @@ def test_a_skipped_allergy_row_never_lets_no_known_allergies_be_quoted(
     assert "disagrees" in nka["statement"], nka
     assert "no known" not in nka["statement"], nka
     _one_unreadable(out, "AllergyIntolerance")
-    assert ("1 unreadable AllergyIntolerance record(s) left out (TypeError)"
+    assert ("1 AllergyIntolerance record(s) listed as unreadable (TypeError)"
             in caplog.text)
     assert "boom-1018" not in caplog.text
 
@@ -203,7 +203,7 @@ def test_a_medication_whose_code_is_a_list_is_left_out_not_the_summary(
     # is the one held to a count.
     ours = " ".join(r.getMessage() for r in caplog.records
                     if r.name == "careagents.agent")
-    assert ("1 unreadable MedicationRequest record(s) left out "
+    assert ("1 MedicationRequest record(s) listed as unreadable "
             "(AttributeError)") in ours
     assert "med-list-1018" not in ours
     assert "ref-list-code-1018" not in ours

@@ -161,7 +161,7 @@ def test_a_skipped_allergy_row_never_reads_as_no_allergies(
     for i in out:
         if i.get("no_known_allergy_record"):
             assert "disagrees" in i["statement"], i
-    assert ("1 unreadable AllergyIntolerance record(s) left out (TypeError)"
+    assert ("1 AllergyIntolerance record(s) listed as unreadable (TypeError)"
             in caplog.text)
     assert CANARY not in caplog.text and "boom" not in caplog.text
 
