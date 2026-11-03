@@ -61,3 +61,11 @@ def test_summary_has_no_payload(app):
         # fixed label does.
         assert 'CVS' not in json.dumps(s)
         assert s['to'] == 'a phone number'
+
+
+def test_the_safe_labels_include_careagents_own_text_label():
+    """summary() retypes CareAgents' label rather than importing careagents
+    into the engine; this keeps the two strings from drifting apart."""
+    from careagents.text_self import RECIPIENT_LABEL
+    from r6.actions.models import SAFE_TO_LABELS
+    assert RECIPIENT_LABEL in SAFE_TO_LABELS

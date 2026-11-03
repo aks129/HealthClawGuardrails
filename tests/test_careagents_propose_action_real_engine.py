@@ -183,12 +183,12 @@ def test_a_text_runs_from_the_turn_to_the_callback(world, monkeypatch):
     assert cb.status_code == 200, cb.get_data(as_text=True)
     assert _action(chain, action_id)["status"] == "completed"
 
-    # No audit row carries the number or the words. Since #1001 summary()
-    # names the kind's fixed label, not even CareAgents' own `to`.
+    # No audit row carries the number or the words (#: summary() copies
+    # `to`, which is why `to` is a fixed label).
     details = "\n".join(_audit_details(chain))
     assert "5555550123" not in details
     assert "visit prep" not in details
-    assert "a phone number" in details   # the label is what the audit names
+    assert "your phone" in details   # the label is what the audit names
 
 
 def test_a_second_text_is_not_staged_while_one_waits(world, monkeypatch):

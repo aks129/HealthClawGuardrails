@@ -226,7 +226,7 @@ Read from the code on `main` at `4cb3771`, not from the docs describing it.
 
 | Stage | Route | Credential | Result |
 |---|---|---|---|
-| propose | `POST /r6/actions/propose` (`routes.py:318`) | tenant header only | 201, `proposed` |
+| propose | `POST /r6/actions/propose` (`routes.py:318`) | write step-up (tenant header only until #1001) | 201, `proposed` |
 | commit | `POST /r6/actions/<id>/commit` (`routes.py:369`) | write step-up | **202, `awaiting_confirmation`** — nothing executes |
 | mint | `POST /r6/actions/<id>/approval-token` (`routes.py:630`) | `X-Internal-Secret` | 403 without it, for public tenants too |
 | approve | `POST /r6/actions/<id>/confirm` (`routes.py:462`) | audience + operation + nonce | the only place an executor runs |

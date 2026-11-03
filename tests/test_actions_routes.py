@@ -67,6 +67,41 @@ def test_propose_creates_action(client, tenant_headers, app):
         assert row.tenant_id == tenant_headers['X-Tenant-Id']
 
 
+def _propose_sms_to(client, tenant_headers, app, to):
+    """Propose a text with this `to`; answer (summary 'to', audit detail)."""
+    resp = client.post('/r6/actions/propose', json={
+        'kind': 'sms', 'payload': {'to': to, 'phone': '+15555550100',
+                                   'body': 'reminder'}},
+        headers=propose_headers(tenant_headers))
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    action_id = resp.get_json()['id']
+    status = client.get(f'/r6/actions/{action_id}', headers=tenant_headers)
+    with app.app_context():
+        from r6.models import AuditEventRecord
+        row = AuditEventRecord.query.filter_by(
+            resource_type='ProposedAction', resource_id=action_id).one()
+        return status.get_json()['to'], row.detail or ''
+
+
+def test_careagents_fixed_label_survives_into_summary_and_audit(
+        client, tenant_headers, app):
+    to, detail = _propose_sms_to(client, tenant_headers, app, 'your phone')
+    assert to == 'your phone'
+    assert json.loads(detail)['to'] == 'your phone'
+
+
+def test_any_other_to_falls_back_to_the_kind_label(client, tenant_headers,
+                                                   app):
+    """#1001: only an exact safe label passes; a label with a name and
+    number appended, or a near miss, is replaced by the kind's label."""
+    for raw in ('your phone, Jane 555-0100', 'Your phone', 'your phone ',
+                'Jane Doe +15555550100'):
+        to, detail = _propose_sms_to(client, tenant_headers, app, raw)
+        assert to == 'a phone number', raw
+        assert json.loads(detail)['to'] == 'a phone number', raw
+        assert 'Jane' not in detail and '555-0100' not in detail
+
+
 def test_propose_rejects_bad_kind(client, tenant_headers):
     resp = client.post('/r6/actions/propose',
                        json={'kind': 'teleport', 'payload': {}},
