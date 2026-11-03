@@ -76,7 +76,8 @@ def test_a_tap_during_seeding_mints_no_second_tenant(cfg, svc, monkeypatch):
     other = app.test_client()
     with other.session_transaction() as s:
         s["account_id"] = _account_id(c)
-        s["session_gen"] = 0  # a fresh account (#1087)
+        from careagents.app import _SESSION_GEN
+        s[_SESSION_GEN] = 0  # a fresh account (#1087)
     fake.tap = lambda: other.post("/api/connections/sample")
 
     first = c.post("/api/connections/sample")

@@ -33,7 +33,8 @@ def test_a_tap_that_read_no_sample_does_not_mint_after_the_first_lands(
         account_id = s["account_id"]
     with first.session_transaction() as s:
         s["account_id"] = account_id
-        s["session_gen"] = 0  # a fresh account (#1087)
+        from careagents.app import _SESSION_GEN
+        s[_SESSION_GEN] = 0  # a fresh account (#1087)
 
     read = svc.active_sample
     armed = {"on": True}

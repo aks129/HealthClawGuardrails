@@ -92,7 +92,8 @@ def _account(svc, monkeypatch, email="wallet-test@example.test"):
 def _sign_in(client, acct, via_link=False):
     with client.session_transaction() as s:
         s["account_id"] = acct.id
-        s["session_gen"] = 0  # a fresh account (#1087)
+        from careagents.app import _SESSION_GEN
+        s[_SESSION_GEN] = 0  # a fresh account (#1087)
         if via_link:
             s["via_link"] = True
 

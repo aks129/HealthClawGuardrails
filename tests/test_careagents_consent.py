@@ -108,7 +108,8 @@ def _signed_in(app, svc, monkeypatch, email="pat@example.com", passkey=False):
     client = app.test_client()
     with client.session_transaction() as s:
         s["account_id"] = acct.id
-        s["session_gen"] = 0  # a fresh account (#1087)
+        from careagents.app import _SESSION_GEN
+        s[_SESSION_GEN] = 0  # a fresh account (#1087)
     if passkey:
         monkeypatch.setattr(svc, "has_passkey", lambda account_id: True)
     return client, acct
@@ -179,7 +180,8 @@ def test_a_valid_link_signed_out_goes_to_sign_in_and_resumes_after(
     acct = _make_account(svc, monkeypatch, "pat@example.com")
     with client.session_transaction() as s:
         s["account_id"] = acct.id
-        s["session_gen"] = 0  # a fresh account (#1087)
+        from careagents.app import _SESSION_GEN
+        s[_SESSION_GEN] = 0  # a fresh account (#1087)
     home = client.get("/home")
     assert home.status_code == 302
     assert "/authorize?req=req-1." in home.headers["Location"]
