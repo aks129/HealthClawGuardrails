@@ -1047,6 +1047,17 @@ test.describe('check-in wallet', () => {
         }
         await set('Have you had any of these').getByLabel('Yellow skin or eyes').check();
         await expect(note).toBeVisible();
+        // QA #1109: it appears on a tap, so it must be set apart as the
+        // website's words, never read as the wallet's own (#1030 F3).
+        await expect(note).toHaveClass(/checkin-from-website/);
+        // `any`: switching between the two answers that show the why
+        // keeps what was typed.
+        await pick('Have you missed a shot', 'Once');
+        await why.locator('textarea').fill('kept across Once and More');
+        await pick('Have you missed a shot', 'More than once');
+        await expect(why.locator('textarea')).toHaveValue('kept across Once and More');
+        await pick('Have you missed a shot', 'No');
+        await expect(why).toBeHidden();
         await set('Have you had any of these').getByLabel('Yellow skin or eyes').uncheck();
         await expect(note).toBeHidden();
         expect(await wallet.evaluate(() =>
@@ -1068,6 +1079,7 @@ test.describe('check-in wallet', () => {
         }
         expect(JSON.stringify(r.json)).not.toContain('I was away');
         expect(JSON.stringify(r.json)).not.toContain('typed, then hidden');
+        expect(JSON.stringify(r.json)).not.toContain('kept across Once and More');
       });
   });
 

@@ -474,3 +474,96 @@ def test_nothing_is_filled_in_to_start_with():
     assert s["missing"] == list(MUST)
     out = _run(REQUEST, share={"semaglutide": True})
     assert _status(out) == {"semaglutide": "declined"}
+
+
+# --- QA #1109: rows the refusal matrices did not pin ------------------------------
+
+def test_a_skipped_question_that_is_conditional_refuses_the_form():
+    """A date (not answered here) gated on an EARLIER question, so the
+    condition itself reads and only the skipped-kind rule refuses it. The
+    speed matrix's `skipped-enable-when` row gates on a later question and
+    is refused by readCondition before that rule is reached.
+
+    MUTATION: drop `when ||` from the skipped branch of readItems -> red."""
+    def fn(q):
+        q["item"].append({"linkId": "when", "type": "date", "text": "When?",
+                          "enableWhen": [{"question": "missed",
+                                          "operator": "exists",
+                                          "answerBoolean": True}]})
+    out = _send(MUST, _mutated(fn))
+    assert out["forms"] == [None]
+    assert _status(out) == {"semaglutide": "unsupported"}
+
+
+@pytest.mark.parametrize("link_id,blank,answer", [
+    ("red-flags", None, [1]),
+    ("doses-taken", "   ", "3"),
+    ("pen-trouble", None, {"picked": [], "other": "Bent"}),
+    ("fluids", None, True),
+])
+def test_a_required_typed_or_pick_several_question_left_blank_declines(
+        link_id, blank, answer):
+    """The deleted `required-repeats` / `child-integer-required` rows
+    pinned a refusal. Such a question is answered now, so what must hold is
+    that `required: true` makes it missing while blank (whitespace is
+    blank), and that an answer then sends."""
+    req = _mutated(lambda q: _item(q, link_id).update(required=True))
+    given = MUST if blank is None else MUST | {link_id: blank}
+    assert _status(_send(given, req)) == {"semaglutide": "declined"}
+    assert _status(_send(MUST | {link_id: answer}, req)) == {
+        "semaglutide": "fulfilled"}
+
+
+def _gated_on_pen(cond):
+    def fn(q):
+        q["item"].append({"linkId": "g", "type": "string", "text": "G?",
+                          "enableWhen": [{"question": "pen-trouble"} | cond]})
+    return _mutated(fn)
+
+
+def test_exists_and_word_equality_on_a_pick_or_type_question():
+    """`exists` holds on typed words alone; `=` with answerString compares
+    the typed words, never a picked option's display."""
+    exists = _gated_on_pen({"operator": "exists", "answerBoolean": True})
+    assert "g" in _state(exists, MUST | {
+        "pen-trouble": {"picked": [], "other": "x"}})["shown"]
+    assert "g" not in _state(exists, MUST)["shown"]
+    words = _gated_on_pen({"operator": "=",
+                           "answerString": "Trouble getting refills or needles"})
+    assert "g" not in _state(words, MUST | {
+        "pen-trouble": {"picked": [2]}})["shown"]
+    assert "g" in _state(words, MUST | {"pen-trouble": {
+        "picked": [], "other": "Trouble getting refills or needles"}})["shown"]
+
+
+def test_an_answer_coding_without_a_system_matches_on_code_alone():
+    """Documented in the PR as deliberate; pinned so a change is seen."""
+    def fn(q):
+        for c in _item(q, "missed-why")["enableWhen"]:
+            c["answerCoding"].pop("system")
+    req = _mutated(fn)
+    assert "missed-why" in _state(req, MUST | {"missed": 1})["shown"]
+    assert "missed-why" not in _state(req, MUST)["shown"]
+
+
+def test_a_hidden_question_in_a_group_is_dropped_and_an_empty_group_not_sent():
+    """A conditional question inside a group: while hidden its answer is
+    not sent, and a group with nothing answered is not sent at all."""
+    def fn(q):
+        why = _item(q, "missed-why")
+        q["item"].remove(why)
+        q["item"].insert(3, {"linkId": "why-group", "type": "group",
+                             "text": "About the missed shot",
+                             "item": [why, {"linkId": "late-days",
+                                            "type": "integer",
+                                            "text": "How many days late?"}]})
+    req = _mutated(fn)
+    out = _send(MUST | {"missed-why": "Away"}, req)
+    assert _status(out) == {"semaglutide": "fulfilled"}
+    assert "why-group" not in [i["linkId"] for i in _qr(out)["item"]]
+    assert "Away" not in json.dumps(out["response"])
+    out = _send(MUST | {"missed": 1, "missed-why": "Away"}, req)
+    group = next(i for i in _qr(out)["item"] if i["linkId"] == "why-group")
+    assert group["item"] == [{"linkId": "missed-why",
+                              "text": _item(_q(REQUEST), "missed-why")["text"],
+                              "answer": [{"valueString": "Away"}]}]
