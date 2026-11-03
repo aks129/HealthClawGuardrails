@@ -119,3 +119,13 @@ def test_an_organization_name_is_trimmed():
 def test_an_organization_only_item_with_no_payer_on_file_is_unsupported():
     out = _run([_item("orgs", resourceTypes=["Organization"])])
     assert _status(out) == {"orgs": "unsupported"}
+
+
+def test_a_non_string_first_given_name_does_not_hide_the_rest():
+    # The Dev file's case keeps "Casey" first, so main's given[0] passes it
+    # too. With the bad entry first, main shows "Synthetic" alone.
+    patient = {"resourceType": "Patient", "id": "p1",
+               "name": [{"given": [None, "Casey", 7, "Jordan"],
+                         "family": "Synthetic"}]}
+    out = _run([_item("me", resourceTypes=["Patient"])], [patient])
+    assert out["names"] == [["Casey Jordan Synthetic"]]
