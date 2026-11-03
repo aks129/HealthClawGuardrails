@@ -987,9 +987,16 @@ def create_app(config: Config | None = None,
     @app.post("/logout")
     def logout():
         # Ends this sign-in everywhere, not just in this browser (#1087).
-        if session.get("account_id"):
-            svc.end_sessions(session["account_id"])
+        # This browser first: a database that cannot be reached must not
+        # leave the person signed in where they asked to sign out.
+        aid = session.get("account_id")
         session.clear()
+        if aid:
+            try:
+                svc.end_sessions(aid)
+            except SQLAlchemyError:
+                # No parameters: the statement carries the account id.
+                logger.warning("sign-out could not end other sessions")
         return redirect(url_for("landing"))
 
     # --- email code auth -----------------------------------------------------
