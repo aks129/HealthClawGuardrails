@@ -34,6 +34,7 @@ Synthetic data only: 555-01xx numbers are fictional.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -83,9 +84,9 @@ def test_f1_push_promises_an_approval_the_relay_refuses(world, monkeypatch):
     chain, c, twilio = world
     aid, pushes = _raw_propose_and_commit(chain, monkeypatch, 'patient', PHONE)
     r = c.post(f'/review/{chain.agent}/{aid}/submit', json={'ack': 'true'})
-    refused = r.status_code == 409
-    told_to_you = any('to you' in m for m in pushes)
-    assert not (refused and told_to_you), (
+    # Whatever the relay answers, no push claims the person (#1099 review).
+    assert pushes, 'commit sent no approval push'
+    assert all('to you' not in m for m in pushes), (
         'push said %r; relay answered %s %s' % (
             pushes, r.status_code, r.get_json()))
 
@@ -93,10 +94,14 @@ def test_f1_push_promises_an_approval_the_relay_refuses(world, monkeypatch):
 # --- F2 ----------------------------------------------------------------------
 
 def _settle_body() -> str:
+    """settleDeclined's body with `//` comments stripped, so a comment
+    quoting the code cannot stand in for it."""
     js = (ROOT / 'templates' / '_review_handlers.html').read_text(
         encoding='utf-8')
     start = js.index('function settleDeclined()')
-    return js[start:js.index('\n    }\n', start)]
+    body = js[start:js.index('\n    }\n', start)]
+    return '\n'.join(re.sub(r'//.*$', '', line)
+                     for line in body.splitlines())
 
 
 def test_f2_settling_a_decline_leaves_no_input_to_rearm_approve():
@@ -107,7 +112,8 @@ def test_f2_settling_a_decline_leaves_no_input_to_rearm_approve():
     The click path disables the form's inputs before it settles; the
     status-read path does not. Settling must, on both."""
     body = _settle_body()
-    assert "querySelectorAll('input')" in body or 'settled' in body, body
+    assert "form.querySelectorAll('input')" in body, body
+    assert 'el.disabled = true' in body, body
 
 
 # --- F3 (pre-existing) -------------------------------------------------------

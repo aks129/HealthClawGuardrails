@@ -91,5 +91,11 @@ def test_a_stale_decline_of_an_approved_request_is_not_a_decline(
     ok = c.post(f'/review/{chain.agent}/{aid}/submit', json={'ack': 'true'})
     assert ok.status_code == 200, (ok.status_code, ok.get_json())
     assert _action(chain, aid)['status'] != 'awaiting_confirmation'
+    assert _action(chain, aid)['status'] == 'executing'
     late = c.post(f'/review/{chain.agent}/{aid}/decline', json={})
-    assert late.get_json().get('declined') is not True, late.get_json()
+    # The 409 read finds `executing`, not `declined`, so the mint failure
+    # stands: the relay's "reload to see where it stands", never a decline.
+    assert late.status_code == 503, (late.status_code, late.get_json())
+    assert late.get_json()['error'] == 'review_unavailable'
+    assert late.get_json()['declined'] is None
+    assert _action(chain, aid)['status'] == 'executing'

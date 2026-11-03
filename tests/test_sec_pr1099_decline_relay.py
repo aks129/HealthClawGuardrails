@@ -76,8 +76,10 @@ def test_a_lapsed_request_is_not_reported_as_declined(world, monkeypatch):
     assert first.get_json().get('declined') is not True, first.get_json()
     second = c.post(f'/review/{chain.agent}/{aid}/decline', json={})
     assert second.get_json().get('declined') is not True, second.get_json()
-    assert _action(chain, aid)['status'] in ('expired',
-                                             'awaiting_confirmation')
+    # One outcome: the mint answers 410 (window lapsed) and nothing on the
+    # decline path flips the row, so it stays awaiting_confirmation until
+    # the reaper expires it. Checked against the engine 2026-11-03.
+    assert _action(chain, aid)['status'] == 'awaiting_confirmation'
 
 
 def test_an_uncommitted_request_is_not_reported_as_declined(

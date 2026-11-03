@@ -12,6 +12,8 @@ Synthetic data only: 555-01xx numbers are fictional, the name is a canary.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from r6.actions.models import VALID_KINDS, ProposedAction
@@ -52,13 +54,13 @@ def test_each_sentence_through_the_real_summary(kind, to, sentence):
     assert kind not in push, push
 
 
-def test_patient_is_you_only_for_a_text():
-    """'patient' is in SAFE_TO_LABELS for sms only: a call staged with it
-    must not be announced as going to "you"."""
+def test_patient_names_no_recipient_for_any_kind():
+    """No push names a recipient (#1099 security F1), so 'patient' never
+    reads as "you" or appears itself, for a text or any other kind."""
     for kind in VALID_KINDS:
-        if kind == 'sms':
-            continue
         action = ProposedAction('t-1093-qa', kind,
                                 {'to': 'patient', 'body': 'synthetic'})
         push = _approval_push(action.summary())
-        assert ' to you.' not in push and 'patient' not in push, (kind, push)
+        # A word match: 'to your insurer' is not a claim about the person.
+        assert not re.search(r'\bto you\b', push), (kind, push)
+        assert 'patient' not in push, (kind, push)

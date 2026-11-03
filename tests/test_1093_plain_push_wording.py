@@ -118,13 +118,46 @@ def test_a_canary_in_to_never_reaches_the_push(
     assert all('Approval needed: ' in m for m in sent), sent
 
 
+def test_an_smbp_text_logs_its_label_in_the_audit_row(
+        client, tenant_headers, monkeypatch):
+    """The one audit change in #1099: an SMBP-staged text's commit row
+    says "patient" where it said "a phone number". Read from the row.
+
+    MUTATION: drop 'patient' from SAFE_TO_LABELS['sms'] -> red."""
+    from r6.models import AuditEventRecord
+    from r6.smbp.outreach import reminder_action
+    from r6.stepup import generate_step_up_token
+    monkeypatch.setattr('r6.actions.routes.notify_tenant',
+                        lambda tenant, message, **k: 1)
+    tenant = tenant_headers['X-Tenant-Id']
+    h = dict(tenant_headers, **{
+        'X-Step-Up-Token': generate_step_up_token(tenant)})
+    staged = reminder_action('Patient/x', '+15555550142', 'en', 0, 7)
+    resp = client.post('/r6/actions/propose', json=staged, headers=h)
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    action_id = resp.get_json()['id']
+    resp = client.post(f'/r6/actions/{action_id}/commit', headers=h)
+    assert resp.status_code == 202, resp.get_data(as_text=True)
+    rows = [json.loads(r.detail) for r in AuditEventRecord.query.filter_by(
+        tenant_id=tenant, resource_id=action_id).all()
+        if (r.detail or '').startswith('{')]
+    assert rows, 'commit wrote no summary audit row'
+    assert all(r['to'] == 'patient' for r in rows), rows
+    blob = json.dumps(rows)
+    assert '555-0142' not in blob and 'phone' not in json.dumps(
+        [sorted(r) for r in rows]), rows
+
+
 # --- the declined card --------------------------------------------------------
 
 TEMPLATES = ROOT / 'templates'
 
 
 def _handlers() -> str:
-    return (TEMPLATES / '_review_handlers.html').read_text(encoding='utf-8')
+    """The shared handler with `//` comments stripped: a comment quoting
+    the code must not satisfy a guard on it."""
+    js = (TEMPLATES / '_review_handlers.html').read_text(encoding='utf-8')
+    return '\n'.join(re.sub(r'//.*$', '', line) for line in js.splitlines())
 
 
 def _function(js: str, name: str) -> str:
