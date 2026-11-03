@@ -13,9 +13,9 @@ Three rows:
   than shown. It must never quote "no known allergies" or say the records
   don't say whether there are allergies. "No known allergies" is never
   inferred, least of all from a list with a row missing.
-- A gap that predates #1101: `valueQuantity.value` is copied to the model
-  as whatever the feed put there. Pinned as a strict xfail, so this file
-  stays green and the row goes red once the value is checked as a number.
+- A gap that predated #1101: `valueQuantity.value` was copied to the model
+  as whatever the feed put there. It now passes only as a number, on every
+  type the summary lists.
 
 Synthetic data only.
 """
@@ -156,22 +156,29 @@ def test_a_skipped_allergy_row_never_reads_as_no_allergies(
     assert CANARY not in caplog.text and "boom" not in caplog.text
 
 
-# --- 3. pre-existing: valueQuantity.value reaches the model verbatim ---------
+# --- 3. valueQuantity.value reaches the model only as a number ---------------
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Pre-existing, not introduced by #1101: _summarize_bundle copies "
-    "valueQuantity.value as any type (agent.py, item['value'] = "
-    "f\"{vq.get('value')} {unit}\"), and the engine's redaction does not "
-    "touch it. Remove this xfail when the value is checked as a number."))
+@pytest.mark.parametrize("rt", ["Observation", "MedicationRequest",
+                                "AllergyIntolerance"])
 def test_a_free_text_quantity_value_never_reaches_the_model(
-        cfg, svc, monkeypatch):  # noqa: F811
+        cfg, svc, monkeypatch, rt):  # noqa: F811
     chain = Chain(cfg, svc, monkeypatch, allergy=True)
-    _plant(chain, {"resourceType": "Observation", "id": "vq-text",
+    _plant(chain, {"resourceType": rt, "id": "vq-text",
                    "subject": PATIENT, "status": "final",
                    "effectiveDateTime": "2026-10-01",
                    "code": {"coding": [{"system": LOINC, "code": "4548-4"}]},
                    "valueQuantity": {"value": f"{CANARY} Jane Q Synthetic",
                                      "code": "%"}})
     out = _execute_tool(chain.hc, TENANT, "search_records",
-                        {"resource_type": "Observation"}, [])
+                        {"resource_type": rt}, [])
     assert CANARY not in out, out
+
+
+@pytest.mark.parametrize("value", [7.1, 7])
+def test_a_numeric_quantity_value_still_reaches_the_model(value):
+    # The guard is a type check, not a block: a number still passes.
+    out = _summarize_bundle({"entry": [{"resource": {
+        "resourceType": "Observation", "id": "vq-num", "status": "final",
+        "code": {"coding": [{"system": LOINC, "code": "4548-4"}]},
+        "valueQuantity": {"value": value, "code": "%"}}}]})
+    assert out[0]["value"] == f"{value} %", out

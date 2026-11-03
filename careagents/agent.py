@@ -733,14 +733,18 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             if isinstance(status, str) and status in _STATUS.get(rt, ()):
                 item["status"] = status
             vq = res.get("valueQuantity")
-            if isinstance(vq, dict) and vq.get("value") is not None:
+            value = vq.get("value") if isinstance(vq, dict) else None
+            # A number or nothing: ingest stores whatever arrived, and a
+            # string here reached the model word for word (#1101 security).
+            if (isinstance(value, (int, float))
+                    and not isinstance(value, bool)):
                 # The coded, allow-listed unit, never the free-text `unit`:
                 # upstream can write a name or an instruction there. A unit we
                 # do not recognise means no number, as on get_labs (#884 QA F1).
                 unit = labs_timeline.coded_unit(
                     vq, _ANALYTE_KEY.get(_obs_loinc(res) or ""), _RECORD_UNITS)
                 if unit is not None:
-                    item["value"] = f"{vq.get('value')} {unit}".strip()
+                    item["value"] = f"{value} {unit}".strip()
             date = labs_timeline.parse_date(res.get("effectiveDateTime"))
             if date:
                 item["date"] = date
