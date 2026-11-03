@@ -63,9 +63,13 @@ document.getElementById('go').onclick = () => {
 };
 </script>`;
 
-/** Anything the guest wallet must never call, recorded and refused. */
+/** Anything the guest wallet must never call, recorded and refused. And
+ *  every request the context makes, so "saw traffic" is told apart from
+ *  "saw nothing forbidden". */
 async function forbid(page: Page) {
   const hit: string[] = [];
+  const seen: string[] = [];
+  page.context().on('request', (r) => seen.push(r.url()));
   for (const p of ['/checkin/wallet/records', '/checkin/wallet/test-patient',
     '/webauthn/**', '/auth/**', '/api/**']) {
     await page.context().route(`${CARE_BASE_URL}${p}`, (route) => {
@@ -73,7 +77,19 @@ async function forbid(page: Page) {
       return route.abort();
     });
   }
-  return hit;
+  return { hit, seen };
+}
+
+/** The guard can see a call: one forbidden fetch from a CareAgents page in
+ *  the same context (the wallet tab has closed by now) lands in `hit`. */
+async function positiveControl(page: Page, hit: string[], seen: string[]) {
+  expect(seen.some((u) => u.includes('/static/checkin_wallet.js'))).toBe(true);
+  const probe = await page.context().newPage();
+  await probe.goto(`${CARE_BASE_URL}/checkin/try-wallet`);
+  await probe.evaluate(() => fetch('/checkin/wallet/records',
+    { method: 'POST' }).catch(() => null));
+  expect(hit).toHaveLength(1);
+  expect(hit[0]).toBe(`${CARE_BASE_URL}/checkin/wallet/records`);
 }
 
 async function openGuest(page: Page) {
@@ -95,7 +111,7 @@ test.describe('guest check-in wallet', () => {
 
   test('no sign-in, made up, and every item starts at "Don\'t share"',
     async ({ page }) => {
-      const hit = await forbid(page);
+      const { hit, seen } = await forbid(page);
       const wallet = await openGuest(page);
       await expect(wallet.locator('#wallet-review')).toBeVisible();
       await expect(wallet.locator('#wallet-signin')).toBeHidden();
@@ -113,10 +129,11 @@ test.describe('guest check-in wallet', () => {
       const r = await page.evaluate(() => (window as any).__result);
       expect(r.json.artifacts).toEqual([]);
       expect(hit).toEqual([]);
+      await positiveControl(page, hit, seen);
     });
 
   test('what is sent is the test patient\'s records only', async ({ page }) => {
-    const hit = await forbid(page);
+    const { hit, seen } = await forbid(page);
     const wallet = await openGuest(page);
     await expect(wallet.locator('#wallet-review')).toBeVisible();
     for (const id of REQUEST.items.map((i) => i.id)) {
@@ -134,5 +151,27 @@ test.describe('guest check-in wallet', () => {
     expect(sent.filter((k: string) => !FIXTURE_IDS.has(k))).toEqual([]);
     expect(sent).toContain('Patient/checkin-test-patient');
     expect(hit).toEqual([]);
+    await positiveControl(page, hit, seen);
   });
+
+  test('unreadable guest records reach the usual can\'t-share answer',
+    async ({ page }) => {
+      // The page as served, with its inlined records broken.
+      await page.context().route(`${CARE_BASE_URL}/checkin/try-wallet`,
+        async (route) => {
+          const res = await route.fetch();
+          const body = (await res.text()).replace(
+            /(<script type="application\/json" id="wallet-guest-records">)[\s\S]*?(<\/script>)/,
+            '$1{$2');
+          return route.fulfill({ response: res, body });
+        });
+      const wallet = await openGuest(page);
+      await expect(wallet.locator('#wallet-done-text'))
+        .toContainText("couldn't read your records just now");
+      await wallet.locator('#wallet-ok').click();
+      await expect.poll(() => page.evaluate(() => (window as any).__result),
+        { timeout: 15_000 }).toBeDefined();
+      expect(JSON.stringify(await page.evaluate(() => (window as any).__result)))
+        .toContain("couldn't share records this time");
+    });
 });

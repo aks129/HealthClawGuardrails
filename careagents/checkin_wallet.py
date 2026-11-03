@@ -370,10 +370,13 @@ def _register_guest(app, cfg) -> None:
     """The guest wallet (CARE_CHECKIN_GUEST_WALLET, with the wallet's own
     flag): the same page and script, for a Verifier team to try without
     an account. Guest mode is this route's, set on the card here; nothing
-    the browser sends turns it on or off. It reads and writes no session,
-    calls no engine, and names no tenant or account: the records are the
-    synthetic US Core test patient (#959), inlined in the page, which
-    labels them made up. Every item still starts at "Don't share"."""
+    the browser sends turns it on or off. The handler itself does not touch
+    the session (the app-wide sign-out check still runs before it), is not
+    given the engine client, and names no tenant or account: the page is
+    the same for everyone (tests/test_checkin_guest_wallet_attack.py). The
+    records are the synthetic US Core test patient (#959), inlined in the
+    page, which labels them made up. Every item still starts at "Don't
+    share". No AuditEvent: no tenant and no real record is read."""
 
     @app.get("/checkin/try-wallet")
     def checkin_try_wallet():

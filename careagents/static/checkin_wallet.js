@@ -499,7 +499,11 @@ async function loadRecords(request, unsupportedItems, connectionId) {
    payer and prescriber they point to. */
 const GUEST_ALSO = ["Organization", "Practitioner"];
 function guestRecords(types) {
-  const bundle = JSON.parse($("wallet-guest-records").textContent);
+  // Missing or unreadable: the usual "couldn't read" reason, then CANT_SHARE.
+  let bundle;
+  try { bundle = JSON.parse($("wallet-guest-records").textContent); } catch (e) {
+    throw new Error("unavailable");
+  }
   const entry = (bundle.entry || []).filter((e) => e && e.resource &&
     (types.includes(e.resource.resourceType) ||
      GUEST_ALSO.includes(e.resource.resourceType)));

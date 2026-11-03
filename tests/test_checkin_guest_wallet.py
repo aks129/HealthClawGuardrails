@@ -73,6 +73,7 @@ def test_the_page_is_the_wallet_in_guest_mode(guest):
     assert "/checkin/wallet/test-patient" not in html
     assert "data-records=" not in html
     assert '<section id="wallet-signin" hidden>' in html
+    assert '<meta name="robots" content="noindex">' in html
     # Made up, said at the top, in the existing words.
     assert "made-up\n      patient's records, not yours" in html
 
@@ -126,7 +127,8 @@ def test_the_signed_in_wallet_is_unchanged_with_the_flag_on(monkeypatch):
             r = c.get("/checkin/wallet")
             assert r.headers["Cache-Control"] == "no-store"
             assert "X-Robots-Tag" not in r.headers
-            pages.append(r.get_data(as_text=True))
+            # Less the build stamp, which is per app (create_app time).
+            pages.append(re.sub(r"\?v=\d+", "", r.get_data(as_text=True)))
         finally:
             svc.engine.dispose()
     assert pages[0] == pages[1]
