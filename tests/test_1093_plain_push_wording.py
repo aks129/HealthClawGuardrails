@@ -108,6 +108,8 @@ def test_a_canary_in_to_never_reaches_the_push(
     action_id = resp.get_json()['id']
     resp = client.post(f'/r6/actions/{action_id}/commit', headers=h)
     assert resp.status_code == 202, resp.get_data(as_text=True)
+    # The agent is told the same section the person is.
+    assert '("%s")' % APPROVALS_SECTION in resp.get_json()['next_step']
 
     assert sent, 'commit sent no approval push'
     blob = json.dumps(sent)
