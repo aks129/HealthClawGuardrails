@@ -30,7 +30,7 @@ import pytest
 
 from careagents import agent
 from careagents.agent import _summarize_bundle
-from tests.test_beta_acceptance_rows import Chain
+from tests.test_beta_acceptance_rows import TENANT, Chain
 from tests.test_careagents import cfg, svc  # noqa: F401  (pytest fixtures)
 from tests.test_careagents_first_answer import _first_turn
 from tests.test_sec_945_first_answer import _plant
@@ -155,3 +155,57 @@ def test_a_skipped_allergy_row_never_lets_no_known_allergies_be_quoted(
     assert out[-1].get("truncated") is True, out
     assert "1 unreadable record(s) left out" in caplog.text
     assert "boom-1018" not in caplog.text
+
+
+# --- QA (#1101): the resolver route, real ingest, a failed read ----------------
+
+def test_a_medication_whose_code_is_a_list_is_left_out_not_the_summary(
+        cfg, svc, monkeypatch, caplog):  # noqa: F811
+    # A second route to the backstop through the real engine, and through
+    # the real ingest rather than a planted row: a Medication whose `code`
+    # is a list is accepted, survives redaction (the list holds a
+    # CodeableConcept the engine even labels), and is read by the
+    # medicationReference resolver, which raised AttributeError on it. On
+    # main that dropped the whole summary, as #1018's status did.
+    caplog.set_level(logging.DEBUG)
+    chain = Chain(cfg, svc, monkeypatch, allergy=True)
+    ingested = chain.hc.ingest_bundle(TENANT, {
+        "resourceType": "Bundle", "type": "collection",
+        **_bundle(
+            {"resourceType": "Medication", "id": "med-list-1018",
+             "code": [{"coding": [{"system": RXNORM, "code": "860975"}]}]},
+            {"resourceType": "MedicationRequest", "id": "ref-list-code-1018",
+             "subject": PATIENT, "intent": "order", "status": "active",
+             "medicationReference": {
+                 "reference": "Medication/med-list-1018"}})})
+    assert ingested.get("ingested") == 2 and not ingested.get("errors"), \
+        ingested
+    out, _ = _first_turn(chain, monkeypatch)
+    _rest_intact(out)
+    meds = out["medications"]
+    assert [i.get("name") for i in meds if "type" in i] == [
+        "Metformin 500 mg"], meds
+    assert meds[-1].get("truncated") is True, meds
+    # The in-process engine logs its own request paths; CareAgents' line
+    # is the one held to a count.
+    ours = " ".join(r.getMessage() for r in caplog.records
+                    if r.name == "careagents.agent")
+    assert "1 unreadable record(s) left out" in ours
+    assert "med-list-1018" not in ours
+    assert "ref-list-code-1018" not in ours
+
+
+def test_a_failed_engine_read_inside_a_row_still_fails_the_list():
+    # The backstop catches a row's shape, never an engine failure: that
+    # still fails the list, so the tool marks it could_not_read rather than
+    # reading it as a list longer than shown.
+    from careagents.healthclaw import HealthClawError
+
+    def unavailable(ref):
+        raise HealthClawError("read failed (503)", 503)
+    with pytest.raises(HealthClawError):
+        _summarize_bundle(_bundle(
+            {"resourceType": "MedicationRequest", "id": "ref-1018",
+             "subject": PATIENT, "intent": "order", "status": "active",
+             "medicationReference": {"reference": "Medication/m-1018"}}),
+            resolve_ref=unavailable)
