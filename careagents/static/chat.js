@@ -156,7 +156,7 @@
     log.appendChild(p);
   }
 
-  // A 401: this browser was signed out, here or on another device (#1094).
+  // A 401: this browser was signed out, here or on another device (#1087).
   // Retrying never works, so it is said once, with the way back, instead
   // of "Connection hiccup".
   function addSignedOut() {

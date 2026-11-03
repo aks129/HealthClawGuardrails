@@ -355,7 +355,7 @@ h1 em { font-style: normal; color: var(--accent-ink); }
   color: var(--ink);
 }
 .chat-menu-list button:hover { background: var(--surface-2); color: var(--ink); }
-/* Under Sign out: what it covers (#1094). */
+/* Under Sign out: what it covers (#1087). */
 .chat-menu-note { margin: 0; padding: 0 12px 8px; font-size: 14px;
   color: var(--ink-soft); }
 .pill {

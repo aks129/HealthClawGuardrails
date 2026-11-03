@@ -63,7 +63,8 @@ _VIA_LINK = "via_link"
 _SESSION_GEN = "session_gen"
 #: One-shot: why /auth opened on a signed-out visitor, set when such a
 #: session is cleared: "elsewhere" (signed out on another device) or
-#: "expired" (signed in before the generation existed). Shown once (#1094).
+#: "expired" (signed in before the generation existed), or "partial" (signed
+#: out here, the other devices not reached). Shown once (#1087).
 _SIGNED_OUT_WHY = "signed_out_why"
 #: Session key: the page a signed-out person asked for, so the sign-in that
 #: follows ends there and not on the hub (beta feedback, 2026-10-22).
@@ -593,7 +594,9 @@ def create_app(config: Config | None = None,
         # account is login_required's to end, so it is left alone here.
         # Nothing carries over: a copied cookie's parked state is not the
         # visitor's own. A static file reads no account, so it costs no
-        # lookup and cannot fail on a database that is down.
+        # lookup and cannot fail on a database that is down. A lookup that
+        # fails anywhere else is not caught, on purpose: with the database
+        # down, a page errors rather than trusting a cookie it cannot check.
         if request.endpoint == "static":
             return
         aid = session.get("account_id")
@@ -703,7 +706,12 @@ def create_app(config: Config | None = None,
 
     @app.get("/")
     def landing():
-        return render_template("landing.html", me=current_account())
+        # Only sign-out's own reason; the others are /auth's to say.
+        partial = session.get(_SIGNED_OUT_WHY) == "partial"
+        if partial:
+            session.pop(_SIGNED_OUT_WHY)
+        return render_template("landing.html", me=current_account(),
+                               signed_out_partly=partial)
 
     @app.get("/auth")
     def auth():
@@ -1001,7 +1009,7 @@ def create_app(config: Config | None = None,
         # This browser first: a database that cannot be reached must not
         # leave the person signed in where they asked to sign out.
         # A confirm-link session (#920 F1) ends every session too: sparing
-        # the others would leave its own copied cookies working (#1094 F2).
+        # the others would leave its own copied cookies working.
         aid = session.get("account_id")
         session.clear()
         if aid:
@@ -1010,6 +1018,8 @@ def create_app(config: Config | None = None,
             except SQLAlchemyError:
                 # No parameters: the statement carries the account id.
                 logger.warning("sign-out could not end other sessions")
+                # The buttons say "all your devices"; say when it was not.
+                session[_SIGNED_OUT_WHY] = "partial"
         return redirect(url_for("landing"))
 
     # --- email code auth -----------------------------------------------------

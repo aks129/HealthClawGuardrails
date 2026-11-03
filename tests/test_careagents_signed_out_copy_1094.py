@@ -148,3 +148,33 @@ def test_a_plain_visit_or_your_own_sign_out_gives_no_reason(
     c = _signed_in(app, svc, monkeypatch)
     c.post("/logout")
     assert 'id="signed-out-why"' not in c.get("/auth").get_data(as_text=True)
+
+
+PARTIAL = "We couldn't sign out your other devices"
+
+
+def test_a_sign_out_that_misses_the_other_devices_says_so_once(
+        made, monkeypatch):  # noqa: F811
+    """The buttons promise every device. When the database write fails,
+    this browser is signed out and the landing page says the rest was not."""
+    from sqlalchemy.exc import OperationalError
+    app, svc = made()
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    c = _signed_in(app, svc, monkeypatch)
+
+    def down(_account_id):
+        raise OperationalError("UPDATE ca_accounts", {}, Exception("locked"))
+    monkeypatch.setattr(svc, "end_sessions", down)
+    r = c.post("/logout")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/")
+    assert PARTIAL in c.get("/").get_data(as_text=True)
+    assert PARTIAL not in c.get("/").get_data(as_text=True)
+    assert c.get("/home").status_code == 302
+
+
+def test_a_sign_out_that_reaches_every_device_says_nothing_extra(
+        made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    c.post("/logout")
+    assert PARTIAL not in c.get("/").get_data(as_text=True)

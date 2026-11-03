@@ -12,11 +12,14 @@
     {# Plain words for what this page does. Someone already signed in
        is here to confirm it's them, not to sign in. #}
     <h1>{% if code_for_passkey or code_for_invite or code_for_connect %}Confirm it's you{% else %}Sign in or sign up{% endif %}</h1>
-    {# Once, after this browser's session was ended for it (#1094). #}
+    {# Once, after this browser's session was ended for it (#1087). #}
     {% if signed_out_why == "elsewhere" %}
     <p class="setup-sub" id="signed-out-why">You were signed out on this
       device because you signed out somewhere else. Sign in with your email
       to continue.</p>
+    {% elif signed_out_why == "partial" %}
+    <p class="setup-sub" id="signed-out-why">Signed out here. We couldn't
+      sign out your other devices. Try again in a minute.</p>
     {% elif signed_out_why == "expired" %}
     <p class="setup-sub" id="signed-out-why">You were signed out. Sign in
       with your email to continue.</p>
