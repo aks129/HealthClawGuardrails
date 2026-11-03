@@ -417,6 +417,20 @@ def test_a_form_this_wallet_will_not_evaluate_is_unsupported(req):
     assert out["response"]["artifacts"] == []
 
 
+@pytest.mark.parametrize("operator", ["matches", "in", "~", "", None, 1])
+def test_an_unknown_operator_on_a_number_is_not_evaluated(operator):
+    """On a number every comparison type is allowed, so only the operator
+    allow-list stands between an unknown operator and an evaluation.
+
+    MUTATION: drop `!FORM_OPERATORS.includes(operator)` in readCondition
+    -> red."""
+    req = _gated(operator, "answerInteger", 5)
+    out = _run(req, share={"semaglutide": True},
+               answers={"semaglutide": {"nausea": 0, "n": "5"}})
+    assert out["forms"] == [None]
+    assert _status(out) == {"semaglutide": "unsupported"}
+
+
 def _many_conditions(n):
     """`n` single-condition items gated on "missed", sized well under the
     32 KB cap, so the count is what refuses."""
