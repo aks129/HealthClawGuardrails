@@ -264,6 +264,11 @@ class Config:
         self.checkin_test_patient_enabled = e.get(
             "CARE_CHECKIN_TEST_PATIENT", "").lower() in (
                 "1", "true", "yes", "on")
+        # The guest wallet, GET /checkin/try-wallet: the same wallet with no
+        # sign-in, answering from the synthetic US Core test patient only,
+        # for a Verifier team to try without an account. Off unless asked
+        # for; needs CARE_CHECKIN_WALLET too.
+        self.checkin_guest_wallet_enabled = _flag(e, "CARE_CHECKIN_GUEST_WALLET")
         # Page-view counting for the pages anyone can open (careagents/
         # analytics.py). Off unless asked for: it writes a row per day per
         # page and nothing about a visitor, but a counter nobody switched on

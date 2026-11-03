@@ -91,23 +91,33 @@
 <main class="setup-wrap">
   <div class="setup-card checkin-wallet" id="wallet"
        data-signed-in="{{ '1' if signed_in else '0' }}"
-       data-records="{{ url_for('checkin_wallet_records') }}"
+       {# The guest wallet (/checkin/try-wallet) is set here by its route,
+          never by the address: it has no relay, only the made-up file. #}
+       {% if guest %}data-guest="1"
+       {% else %}data-records="{{ url_for('checkin_wallet_records') }}"{% endif %}
        {% if test_patient %}data-test-patient="{{ url_for('checkin_wallet_test_patient') }}"{% endif %}>
     {# Plain words, not "Test version" (#1080). The review swaps it for the
        made-up patient's line when those records answer (#1081). #}
+    {% if guest %}
+    <p class="checkin-test-note" id="wallet-note">This answers from a made-up
+      patient's records, not yours. You choose what the website gets.</p>
+    {% else %}
     <p class="checkin-test-note" id="wallet-note">This answers from the
       records on your CareAgents account. You choose what the website gets.</p>
+    {% endif %}
 
     <div id="wallet-err" class="form-error" role="alert" hidden></div>
     {# Signed in, the sign-in section below is never shown, so its "could
        not start" would never be seen: say it here instead, and not as a
        sign-in failure (#1061 follow-up). #}
-    {% if signed_in %}
+    {% if signed_in or guest %}
     <p class="form-error" id="signin-stalled" role="alert" hidden>This page
       could not start. Reload the page.</p>
     {% endif %}
 
-    <section id="wallet-signin" {% if signed_in %}hidden{% endif %}>
+    {# Kept, hidden, in guest mode only because the script wires it up;
+       the guest wallet never shows it. #}
+    <section id="wallet-signin" {% if signed_in or guest %}hidden{% endif %}>
       <h1>Sign in to answer</h1>
       {# The website's address is not known yet: it arrives with the request,
          and the request comes only after sign-in. So say when it will show. #}
@@ -122,7 +132,7 @@
            leave two dead buttons. #}
         <noscript><p class="form-error">Sign-in could not start. Turn on
           JavaScript, then reload the page.</p></noscript>
-        {% if not signed_in %}
+        {% if not signed_in and not guest %}
         <p class="form-error" id="signin-stalled" role="alert" hidden>Sign-in
           could not start. Reload the page.</p>
         {% endif %}
@@ -237,5 +247,9 @@
     </section>
   </div>
 </main>
+{% if guest %}
+{# The synthetic US Core test patient (#959), the guest wallet's only records. #}
+<script type="application/json" id="wallet-guest-records">{{ guest_records|tojson }}</script>
+{% endif %}
 <script type="module" src="{{ url_for('static', filename='checkin_wallet.js') }}"></script>
 {% endblock %}

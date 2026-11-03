@@ -477,6 +477,7 @@ const CANT_SHARE = "The person's wallet couldn't share records this time. They w
 async function loadRecords(request, unsupportedItems, connectionId) {
   const types = requestedTypes(request, unsupportedItems);
   if (!types.length) return prepareRecords({ entry: [] });
+  if (card.dataset.guest === "1") return guestRecords(types);
   const body = { resource_types: types };
   if (connectionId) body.connection_id = connectionId;
   const res = await post(card.dataset.records, body);
@@ -490,6 +491,19 @@ async function loadRecords(request, unsupportedItems, connectionId) {
   // (checkin_answer.js, #1086 security F1).
   return { ...prepareRecords(res.d),
     made: relaySaysMadeUp(res.headers) };
+}
+
+/* The guest wallet's records (/checkin/try-wallet): the synthetic test
+   patient, inlined in the page by the server, never the relay, and always
+   made up. Only the kinds the request names, as the relay sends, with the
+   payer and prescriber they point to. */
+const GUEST_ALSO = ["Organization", "Practitioner"];
+function guestRecords(types) {
+  const bundle = JSON.parse($("wallet-guest-records").textContent);
+  const entry = (bundle.entry || []).filter((e) => e && e.resource &&
+    (types.includes(e.resource.resourceType) ||
+     GUEST_ALSO.includes(e.resource.resourceType)));
+  return { ...prepareRecords({ entry }), made: true };
 }
 
 // Why the records could not be read, in plain words. The website is told
@@ -759,5 +773,5 @@ $("signin-stalled").hidden = true;
 
 // Opened directly, not by a check-in page: nothing to sign in for.
 if (!window.opener) show("wallet-direct");
-else if (card.dataset.signedIn === "1") start();
+else if (card.dataset.guest === "1" || card.dataset.signedIn === "1") start();
 else show("wallet-signin");

@@ -362,6 +362,28 @@ def register(app, svc, cfg, hc, full_session) -> None:
 
     if test_patient:
         _register_test_patient(app, svc, hc, signed_in)
+    if cfg.checkin_guest_wallet_enabled:
+        _register_guest(app, cfg)
+
+
+def _register_guest(app, cfg) -> None:
+    """The guest wallet (CARE_CHECKIN_GUEST_WALLET, with the wallet's own
+    flag): the same page and script, for a Verifier team to try without
+    an account. Guest mode is this route's, set on the card here; nothing
+    the browser sends turns it on or off. It reads and writes no session,
+    calls no engine, and names no tenant or account: the records are the
+    synthetic US Core test patient (#959), inlined in the page, which
+    labels them made up. Every item still starts at "Don't share"."""
+
+    @app.get("/checkin/try-wallet")
+    def checkin_try_wallet():
+        resp = _no_store(Response(render_template(
+            "checkin_wallet.html", signed_in=False, test_patient=False,
+            guest=True, guest_records=test_patient_bundle(),
+            terms_url=f"{cfg.healthclaw_public_base}/terms",
+            privacy_url=f"{cfg.healthclaw_public_base}/privacy")))
+        resp.headers["X-Robots-Tag"] = "noindex"
+        return resp
 
 
 def _register_test_patient(app, svc, hc, signed_in) -> None:

@@ -143,6 +143,10 @@ export default defineConfig({
         // careagents-checkin-wallet.spec.ts can reach it. It answers only
         // from the synthetic test patient.
         CARE_CHECKIN_WALLET: '1',
+        // The guest wallet, /checkin/try-wallet, for
+        // careagents-checkin-guest-wallet.spec.ts: no sign-in, the
+        // synthetic test patient's file only.
+        CARE_CHECKIN_GUEST_WALLET: '1',
         // Opens /admin/funnel to this one synthetic address.
         CARE_OWNER_EMAILS: CARE_OWNER_EMAIL,
       },
