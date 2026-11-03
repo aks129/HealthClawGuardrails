@@ -36,4 +36,4 @@ def test_the_approval_push_names_the_kind_label_not_the_raw_to(
     assert sent, 'commit sent no approval push'
     blob = json.dumps(sent)
     assert 'Jane' not in blob and '555-0142' not in blob, sent
-    assert any('to a phone number' in m for m in sent), sent
+    assert any('Approval needed: a phone call.' in m for m in sent), sent
