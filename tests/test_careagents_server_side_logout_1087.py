@@ -1,0 +1,124 @@
+"""Signing out ends the session on the server, not just in the browser (#1087).
+
+Each account carries a session generation; a sign-in stamps the current value
+into the session, and /logout adds one. A cookie from before the sign-out (a
+copy, an older tab, another device) then reads as signed out everywhere a
+page looks at `session["account_id"]`, not only behind login_required.
+
+The schema test uses the calm hub schema tests' fixture, so it runs on
+Postgres when CARE_TEST_DATABASE_URL names one.
+
+Synthetic addresses only.
+"""
+from __future__ import annotations
+
+import os
+
+import pytest
+from sqlalchemy import create_engine, inspect, text
+
+from careagents import models
+from tests.test_careagents import _login
+from tests.test_careagents_beta_signup import made  # noqa: F401  (fixture)
+
+pytestmark = pytest.mark.extension
+
+EMAIL = "logout1087@example.test"
+
+
+def _signed_in(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email=EMAIL)
+    assert c.get("/home").status_code == 200
+    return c
+
+
+def _copy(app, c):
+    other = app.test_client()
+    other.set_cookie("session", c.get_cookie("session").value)
+    return other
+
+
+def test_a_pre_logout_cookie_copy_is_signed_out_on_home(made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    copy = _copy(app, c)
+    assert copy.get("/home").status_code == 200
+    assert c.post("/logout").status_code == 302
+    r = copy.get("/home")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
+    # Signed out for the API, too.
+    assert copy.get("/api/labs/timeline").status_code == 401
+
+
+def test_sign_out_ends_the_other_devices_too(made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    phone = _signed_in(app, svc, monkeypatch)
+    laptop = app.test_client()
+    _login(laptop, svc, monkeypatch, email=EMAIL)
+    assert laptop.post("/logout").status_code == 302
+    assert phone.get("/home").status_code == 302
+
+
+def test_signing_in_again_after_sign_out_works(made, monkeypatch):  # noqa: F811
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    c.post("/logout")
+    _login(c, svc, monkeypatch, email=EMAIL)
+    assert c.get("/home").status_code == 200
+
+
+def test_a_session_from_before_the_generation_signs_in_again(
+        made, monkeypatch):  # noqa: F811
+    """The pre-deploy choice: a session with no generation is signed out,
+    so a cookie copied before this shipped cannot outlive it."""
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+    with c.session_transaction() as s:
+        s.pop("session_gen")
+    assert c.get("/home").status_code == 302
+    with c.session_transaction() as s:
+        assert "account_id" not in s
+
+
+def test_sign_out_without_a_session_is_harmless(made):  # noqa: F811
+    app, _ = made()
+    assert app.test_client().post("/logout").status_code == 302
+
+
+# --- schema ------------------------------------------------------------------
+
+@pytest.fixture
+def url(tmp_path):
+    env = os.environ.get("CARE_TEST_DATABASE_URL", "")
+    if env and not env.startswith("sqlite"):
+        engine = create_engine(env)
+        models.Base.metadata.drop_all(engine)
+        engine.dispose()
+        return env
+    return f"sqlite:///{tmp_path / 'legacy.db'}"
+
+
+def test_an_existing_account_gains_generation_zero(url):
+    legacy = create_engine(url)
+    with legacy.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE ca_accounts (id VARCHAR(32) PRIMARY KEY, "
+            "email VARCHAR(255) NOT NULL UNIQUE, email_verified_at FLOAT, "
+            "created_at FLOAT, last_login_at FLOAT)"))
+        conn.execute(text(
+            "INSERT INTO ca_accounts (id, email, created_at) "
+            "VALUES ('acct_legacy', 'legacy1087@example.test', 1.0)"))
+    engine = models.make_engine(url)
+    cols = {c["name"] for c in inspect(engine).get_columns("ca_accounts")}
+    assert "session_generation" in cols
+    with engine.connect() as conn:
+        gen = conn.execute(text(
+            "SELECT session_generation FROM ca_accounts "
+            "WHERE id = 'acct_legacy'")).scalar_one()
+    assert gen == 0
+    # A peer process that added it first is not an error.
+    models._add_column(engine, "ca_accounts", "session_generation",
+                       "INTEGER NOT NULL DEFAULT 0")
+    engine.dispose()
+    legacy.dispose()

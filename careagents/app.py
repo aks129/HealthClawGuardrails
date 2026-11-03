@@ -58,6 +58,9 @@ logger = logging.getLogger(__name__)
 #: not by a code or passkey. Limited (full_sign_in_required) and ended once
 #: the account has real records (login_required), #920 F1.
 _VIA_LINK = "via_link"
+#: Session key: the account's session_generation at sign-in. A session whose
+#: value no longer matches was signed out, here or elsewhere (#1087).
+_SESSION_GEN = "session_gen"
 #: Session key: the page a signed-out person asked for, so the sign-in that
 #: follows ends there and not on the hub (beta feedback, 2026-10-22).
 _AFTER_SIGN_IN = "after_sign_in"
@@ -577,6 +580,21 @@ def create_app(config: Config | None = None,
 
     # --- auth plumbing -------------------------------------------------------
 
+    @app.before_request
+    def _end_signed_out_session():
+        # A cookie signed in before a sign-out on any device is a signed-out
+        # visitor (#1087). Here, not in login_required: pages outside that
+        # gate read session["account_id"] too. A session from before the
+        # generation existed has none, and signs in again. A vanished
+        # account is login_required's to end, so it is left alone here.
+        # Nothing carries over: a copied cookie's parked state is not the
+        # visitor's own.
+        aid = session.get("account_id")
+        acct = svc.get_account(aid) if aid else None
+        if acct is not None and session.get(
+                _SESSION_GEN) != acct.session_generation:
+            session.clear()
+
     def current_account():
         aid = session.get("account_id")
         return svc.get_account(aid) if aid else None
@@ -656,6 +674,7 @@ def create_app(config: Config | None = None,
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
+        session[_SESSION_GEN] = account.session_generation
         if (isinstance(consent_req, str)
                 and consent.parse_handle(consent_req, cfg.mint_secret)):
             session["consent_req"] = consent_req
@@ -967,6 +986,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/logout")
     def logout():
+        # Ends this sign-in everywhere, not just in this browser (#1087).
+        if session.get("account_id"):
+            svc.end_sessions(session["account_id"])
         session.clear()
         return redirect(url_for("landing"))
 
