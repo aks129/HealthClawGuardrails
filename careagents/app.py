@@ -588,7 +588,10 @@ def create_app(config: Config | None = None,
         # generation existed has none, and signs in again. A vanished
         # account is login_required's to end, so it is left alone here.
         # Nothing carries over: a copied cookie's parked state is not the
-        # visitor's own.
+        # visitor's own. A static file reads no account, so it costs no
+        # lookup and cannot fail on a database that is down.
+        if request.endpoint == "static":
+            return
         aid = session.get("account_id")
         acct = svc.get_account(aid) if aid else None
         if acct is not None and session.get(
@@ -989,7 +992,9 @@ def create_app(config: Config | None = None,
         # Ends this sign-in everywhere, not just in this browser (#1087).
         # This browser first: a database that cannot be reached must not
         # leave the person signed in where they asked to sign out.
-        aid = session.get("account_id")
+        # A session a confirm link opened (#920 F1) ends only itself: a
+        # forwarded link must not sign the owner out on every device.
+        aid = None if session.get(_VIA_LINK) else session.get("account_id")
         session.clear()
         if aid:
             try:

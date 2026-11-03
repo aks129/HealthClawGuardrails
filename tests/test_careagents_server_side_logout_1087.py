@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 
 from careagents import models
+from careagents.app import _SESSION_GEN, _VIA_LINK
 from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import made  # noqa: F401  (fixture)
 
@@ -75,10 +76,39 @@ def test_a_session_from_before_the_generation_signs_in_again(
     app, svc = made()
     c = _signed_in(app, svc, monkeypatch)
     with c.session_transaction() as s:
-        s.pop("session_gen")
+        s.pop(_SESSION_GEN)
     assert c.get("/home").status_code == 302
     with c.session_transaction() as s:
         assert "account_id" not in s
+
+
+def test_a_confirm_link_session_signs_out_only_itself(made, monkeypatch):  # noqa: F811
+    """A forwarded confirm link must not sign the owner out everywhere."""
+    app, svc = made()
+    phone = _signed_in(app, svc, monkeypatch)
+    with phone.session_transaction() as s:
+        aid, gen = s["account_id"], s[_SESSION_GEN]
+    link = app.test_client()
+    with link.session_transaction() as s:
+        s["account_id"], s[_SESSION_GEN], s[_VIA_LINK] = aid, gen, True
+    assert link.get("/home").status_code == 200
+    assert link.post("/logout").status_code == 302
+    assert link.get("/home").status_code == 302
+    assert svc.get_account(aid).session_generation == gen
+    assert phone.get("/home").status_code == 200
+
+
+def test_a_static_file_reads_no_account(made, monkeypatch):  # noqa: F811
+    """No lookup, so a database that is down cannot fail a stylesheet."""
+    app, svc = made()
+    c = _signed_in(app, svc, monkeypatch)
+
+    def down(_aid):
+        raise AssertionError("a static file read an account")
+    monkeypatch.setattr(svc, "get_account", down)
+    r = c.get("/static/auth.js")
+    assert r.status_code == 200
+    r.close()
 
 
 def test_sign_out_without_a_session_is_harmless(made):  # noqa: F811
