@@ -160,3 +160,18 @@ def test_an_unnamed_organization_never_reads_its_upstream_text():
     out = _run([_item("orgs", resourceTypes=["Organization"])], [org])
     assert out["names"] == [["An organization"]]
     assert CANARY not in json.dumps(out["names"])
+
+
+@pytest.mark.parametrize("name, insurer", [
+    ("   ", "Your insurer"),
+    ("", "Your insurer"),
+    ("  Example Health Plan  ", "Example Health Plan"),
+])
+def test_a_coverage_payer_name_is_trimmed_and_blank_is_missing(name, insurer):
+    # The same rule as the Organization line above (#1105 QA E3).
+    org = {"resourceType": "Organization", "id": "payer-1", "name": name}
+    cov = {"resourceType": "Coverage", "id": "cov-1", "status": "active",
+           "subscriberId": "SYN12345678",
+           "payor": [{"reference": "Organization/payer-1"}]}
+    out = _run([_item("cov", resourceTypes=["Coverage"])], [cov, org])
+    assert out["names"] == [[f"{insurer}, member ID ending 5678"]]

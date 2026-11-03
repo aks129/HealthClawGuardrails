@@ -651,7 +651,7 @@ export function recordNames(match) {
         const payerRef = Array.isArray(r.payor) && r.payor[0] && r.payor[0].reference;
         const payer = byUrl.get(payerRef);
         const insurer = (payer && payer.resourceType === "Organization" &&
-          typeof payer.name === "string" && payer.name) || "Your insurer";
+          typeof payer.name === "string" && payer.name.trim()) || "Your insurer";
         return `${insurer}, member ID ${masked(r.subscriberId)}`;
       }
       case "Immunization": {
