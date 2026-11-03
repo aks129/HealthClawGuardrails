@@ -15,8 +15,8 @@ def test_reminder_action_is_valid_sms_payload():
 
 
 def test_reminder_number_is_not_in_the_audit_safe_label():
-    # `to` is the recipient LABEL surfaced by ProposedAction.summary() into
-    # audit + notify_tenant. The phone number is PHI and must never land there.
+    # `to` is a fixed recipient label. summary() no longer surfaces it
+    # (#1001), but the phone number is PHI and must never land there either.
     act = reminder_action("Patient/p1", "+15559998888", "en", 1, 28)
     assert act["payload"]["to"] != "+15559998888"
     assert "+15559998888" not in act["payload"]["to"]

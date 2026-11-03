@@ -9,19 +9,18 @@ fallback, symptom screen). Administrative only — no clinical advice.
 from r6.smbp.content import msg, SYMPTOM_PROMPTS
 
 
-def reminder_action(patient_ref, phone, lang, completed, prescribed,
-                    to_label="patient"):
+def reminder_action(patient_ref, phone, lang, completed, prescribed):
     """Build an `sms` action payload for a bilingual reading reminder.
 
     The recipient number goes in `payload.phone` — the key the SMS executor
-    reads. `payload.to` is only the PHI-safe recipient LABEL that
-    ProposedAction.summary() surfaces into audit + notify_tenant, so the number
-    must never be routed through it.
+    reads. `payload.to` is a fixed label kept with the payload; it never
+    reaches audit or notify_tenant, where ProposedAction.summary() names the
+    kind's own label instead (#1001). The number must never go in it either.
     """
     body = msg("reading_prompt", lang)
     return {
         "kind": "sms",
-        "payload": {"to": to_label, "phone": phone, "body": body,
+        "payload": {"to": "patient", "phone": phone, "body": body,
                     "meta": {"patient_ref": patient_ref,
                              "completed": completed, "prescribed": prescribed}},
     }

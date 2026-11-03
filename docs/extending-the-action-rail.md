@@ -96,8 +96,9 @@ A client proposes the synthetic action:
 }
 ```
 
-`propose` runs `validate()` and stores a draft. `commit` requires a step-up
-token and moves the action to `awaiting_confirmation`; it still does not call
+`propose` requires a write step-up token, runs `validate()` and stores a
+draft. `commit` requires a step-up token too and moves the action to
+`awaiting_confirmation`; it still does not call
 the provider. The human approval endpoint atomically claims the action, writes
 the consent record, then calls `execute()`. That is the only provider-call
 path.
