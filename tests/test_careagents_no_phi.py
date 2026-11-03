@@ -68,7 +68,9 @@ class _CanaryClient(FakeClient):
             "extension": [{"url": "field", "valueString": field}]}]}
 
     def pending_actions(self, tenant):
-        return [{"id": "act-1", "kind": "form-fill", "to": CANARY,
+        # A text, not a form: the approvals card shows `to` for every kind
+        # but form-fill (#853), and this canary must reach the page.
+        return [{"id": "act-1", "kind": "sms", "to": CANARY,
                  "status": "awaiting_confirmation"}]
 
     def action_status(self, tenant, action_id):
