@@ -194,23 +194,31 @@ def test_demo_agent_loop_into_a_closed_tenant(client, secret):
 
 def test_action_rail_review_writes_into_a_closed_tenant(
         app, client, tenant_headers, auth_headers):
-    """Commit (the first step-up-gated step) and review submit both refuse;
-    propose stays open because it carries no credential, so a 409 there
-    would tell anyone naming the tenant that it is closed. Confirm is
-    pinned in tests/test_tenant_closure_freeze.py."""
+    """Propose, commit and review submit all refuse a closed tenant. Propose
+    gained the check with its write grant (#1001, #1092 F2), and answers 409
+    only after the grant, so naming the tenant alone learns nothing. The
+    action here is proposed before the close, so commit and review are each
+    reached. Confirm is pinned in tests/test_tenant_closure_freeze.py."""
     from tests.test_intake_attestation_gate import (
         _allergy, _medication, _patient, _review, _store)
     tenant = tenant_headers["X-Tenant-Id"]
     for resource in (_patient(), _medication(), _allergy()):
         _store(resource, tenant)
-    _close(tenant)
-    proposed = client.post("/r6/actions/propose", headers=propose_headers(tenant_headers),
-                           json={"kind": "form-fill",
-                                 "payload": {"to": "Intake portal",
-                                             "questionnaire": "healthclaw-intake",
-                                             "body": "new patient intake"}})
+    form = {"kind": "form-fill",
+            "payload": {"to": "Intake portal",
+                        "questionnaire": "healthclaw-intake",
+                        "body": "new patient intake"}}
+    proposed = client.post("/r6/actions/propose",
+                           headers=propose_headers(tenant_headers), json=form)
     assert proposed.status_code == 201
     action_id = proposed.get_json()["id"]
+    _close(tenant)
+    assert client.post("/r6/actions/propose",
+                       headers=propose_headers(tenant_headers),
+                       json=form).status_code == 409
+    # Without a grant the refusal is the grant's, not the closure's.
+    assert client.post("/r6/actions/propose", headers=tenant_headers,
+                       json=form).status_code == 401
     assert client.post("/r6/actions/%s/commit" % action_id,
                        headers=auth_headers).status_code == 409
     assert _review(client, auth_headers, action_id,

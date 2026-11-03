@@ -391,6 +391,9 @@ def propose_action():
         absent_status=401,
         rejected_status=401,
     )
+    # A closed tenant stages nothing new (409, audited), as at commit. After
+    # the grant, so only a credentialed caller learns the tenant is closed.
+    require_open_tenant(tenant)
 
     body, too_deep = json_body_within_depth()
     if too_deep:

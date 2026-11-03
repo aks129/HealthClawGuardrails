@@ -154,9 +154,7 @@ def test_your_phone_is_not_believed_for_a_kind_that_is_not_a_text(
     assert json.loads(detail)["to"] != "your phone"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1092 F2: propose now carries a credential but still stages into a "
-    "closed tenant; commit refuses the same tenant with 409"))
+# #1092 F2, fixed: propose calls require_open_tenant after its grant.
 def test_propose_refuses_a_closed_tenant(app, client, auth_headers):
     tenant = auth_headers["X-Tenant-Id"]
     with app.app_context():
