@@ -1566,6 +1566,7 @@ def test_no_write_path_indexes_the_step_up_tuple():
         + ", ".join(offenders))
 
 
+@pytest.mark.extension
 def test_ingest_context_step_up_is_flag_conditional(client, monkeypatch,
                                                     tenant_id):
     """$ingest-context is the only write whose step-up gate depends on a flag.

@@ -42,6 +42,8 @@ OPTIONAL = (
     "r6.smbp",
     "r6.agent_runs",
     "r6.agent_client",
+    "r6.context_builder",
+    "r6.health_context",
 )
 _OPTIONAL_RE = re.compile(
     r"^(%s)(\.|$)" % "|".join(re.escape(name) for name in OPTIONAL))
@@ -145,6 +147,29 @@ def test_a_registry_claims_only_what_its_extensions_declare():
     assert not registry.provides("Patient/$care-gaps")
 
 
+def test_without_providers_the_core_reads_an_empty_context():
+    registry = extensions.ExtensionRegistry()
+    assert registry.health_context() == {}
+    assert registry.bundle_ingest is None
+    registry.add_health_context(lambda: {"audit_agent_default": "x"})
+    registry.add_bundle_ingest(lambda bundle, tenant_id=None: {})
+    assert registry.health_context() == {"audit_agent_default": "x"}
+    assert registry.bundle_ingest is not None
+
+
+def test_the_careagents_back_link_reads_app_config(app, monkeypatch):
+    from app import _careagents_home
+
+    monkeypatch.delenv("CAREAGENTS_CONSENT_URL", raising=False)
+
+    with app.test_request_context("/"):
+        app.config["CAREAGENTS_CONSENT_URL"] = "https://hub.example/authorize"
+        assert _careagents_home() == "https://hub.example/home"
+        app.config["CAREAGENTS_CONSENT_URL"] = ""
+        app.config["CAREAGENTS_HOME_URL"] = "https://other.example/home"
+        assert _careagents_home() == "https://other.example/home"
+
+
 # --- runtime, in a fresh interpreter -------------------------------------------
 
 _PROBE = r"""
@@ -174,6 +199,18 @@ interpret = client.post("/r6/fhir/Observation/$interpret", json={}, headers=h)
 gaps_get = client.get("/r6/fhir/Patient/$care-gaps", headers=h)
 gaps_post = client.post("/r6/fhir/Patient/$care-gaps", json={}, headers=h)
 meta = client.get("/r6/fhir/metadata", headers=h)
+ingest = client.post("/r6/fhir/Bundle/$ingest-context",
+                     json={"resourceType": "Bundle", "type": "collection"},
+                     headers=h)
+home = client.get("/")
+from r6.audit import add_audit_event
+from r6.models import AuditEventRecord
+with app.app_context():
+    add_audit_event("read", "Patient", "probe-1", tenant_id="test-tenant",
+                    detail="probe")
+    db.session.commit()
+    audit_agent = AuditEventRecord.query.filter_by(
+        resource_id="probe-1").one().agent_id
 from r6.extensions import get_registry
 print(json.dumps({
     "loaded": get_registry().loaded,
@@ -181,6 +218,9 @@ print(json.dumps({
     "gaps_get": [gaps_get.status_code, gaps_get.get_json()],
     "gaps_post": gaps_post.status_code,
     "metadata": [meta.status_code, meta.get_data(as_text=True)],
+    "ingest": [ingest.status_code, ingest.get_json()],
+    "home": home.status_code,
+    "audit_agent": audit_agent,
     "command_center": client.get("/command-center/api/overview").status_code,
     "optional_loaded": sorted(m for m in sys.modules
                               if any(m == b or m.startswith(b + ".")
@@ -214,6 +254,13 @@ def _assert_core_only(out):
     status, text = out["metadata"]
     assert status == 200
     assert "$interpret" not in text and "care-gaps" not in text
+    assert "ingest-context" not in text
+    status, body = out["ingest"]
+    assert status == 501
+    assert body["issue"][0]["code"] == "not-supported"
+    assert out["home"] == 200
+    # Audit is still written, under the core's own agent name.
+    assert out["audit_agent"] == "healthclaw-guardrails"
     assert out["command_center"] == 404
 
 

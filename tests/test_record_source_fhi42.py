@@ -250,6 +250,7 @@ def test_the_demo_history_cli_tags_its_rows_sample(app):
     assert rows and {r.source for r in rows} == {"sample"}
 
 
+@pytest.mark.extension
 def test_context_builder_rows_stay_untagged(client, auth_headers):
     """`$ingest-context` builds an agent's context envelope; it is not a
     channel a person brought records through, so its rows carry no source."""

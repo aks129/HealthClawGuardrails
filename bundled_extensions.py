@@ -32,6 +32,32 @@ def register(registry) -> None:
 
     registry.add_app_hook(_register_app)
 
+    registry.add_health_context(_health_context)
+    registry.add_bundle_ingest(_ingest_bundle)
+
+
+# --- Providers ---------------------------------------------------------------
+
+def _health_context():
+    # .health-context.yaml, loaded once and cached.
+    from r6.health_context import load_health_context
+
+    return load_health_context()
+
+
+_context_builder = None
+
+
+def _ingest_bundle(bundle, tenant_id=None):
+    # Imported on first use: r6.context_builder imports r6.audit, which the
+    # registry must not pull in while it is being built.
+    global _context_builder
+    if _context_builder is None:
+        from r6.context_builder import ContextBuilder
+
+        _context_builder = ContextBuilder()
+    return _context_builder.ingest_bundle(bundle, tenant_id=tenant_id)
+
 
 # --- FHIR blueprint routes -------------------------------------------------
 

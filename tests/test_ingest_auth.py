@@ -21,6 +21,8 @@ the `require_grant` call -> every refusal test fails; delete
 `_audit_refusal(exc)` in r6/access.py -> the deny tests fail.
 """
 
+import pytest
+
 from r6.models import AuditEventRecord
 from r6.stepup import generate_step_up_token
 
@@ -48,6 +50,16 @@ def test_ingest_context_requires_write_token_when_auth_enabled(
         },
     )
     assert read_only.status_code == 401
+
+
+# The refusals above hold without the ingest provider; acceptance needs it.
+@pytest.mark.extension
+def test_ingest_context_accepts_a_write_token_when_auth_enabled(
+    client, sample_bundle, monkeypatch,
+):
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    tenant = 'private-ingest-tenant'
+    base_headers = {'X-Tenant-Id': tenant}
 
     authorized = client.post(
         '/r6/fhir/Bundle/$ingest-context',
@@ -128,6 +140,7 @@ def test_a_refused_ingest_writes_one_row_and_no_agent_id(
                              row.resource_id, row.context_id, row.detail))
 
 
+@pytest.mark.extension
 def test_an_accepted_ingest_is_audited(app, client, sample_bundle, monkeypatch):
     """And so must an accepted one — resources landed in the record."""
     monkeypatch.setenv('READ_AUTH_ENABLED', 'true')

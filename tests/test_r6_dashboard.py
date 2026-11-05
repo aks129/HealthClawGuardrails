@@ -150,6 +150,7 @@ class TestDashboardPage:
 class TestFullAgentWorkflow:
     """End-to-end agent workflow: create → read → search → context → deidentify → audit."""
 
+    @pytest.mark.extension
     def test_complete_workflow(self, client, auth_headers, tenant_headers):
         # 1. Create patient
         patient = {
@@ -421,6 +422,7 @@ class TestBundleEdgeCases:
                           headers=tenant_headers)
         assert resp.status_code == 400
 
+    @pytest.mark.extension
     def test_bundle_with_unsupported_resources_skips_them(self, client, tenant_headers):
         """Unsupported resource types in a Bundle are skipped, not stored.
 
@@ -443,6 +445,7 @@ class TestBundleEdgeCases:
         # Only Patient should be stored (ImagingStudy is not supported)
         assert resp.get_json()['resource_count'] == 1
 
+    @pytest.mark.extension
     def test_bundle_all_valid_types(self, client, tenant_headers):
         """All valid Bundle.type values should be accepted."""
         for btype in ['document', 'message', 'collection', 'transaction', 'batch']:

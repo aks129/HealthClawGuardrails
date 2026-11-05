@@ -27,6 +27,10 @@ PATH = '/r6/fhir/Bundle/$ingest-context'
 _UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 
 
+# Needs the Bundle/$ingest-context provider (r6/extensions.py).
+pytestmark = pytest.mark.extension
+
+
 def _bundle(*resources):
     return {'resourceType': 'Bundle', 'type': 'collection',
             'entry': [{'resource': r} for r in resources]}

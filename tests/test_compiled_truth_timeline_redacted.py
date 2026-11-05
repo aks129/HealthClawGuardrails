@@ -81,6 +81,7 @@ def test_a_curatr_fix_shows_in_the_timeline_without_free_text(
     assert ev["reason"] == "Patient administration"
 
 
+@pytest.mark.extension
 def test_an_ingested_curatr_extension_is_not_ours(client, tenant_id):
     """The proof that change_summary cannot be kept on its grammar: the same
     extension URL reaches the store from a client with any text in it, and

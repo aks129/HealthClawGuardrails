@@ -322,9 +322,9 @@ def _register_request_hooks(flask_app: Flask) -> None:
 
     @flask_app.context_processor
     def inject_health_context():
-        from r6.health_context import load_health_context
+        from r6.extensions import get_registry
 
-        return {"health_context": load_health_context()}
+        return {"health_context": get_registry().health_context()}
 
     @flask_app.before_request
     def attach_request_id():

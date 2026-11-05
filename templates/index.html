@@ -46,7 +46,7 @@
   <div class="hc-nav__inner">
     <a href="{{ url_for('index') }}" class="hc-nav__brand">
       <span class="hc-nav__mark">HealthClaw</span>
-      <span class="hc-nav__ver">v{{ health_context.version }}</span>
+      {% if health_context.version %}<span class="hc-nav__ver">v{{ health_context.version }}</span>{% endif %}
     </a>
     <div class="hc-nav__links">
       <a href="{{ url_for('index') }}" class="hc-nav__link" aria-current="page">Home</a>

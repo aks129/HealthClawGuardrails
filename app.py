@@ -250,18 +250,21 @@ _TENANT_ID_PATTERN = _re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')
 
 # Where "Back to CareAgents" goes from the patient connect page. Only ever
 # server configuration, never the request: the origin of the consent URL
-# CareAgents already registers here, else the production hub.
+# CareAgents already registers here (app config, else the environment), else
+# CAREAGENTS_HOME_URL from app config, else the production hub.
 _CAREAGENTS_HOME_DEFAULT = 'https://careagents.cloud/home'
 
 
 def _careagents_home():
     from urllib.parse import urlsplit
-    configured = os.environ.get('CAREAGENTS_CONSENT_URL', '').strip()
+    configured = str(current_app.config.get('CAREAGENTS_CONSENT_URL')
+                     or os.environ.get('CAREAGENTS_CONSENT_URL', '')).strip()
     parts = urlsplit(configured)
     if parts.scheme in ('http', 'https') and parts.netloc \
             and _re.fullmatch(r'[A-Za-z0-9.:\-]+', parts.netloc):
         return f'{parts.scheme}://{parts.netloc}/home'
-    return _CAREAGENTS_HOME_DEFAULT
+    return current_app.config.get('CAREAGENTS_HOME_URL',
+                                  _CAREAGENTS_HOME_DEFAULT)
 
 
 def connect_view_tag(tenant_id):

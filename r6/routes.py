@@ -33,7 +33,6 @@ from models import db
 from r6 import checkin as _checkin, ktc as _ktc
 from r6 import constant_time
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
-from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.log_safety import loggable_id, payload_shape, vendor_request_id
@@ -79,7 +78,7 @@ from r6.curatr import (
     apply_fix as _curatr_apply_fix,
     persist_curation_state as _persist_curation_state,
 )
-from r6.health_context import get as _hc_get
+from r6.extensions import get_registry as _get_extensions
 
 _curatr_engine = CuratrEngine()
 
@@ -101,7 +100,6 @@ r6_blueprint.teardown_request(close_request_proxy)
 R6_FHIR_VERSION = '6.0.0-ballot3'
 
 # Initialize services
-context_builder = ContextBuilder()
 validator = R6Validator()
 
 # Valid FHIR id pattern
@@ -249,7 +247,7 @@ def r6_metadata():
         'format': ['json'],
         'software': {
             'name': 'HealthClaw Guardrails',
-            'version': _hc_get('version', '1.2.0'),
+            'version': _get_extensions().health_context().get('version', '1.2.0'),
         },
         'implementation': {
             'description': (
@@ -296,10 +294,10 @@ def r6_metadata():
                         'name': 'validate',
                         'definition': 'http://hl7.org/fhir/OperationDefinition/Resource-validate'
                     },
-                    {
+                    *([{
                         'name': 'ingest-context',
                         'definition': request.host_url.rstrip('/') + '/r6/fhir/Bundle/$ingest-context'
-                    },
+                    }] if _get_extensions().bundle_ingest else []),
                     {
                         'name': 'stats',
                         'definition': 'http://hl7.org/fhir/OperationDefinition/Observation-stats'
@@ -1066,10 +1064,19 @@ def ingest_context():
             'Bundle ingestion requires a tenant-bound write token'))
     require_open_tenant(tenant)
 
+    # The store-and-envelope step is an optional module (r6/extensions.py).
+    # Without one the gates above still ran, so a caller who may not write
+    # here is refused the same way whether or not it is installed.
+    ingest = _get_extensions().bundle_ingest
+    if ingest is None:
+        return _operation_outcome(
+            'error', 'not-supported',
+            'Bundle/$ingest-context is not supported by this server'), 501
+
     try:
         from r6.fasten.ingester import skipped_type_summary
 
-        result = context_builder.ingest_bundle(body, tenant_id=tenant_id)
+        result = ingest(body, tenant_id=tenant_id)
         # The types are code-owned names, never the feed's own string — see
         # `safe_skipped_type`. A discard the audit trail cannot name is the
         # #377 silence with a 201 on it.
