@@ -166,8 +166,7 @@ def test_the_careagents_back_link_reads_app_config(app, monkeypatch):
         app.config["CAREAGENTS_CONSENT_URL"] = "https://hub.example/authorize"
         assert _careagents_home() == "https://hub.example/home"
         app.config["CAREAGENTS_CONSENT_URL"] = ""
-        app.config["CAREAGENTS_HOME_URL"] = "https://other.example/home"
-        assert _careagents_home() == "https://other.example/home"
+        assert _careagents_home() == "https://careagents.cloud/home"
 
 
 # --- runtime, in a fresh interpreter -------------------------------------------
