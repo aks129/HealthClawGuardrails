@@ -7,6 +7,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+- A no-login guest check-in wallet at `/checkin/try-wallet`, behind
+  `CARE_CHECKIN_GUEST_WALLET` (off by default; needs `CARE_CHECKIN_WALLET`).
+  It answers only from the synthetic US Core test patient, labelled made up.
 - Share with a pharmacy by text: PHARMACY, then YES, hands a one-use SMART
   Health Link to a pharmacy's intake URL (RX Genie by default). Behind
   `CARE_PHARMACY_SHARE` on CareAgents and `KTC_LINK_ENABLED` on the engine,

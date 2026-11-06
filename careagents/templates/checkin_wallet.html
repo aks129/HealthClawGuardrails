@@ -7,6 +7,7 @@
 {% block bodyclass %}page-setup{% endblock %}
 {# Page-local styles, kept here while the wallet is behind its flag. #}
 {% block head %}
+{% if guest %}<meta name="robots" content="noindex">{% endif %}
 <style>
   .checkin-test-note { background: var(--practice-bg); color: var(--practice-ink);
     border: 1px solid var(--practice-line); border-radius: var(--radius-sm);
@@ -85,29 +86,46 @@
     border: 1px solid var(--hairline); border-radius: var(--radius-sm);
     padding: 10px 14px; margin: 0 0 12px; }
   h1[tabindex="-1"]:focus { outline: none; }
+  .checkin-guest-about { border-top: 1px solid var(--hairline); margin-top: 24px;
+    padding-top: 12px; font-size: 15px; color: var(--ink-soft); }
+  .checkin-guest-about summary { font-weight: 600; color: var(--ink);
+    min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+  .checkin-guest-about h2 { font-size: 15px; color: var(--ink); margin: 12px 0 4px; }
+  .checkin-guest-about ul { margin: 0; padding-left: 20px; }
+  .checkin-guest-about li { margin: 0 0 4px; overflow-wrap: anywhere; }
 </style>
 {% endblock %}
 {% block content %}
 <main class="setup-wrap">
   <div class="setup-card checkin-wallet" id="wallet"
        data-signed-in="{{ '1' if signed_in else '0' }}"
-       data-records="{{ url_for('checkin_wallet_records') }}"
+       {# The guest wallet (/checkin/try-wallet) is set here by its route,
+          never by the address: it has no relay, only the made-up file. #}
+       {% if guest %}data-guest="1"
+       {% else %}data-records="{{ url_for('checkin_wallet_records') }}"{% endif %}
        {% if test_patient %}data-test-patient="{{ url_for('checkin_wallet_test_patient') }}"{% endif %}>
     {# Plain words, not "Test version" (#1080). The review swaps it for the
        made-up patient's line when those records answer (#1081). #}
+    {% if guest %}
+    <p class="checkin-test-note" id="wallet-note">This answers from a made-up
+      patient's records, not yours. You choose what the website gets.</p>
+    {% else %}
     <p class="checkin-test-note" id="wallet-note">This answers from the
       records on your CareAgents account. You choose what the website gets.</p>
+    {% endif %}
 
     <div id="wallet-err" class="form-error" role="alert" hidden></div>
     {# Signed in, the sign-in section below is never shown, so its "could
        not start" would never be seen: say it here instead, and not as a
        sign-in failure (#1061 follow-up). #}
-    {% if signed_in %}
+    {% if signed_in or guest %}
     <p class="form-error" id="signin-stalled" role="alert" hidden>This page
       could not start. Reload the page.</p>
     {% endif %}
 
-    <section id="wallet-signin" {% if signed_in %}hidden{% endif %}>
+    {# Rendered hidden in guest mode, kept only because the script wires
+       it up. #}
+    <section id="wallet-signin" {% if signed_in or guest %}hidden{% endif %}>
       <h1>Sign in to answer</h1>
       {# The website's address is not known yet: it arrives with the request,
          and the request comes only after sign-in. So say when it will show. #}
@@ -122,7 +140,7 @@
            leave two dead buttons. #}
         <noscript><p class="form-error">Sign-in could not start. Turn on
           JavaScript, then reload the page.</p></noscript>
-        {% if not signed_in %}
+        {% if not signed_in and not guest %}
         <p class="form-error" id="signin-stalled" role="alert" hidden>Sign-in
           could not start. Reload the page.</p>
         {% endif %}
@@ -235,7 +253,55 @@
       <p class="setup-sub" id="wallet-done-text"></p>
       <button class="btn-primary btn-block" id="wallet-ok" hidden>OK</button>
     </section>
+
+    {% if guest %}
+    {# For connectathon testers: what this test wallet does, as of today.
+       Fixed text, closed by default, below everything the hand-off shows.
+       Case names in brackets are the organizers' Testing EHR cases. #}
+    <details class="checkin-guest-about" id="wallet-guest-about">
+      <summary>What this test wallet does</summary>
+      <p>Every item starts at "Don't share". Nothing is sent until you tap
+        Share and then Send. These are a made-up patient's records.</p>
+      <h2>Works, and passes the organizers' Testing EHR</h2>
+      <ul>
+        <li>Shares US Core records: patient, problems, allergies, medicines,
+          immunizations and insurance [any-us-core]</li>
+        <li>Declines every item [decline-all]</li>
+        <li>Answers "can't answer" to a kind of request it doesn't know
+          [unknown-selector]</li>
+        <li>Answers a request that names no kind of record [no-selector]</li>
+        <li>Fills in the PHQ-2 form, including a form name with a version
+          [fill-form, versioned-canonical]</li>
+        <li>Hands off in person at phone width [in-person-handoff]</li>
+      </ul>
+      <h2>Answers honestly instead</h2>
+      <ul>
+        <li>A form given only by its web address: "can't answer"
+          [form-by-reference]</li>
+        <li>Lab results and vital signs: "can't answer", because we don't
+          share those yet [narrowed-family]</li>
+        <li>Immunization and insurance cards: sent as FHIR records, not as
+          SMART Health Cards [health-card, insurance-card]</li>
+      </ul>
+      <h2>Not supported</h2>
+      <ul>
+        <li>Answers over 400 KB [large-response]</li>
+        <li>One record answering two items [shared-artifact]</li>
+        <li>Cross-device, with a QR code to a phone [cross-device]</li>
+        <li>Forms that come filled in [prefilled-form]</li>
+      </ul>
+      <h2>Coming soon</h2>
+      <ul>
+        <li>The physician's form, with questions that show only for some
+          answers [physician-form]</li>
+      </ul>
+    </details>
+    {% endif %}
   </div>
 </main>
+{% if guest %}
+{# The synthetic US Core test patient (#959), the guest wallet's only records. #}
+<script type="application/json" id="wallet-guest-records">{{ guest_records|tojson }}</script>
+{% endif %}
 <script type="module" src="{{ url_for('static', filename='checkin_wallet.js') }}"></script>
 {% endblock %}
