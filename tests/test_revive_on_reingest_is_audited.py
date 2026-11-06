@@ -19,6 +19,7 @@ import json
 
 from models import db
 from r6.models import AuditEventRecord, R6Resource
+import pytest
 
 PATH = '/r6/fhir/Bundle/$ingest-context'
 REVIVE = 'tombstone lifted on re-ingest'
@@ -63,6 +64,7 @@ def _post(client, headers, rid):
 
 # --- context builder path ------------------------------------------------
 
+@pytest.mark.extension
 def test_context_builder_revive_is_audited(client, app, tenant_headers, tenant_id):
     rid = 'revive-cb-558'
     assert _post(client, tenant_headers, rid).status_code == 201
@@ -80,6 +82,7 @@ def test_context_builder_revive_is_audited(client, app, tenant_headers, tenant_i
     _no_phi_in_audit(app, tenant_id)
 
 
+@pytest.mark.extension
 def test_context_builder_never_deleted_upsert_is_not_called_a_revive(
         client, app, tenant_headers, tenant_id):
     rid = 'upsert-cb-558'

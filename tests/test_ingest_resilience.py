@@ -10,6 +10,7 @@ import uuid
 
 from r6.models import R6Resource
 from models import db
+import pytest
 
 
 def test_resource_id_column_fits_real_ehr_ids():
@@ -610,6 +611,7 @@ def test_the_shc_path_names_skipped_types_the_same_way(app, tenant_id):
     assert "MedicationAdministration:1" in _shc_summary_detail("job377")
 
 
+@pytest.mark.extension
 def test_ingest_context_tells_its_caller_what_it_dropped(client, tenant_headers):
     """The third ingest path, and the only SYNCHRONOUS one — the caller is
     holding the response. It answered `resource_count: 1` for a two-entry

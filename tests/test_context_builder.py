@@ -4,8 +4,14 @@ Tests for the Context Builder service.
 
 import json
 
+import pytest
+
 from models import db
 from r6.models import R6Resource
+
+
+# Needs the Bundle/$ingest-context provider (r6/extensions.py).
+pytestmark = pytest.mark.extension
 
 
 class TestContextBuilder:

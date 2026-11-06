@@ -25,7 +25,7 @@ import unicodedata
 import uuid
 from functools import wraps
 from urllib.parse import urlencode, urlsplit
-from flask import request, jsonify, redirect
+from flask import current_app, has_app_context, request, jsonify, redirect
 from r6.runtime_config import resolve_app_env
 from r6.runtime_config import read_auth_enabled
 from r6.runtime_config import internal_mint_secret
@@ -94,8 +94,11 @@ def resource_policies():
 
 def consent_url():
     """Where a browser is sent to sign in and decide (spec §13.2). Unset
-    means no consent surface, and the MCP audience stays on the demo tenant."""
-    return os.environ.get('CAREAGENTS_CONSENT_URL', '').strip()
+    means no consent surface, and the MCP audience stays on the demo tenant.
+    App config first, then the environment, as app.py's back link reads it."""
+    configured = (current_app.config.get('CAREAGENTS_CONSENT_URL')
+                  if has_app_context() else None)
+    return str(configured or os.environ.get('CAREAGENTS_CONSENT_URL', '')).strip()
 
 
 def _handoff_key():

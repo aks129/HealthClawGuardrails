@@ -4,6 +4,7 @@ Tests for R6 FHIR REST endpoints.
 
 import json
 from urllib.parse import parse_qs, urlsplit
+import pytest
 
 
 class TestR6Metadata:
@@ -34,9 +35,17 @@ class TestR6Metadata:
         data = resp.get_json()
         ops = data['rest'][0]['operation']
         op_names = [o['name'] for o in ops]
-        assert 'validate' in op_names
+        for name in ('validate', 'stats', 'lastn'):
+            assert name in op_names
+
+    # Listed only when the Bundle/$ingest-context provider is installed.
+    @pytest.mark.extension
+    def test_metadata_lists_ingest_context(self, client):
+        resp = client.get('/r6/fhir/metadata')
+        op_names = [o['name'] for o in resp.get_json()['rest'][0]['operation']]
         assert 'ingest-context' in op_names
 
+    @pytest.mark.extension
     def test_metadata_version_is_current(self, client):
         """CapabilityStatement.software.version must match pyproject.toml."""
         import tomllib
@@ -373,6 +382,7 @@ class TestR6Validate:
 class TestR6ContextIngestion:
     """Test Bundle ingestion and context builder."""
 
+    @pytest.mark.extension
     def test_ingest_bundle_creates_context(self, client, sample_bundle, tenant_headers):
         resp = client.post('/r6/fhir/Bundle/$ingest-context',
                           data=json.dumps(sample_bundle),
@@ -384,6 +394,7 @@ class TestR6ContextIngestion:
         assert data['resource_count'] == 2
         assert data['patient_ref'] == 'Patient/test-patient-1'
 
+    @pytest.mark.extension
     def test_get_context_envelope(self, client, sample_bundle, tenant_headers):
         ingest_resp = client.post('/r6/fhir/Bundle/$ingest-context',
                                   data=json.dumps(sample_bundle),
@@ -398,6 +409,7 @@ class TestR6ContextIngestion:
         assert data['context_id'] == context_id
         assert data['item_count'] == 2
 
+    @pytest.mark.extension
     def test_get_context_cross_tenant_blocked(self, client, sample_bundle,
                                               tenant_headers, other_tenant_headers):
         """Context envelopes should be tenant-isolated."""
@@ -411,6 +423,7 @@ class TestR6ContextIngestion:
                          headers=other_tenant_headers)
         assert resp.status_code == 404
 
+    @pytest.mark.extension
     def test_ingest_empty_bundle_fails(self, client, tenant_headers):
         empty_bundle = {'resourceType': 'Bundle', 'type': 'collection', 'entry': []}
         resp = client.post('/r6/fhir/Bundle/$ingest-context',
@@ -478,6 +491,7 @@ class TestR6AuditEvents:
         data = resp.get_json()
         assert data['total'] >= 1
 
+    @pytest.mark.extension
     def test_audit_events_filterable_by_context(self, client, sample_bundle, tenant_headers):
         ingest_resp = client.post('/r6/fhir/Bundle/$ingest-context',
                                   data=json.dumps(sample_bundle),
@@ -1596,6 +1610,7 @@ class TestPermissionReasoning:
 class TestContextEnforcement:
     """Test that context envelope can include resources."""
 
+    @pytest.mark.extension
     def test_context_with_include_resources(self, client, sample_bundle, tenant_headers):
         """?_include=resources should return actual resource data."""
         ingest_resp = client.post('/r6/fhir/Bundle/$ingest-context',
@@ -1992,6 +2007,7 @@ class TestPhase2CapabilityStatement:
         assert 'stats' in op_names
         assert 'lastn' in op_names
 
+    @pytest.mark.extension
     def test_metadata_version_is_phase2(self, client):
         # Phase-2 features shipped in >=1.3.0; the exact version tracks pyproject.
         import tomllib

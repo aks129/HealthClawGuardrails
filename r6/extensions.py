@@ -19,6 +19,13 @@ contribution at the point where it belongs:
   the like on each app ``create_app`` builds.
 - ``add_model_module(name)`` — a module whose import declares SQLAlchemy
   tables, so ``create_all`` and the migration helpers see them.
+- ``add_health_context(fn)`` — ``fn()`` returns the deployment's declared
+  context (name, version, default audit agent, ...). Without one the core
+  reads an empty mapping, and every caller keeps its own literal default.
+- ``add_bundle_ingest(fn)`` — ``fn(bundle, tenant_id=...)`` stores a Bundle
+  and builds its context envelope for ``Bundle/$ingest-context``. The core
+  keeps the route and its gates (depth bound, write grant, closed tenant,
+  audit); without a provider the route answers ``501 not-supported``.
 
 Tenant purge does not go through the registry. The migrations create every
 optional module's tables whichever modules a process loads, so
@@ -78,6 +85,8 @@ class ExtensionRegistry:
         self.app_hooks: list[Callable] = []
         self.model_modules: list[str] = []
         self.operations: set[str] = set()
+        self.health_context_provider: Callable | None = None
+        self.bundle_ingest: Callable | None = None
 
     def add_r6_routes(self, fn: Callable, operations=()) -> None:
         self.r6_routes.append(fn)
@@ -89,8 +98,20 @@ class ExtensionRegistry:
     def add_model_module(self, name: str) -> None:
         self.model_modules.append(name)
 
+    def add_health_context(self, fn: Callable) -> None:
+        self.health_context_provider = fn
+
+    def add_bundle_ingest(self, fn: Callable) -> None:
+        self.bundle_ingest = fn
+
     def provides(self, operation: str) -> bool:
         return operation in self.operations
+
+    def health_context(self) -> dict:
+        """The declared context, or an empty mapping with no provider."""
+        if self.health_context_provider is None:
+            return {}
+        return self.health_context_provider()
 
 
 def _resolve(spec: str) -> Callable:

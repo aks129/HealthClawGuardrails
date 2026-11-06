@@ -10,7 +10,7 @@ import logging
 import re
 from models import db
 from r6.models import AuditEventRecord
-from r6.health_context import get as _hc_get
+from r6.extensions import get_registry as _get_extensions
 from r6.log_safety import id_hash, loggable_id, scrub as scrub_credentials
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,8 @@ def _new_audit_event(event_type, resource_type=None, resource_id=None,
         tenant_id=tenant_id,
         agent_id=(
             _storable_agent_id(agent_id) if agent_id
-            else _hc_get('audit_agent_default', 'healthclaw-guardrails')
+            else _get_extensions().health_context().get(
+                'audit_agent_default', 'healthclaw-guardrails')
         ),
         outcome=outcome,
         outcome_detail_code=outcome_detail_code,

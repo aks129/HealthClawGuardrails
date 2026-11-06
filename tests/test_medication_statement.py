@@ -100,6 +100,7 @@ def test_the_shc_bundle_path_stores_it(app, tenant_id):
     assert counts["skipped_types"] == {}
 
 
+@pytest.mark.extension
 def test_ingest_context_stores_it(client, tenant_headers):
     resp = client.post(
         "/r6/fhir/Bundle/$ingest-context",
