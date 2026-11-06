@@ -29,6 +29,7 @@ def register(registry) -> None:
     # are registered here, with command_center.models, until core registers
     # them itself.
     registry.add_model_module("r6.agent_runs.models")
+    registry.add_model_module("r6.conversations")
     registry.add_model_module("r6.command_center.models")
     registry.add_model_module("r6.smbp.models")
 

@@ -160,3 +160,35 @@ def test_the_moved_tables_keep_their_names_and_constraints():
     assert {"fk_cc_message_conversation", "uq_cc_message_request"} <= msg
     assert [c.name for c in Conversation.__table__.primary_key.columns] == [
         "tenant_id", "id"]
+
+
+def test_the_moved_tables_keep_their_column_types():
+    """Widths matter on Postgres; this pins them without a database."""
+    from r6.conversations import Conversation, ConversationMessage
+
+    def cols(model):
+        return {c.name: str(c.type) for c in model.__table__.columns}
+
+    assert cols(Conversation) == {
+        "id": "VARCHAR(128)", "tenant_id": "VARCHAR(64)",
+        "agent_id": "VARCHAR(64)", "created_by_surface": "VARCHAR(32)",
+        "status": "VARCHAR(24)", "created_at": "DATETIME",
+        "updated_at": "DATETIME"}
+    assert cols(ConversationMessage) == {
+        "id": "VARCHAR(64)", "tenant_id": "VARCHAR(64)",
+        "conversation_id": "VARCHAR(128)", "agent_id": "VARCHAR(64)",
+        "channel": "VARCHAR(32)", "session_id": "VARCHAR(128)",
+        "user_id": "VARCHAR(128)", "role": "VARCHAR(16)", "text": "TEXT",
+        "request_id": "VARCHAR(128)", "reply_to": "VARCHAR(64)",
+        "metadata_json": "TEXT", "created_at": "DATETIME"}
+
+
+def test_the_conversation_tables_are_registered_by_name():
+    """Registered directly, not only as a side effect of the command
+    center's re-export, so removing that shim cannot drop the tables."""
+    import bundled_extensions
+    from r6.extensions import ExtensionRegistry
+
+    registry = ExtensionRegistry()
+    bundled_extensions.register(registry)
+    assert "r6.conversations" in registry.model_modules
