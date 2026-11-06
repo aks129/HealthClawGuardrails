@@ -247,7 +247,7 @@ def r6_metadata():
         'format': ['json'],
         'software': {
             'name': 'HealthClaw Guardrails',
-            'version': _get_extensions().health_context().get('version', '1.2.0'),
+            'version': _get_extensions().health_context().get('version', __version__),
         },
         'implementation': {
             'description': (

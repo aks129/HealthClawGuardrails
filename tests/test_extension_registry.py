@@ -169,6 +169,17 @@ def test_the_careagents_back_link_reads_app_config(app, monkeypatch):
         assert _careagents_home() == "https://careagents.cloud/home"
 
 
+def test_the_oauth_consent_url_reads_app_config_first(app, monkeypatch):
+    from r6.oauth import consent_url
+
+    monkeypatch.setenv("CAREAGENTS_CONSENT_URL", "https://env.example/authorize")
+    with app.app_context():
+        app.config["CAREAGENTS_CONSENT_URL"] = "https://hub.example/authorize"
+        assert consent_url() == "https://hub.example/authorize"
+        app.config["CAREAGENTS_CONSENT_URL"] = ""
+        assert consent_url() == "https://env.example/authorize"
+
+
 # --- runtime, in a fresh interpreter -------------------------------------------
 
 _PROBE = r"""
@@ -254,6 +265,9 @@ def _assert_core_only(out):
     assert status == 200
     assert "$interpret" not in text and "care-gaps" not in text
     assert "ingest-context" not in text
+    # The release version, not a stale literal, with no context provider.
+    from r6.version import __version__
+    assert json.loads(text)["software"]["version"] == __version__
     status, body = out["ingest"]
     assert status == 501
     assert body["issue"][0]["code"] == "not-supported"
