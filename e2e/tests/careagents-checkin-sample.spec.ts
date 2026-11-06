@@ -108,12 +108,10 @@ async function openForm(page: Page,
   // Every item starts unshared.
   await expect(tab.locator('#wallet-items .checkin-choice')).toHaveCount(4);
   await expect(tab.locator('#wallet-items input[value=share]:checked')).toHaveCount(0);
-  // The free-text question is shown as one it does not answer, and the
-  // line says it is about the question below it.
+  // The free-text question takes the person's own words, and starts empty.
   const intake = tab.locator('#wallet-items li[data-item=intake]');
   await expect(intake).toContainText('What brings you in today?');
-  await expect(intake.locator('.checkin-skipped-why'))
-    .toHaveText("This page can't answer the next question. Nothing is sent for it.");
+  await expect(intake.locator('.checkin-typed')).toHaveValue('');
   return tab;
 }
 
@@ -127,6 +125,7 @@ test.describe('sample new-patient form at 375px', () => {
         await tab.locator(`#wallet-items li[data-item=${id}] input[value=share]`).check();
       }
       await tab.locator('#wallet-items li[data-item=intake]').getByLabel('Yes').check();
+      await tab.locator('#wallet-items li[data-item=intake] .checkin-typed').fill('A sore knee');
       await tab.locator('#wallet-send').click();
 
       // Made-up records, said so, and not called "your" (#1081).
@@ -138,7 +137,7 @@ test.describe('sample new-patient form at 375px', () => {
       await expect(answers.nth(1)).toContainText('Penicillin');
       await expect(answers.nth(2)).toContainText('Hypertensive disorder');
       await expect(answers.nth(3)).toContainText('Is this your first visit to our clinic?Yes');
-      await expect(answers.nth(4)).toContainText("You'd tell the clinic yourself");
+      await expect(answers.nth(4)).toContainText('What brings you in today?A sore knee');
       // Nothing scrolls sideways on a phone.
       expect(await page.evaluate(() =>
         document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
