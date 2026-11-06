@@ -31,7 +31,7 @@ from r6.agent_runs.service import (
     worker_availability,
 )
 from r6.agent_runs.state import InvalidTransition
-from r6.command_center.models import ConversationMessage
+from r6.conversations import ConversationMessage
 from r6.read_auth import TENANT_SESSION_KEY
 from r6.access import Scope, Tenant, TenantSource, has_grant
 

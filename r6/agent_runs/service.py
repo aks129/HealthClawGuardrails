@@ -23,7 +23,7 @@ from r6.agent_runs.state import (
     require_run_transition,
     require_tool_transition,
 )
-from r6.command_center.models import (
+from r6.conversations import (
     Conversation,
     ConversationMessage,
     audit_channel,
