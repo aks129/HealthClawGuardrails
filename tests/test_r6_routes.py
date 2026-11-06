@@ -30,13 +30,19 @@ class TestR6Metadata:
         assert 'Observation' in resource_types
         assert 'AuditEvent' in resource_types
 
-    @pytest.mark.extension
     def test_metadata_lists_operations(self, client):
         resp = client.get('/r6/fhir/metadata')
         data = resp.get_json()
         ops = data['rest'][0]['operation']
         op_names = [o['name'] for o in ops]
-        assert 'validate' in op_names
+        for name in ('validate', 'stats', 'lastn'):
+            assert name in op_names
+
+    # Listed only when the Bundle/$ingest-context provider is installed.
+    @pytest.mark.extension
+    def test_metadata_lists_ingest_context(self, client):
+        resp = client.get('/r6/fhir/metadata')
+        op_names = [o['name'] for o in resp.get_json()['rest'][0]['operation']]
         assert 'ingest-context' in op_names
 
     @pytest.mark.extension

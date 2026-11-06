@@ -169,6 +169,44 @@ def test_the_careagents_back_link_reads_app_config(app, monkeypatch):
         assert _careagents_home() == "https://careagents.cloud/home"
 
 
+def test_the_back_link_and_the_consent_handoff_read_the_same_url(
+        app, monkeypatch):
+    # Config and environment disagree: both readers must pick the same one.
+    from urllib.parse import urlsplit
+
+    from app import _careagents_home
+    from r6.oauth import consent_url
+
+    monkeypatch.setenv("CAREAGENTS_CONSENT_URL", "https://env.example/authorize")
+    with app.test_request_context("/"):
+        app.config["CAREAGENTS_CONSENT_URL"] = "https://hub.example/authorize"
+        origin = urlsplit(consent_url())
+        assert _careagents_home() == f"{origin.scheme}://{origin.netloc}/home"
+        assert _careagents_home() == "https://hub.example/home"
+
+
+def test_a_health_context_provider_is_what_the_core_reads(
+        app, client, monkeypatch):
+    # Values unlike the core's fallbacks ('healthclaw-guardrails' and the
+    # release version), so the assertions cannot pass on the fallbacks.
+    from models import db
+    from r6.audit import add_audit_event
+    from r6.models import AuditEventRecord
+
+    monkeypatch.setattr(
+        extensions.get_registry(), "health_context_provider",
+        lambda: {"audit_agent_default": "provider-agent",
+                 "version": "9.9.9-provider"})
+    add_audit_event("read", "Patient", "provider-probe",
+                    tenant_id="test-tenant", detail="probe")
+    db.session.commit()
+    row = AuditEventRecord.query.filter_by(resource_id="provider-probe").one()
+    assert row.agent_id == "provider-agent"
+    meta = client.get("/r6/fhir/metadata",
+                      headers={"X-Tenant-Id": "test-tenant"}).get_json()
+    assert meta["software"]["version"] == "9.9.9-provider"
+
+
 def test_the_oauth_consent_url_reads_app_config_first(app, monkeypatch):
     from r6.oauth import consent_url
 
