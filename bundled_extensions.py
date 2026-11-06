@@ -25,7 +25,9 @@ def register(registry) -> None:
     registry.add_r6_routes(_brief_routes)
 
     # The durable run queue is keyed to the conversation tables (its foreign
-    # keys name them), so the two register together.
+    # keys name them). Those tables are declared in r6/conversations.py and
+    # reach the metadata through command_center.models' re-export, so the
+    # two still register together until core registers them itself.
     registry.add_model_module("r6.agent_runs.models")
     registry.add_model_module("r6.command_center.models")
     registry.add_model_module("r6.smbp.models")

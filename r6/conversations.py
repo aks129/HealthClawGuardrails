@@ -5,9 +5,12 @@ Conversation — durable thread identity shared across messaging surfaces.
 
 ConversationMessage — one persisted turn, from any channel.
 
-These are core tables. A chat transcript is PHI-adjacent, so it is stored
-here, per tenant, and nowhere else. Optional modules (the command center,
-the run queue) read and write them; they do not own them.
+A chat transcript is PHI-adjacent, so these are the tables the engine
+writes transcripts to, per tenant. Optional modules such as the command
+center read and write them; they do not own them.
+
+The tables keep their original ``cc_`` names on purpose: renaming them
+would need a migration, and the prefix is history, not ownership.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ class Conversation(db.Model):
     id = db.Column(db.String(128), nullable=False)
     tenant_id = db.Column(db.String(64), nullable=False, index=True)
     # Opaque identity in the calling system's namespace (for example a
-    # CareAgents agent UUID). It is tenant-scoped, not a command-center FK.
+    # CareAgents agent UUID). It is tenant-scoped, not a foreign key.
     agent_id = db.Column(db.String(64), nullable=True, index=True)
     created_by_surface = db.Column(db.String(32), nullable=False,
                                    default="unknown")
