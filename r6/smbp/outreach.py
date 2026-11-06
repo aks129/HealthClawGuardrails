@@ -13,9 +13,10 @@ def reminder_action(patient_ref, phone, lang, completed, prescribed):
     """Build an `sms` action payload for a bilingual reading reminder.
 
     The recipient number goes in `payload.phone` — the key the SMS executor
-    reads. `payload.to` is a fixed label kept with the payload; it never
-    reaches audit or notify_tenant, where ProposedAction.summary() names the
-    kind's own label instead (#1001). The number must never go in it either.
+    reads. `payload.to` is a fixed, PHI-free label: ProposedAction.summary()
+    passes "patient" through to audit (#1093), and names the kind's own
+    label for anything else (#1001). The approval push names no recipient.
+    The number must never go in it.
     """
     body = msg("reading_prompt", lang)
     return {

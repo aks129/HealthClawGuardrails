@@ -48,8 +48,9 @@ RECIPIENT_LABELS = {
 # phone' is CareAgents' text_self.RECIPIENT_LABEL; it is retyped rather
 # than imported because importing careagents loads the whole consumer app
 # into the engine. tests/test_actions_models.py pins the two together.
+# 'patient' is the label r6/smbp/outreach.py stages its reminders with.
 SAFE_TO_LABELS = {
-    'sms': frozenset({'your phone'}),
+    'sms': frozenset({'your phone', 'patient'}),
 }
 
 # Legal status transitions. awaiting_confirmation is the out-of-band gate:

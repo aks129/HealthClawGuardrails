@@ -756,6 +756,17 @@ class HealthClawClient:
             headers={"X-Tenant-Id": tenant,
                      "X-Internal-Secret": self.mint_secret},
             what="approval token mint")
+        if mint.status_code == 409:
+            # No longer awaiting an answer. From a stale tab that is often
+            # because this person already declined it (#1099 QA): read the
+            # status, and only an engine that says `declined` is a decline.
+            # Anything else keeps the mint failure below.
+            try:
+                state = self.action_status(tenant, action_id).get("status")
+            except HealthClawError:
+                state = None
+            if state == "declined":
+                return 200, {"id": action_id, "status": "declined"}
         token = (self._json_object(mint, "approval token mint").get("token")
                  if mint.ok else None)
         if not token:
