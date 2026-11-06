@@ -4,7 +4,12 @@ command center: they are core, and the command center is optional.
 MUTATION: put `from r6.command_center.models import ConversationMessage`
 (or `from r6 import command_center`, or the relative form) back into any
 file under r6/agent_runs/ and test_core_files_do_not_import_the_command_center
-fails; an importlib call there fails test_run_queue_imports_with_command_center_blocked.
+fails. So does `importlib.import_module("r6.command_center.models")` or
+`__import__(...)` with a literal name, wherever it sits (a function body, a
+try/except). A module-level import reached transitively fails
+test_run_queue_imports_with_command_center_blocked.
+
+Not covered: a dynamic import whose module name is computed at runtime.
 """
 
 import ast
@@ -45,6 +50,23 @@ def _imported_modules(source: str, package: str) -> set[str]:
     return names
 
 
+def _dynamic_import_names(source: str) -> set[str]:
+    """Literal module names passed to importlib.import_module or __import__,
+    anywhere in ``source``, including inside functions and try blocks."""
+    names = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        called = (func.attr if isinstance(func, ast.Attribute)
+                  else func.id if isinstance(func, ast.Name) else None)
+        arg = node.args[0]
+        if called in ("import_module", "__import__") and isinstance(
+                arg, ast.Constant) and isinstance(arg.value, str):
+            names.add(arg.value)
+    return names
+
+
 def _is_forbidden(name: str) -> bool:
     return name == FORBIDDEN or name.startswith(FORBIDDEN + ".")
 
@@ -63,6 +85,18 @@ def test_the_import_reader_sees_every_static_shape(source):
     assert any(_is_forbidden(n) for n in found), (source, sorted(found))
 
 
+@pytest.mark.parametrize("source", [
+    "import importlib\nimportlib.import_module('r6.command_center.models')",
+    "from importlib import import_module\n"
+    "def f():\n    return import_module('r6.command_center')",
+    "def f():\n    try:\n        __import__('r6.command_center.routes')\n"
+    "    except ImportError:\n        pass",
+])
+def test_the_dynamic_reader_sees_literal_calls_anywhere(source):
+    found = _dynamic_import_names(source)
+    assert any(_is_forbidden(n) for n in found), (source, sorted(found))
+
+
 def test_the_import_reader_does_not_flag_the_core_module():
     found = _imported_modules(
         "from r6.conversations import ConversationMessage\n"
@@ -77,7 +111,9 @@ def test_core_files_do_not_import_the_command_center():
         assert expected in examined, f"not examined: {expected}"
     offenders = {}
     for p in CORE_FILES:
-        bad = sorted(n for n in _imported_modules(p.read_text(), _package_of(p))
+        source = p.read_text()
+        bad = sorted(n for n in (_imported_modules(source, _package_of(p))
+                                 | _dynamic_import_names(source))
                      if _is_forbidden(n))
         if bad:
             offenders[str(p.relative_to(ROOT))] = bad
@@ -85,19 +121,22 @@ def test_core_files_do_not_import_the_command_center():
 
 
 def test_run_queue_imports_with_command_center_blocked():
-    """Transitive and dynamic imports: load every run-queue module in a fresh
-    interpreter where importing r6.command_center raises."""
+    """Module-level transitive imports: load every run-queue module in a fresh
+    interpreter where importing r6.command_center raises, then check that no
+    command-center module was loaded."""
     code = (
         "import sys\n"
         "sys.modules['r6.command_center'] = None\n"
         "import r6.conversations, r6.agent_runs, r6.agent_runs.models, "
         "r6.agent_runs.state, r6.agent_runs.service, r6.agent_runs.routes\n"
-        "print('ok')\n"
+        "print(sorted(m for m, v in sys.modules.items()\n"
+        "             if v is not None and m.startswith('r6.command_center')))\n"
     )
-    env = dict(os.environ, HEALTHCLAW_EXTENSIONS="", PYTHONDONTWRITEBYTECODE="1")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
                        capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stderr[-2000:]
+    assert r.returncode == 0, r.stderr[-2000:]
+    assert r.stdout.strip().splitlines()[-1] == "[]", r.stdout[-2000:]
 
 
 def test_command_center_reexports_the_same_classes():
@@ -107,3 +146,17 @@ def test_command_center_reexports_the_same_classes():
     for name in ("Conversation", "ConversationMessage", "audit_channel",
                  "KNOWN_CHANNELS", "default_conversation_id"):
         assert getattr(models, name) is getattr(conversations, name)
+
+
+def test_the_moved_tables_keep_their_names_and_constraints():
+    """No migration rides on this move, so the schema identity is pinned."""
+    from r6.conversations import Conversation, ConversationMessage
+
+    assert Conversation.__table__.name == "cc_conversations"
+    assert ConversationMessage.__table__.name == "cc_conversation_messages"
+    conv = {c.name for c in Conversation.__table__.constraints}
+    msg = {c.name for c in ConversationMessage.__table__.constraints}
+    assert "pk_cc_conversations" in conv
+    assert {"fk_cc_message_conversation", "uq_cc_message_request"} <= msg
+    assert [c.name for c in Conversation.__table__.primary_key.columns] == [
+        "tenant_id", "id"]

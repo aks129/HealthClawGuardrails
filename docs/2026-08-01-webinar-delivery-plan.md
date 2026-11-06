@@ -30,7 +30,7 @@ ICP-webinar headline.
 | Instead of | We ship | Why |
 |---|---|---|
 | A terminology service / FHIR ValueSet resolver | A **static Python dict** of the top-N codes, sized by measurement | Zero infra, zero latency, trivially troubleshootable. A dict lookup cannot fail in production. |
-| A new chat-history store + PHI-boundary renegotiation | **Reuse `ConversationMessage`** (`r6/command_center/models.py`) and the existing `GET`/`POST /command-center/api/conversations` | Already tenant-scoped, already on the HealthClaw side of the boundary, already covered by `purge_tenant`. Persistence becomes wiring, not architecture. |
+| A new chat-history store + PHI-boundary renegotiation | **Reuse `ConversationMessage`** (`r6/conversations.py`; it lived in `r6/command_center/models.py` when this was written) and the existing `GET`/`POST /command-center/api/conversations` | Already tenant-scoped, already on the HealthClaw side of the boundary, already covered by `purge_tenant`. Persistence becomes wiring, not architecture. |
 | A document-understanding pipeline | **Add `DocumentReference` to the search enum** + surface existing text through redaction | The read path is already proven in the MCP server. |
 | Sentry + metrics + dashboards | **One 6-hourly cron** running the existing `scripts/careagents_smoke.py`, opening a pinned issue on failure | The alerting channel a solo maintainer actually reads. |
 | Racing Bland for a live call | **Polish the intake form** that works today | Value per day-of-risk is far higher, and it is the same "real action" claim. |
