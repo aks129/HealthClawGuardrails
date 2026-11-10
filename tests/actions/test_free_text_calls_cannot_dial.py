@@ -159,3 +159,80 @@ def test_the_transfer_route_answers_410_before_any_credential(client):
     """
     resp = client.post('/r6/actions/rx-transfer/propose', json={})
     assert resp.status_code == 410
+
+
+# --- the approval page for a kind nothing can carry out -------------------
+
+def _awaiting(client, auth_headers, kind):
+    resp = client.post('/r6/actions/propose', headers=auth_headers, json={
+        'kind': kind, 'payload': {'to': 'Pharmacy', 'phone': '617-555-0100',
+                                  'body': 'Calling about a refill.'}})
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    action_id = resp.get_json()['id']
+    resp = client.post('/r6/actions/%s/commit' % action_id,
+                       headers=auth_headers)
+    assert resp.status_code == 202, resp.get_data(as_text=True)
+    return action_id
+
+
+@pytest.mark.parametrize('kind', CALL_KINDS)
+def test_the_approval_page_says_a_call_is_not_available_and_offers_no_approve(
+        kind, client, auth_headers, action_registry):
+    """The page used to promise "Approve carries out exactly what is shown
+    above" for a request that can only fail. It still shows the request, so
+    the person can see what was asked, and still offers Decline.
+
+    MUTATION: pass `available=True` unconditionally from _approve_context
+    in r6/actions/review.py -> red: the Approve button and the promise are
+    back.
+    """
+    action_id = _awaiting(client, auth_headers, kind)
+    resp = client.get('/r6/actions/%s/review' % action_id,
+                      headers=auth_headers)
+    assert resp.status_code == 200
+    page = resp.get_data(as_text=True)
+    assert 'is not available' in page
+    assert 'cannot be carried out' in page
+    assert 'id="approve-btn"' not in page
+    assert 'id="ack"' not in page
+    assert 'id="decline-btn"' in page
+    assert 'Calling about a refill.' in page
+    assert 'Ask your assistant to try again' not in page
+
+
+def test_the_approval_page_for_a_kind_with_a_rail_is_unchanged(
+        client, auth_headers, action_registry):
+    """The other half, so the test above cannot pass on a page that lost
+    its Approve button for every kind.
+
+    MUTATION: pass `available=False` unconditionally -> red.
+    """
+    action_id = _awaiting(client, auth_headers, 'sms')
+    page = client.get('/r6/actions/%s/review' % action_id,
+                      headers=auth_headers).get_data(as_text=True)
+    assert 'id="approve-btn"' in page
+    assert 'id="ack"' in page
+    assert 'is not available' not in page
+    assert 'Ask your assistant to try again' in page
+
+
+@pytest.mark.parametrize('kind', CALL_KINDS)
+def test_the_review_post_records_no_approval_for_a_call(
+        kind, client, app, auth_headers, action_registry):
+    """A POST that skips the page: refused, and no consent record is made
+    for something that would only fail.
+
+    MUTATION: delete the `get_executor(action.kind) is None` refusal from
+    review_submit in r6/actions/review.py -> red: 200 and a confirmation.
+    """
+    from r6.actions.confirmations import ActionConfirmation
+    action_id = _awaiting(client, auth_headers, kind)
+    resp = client.post('/r6/actions/%s/review' % action_id,
+                       json={'ack': 'true'}, headers=auth_headers)
+    assert resp.status_code == 409, resp.get_data(as_text=True)
+    assert 'not available' in resp.get_json()['error']
+    with app.app_context():
+        assert ActionConfirmation.query.filter_by(
+            action_id=action_id).count() == 0
+        assert db.session.get(ProposedAction, action_id).status == (
+            'awaiting_confirmation')

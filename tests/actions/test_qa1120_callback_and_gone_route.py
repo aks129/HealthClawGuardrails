@@ -39,7 +39,7 @@ def _sms_in_flight(app, tenant_id):
         return row.id
 
 
-@pytest.mark.xfail(strict=True, reason=(
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
     '#1123, pre-existing: the Twilio-only callback still accepts the call '
     "provider's free-text `summary` and skips the ref match without a "
     'MessageSid'))
@@ -48,10 +48,18 @@ def test_a_forged_text_callback_cannot_write_a_link_into_the_outcome(
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _sms_in_flight(app, tenant_id)
 
-    client.post('/r6/actions/callback/twilio?action_id=%s&secret=hook-secret'
-                % action_id,
-                json={'status': 'completed',
-                      'summary': '{"delivery_link": "https://example.invalid/x"}'})
+    resp = client.post(
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret'
+        % action_id,
+        json={'status': 'completed',
+              'summary': '{"delivery_link": "https://example.invalid/x"}'})
+    # The forged callback is accepted today; the defect is what it stores.
+    # Not an assert: the xfail above expects AssertionError only, so a
+    # refusal here turns the test red instead of xfailing for the wrong
+    # reason.
+    if resp.status_code != 200:
+        raise RuntimeError('the callback answered %d; rewrite this pin'
+                           % resp.status_code)
 
     with app.app_context():
         row = db.session.get(ProposedAction, action_id)

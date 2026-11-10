@@ -19,8 +19,8 @@ No rail dials a phone. 'phone-call' and 'insurance-call' took a free-text
 script to any number; their rail is gone, so neither kind has an executor
 and a confirmed one fails loud at confirm (provider_not_configured) with no
 provider request. The kinds stay proposable only because the gate's own
-tests use them as fixtures. A call rail comes back as a structured plan to
-a saved contact, never as free text.
+tests use them as fixtures. The plan is for calls to return as a structured
+plan to a saved contact; nothing here enforces that yet.
 
 Scope note: 'form-fill' (Task 3) is registered, but its execute() is a
 skeleton: it fails loud without PUBLIC_BASE_URL and otherwise returns an
