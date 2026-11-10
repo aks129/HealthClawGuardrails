@@ -146,5 +146,12 @@ def test_the_transfer_route_is_gone_and_stages_nothing(
 
 
 def test_the_transfer_route_answers_410_before_any_credential(client):
+    """No tenant header and no token: still 410, not the 400 or 401 a gate
+    would give. That the body is not read either is pinned by the
+    malformed-body test in test_qa1120_callback_and_gone_route.py.
+
+    MUTATION: put the tenant or grant check back above the 410 in
+    propose_rx_transfer -> red (400).
+    """
     resp = client.post('/r6/actions/rx-transfer/propose', json={})
     assert resp.status_code == 410

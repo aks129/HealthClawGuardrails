@@ -7,6 +7,8 @@ feed's own `text` and `display` ("recorded as: ..."), and from nothing else
 when the code had no label of ours. Feed text is where real feeds put a
 patient's name, so it is never repeated to a third party: a spoken or shown
 name comes from r6/terminology.py, keyed by code, or there is no name.
+tests/test_rx_transfer.py::test_the_feeds_names_reach_nothing_but_the_schedule_ii_check
+holds that line for this module.
 
 What stays is the refusal, because reading a name to refuse an order is not
 repeating it:

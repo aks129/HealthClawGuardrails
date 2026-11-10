@@ -281,7 +281,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `questionnaire_extract` | SDC `$extract` — extract resources from a completed QuestionnaireResponse |
 | `curatr_apply_fix` | Apply patient-approved fixes with Provenance tracking |
 | `action_propose` / `action_commit` | Propose / commit a real-world phone call or SMS |
-| `rx_transfer_request` | Draft a pharmacy-transfer request call from active meds (Schedule II refused); commit via `action_commit` |
+| `rx_transfer_request` | Retired: the server answers 410 and proposes nothing |
 | `shl_generate` | Generate an encrypted SMART Health Link (QR). Off by default: withheld from `tools/list` and refused unless `MCP_ENABLE_SHL_GENERATE=true` |
 
 **Utility tools:**

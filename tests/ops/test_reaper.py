@@ -423,15 +423,24 @@ class TestContainment:
         moved = {t['id'] for t in body['transitions']}
         assert moved == {never_called_id, lapsed_id}
 
-    def test_missing_executor_is_contained(self, app, client, auth_headers,
-                                           monkeypatch):
-        action_id = make_action(external_ref='call-42')
+    @pytest.mark.parametrize('status', ['executing', 'unknown'])
+    def test_a_row_whose_kind_has_no_rail_is_not_left_in_flight(
+            self, status, app, client, auth_headers, monkeypatch):
+        """A retired rail leaves rows no callback and no reconcile can
+        resolve. The provider may have acted, so they end needs_review.
+
+        MUTATION: make _reap_without_a_rail in r6/ops/routes.py return
+        None -> red: the row stays in flight for ever.
+        """
+        action_id = make_action(status=status, external_ref='call-42')
         other_id = make_action(claimed_at=_utcnow() - STALE)
         monkeypatch.setattr('r6.ops.routes.get_executor', lambda kind: None)
         body = reap(client, auth_headers)
-        assert get_action(action_id).status == 'executing'
+        row = get_action(action_id)
+        assert row.status == 'needs_review'
+        assert 'no_rail_for_kind' in row.outcome_summary
         assert get_action(other_id).status == 'failed'
-        assert body['swept'] == 1
+        assert body['swept'] == 2
 
 
 class TestReaperLedger:

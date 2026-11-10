@@ -111,7 +111,8 @@ Read: `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`,
 `wearables_sync_status`, `sources_check`, `fhir_compiled_truth`.
 Write (step-up gated): `fhir_propose_write`, `fhir_commit_write`,
 `curatr_apply_fix`, `action_propose`, `action_commit`, `rx_transfer_request`,
-`questionnaire_extract`.
+`questionnaire_extract`. `rx_transfer_request` is retired: the server answers
+410 and proposes nothing.
 ChatGPT-connector shims: `search`, `fetch`.
 
 Step-up for the write tier comes from the `X-Step-Up-Token` header, issued by
