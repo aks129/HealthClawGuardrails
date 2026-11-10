@@ -186,9 +186,9 @@ def test_the_moved_tables_keep_their_column_types():
 def test_the_conversation_tables_are_registered_by_name():
     """Registered directly, not only as a side effect of the command
     center's re-export, so removing that shim cannot drop the tables."""
-    import bundled_extensions
-    from r6.extensions import ExtensionRegistry
+    import inspect
 
-    registry = ExtensionRegistry()
-    bundled_extensions.register(registry)
-    assert "r6.conversations" in registry.model_modules
+    from r6.database_migrations import register_model_metadata
+
+    assert "import r6.conversations " in inspect.getsource(
+        register_model_metadata)

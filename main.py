@@ -279,6 +279,12 @@ def _register_blueprints(flask_app: Flask) -> None:
 
     flask_app.register_blueprint(email_blueprint)
 
+    # The durable run queue. Last of the core blueprints, so its rules sit
+    # where they did when an extension registered them.
+    from r6.agent_runs.routes import agent_runs_blueprint
+
+    flask_app.register_blueprint(agent_runs_blueprint)
+
     # Optional modules add their blueprints and commands through the
     # extension registry (r6/extensions.py); the core imports none of them.
     from r6.extensions import get_registry
