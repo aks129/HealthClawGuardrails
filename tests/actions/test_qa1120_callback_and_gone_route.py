@@ -18,6 +18,8 @@ from r6.actions.models import ProposedAction
 
 
 def test_the_gone_route_answers_410_before_parsing_a_malformed_body(client):
+    """MUTATION: call `request.get_json(force=True)` at the top of
+    propose_rx_transfer in r6/actions/routes.py -> red (400)."""
     resp = client.post('/r6/actions/rx-transfer/propose',
                        data='{"to_pharmacy":',
                        headers={'Content-Type': 'application/json'})

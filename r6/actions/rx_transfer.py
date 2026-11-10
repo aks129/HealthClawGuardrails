@@ -10,10 +10,13 @@ name comes from r6/terminology.py, keyed by code, or there is no name.
 tests/test_rx_transfer.py::test_the_feeds_names_reach_nothing_but_the_schedule_ii_check
 holds that line for this module.
 
-What stays is the refusal, because reading a name to refuse an order is not
-repeating it:
-- Schedule II is NEVER transferable or refillable by phone under federal
-  rule. The deny-list below is a conservative keyword match, NOT an
+What stays is the check, because reading a name to refuse an order is not
+repeating it. NOTHING CALLS IT TODAY: with the builder gone, no code path in
+r6/ refuses anything on its say. It is kept, and tested directly, for the
+call builder that replaces the old one; until that lands this module
+enforces nothing.
+- Schedule II is never transferable or refillable by phone under federal
+  rule, which is why the check exists. The deny-list below is a conservative keyword match, NOT an
   authoritative DEA schedule lookup; false positives are acceptable (the
   patient can still call themselves), false negatives are caught by the
   pharmacist.

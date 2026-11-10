@@ -18,6 +18,10 @@ from r6.actions.registry import all_kinds
 from tests.approval_helpers import approval_headers
 
 CALL_KINDS = ('phone-call', 'insurance-call')
+# A floor under the parametrized callback test below: if the kinds leave
+# VALID_KINDS, this fails at import, loudly, where a shrunken parameter
+# set would just collect fewer cases.
+assert set(CALL_KINDS) <= set(VALID_KINDS)
 
 
 @pytest.mark.parametrize('kind', CALL_KINDS)
