@@ -8,6 +8,9 @@ feed's word for the drug cannot hide it (conservative keyword deny-list,
 documented as not authoritative).
 """
 
+import ast
+from pathlib import Path
+
 from r6.actions import rx_transfer
 from r6.actions.rx_transfer import (SCHEDULE_II_RXCUI, SCHEDULE_II_TERMS,
                                     _is_schedule_ii, medication_names)
@@ -36,16 +39,64 @@ def _refused(med):
     return _is_schedule_ii(med, medication_names(med))
 
 
-def test_no_builder_turns_feed_text_into_a_spoken_name():
+def _name_uses(tree):
+    """Every place a module's source mentions a name: loads, attribute
+    reads and `from x import name`."""
+    uses = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            uses.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            uses.append(node.attr)
+        elif isinstance(node, ast.ImportFrom):
+            uses.extend(alias.name for alias in node.names)
+    return uses
+
+
+def test_the_feeds_names_reach_nothing_but_the_schedule_ii_check():
     """The script builder said a medicine as "<label> (recorded as: <feed
     text>)", and as the feed text alone when the code had no label. Feed
     text is where real feeds put a patient's name.
 
-    MUTATION: restore `display_name` (or `build_transfer_request`) to
-    r6/actions/rx_transfer.py -> red.
+    What this proves: the one function that reads an order's `text` and
+    `display` (`_feed_names`) is called only by `medication_names`, and
+    nothing in r6/ uses `medication_names`, so the names it collects cannot
+    reach an action payload, a script or a page by this module. It also
+    pins that the three deleted builder functions stay deleted.
+
+    What it does not prove: that nobody writes a second reader of `text`
+    or `display` under another name somewhere else. No test here can; that
+    is the redaction rule's job (labels come from r6/terminology.py, after
+    apply_redaction) and a reviewer's.
+
+    MUTATION: add a function to r6/actions/rx_transfer.py that returns
+    `_feed_names(med)[0]`, or import `medication_names` into
+    r6/actions/routes.py -> red.
     """
     for gone in ("display_name", "build_transfer_request", "_call_script"):
         assert not hasattr(rx_transfer, gone), gone
+
+    module = ast.parse(Path(rx_transfer.__file__).read_text())
+    callers = [fn.name for fn in module.body
+               if isinstance(fn, ast.FunctionDef) and fn.name != "_feed_names"
+               and "_feed_names" in _name_uses(fn)]
+    assert callers == ["medication_names"], callers
+    readers = [fn.name for fn in module.body
+               if isinstance(fn, ast.FunctionDef)
+               and "medication_names" in _name_uses(fn)]
+    assert readers == [], readers
+
+    root = Path(rx_transfer.__file__).resolve().parents[1]
+    scanned, outside = 0, []
+    for path in sorted(root.rglob("*.py")):
+        if path == Path(rx_transfer.__file__).resolve():
+            continue
+        scanned += 1
+        uses = _name_uses(ast.parse(path.read_text()))
+        if {"medication_names", "_feed_names"} & set(uses):
+            outside.append(str(path.relative_to(root)))
+    assert scanned > 50, "the scan walked %d modules; it is broken" % scanned
+    assert outside == [], outside
 
 
 class TestScheduleIIByName:
