@@ -59,6 +59,7 @@ with app.app_context():
     created = sorted(inspect(db.engine).get_table_names())
 client = app.test_client()
 health = "/command-center/api/runs/workers/health"
+answered = client.get(health, headers={"X-Internal-Secret": "probe-secret"})
 print(json.dumps({
     "loaded": get_registry().loaded,
     "init_db": [init_db.exit_code, init_db.output[-500:]],
@@ -66,8 +67,7 @@ print(json.dumps({
     "metadata": sorted(db.metadata.tables),
     "created": created,
     "health_refused": client.get(health).status_code,
-    "health": client.get(
-        health, headers={"X-Internal-Secret": "probe-secret"}).status_code,
+    "health": [answered.status_code, answered.get_json()],
 }))
 """
 
@@ -109,10 +109,15 @@ def test_the_core_serves_the_run_queue_without_an_extension(tmp_path):
     assert RUN_QUEUE_TABLES <= set(out["created"])
     assert RUN_QUEUE_TABLES <= set(out["metadata"])
     assert len(_run_queue_rules(out)) == 14
-    # Served, and still gated: refused without the internal secret, and with
-    # it the handler reads the run tables init-db created.
+    # The worker-health route alone (tests/test_run_queue_core_only_gates.py
+    # covers the gates on all 14): refused without the internal secret. With
+    # it, the queue query ran against the tables init-db created ("ok"; a
+    # missing table answers "error"), and no worker is present.
     assert out["health_refused"] == 403
-    assert out["health"] in (200, 503)
+    status, body = out["health"]
+    assert status == 503
+    assert body["queue"] == "ok"
+    assert body["status"] == "unavailable"
 
 
 @pytest.mark.extension
@@ -124,7 +129,11 @@ def test_the_bundled_modules_add_to_the_core_and_move_nothing(tmp_path):
     assert set(core["metadata"]) < set(full["metadata"])
     assert set(core["created"]) == set(full["created"])
     # Registered once, by the core, in the same place either way: directly
-    # before the first blueprint an extension adds.
+    # before the first blueprint an extension adds. The bundled extension
+    # registers smbp's first, so that name marks where the extensions' rules
+    # start; if it reorders its blueprints, update the name here. The order
+    # is pinned because the rules stood there before the move, and a later
+    # position would let an extension's rule shadow a run-queue path.
     assert _run_queue_rules(full) == _run_queue_rules(core)
     endpoints = [endpoint for _, endpoint in full["rules"]]
     last_run_rule = max(i for i, e in enumerate(endpoints)

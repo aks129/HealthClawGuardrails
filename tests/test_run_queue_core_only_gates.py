@@ -67,6 +67,8 @@ def _seed_message(tenant=TENANT, message_id="msg-1"):
         db.session.add(Conversation(
             id=conversation_id, tenant_id=tenant, agent_id="juniper",
             created_by_surface="web"))
+        # Postgres checks the message's foreign key at insert.
+        db.session.flush()
     db.session.add(ConversationMessage(
         id=message_id, tenant_id=tenant, conversation_id=conversation_id,
         agent_id="juniper", channel="web", role="user", text=QUESTION,

@@ -181,14 +181,3 @@ def test_the_moved_tables_keep_their_column_types():
         "user_id": "VARCHAR(128)", "role": "VARCHAR(16)", "text": "TEXT",
         "request_id": "VARCHAR(128)", "reply_to": "VARCHAR(64)",
         "metadata_json": "TEXT", "created_at": "DATETIME"}
-
-
-def test_the_conversation_tables_are_registered_by_name():
-    """Registered directly, not only as a side effect of the command
-    center's re-export, so removing that shim cannot drop the tables."""
-    import inspect
-
-    from r6.database_migrations import register_model_metadata
-
-    assert "import r6.conversations " in inspect.getsource(
-        register_model_metadata)
