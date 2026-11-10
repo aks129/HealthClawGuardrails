@@ -177,7 +177,7 @@ def _built_in_resources() -> list[dict]:
             "status": "active",
             "intent": "order",
             "subject": {"reference": "Patient/__PATIENT_ID__"},
-            "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "860975", "display": "Metformin 500 MG Oral Tablet"}]},
+            "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "861007", "display": "Metformin 500 MG Oral Tablet"}]},
         },
         *_lab_series(moment),
         intake_questionnaire(),

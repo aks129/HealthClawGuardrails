@@ -198,26 +198,40 @@ _LABELS: dict[tuple[str, str], str] = {
     (ICD9, "585.3"): "Chronic kidney disease, stage 3",
 
     # --- RxNorm: high-frequency maintenance medications ----------------------
-    (RXNORM, "860975"): "Metformin 500 mg",
-    (RXNORM, "860974"): "Metformin",
+    # Every row here is checked against a recorded copy of RxNav by
+    # tests/test_terminology_rxnorm_drift.py (#1119): a label names the
+    # code's own ingredients, keeps its strength, and never drops a release
+    # form. Add a row, then re-record with scripts/record_rxnav_fixture.py.
+    (RXNORM, "861007"): "Metformin 500 mg",
+    (RXNORM, "860975"): "Metformin 500 mg extended release",
+    (RXNORM, "860974"): "Metformin 500 mg",
     (RXNORM, "6809"): "Metformin",
     (RXNORM, "29046"): "Lisinopril",
     (RXNORM, "314076"): "Lisinopril 10 mg",
     (RXNORM, "83367"): "Atorvastatin",
-    (RXNORM, "617314"): "Atorvastatin 20 mg",
+    (RXNORM, "617310"): "Atorvastatin 20 mg",
+    (RXNORM, "617314"): "Atorvastatin 10 mg",
     (RXNORM, "36567"): "Simvastatin",
-    (RXNORM, "42463"): "Amlodipine",
+    (RXNORM, "17767"): "Amlodipine",
     (RXNORM, "197361"): "Amlodipine 5 mg",
     (RXNORM, "5487"): "Hydrochlorothiazide",
-    (RXNORM, "38454"): "Metoprolol",
+    (RXNORM, "6918"): "Metoprolol",
     (RXNORM, "1191"): "Aspirin",
     (RXNORM, "7646"): "Omeprazole",
     (RXNORM, "10582"): "Levothyroxine",
-    (RXNORM, "35636"): "Sertraline",
-    (RXNORM, "32968"): "Albuterol",
-    (RXNORM, "6387"): "Losartan",
-    (RXNORM, "3616"): "Gabapentin",
+    (RXNORM, "36437"): "Sertraline",
+    (RXNORM, "435"): "Albuterol",
+    (RXNORM, "52175"): "Losartan",
+    (RXNORM, "25480"): "Gabapentin",
     (RXNORM, "8640"): "Prednisone",
+    # Codes an earlier version of this table mislabelled (#1119). They stay,
+    # under their true names, because a real feed can carry any of them.
+    (RXNORM, "42463"): "Pravastatin",
+    (RXNORM, "38454"): "Trandolapril",
+    (RXNORM, "35636"): "Risperidone",
+    (RXNORM, "32968"): "Clopidogrel",
+    (RXNORM, "6387"): "Lidocaine",
+    (RXNORM, "3616"): "Dobutamine",
     # The check-in test patient's allergen (#959), the ingredient
     # penicillin G. Unlabelled, a clinic saw the bare code 7980. "Penicillin",
     # the name the wallet's review shows (tests/test_checkin_wallet.py).
