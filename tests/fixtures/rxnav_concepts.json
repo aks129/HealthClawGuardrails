@@ -22,12 +22,16 @@
     "ingredients": [
       {
         "active_ingredient": "etonogestrel",
+        "denominator": "24",
+        "denominator_unit": "HR",
         "ingredient": "etonogestrel",
         "numerator": "0.12",
         "unit": "MG"
       },
       {
         "active_ingredient": "ethinyl estradiol",
+        "denominator": "24",
+        "denominator_unit": "HR",
         "ingredient": "ethinyl estradiol",
         "numerator": "0.015",
         "unit": "MG"
@@ -61,6 +65,8 @@
     "ingredients": [
       {
         "active_ingredient": "epinephrine",
+        "denominator": "1",
+        "denominator_unit": "ML",
         "ingredient": "epinephrine",
         "numerator": "1",
         "unit": "MG"
@@ -86,6 +92,8 @@
     "ingredients": [
       {
         "active_ingredient": "amlodipine besylate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "amlodipine",
         "numerator": "5",
         "unit": "MG"
@@ -135,6 +143,8 @@
     "ingredients": [
       {
         "active_ingredient": "lisinopril",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "lisinopril",
         "numerator": "10",
         "unit": "MG"
@@ -200,6 +210,8 @@
     "ingredients": [
       {
         "active_ingredient": "etonogestrel",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "etonogestrel",
         "numerator": "68",
         "unit": "MG"
@@ -257,6 +269,8 @@
     "ingredients": [
       {
         "active_ingredient": "atorvastatin calcium",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "atorvastatin",
         "numerator": "20",
         "unit": "MG"
@@ -274,6 +288,8 @@
     "ingredients": [
       {
         "active_ingredient": "atorvastatin calcium",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "atorvastatin",
         "numerator": "10",
         "unit": "MG"
@@ -299,6 +315,8 @@
     "ingredients": [
       {
         "active_ingredient": "loratadine",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "loratadine",
         "numerator": "5",
         "unit": "MG"
@@ -340,18 +358,24 @@
     "ingredients": [
       {
         "active_ingredient": "drospirenone",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "drospirenone",
         "numerator": "3",
         "unit": "MG"
       },
       {
         "active_ingredient": "ethinyl estradiol",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "ethinyl estradiol",
         "numerator": "0.02",
         "unit": "MG"
       },
       {
         "active_ingredient": "inert ingredients",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "inert ingredients",
         "numerator": "1",
         "unit": "MG"
@@ -360,12 +384,14 @@
     "name": "{24 (drospirenone 3 MG / ethinyl estradiol 0.02 MG Oral Tablet) / 4 (inert ingredients 1 MG Oral Tablet) } Pack [Yaz 28 Day]",
     "pack": [
       {
-        "name": "",
-        "rxcui": ""
+        "count": "24",
+        "name": "drospirenone 3 MG / ethinyl estradiol 0.02 MG Oral Tablet",
+        "rxcui": "630734"
       },
       {
-        "name": "",
-        "rxcui": ""
+        "count": "4",
+        "name": "inert ingredients 1 MG Oral Tablet",
+        "rxcui": "748797"
       }
     ],
     "status": "Active",
@@ -378,30 +404,40 @@
     "ingredients": [
       {
         "active_ingredient": "norgestimate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "norgestimate",
         "numerator": "0.25",
         "unit": "MG"
       },
       {
         "active_ingredient": "norgestimate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "norgestimate",
         "numerator": "0.18",
         "unit": "MG"
       },
       {
         "active_ingredient": "norgestimate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "norgestimate",
         "numerator": "0.215",
         "unit": "MG"
       },
       {
         "active_ingredient": "ethinyl estradiol",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "ethinyl estradiol",
         "numerator": "0.035",
         "unit": "MG"
       },
       {
         "active_ingredient": "inert ingredients",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "inert ingredients",
         "numerator": "1",
         "unit": "MG"
@@ -410,20 +446,24 @@
     "name": "{7 (ethinyl estradiol 0.035 MG / norgestimate 0.18 MG Oral Tablet) / 7 (ethinyl estradiol 0.035 MG / norgestimate 0.215 MG Oral Tablet) / 7 (ethinyl estradiol 0.035 MG / norgestimate 0.25 MG Oral Tablet) / 7 (inert ingredients 1 MG Oral Tablet) } Pack [Trinessa 28 Day]",
     "pack": [
       {
-        "name": "",
-        "rxcui": ""
+        "count": "7",
+        "name": "ethinyl estradiol 0.035 MG / norgestimate 0.18 MG Oral Tablet",
+        "rxcui": "406396"
       },
       {
-        "name": "",
-        "rxcui": ""
+        "count": "7",
+        "name": "ethinyl estradiol 0.035 MG / norgestimate 0.215 MG Oral Tablet",
+        "rxcui": "687424"
       },
       {
-        "name": "",
-        "rxcui": ""
+        "count": "7",
+        "name": "ethinyl estradiol 0.035 MG / norgestimate 0.25 MG Oral Tablet",
+        "rxcui": "240128"
       },
       {
-        "name": "",
-        "rxcui": ""
+        "count": "7",
+        "name": "inert ingredients 1 MG Oral Tablet",
+        "rxcui": "748797"
       }
     ],
     "status": "Active",
@@ -458,6 +498,8 @@
     "ingredients": [
       {
         "active_ingredient": "",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "metformin",
         "numerator": "500",
         "unit": "MG"
@@ -475,6 +517,8 @@
     "ingredients": [
       {
         "active_ingredient": "metformin hydrochloride",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "metformin",
         "numerator": "500",
         "unit": "MG"
@@ -492,6 +536,8 @@
     "ingredients": [
       {
         "active_ingredient": "metformin hydrochloride",
+        "denominator": "1",
+        "denominator_unit": "EACH",
         "ingredient": "metformin",
         "numerator": "500",
         "unit": "MG"

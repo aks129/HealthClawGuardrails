@@ -188,6 +188,20 @@ def _built_in_resources() -> list[dict]:
 # Core seed function (no Flask request context needed)
 # ---------------------------------------------------------------------------
 
+#: Codes an earlier seed used for the wrong product (#1119): 860975 is the
+#: extended-release metformin tablet, and the seed meant the plain 500 mg
+#: tablet, 861007. A tenant seeded before the correction keeps the old row,
+#: because a row that exists is skipped; this names the rows to rewrite.
+_RETIRED_SEED_CODES = ("860975",)
+
+
+def _carries_a_retired_seed_code(stored_json: str, seed_json: str) -> bool:
+    """True when the stored seed row still carries a code the seed dropped."""
+    return any('"%s"' % code in (stored_json or "")
+               and '"%s"' % code not in seed_json
+               for code in _RETIRED_SEED_CODES)
+
+
 def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None = None,
                    *, source: str | None = None) -> int:
     """
@@ -251,7 +265,10 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
         existing = (R6Resource.query
                     .filter_by(tenant_id=tenant_id, resource_type=rtype, id=rid)
                     .first()) if rid else None
-        if existing is not None and not existing.is_deleted:
+        stale = (existing is not None and not existing.is_deleted
+                 and _carries_a_retired_seed_code(existing.resource_json,
+                                                  resource_str))
+        if existing is not None and not existing.is_deleted and not stale:
             # Resolve the placeholder against the patient already on file, or
             # every later resource in this pass points at nothing.
             if rtype == 'Patient':
@@ -269,7 +286,9 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
             try:
                 result, _ = _ingest_one(
                     json.loads(resource_str), tenant_id, agent_id='seed',
-                    detail='seeded via auto-seed on first boot',
+                    detail=('seed record rewritten: corrected medication code'
+                            if stale else
+                            'seeded via auto-seed on first boot'),
                     source=source)
             except Exception:
                 # The revive and its audit row share the transaction, so

@@ -46,6 +46,8 @@ def fetch(code: str) -> dict:
             "ingredient": (p.get("baseName") or "").lower(),
             "numerator": p.get("numeratorValue") or "",
             "unit": p.get("numeratorUnit") or "",
+            "denominator": p.get("denominatorValue") or "",
+            "denominator_unit": p.get("denominatorUnit") or "",
             "active_ingredient": (p.get("activeIngredientName") or "").lower(),
         }
         for p in features.get("ingredientAndStrength") or []
@@ -53,7 +55,8 @@ def fetch(code: str) -> dict:
     forms = [f.get("doseFormName") or ""
              for f in features.get("doseFormConcept") or []]
     pack = [
-        {"rxcui": m.get("rxcui") or "", "name": m.get("name") or ""}
+        {"rxcui": m.get("packRxcui") or "", "name": m.get("packName") or "",
+         "count": m.get("packNumber") or ""}
         for m in (history.get("pack") or {}).get("packConcept") or []
     ]
     return {
@@ -74,6 +77,8 @@ def main() -> None:
         recorded[code] = fetch(code)
         time.sleep(0.25)
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    # No timestamp in the file: a re-record that changes nothing should
+    # produce no diff. The recording date is the commit's.
     OUT.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n")
     print("recorded %d concepts to %s" % (len(recorded), OUT.relative_to(ROOT)))
 
