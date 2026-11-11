@@ -58,6 +58,25 @@ os.environ.setdefault('PUBLIC_TENANTS', 'desktop-demo,test-tenant')
 TEST_TENANT_ID = 'test-tenant'
 
 
+@pytest.fixture(autouse=True)
+def _rxnav_stays_offline():
+    """No test reaches RxNav. r6/rxnav.py opens its session through this one
+    function; a test that wants an answer replaces it with a recorded one.
+
+    Its own MonkeyPatch, not the `monkeypatch` fixture: asking for that here
+    would set it up before every other fixture, so a test's patches would be
+    undone after its other fixtures tear down instead of before.
+    """
+    from r6 import rxnav
+
+    def _offline():
+        raise AssertionError("a test tried to reach RxNav")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(rxnav, "_session", _offline)
+        yield
+
+
 @pytest.fixture
 def app():
     """Create a test Flask application."""

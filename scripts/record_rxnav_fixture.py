@@ -20,53 +20,26 @@ from __future__ import annotations
 import json
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from r6 import rxnav  # noqa: E402
 from r6.terminology import RXNORM, _LABELS  # noqa: E402
 
 OUT = ROOT / "tests" / "fixtures" / "rxnav_concepts.json"
-URL = "https://rxnav.nlm.nih.gov/REST/rxcui/%s/historystatus.json"
+#: The keys the fixture holds, of those r6/rxnav.py parses.
+RECORDED = ("name", "tty", "status", "ingredients", "dose_forms", "pack")
 
 
 def fetch(code: str) -> dict:
-    if not code.isdigit() or len(code) > 8:
-        raise SystemExit("not an RxCUI: %r" % code)
-    with urllib.request.urlopen(URL % code, timeout=30) as resp:
-        body = json.load(resp)
-    history = body.get("rxcuiStatusHistory") or {}
-    meta = history.get("metaData") or {}
-    attrs = history.get("attributes") or {}
-    features = history.get("definitionalFeatures") or {}
-    parts = [
-        {
-            "ingredient": (p.get("baseName") or "").lower(),
-            "numerator": p.get("numeratorValue") or "",
-            "unit": p.get("numeratorUnit") or "",
-            "denominator": p.get("denominatorValue") or "",
-            "denominator_unit": p.get("denominatorUnit") or "",
-            "active_ingredient": (p.get("activeIngredientName") or "").lower(),
-        }
-        for p in features.get("ingredientAndStrength") or []
-    ]
-    forms = [f.get("doseFormName") or ""
-             for f in features.get("doseFormConcept") or []]
-    pack = [
-        {"rxcui": m.get("packRxcui") or "", "name": m.get("packName") or "",
-         "count": m.get("packNumber") or ""}
-        for m in (history.get("pack") or {}).get("packConcept") or []
-    ]
-    return {
-        "name": attrs.get("name") or "",
-        "tty": attrs.get("tty") or "",
-        "status": meta.get("status") or "",
-        "ingredients": parts,
-        "dose_forms": forms,
-        "pack": pack,
-    }
+    """What r6/rxnav.py reads from RxNav for this code, as recorded."""
+    try:
+        concept = rxnav.history(code)
+    except ValueError:
+        raise SystemExit("not an RxCUI: %r" % code) from None
+    return {key: concept[key] for key in RECORDED}
 
 
 def main() -> None:
