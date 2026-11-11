@@ -7,6 +7,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+- Engine: the run queue's routes (`/command-center/api/runs`) and tables,
+  and the conversation tables, are registered by the core, not by
+  `bundled_extensions.py`. An out-of-tree extension that still registers
+  the `agent_runs` blueprint fails at startup, and a deployment that pins
+  `HEALTHCLAW_EXTENSIONS` (the empty string included) now serves these
+  routes.
 - Share with a pharmacy by text: PHARMACY, then YES, hands a one-use SMART
   Health Link to a pharmacy's intake URL (RX Genie by default). Behind
   `CARE_PHARMACY_SHARE` on CareAgents and `KTC_LINK_ENABLED` on the engine,

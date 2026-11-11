@@ -24,12 +24,6 @@ def register(registry) -> None:
                            operations=("Patient/$care-gaps",))
     registry.add_r6_routes(_brief_routes)
 
-    # The durable run queue is keyed to the conversation tables (its foreign
-    # keys name them). Those tables are declared in r6/conversations.py and
-    # are registered here, with command_center.models, until core registers
-    # them itself.
-    registry.add_model_module("r6.agent_runs.models")
-    registry.add_model_module("r6.conversations")
     registry.add_model_module("r6.command_center.models")
     registry.add_model_module("r6.smbp.models")
 
@@ -175,10 +169,6 @@ def _register_app(flask_app) -> None:
     from r6.runtime_config import config_flag
 
     logger = logging.getLogger("main")
-
-    from r6.agent_runs.routes import agent_runs_blueprint
-
-    flask_app.register_blueprint(agent_runs_blueprint)
 
     from r6.smbp.routes import smbp_blueprint
 

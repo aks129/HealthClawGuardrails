@@ -40,7 +40,6 @@ OPTIONAL = (
     "r6.command_center",
     "r6.quality",
     "r6.smbp",
-    "r6.agent_runs",
     "r6.agent_client",
     "r6.context_builder",
     "r6.health_context",

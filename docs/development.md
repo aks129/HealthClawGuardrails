@@ -115,7 +115,10 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   entry point, and an extension runs inside the guardrail process with its
   full authority, so a dependency that ships one would be loaded on the next
   start. Named, an unexpected or broken extension fails startup instead. Set
-  it to the empty string to run the core alone. Tenant purge empties every
+  it to the empty string to run the core alone. The run queue
+  (`/command-center/api/runs`) and its tables belong to the core: every
+  setting serves them, and an extension that registers the `agent_runs`
+  blueprint itself fails startup. Tenant purge empties every
   optional module's tables whichever extensions are loaded
   (`r6/extensions.py`, `r6/purge.py`).
 - Pushing `main` auto-deploys the Flask app (Railway) and the marketing site
