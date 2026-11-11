@@ -1815,6 +1815,11 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # _require_step_up rather than going through routes.py,
                      # so it is named here in its own right.
                      'r6/actions/review.py',
+                     # The saved-contacts store: the agent's list asks
+                     # require_grant, and its writes audit through the
+                     # kernel. A new module, written against the kernel from
+                     # the start.
+                     'r6/actions/contacts.py',
                      # slice 10a: the four FHIR resource handlers (create,
                      # read, update, search) read the tenant through the
                      # kernel. This is the god module's FIRST kernel import

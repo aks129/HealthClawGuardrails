@@ -242,6 +242,8 @@ def _register_blueprints(flask_app: Flask) -> None:
     # register_blueprint — routes can't be added to a blueprint after it is
     # registered on the app.
     import r6.actions.review  # noqa: F401
+    # Same for the saved-contacts routes under /contacts.
+    import r6.actions.contacts  # noqa: F401
 
     flask_app.register_blueprint(actions_blueprint)
     logger.info(

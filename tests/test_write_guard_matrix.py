@@ -176,6 +176,8 @@ def _setup_fasten_connection(app):
 # POST /r6/actions/<id>/confirm            |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/<id>/decline            |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/<id>/approval-token     |  x  | x |    |    |    |  x   |  x   |  x
+# POST /r6/actions/contacts                |  x  | x |    |    |    |  x   |  x   |  x
+# PUT  /r6/actions/contacts/<id>           |  x  | x |    |    |    |  x   |  x   |  x
 # POST /r6/actions/<id>/review             |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/callback/<provider>     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/webhook                     |     |   |    |    |    |  x   |  x   |  x
@@ -459,6 +461,29 @@ MATRIX: tuple = (
              "own approval credential and close the human loop on itself.",
     ),
     Row(
+        id="actions-contact-save",
+        method="POST", path="/r6/actions/contacts",
+        endpoint="actions.save_contact",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, INTERNAL_SECRET,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400, 403), internal_secret_status=403,
+        note="A saved contact is where a call may go. The secret is "
+             "required even for a public tenant, and a tenant write token "
+             "is refused: the party asking for a call must not also be "
+             "the one that says where calls may go.",
+    ),
+    Row(
+        id="actions-contact-resave",
+        method="PUT", path="/r6/actions/contacts/c_guard_matrix",
+        endpoint="actions.resave_contact",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, INTERNAL_SECRET,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400, 403), internal_secret_status=403,
+        note="Saving a contact again is a fresh attestation and can change "
+             "its number, so it takes the same secret as the first save. "
+             "The contact is looked up by id and tenant together.",
+    ),
+    Row(
         id="actions-review",
         method="POST", path="/r6/actions/{action_id}/review",
         endpoint="actions.review_submit",
@@ -697,6 +722,7 @@ KNOWN_GET_MUTATORS = {
     "agent_runs.get_agent_worker_health": "expire_overdue_runs() on a probe",
     "wearables.oauth_callback": "upserts WearableConnection (signed state)",
     "shl.fetch_file": "SMART Health Link U flag: a GET by spec; spends one use, drops the ciphertext on the last, audits the read",
+    "actions.list_contacts": "audits the read in its own commit; writes nothing else",
 }
 
 
