@@ -1820,6 +1820,10 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # kernel. A new module, written against the kernel from
                      # the start.
                      'r6/actions/contacts.py',
+                     # The attested-facts store: audits through the kernel.
+                     # Its gate is the internal secret, so it has no step-up
+                     # site.
+                     'r6/actions/facts.py',
                      # slice 10a: the four FHIR resource handlers (create,
                      # read, update, search) read the tenant through the
                      # kernel. This is the god module's FIRST kernel import

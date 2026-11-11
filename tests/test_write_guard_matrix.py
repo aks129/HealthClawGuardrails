@@ -178,6 +178,7 @@ def _setup_fasten_connection(app):
 # POST /r6/actions/<id>/approval-token     |  x  | x |    |    |    |  x   |  x   |  x
 # POST /r6/actions/contacts                |  x  | x |    |    |    |  x   |  x   |  x
 # PUT  /r6/actions/contacts/<id>           |  x  | x |    |    |    |  x   |  x   |  x
+# PUT  /r6/actions/facts                   |  x  | x |    |    |    |  x   |  x   |  x
 # POST /r6/actions/<id>/review             |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/callback/<provider>     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/webhook                     |     |   |    |    |    |  x   |  x   |  x
@@ -484,6 +485,18 @@ MATRIX: tuple = (
              "The contact is looked up by id and tenant together.",
     ),
     Row(
+        id="actions-facts-attest",
+        method="PUT", path="/r6/actions/facts",
+        endpoint="actions.attest_facts",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, INTERNAL_SECRET,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400, 403), internal_secret_status=403,
+        note="A person's own name, date of birth and insurance details, "
+             "attested on a signed-in page. A tenant write token is "
+             "refused, so an agent can neither read these values nor "
+             "set them.",
+    ),
+    Row(
         id="actions-review",
         method="POST", path="/r6/actions/{action_id}/review",
         endpoint="actions.review_submit",
@@ -723,6 +736,7 @@ KNOWN_GET_MUTATORS = {
     "wearables.oauth_callback": "upserts WearableConnection (signed state)",
     "shl.fetch_file": "SMART Health Link U flag: a GET by spec; spends one use, drops the ciphertext on the last, audits the read",
     "actions.list_contacts": "audits the read in its own commit; writes nothing else",
+    "actions.read_facts": "audits the read in its own commit; writes nothing else",
 }
 
 
