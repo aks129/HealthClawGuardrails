@@ -60,7 +60,7 @@ ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"
 #: projection doing any work.
 TOTAL_CHOL = "2093-3"
 SMOKING = "72166-2"
-METFORMIN = "860975"
+METFORMIN = "861007"
 DIABETES = "E11.9"
 
 PATIENT_ID = "bounded-p1"

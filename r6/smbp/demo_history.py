@@ -78,7 +78,7 @@ RXNORM = {
     "losartan_hctz": ("979468",
                       "losartan potassium 50 MG / hydrochlorothiazide "
                       "12.5 MG Oral Tablet"),
-    "metformin": ("860975", "metformin hydrochloride 500 MG Oral Tablet"),
+    "metformin": ("861007", "metformin hydrochloride 500 MG Oral Tablet"),
     "amlodipine": ("197361", "amlodipine 5 MG Oral Tablet"),
 }
 

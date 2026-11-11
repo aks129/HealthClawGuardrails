@@ -50,7 +50,7 @@ def _med(rid, **fields):
     return {"resourceType": "MedicationRequest", "id": rid,
             "subject": PATIENT, "intent": "order",
             "medicationCodeableConcept": {"coding": [
-                {"system": RXNORM, "code": "860975"}]},
+                {"system": RXNORM, "code": "861007"}]},
             **fields}
 
 
@@ -127,7 +127,7 @@ def test_a_row_that_cannot_be_read_is_listed_unreadable_not_lost(
 
 def test_a_coding_system_that_is_not_a_string_reads_as_unlabeled():
     out = _summarize_bundle(_bundle(_med("sys-1018", medicationCodeableConcept={
-        "coding": [{"system": [RXNORM], "code": "860975"}]})))
+        "coding": [{"system": [RXNORM], "code": "861007"}]})))
     assert out == [{"type": "MedicationRequest", "name": "unlabeled record",
                     "unreadable": True, "note": out[0]["note"]}], out
 
@@ -187,7 +187,7 @@ def test_a_medication_whose_code_is_a_list_is_left_out_not_the_summary(
         "resourceType": "Bundle", "type": "collection",
         **_bundle(
             {"resourceType": "Medication", "id": "med-list-1018",
-             "code": [{"coding": [{"system": RXNORM, "code": "860975"}]}]},
+             "code": [{"coding": [{"system": RXNORM, "code": "861007"}]}]},
             {"resourceType": "MedicationRequest", "id": "ref-list-code-1018",
              "subject": PATIENT, "intent": "order", "status": "active",
              "medicationReference": {

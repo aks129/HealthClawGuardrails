@@ -885,7 +885,7 @@ def _marked_medication_request():
         "status": "active", "intent": "order",
         "medicationCodeableConcept": {
             "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm",
-                        "code": "860975", "display": MED_DISPLAY_MARKER}],
+                        "code": "861007", "display": MED_DISPLAY_MARKER}],
             "text": MED_TEXT_MARKER},
         "subject": {"reference": PROBE_PATIENT_REF},
     }
@@ -947,7 +947,7 @@ def test_a_recognised_code_still_reads_as_a_name(
     label keyed by code. Asserting only that the markers are gone is what let
     #376 hide — a document full of "Unknown" passes a leak check perfectly.
 
-    RxNorm 860975 is in the terminology table, so the medication line must
+    RxNorm 861007 is in the terminology table, so the medication line must
     carry the SERVER's name for it. That the marker is absent is asserted
     above; that a real name is present is asserted here, and neither
     assertion can stand in for the other.

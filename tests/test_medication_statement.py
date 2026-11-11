@@ -30,7 +30,7 @@ def _statement(rid="ms-377-1", subject="Patient/pt-377"):
         "subject": {"reference": subject},
         "medicationCodeableConcept": {
             "text": f"metformin per {PLANTED}",
-            "coding": [{"system": RXNORM, "code": "860975",
+            "coding": [{"system": RXNORM, "code": "861007",
                         "display": f"{PLANTED} metformin"}],
         },
         "note": [{"text": f"taken as told by {PLANTED}"}],
