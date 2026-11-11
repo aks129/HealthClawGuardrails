@@ -39,7 +39,7 @@ MED_A = {
     'resourceType': 'MedicationRequest', 'id': 'med-a', 'status': 'active',
     'intent': 'order',
     'medicationCodeableConcept': {
-        'coding': [{'system': RXNORM, 'code': '860975'}],
+        'coding': [{'system': RXNORM, 'code': '861007'}],
         'text': 'Metformin 500 mg tablet'},
     'dosageInstruction': [{'text': 'Take 1 tablet twice daily'}],
     'subject': {'reference': 'Patient/test-patient-1'},

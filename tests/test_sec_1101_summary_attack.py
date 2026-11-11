@@ -49,7 +49,7 @@ def _med(rid, rt="MedicationRequest", **fields):
     res = {"resourceType": rt, "id": rid, "subject": PATIENT,
            "intent": "order", "status": "active",
            "medicationCodeableConcept": {"coding": [
-               {"system": RXNORM, "code": "860975"}]}}
+               {"system": RXNORM, "code": "861007"}]}}
     res.update(fields)
     return res
 

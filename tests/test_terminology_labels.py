@@ -76,7 +76,7 @@ def test_medication_codings_are_labelled():
     med = {"resourceType": "MedicationRequest",
            "medicationCodeableConcept": {"coding": [{
                "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
-               "code": "860975"}]}}
+               "code": "861007"}]}}
     out = apply_redaction(med)
     assert "Metformin" in out["medicationCodeableConcept"]["coding"][0]["display"]
 
@@ -106,7 +106,7 @@ def test_every_code_the_live_demo_tenant_serves_has_a_label():
     live = [(LOINC, "2339-0"), (LOINC, "4548-4"), (LOINC, "55284-4"),
             (LOINC, "2823-3"), (LOINC, "85354-9"), (LOINC, "13457-7"),
             (ICD9, "250.00"), (ICD10, "E11.9"), (ICD10, "I10"),
-            ("http://www.nlm.nih.gov/research/umls/rxnorm", "860975")]
+            ("http://www.nlm.nih.gov/research/umls/rxnorm", "861007")]
     missing = [c for c in live if not lookup(*c)]
     assert not missing, f"demo codes with no label: {missing}"
 

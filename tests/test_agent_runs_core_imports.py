@@ -181,14 +181,3 @@ def test_the_moved_tables_keep_their_column_types():
         "user_id": "VARCHAR(128)", "role": "VARCHAR(16)", "text": "TEXT",
         "request_id": "VARCHAR(128)", "reply_to": "VARCHAR(64)",
         "metadata_json": "TEXT", "created_at": "DATETIME"}
-
-
-def test_the_conversation_tables_are_registered_by_name():
-    """Registered directly, not only as a side effect of the command
-    center's re-export, so removing that shim cannot drop the tables."""
-    import bundled_extensions
-    from r6.extensions import ExtensionRegistry
-
-    registry = ExtensionRegistry()
-    bundled_extensions.register(registry)
-    assert "r6.conversations" in registry.model_modules

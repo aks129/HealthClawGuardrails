@@ -145,7 +145,7 @@ The `desktop-demo` tenant is auto-seeded on first deploy with:
 | Patient | Maria Elena Rivera, DOB 1985-03-15, Boston MA |
 | Condition | Diabetes mellitus — **ICD-9 code 250.00** (intentionally deprecated, triggers curatr flag) |
 | Observation | Glucose 180 mg/dL, HbA1c 8.1%, BP 138/88 mmHg |
-| MedicationRequest | Metformin 500 MG Oral Tablet (RxNorm 860975) |
+| MedicationRequest | Metformin 500 MG Oral Tablet (RxNorm 861007) |
 
 The ICD-9 code is intentional — it demonstrates the curatr `icd9-deprecated` detection pattern. Ask Claude to evaluate it and propose a fix to ICD-10-CM E11.9.
 

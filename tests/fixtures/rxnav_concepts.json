@@ -1,0 +1,559 @@
+{
+  "10582": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "levothyroxine",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "1191": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "aspirin",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "1367439": {
+    "dose_forms": [
+      "Vaginal System"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "etonogestrel",
+        "denominator": "24",
+        "denominator_unit": "HR",
+        "ingredient": "etonogestrel",
+        "numerator": "0.12",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "ethinyl estradiol",
+        "denominator": "24",
+        "denominator_unit": "HR",
+        "ingredient": "ethinyl estradiol",
+        "numerator": "0.015",
+        "unit": "MG"
+      }
+    ],
+    "name": "21 DAY ethinyl estradiol 0.000625 MG/HR / etonogestrel 0.005 MG/HR Vaginal System [NuvaRing]",
+    "pack": [],
+    "status": "Active",
+    "tty": "SBD"
+  },
+  "161": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "acetaminophen",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "17767": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "amlodipine",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "1870230": {
+    "dose_forms": [
+      "Auto-Injector"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "epinephrine",
+        "denominator": "1",
+        "denominator_unit": "ML",
+        "ingredient": "epinephrine",
+        "numerator": "1",
+        "unit": "MG"
+      }
+    ],
+    "name": "NDA020800 0.3 ML epinephrine 1 MG/ML Auto-Injector",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "190521": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "abacavir",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "197361": {
+    "dose_forms": [
+      "Oral Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "amlodipine besylate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "amlodipine",
+        "numerator": "5",
+        "unit": "MG"
+      }
+    ],
+    "name": "amlodipine 5 MG Oral Tablet",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "219228": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "acetaminophen / phenyltoloxamine",
+    "pack": [],
+    "status": "Active",
+    "tty": "MIN"
+  },
+  "25480": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "gabapentin",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "2670": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "codeine",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "29046": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "lisinopril",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "314076": {
+    "dose_forms": [
+      "Oral Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "lisinopril",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "lisinopril",
+        "numerator": "10",
+        "unit": "MG"
+      }
+    ],
+    "name": "lisinopril 10 MG Oral Tablet",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "32968": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "clopidogrel",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "35636": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "risperidone",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "3616": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "dobutamine",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "36437": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "sertraline",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "36567": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "simvastatin",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "38454": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "trandolapril",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "389221": {
+    "dose_forms": [
+      "Drug Implant"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "etonogestrel",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "etonogestrel",
+        "numerator": "68",
+        "unit": "MG"
+      }
+    ],
+    "name": "etonogestrel 68 MG Drug Implant",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "42463": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "pravastatin",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "435": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "albuterol",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "519": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "allopurinol",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "52175": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "losartan",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "5487": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "hydrochlorothiazide",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "617310": {
+    "dose_forms": [
+      "Oral Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "atorvastatin calcium",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "atorvastatin",
+        "numerator": "20",
+        "unit": "MG"
+      }
+    ],
+    "name": "atorvastatin 20 MG Oral Tablet",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "617314": {
+    "dose_forms": [
+      "Oral Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "atorvastatin calcium",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "atorvastatin",
+        "numerator": "10",
+        "unit": "MG"
+      }
+    ],
+    "name": "atorvastatin 10 MG Oral Tablet [Lipitor]",
+    "pack": [],
+    "status": "Active",
+    "tty": "SBD"
+  },
+  "6387": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "lidocaine",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "665078": {
+    "dose_forms": [
+      "Chewable Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "loratadine",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "loratadine",
+        "numerator": "5",
+        "unit": "MG"
+      }
+    ],
+    "name": "loratadine 5 MG Chewable Tablet",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "6809": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "metformin",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "6918": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "metoprolol",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "743": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "amylase",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "748856": {
+    "dose_forms": [
+      "Pack"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "drospirenone",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "drospirenone",
+        "numerator": "3",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "ethinyl estradiol",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "ethinyl estradiol",
+        "numerator": "0.02",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "inert ingredients",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "inert ingredients",
+        "numerator": "1",
+        "unit": "MG"
+      }
+    ],
+    "name": "{24 (drospirenone 3 MG / ethinyl estradiol 0.02 MG Oral Tablet) / 4 (inert ingredients 1 MG Oral Tablet) } Pack [Yaz 28 Day]",
+    "pack": [
+      {
+        "count": "24",
+        "name": "drospirenone 3 MG / ethinyl estradiol 0.02 MG Oral Tablet",
+        "rxcui": "630734"
+      },
+      {
+        "count": "4",
+        "name": "inert ingredients 1 MG Oral Tablet",
+        "rxcui": "748797"
+      }
+    ],
+    "status": "Active",
+    "tty": "BPCK"
+  },
+  "751905": {
+    "dose_forms": [
+      "Pack"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "norgestimate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "norgestimate",
+        "numerator": "0.25",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "norgestimate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "norgestimate",
+        "numerator": "0.18",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "norgestimate",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "norgestimate",
+        "numerator": "0.215",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "ethinyl estradiol",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "ethinyl estradiol",
+        "numerator": "0.035",
+        "unit": "MG"
+      },
+      {
+        "active_ingredient": "inert ingredients",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "inert ingredients",
+        "numerator": "1",
+        "unit": "MG"
+      }
+    ],
+    "name": "{7 (ethinyl estradiol 0.035 MG / norgestimate 0.18 MG Oral Tablet) / 7 (ethinyl estradiol 0.035 MG / norgestimate 0.215 MG Oral Tablet) / 7 (ethinyl estradiol 0.035 MG / norgestimate 0.25 MG Oral Tablet) / 7 (inert ingredients 1 MG Oral Tablet) } Pack [Trinessa 28 Day]",
+    "pack": [
+      {
+        "count": "7",
+        "name": "ethinyl estradiol 0.035 MG / norgestimate 0.18 MG Oral Tablet",
+        "rxcui": "406396"
+      },
+      {
+        "count": "7",
+        "name": "ethinyl estradiol 0.035 MG / norgestimate 0.215 MG Oral Tablet",
+        "rxcui": "687424"
+      },
+      {
+        "count": "7",
+        "name": "ethinyl estradiol 0.035 MG / norgestimate 0.25 MG Oral Tablet",
+        "rxcui": "240128"
+      },
+      {
+        "count": "7",
+        "name": "inert ingredients 1 MG Oral Tablet",
+        "rxcui": "748797"
+      }
+    ],
+    "status": "Active",
+    "tty": "BPCK"
+  },
+  "7646": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "omeprazole",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "7980": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "penicillin G",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "83367": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "atorvastatin",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  },
+  "860974": {
+    "dose_forms": [],
+    "ingredients": [
+      {
+        "active_ingredient": "",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "metformin",
+        "numerator": "500",
+        "unit": "MG"
+      }
+    ],
+    "name": "metformin hydrochloride 500 MG",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCDC"
+  },
+  "860975": {
+    "dose_forms": [
+      "Extended Release Oral Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "metformin hydrochloride",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "metformin",
+        "numerator": "500",
+        "unit": "MG"
+      }
+    ],
+    "name": "24 HR metformin hydrochloride 500 MG Extended Release Oral Tablet",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "861007": {
+    "dose_forms": [
+      "Oral Tablet"
+    ],
+    "ingredients": [
+      {
+        "active_ingredient": "metformin hydrochloride",
+        "denominator": "1",
+        "denominator_unit": "EACH",
+        "ingredient": "metformin",
+        "numerator": "500",
+        "unit": "MG"
+      }
+    ],
+    "name": "metformin hydrochloride 500 MG Oral Tablet",
+    "pack": [],
+    "status": "Active",
+    "tty": "SCD"
+  },
+  "8640": {
+    "dose_forms": [],
+    "ingredients": [],
+    "name": "prednisone",
+    "pack": [],
+    "status": "Active",
+    "tty": "IN"
+  }
+}

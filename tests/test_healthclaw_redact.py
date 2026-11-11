@@ -76,7 +76,7 @@ CANNED_LABS_BUNDLE = {
 
 CANNED_MEDS_FLAT = [{
     "patientName": "Alex Johnson", "ssn": "123-45-6789",
-    "medication": "Metformin 500mg", "rxnorm": "860975", "startDate": "2019-03-15",
+    "medication": "Metformin 500mg", "rxnorm": "861007", "startDate": "2019-03-15",
 }]
 
 
@@ -174,7 +174,7 @@ class TestGenericShapeRedaction:
 
     def test_rxnorm_preserved(self):
         redacted, _ = redact(CANNED_MEDS_FLAT)
-        assert redacted[0]["rxnorm"] == "860975"
+        assert redacted[0]["rxnorm"] == "861007"
 
     def test_medication_preserved(self):
         redacted, _ = redact(CANNED_MEDS_FLAT)
@@ -282,7 +282,7 @@ class TestEndToEndExport:
         # Clinical signal intact across all resource types
         assert "44054006" in text  # SNOMED type-2 diabetes (Condition)
         assert "4548-4" in text    # LOINC A1c (Observation)
-        assert "860975" in text    # RxNorm Metformin (non-FHIR shape)
+        assert "861007" in text    # RxNorm Metformin (non-FHIR shape)
 
     def test_ndjson_one_line_per_resource(self, mocked_export, tmp_path):
         snapshot = asyncio.run(mocked_export._run_export(

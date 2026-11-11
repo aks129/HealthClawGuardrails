@@ -41,7 +41,7 @@ def _medication():
             'status': 'active', 'intent': 'order',
             'medicationCodeableConcept': {
                 'coding': [{'system': 'http://www.nlm.nih.gov/research/umls/rxnorm',
-                            'code': '860975'}]},
+                            'code': '861007'}]},
             'subject': {'reference': PATIENT_REF}}
 
 

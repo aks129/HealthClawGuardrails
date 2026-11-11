@@ -90,7 +90,7 @@ CANNED_PAYLOADS = {
             "patientName": "Alex Johnson",
             "ssn": "123-45-6789",
             "medication": "Metformin 500mg",
-            "rxnorm": "860975",
+            "rxnorm": "861007",
             "startDate": "2019-03-15",
         },
     ],
@@ -217,7 +217,7 @@ def _run_unit_redaction_tests(failures: list[str]) -> None:
             "generic ssn hashed", failures)
     _assert(meds_redacted[0]["medication"] == "Metformin 500mg",
             "clinical fields preserved in non-FHIR shape", failures)
-    _assert(meds_redacted[0]["rxnorm"] == "860975",
+    _assert(meds_redacted[0]["rxnorm"] == "861007",
             "RxNorm preserved in non-FHIR shape", failures)
     _assert(meds_stats.generic_keys_redacted >= 2,
             "stats: generic_keys_redacted >= 2", failures)

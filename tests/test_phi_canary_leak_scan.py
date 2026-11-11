@@ -243,7 +243,7 @@ def _bundle():
         {"resourceType": "MedicationRequest", "id": "canary-med",
          "status": "active", "intent": "order",
          "medicationCodeableConcept": {
-             "coding": [{"system": RXNORM, "code": "860975",
+             "coding": [{"system": RXNORM, "code": "861007",
                          "display": MED_DISPLAY}],
              "text": MED_TEXT},
          "subject": SUBJECT,

@@ -700,7 +700,7 @@ def test_a_medication_statement_is_stored_and_read_back_redacted(
         "medicationCodeableConcept": {
             "text": f"metformin per {planted}",
             "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm",
-                        "code": "860975", "display": f"{planted} metformin"}]},
+                        "code": "861007", "display": f"{planted} metformin"}]},
     }
     r = _post(client, {"bundle": _bundle([statement])})
     assert r.status_code == 200, r.get_data(as_text=True)

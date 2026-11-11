@@ -76,7 +76,7 @@ def test_populate_auto_loads_medications_allergies_conditions(
                  "subject": {"reference": "Patient/p1"},
                  "medicationCodeableConcept": {
                      "coding": [{"system": "http://www.nlm.nih.gov/research/"
-                                           "umls/rxnorm", "code": "860975"}],
+                                           "umls/rxnorm", "code": "861007"}],
                      "text": "Metformin"}},
            tenant_id)
     _store(app, {"resourceType": "AllergyIntolerance", "id": "a1",
