@@ -61,6 +61,38 @@ def _error(status, message):
     return jsonify({'error': message}), status
 
 
+# Where a person approves (#215, #748): the section of their CareAgents
+# agent with this title (careagents/templates/approvals.html). There is no
+# HealthClaw dashboard to approve in, and Telegram cannot approve (#738).
+APPROVALS_SECTION = 'Waiting for your OK'
+
+# What the approval push calls each kind (#1093): the name the CareAgents
+# approvals page gives it (careagents/app.py _KIND_LABELS), with an article.
+# Retyped, because the engine never imports careagents;
+# tests/test_1093_plain_push_wording.py pins the two together.
+_PUSH_KIND_NAMES = {
+    'phone-call': 'a phone call',
+    'sms': 'a text message',
+    'insurance-call': 'a call to your insurer',
+    'form-fill': 'an intake form',
+    'webhook-poster': 'a message to a connected service',
+    'curatr-fix': 'a correction to your health record',
+}
+
+
+def _approval_push(summary):
+    """The approval push, built from summary()['kind'] alone: no payload
+    field and no `to` can reach it. An unknown kind gets a generic sentence.
+
+    It names no recipient, not even a safe `to` label. Any write-token
+    holder can stage 'patient' or 'your phone' beside somebody else's
+    number; the review relay checks the number, and the push cannot."""
+    what = _PUSH_KIND_NAMES.get(summary.get('kind'),
+                                'a request from your assistant')
+    return ('🔔 Approval needed: %s. Open CareAgents — it is under "%s" '
+            'on your agent.' % (what, APPROVALS_SECTION))
+
+
 def _tenant_or_none():
     """Resolve X-Tenant-Id through the access kernel (spec §1.1, slice 10).
 
@@ -429,21 +461,16 @@ def commit_action(action_id):
     db.session.commit()
 
     # Telegram push: summary-level ONLY (kind + recipient label)
-    label = action.summary().get('to') or 'recipient'
-    # The surface that exists (#215, #748): the person's CareAgents agent
-    # page, "Waiting for you". There is no HealthClaw dashboard to approve
-    # in, and this chat cannot approve either (#738).
-    notify_tenant(tenant_id,
-                  '🔔 Approval needed: %s to %s. Open CareAgents — it is '
-                  'under "Waiting for you" on your agent.' % (action.kind, label))
+    notify_tenant(tenant_id, _approval_push(action.summary()))
 
     return jsonify({
         'id': action.id,
         'status': 'awaiting_confirmation',
         'next_step': ('Terminal for this turn: the patient must approve out '
-                      'of band, on their CareAgents review page ("Waiting '
-                      'for you"). Poll GET /r6/actions/%s or end your turn. '
-                      'Do not retry commit.' % action.id),
+                      'of band, on their CareAgents review page ("%s"). '
+                      'Poll GET /r6/actions/%s or end your turn. '
+                      'Do not retry commit.' % (APPROVALS_SECTION,
+                                                action.id)),
     }), 202
 
 
