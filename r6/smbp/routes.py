@@ -119,6 +119,12 @@ def reading():
         return jsonify(_oo("error", "invalid",
                            "patient_ref, systolic, diastolic, effective required")), 400
 
+    # Plausibility at entry (#903): an implausible or transposed pair is not
+    # stored or triaged; the person is asked to measure again.
+    if not (50 <= systolic <= 300 and 20 <= diastolic <= 220) or systolic <= diastolic:
+        return jsonify(_oo("error", "invalid",
+                           "That number doesn't look right, can you take it again?")), 400
+
     triage = classify(systolic, diastolic, body.get("symptoms"))
     obs = build_bp_observation(patient_ref, systolic, diastolic, effective)
     # grant.tenant_id, not the header: the handler must not be able to write to
