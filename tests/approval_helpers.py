@@ -28,3 +28,11 @@ def approval_headers(app, auth_headers, action_id):
         headers['X-Tenant-Id'], audience=ACTION_APPROVAL_AUDIENCE,
         operation=bound_operation(app, action_id))
     return headers
+
+
+def sms_rail_env(monkeypatch):
+    """Configure the one rail that reaches a provider, for tests that drive
+    an approval through to the provider request."""
+    monkeypatch.setenv('TWILIO_ACCOUNT_SID', 'AC-test')
+    monkeypatch.setenv('TWILIO_AUTH_TOKEN', 'test-token')
+    monkeypatch.setenv('TWILIO_FROM_NUMBER', '+15555550100')

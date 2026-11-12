@@ -334,63 +334,6 @@ def test_wearable_status_rejects_credential_for_another_tenant(client):
     assert response.status_code == 401
 
 
-def test_rx_transfer_proposal_rejects_bare_private_tenant(client):
-    response = client.post(
-        "/r6/actions/rx-transfer/propose",
-        headers={"X-Tenant-Id": PRIVATE_TENANT},
-        json={"to_pharmacy": {"name": "Local Pharmacy", "phone": "+15551234567"}},
-    )
-    assert response.status_code == 401
-
-
-def test_rx_transfer_proposal_accepts_bound_credential(client):
-    response = client.post(
-        "/r6/actions/rx-transfer/propose",
-        headers=_read_headers(),
-        json={"to_pharmacy": {"name": "Local Pharmacy", "phone": "+15551234567"}},
-    )
-    # Auth passed; there simply are no medications to propose in this fixture.
-    assert response.status_code == 422
-
-
-def test_rx_read_token_cannot_persist_proposal(client, app):
-    import json
-    from r6.actions.models import ProposedAction
-
-    write_token = generate_step_up_token(PRIVATE_TENANT)
-    medication = {
-        "resourceType": "MedicationRequest",
-        "status": "active",
-        "intent": "order",
-        "medicationCodeableConcept": {"text": "Metformin 500 mg"},
-        "subject": {"reference": "Patient/rx-boundary"},
-    }
-    created = client.post(
-        "/r6/fhir/MedicationRequest",
-        headers={
-            "X-Tenant-Id": PRIVATE_TENANT,
-            "X-Step-Up-Token": write_token,
-            "X-Human-Confirmed": "true",
-            "Content-Type": "application/fhir+json",
-        },
-        data=json.dumps(medication),
-    )
-    assert created.status_code == 201
-
-    before = ProposedAction.query.filter_by(tenant_id=PRIVATE_TENANT).count()
-    read_token = generate_step_up_token(PRIVATE_TENANT, scope="read")
-    response = client.post(
-        "/r6/actions/rx-transfer/propose",
-        headers={
-            "X-Tenant-Id": PRIVATE_TENANT,
-            "X-Step-Up-Token": read_token,
-        },
-        json={"to_pharmacy": {"name": "Local Pharmacy", "phone": "+15551234567"}},
-    )
-    assert response.status_code == 401
-    assert ProposedAction.query.filter_by(tenant_id=PRIVATE_TENANT).count() == before
-
-
 @pytest.mark.extension
 def test_command_center_private_dashboard_accepts_bound_step_up(client):
     response = client.get(

@@ -27,7 +27,7 @@ from flask import Blueprint, jsonify
 
 from models import db
 from r6.actions.models import ProposedAction, _utcnow
-from r6.actions.registry import get_executor
+from r6.actions.registry import ExecutionResult, get_executor
 from r6.actions.state import transition_action
 from r6.audit import add_audit_event
 from r6.internal_auth import internal_secret_authorized
@@ -121,6 +121,27 @@ def _apply_reconcile(action, result):
     return {'id': action.id, 'from': from_state, 'to': to_state}
 
 
+#: Kinds whose rail was removed on purpose. Named, not inferred from an
+#: empty registry slot: a rail that failed to load at boot also has no
+#: executor, and its in-flight rows must be left for a person, not ended.
+RETIRED_KINDS = ('phone-call', 'insurance-call')
+
+
+def _reap_without_a_rail(action):
+    """An in-flight row with no executor. For a retired kind nothing can ask
+    the provider what happened and no callback will resolve it; it may have
+    acted, so the honest end is needs_review, not failed, and not an
+    'executing' that never ends. Any other kind is left alone and logged."""
+    if action.kind not in RETIRED_KINDS:
+        logger.warning('reaper: no executor for kind=%s (action %s); '
+                       'leaving for manual review', action.kind, action.id)
+        return None
+    logger.warning('reaper: kind=%s is retired (action %s); '
+                   'moving to needs_review', action.kind, action.id)
+    return _apply_reconcile(action, ExecutionResult(
+        status='needs_review', outcome={'reason': 'no_rail_for_kind'}))
+
+
 def _reap_executing(action, stale_before):
     """One stale-'executing' row. Three forensic cases (attempt ledger):
     ref recorded -> ask the provider; no ref and provider provably never
@@ -131,10 +152,7 @@ def _reap_executing(action, stale_before):
             return None     # fresh — its webhook may still be coming
         executor = get_executor(action.kind)
         if executor is None:
-            logger.warning('reaper: no executor for kind=%s (action %s); '
-                           'leaving for manual review', action.kind,
-                           action.id)
-            return None
+            return _reap_without_a_rail(action)
         return _apply_reconcile(action, executor.reconcile(action))
 
     if action.provider_request_at is None:
@@ -171,9 +189,7 @@ def _reap_unknown(action):
     legal transitions)."""
     executor = get_executor(action.kind)
     if executor is None:
-        logger.warning('reaper: no executor for kind=%s (action %s)',
-                       action.kind, action.id)
-        return None
+        return _reap_without_a_rail(action)
     return _apply_reconcile(action, executor.reconcile(action))
 
 
