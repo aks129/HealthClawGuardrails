@@ -209,3 +209,15 @@ def test_the_offline_guard_fails_a_test_that_reaches_rxnav(switched_on):
     with pytest.raises(BaseException) as caught:
         terminology_resolver.resolve(RXNORM, "861007")
     assert not isinstance(caught.value, rxnav.Unavailable)
+
+
+# --- merge order ---------------------------------------------------------
+
+def test_no_route_drafts_a_transfer_call(client):
+    """This change takes away a label that the transfer builder's Schedule
+    II check read, so it is safe to merge only once that builder's route is
+    retired (#1120). Red until then, so the order cannot be got wrong by a
+    merge nobody is watching. Once #1120 is in main this repeats its own
+    test and can go."""
+    resp = client.post("/r6/actions/rx-transfer/propose")
+    assert resp.status_code == 410, resp.get_data(as_text=True)
