@@ -28,14 +28,17 @@ Two routes on the actions blueprint:
 Every other kind (#215, #413) renders action_approve.html from the SEALED
 payload — kind, recipient, the verbatim body, and for a curatr-fix the
 field-by-field change list with the record version it was proposed against.
-Its POST issues the same review-page ActionConfirmation over that payload
-and nothing else; the confirm route's claim is still the only place an
-action executes. What the person saw is what the digest binds.
+Its POST records NO approval (#1104). The confirm route records it, under the
+action-bound credential only the approve surface can mint, bound to the
+payload the person was shown; that is also the only place an action executes.
 
-Auth mirrors /confirm: X-Tenant-Id + a tenant-bound X-Step-Up-Token. The token
-is validated multi-use (not nonce-consumed) so the page can be re-opened and
-submitted with the same credential; the load-bearing gate here is the
-per-item + allergy-attestation check, not single-use.
+Auth: X-Tenant-Id + a tenant-bound X-Step-Up-Token with write scope. That is
+the token the proposing agent also holds, so nothing this route records from
+it alone may stand as a person's consent. The form-fill branch still mints
+its confirmation from it (#1116). The token is validated multi-use (not
+nonce-consumed) so the page can be re-opened and submitted with the same
+credential; the load-bearing gate here is the per-item + allergy-attestation
+check, not single-use.
 """
 import json
 import logging
@@ -678,36 +681,37 @@ def review_submit(action_id):
 # page then looks up the outcome and replaces this with what happened.
 _FORM_NEXT_STEP = ('Review recorded and approved. We are making your form '
                    'now; the link to it appears here when it is ready.')
-_APPROVE_NEXT_STEP = ('Approved, exactly as shown. We are carrying out this '
-                      'request now; what happened appears here in a moment.')
-_ALREADY_APPROVED = ('This request has already been approved from this page; '
-                     'nothing further is needed.')
+_APPROVE_NEXT_STEP = ('Your answer was received. What happened to this '
+                      'request appears here in a moment.')
 
 
 def _approve_submit(action, tenant_id):
-    """POST for every kind but form-fill: the consent record over the sealed
-    payload, and nothing else. No decisions to re-derive — the page showed
-    the payload verbatim, and the payload is what the digest binds."""
-    if has_confirmation(action.id):
-        return _error(409, _ALREADY_APPROVED)
-    try:
-        issue_confirmation(action.id, approved_via='review-page',
-                           ttl_minutes=15, payload_json=action.payload_json)
-        _audit_review(action, tenant_id,
-                      'approved via review-page; kind=%s' % action.kind)
-        db.session.commit()
-    except PayloadSealed:
-        db.session.rollback()
-        return _error(409, _ALREADY_APPROVED)
+    """POST for every kind but form-fill: an audited acknowledgement, and no
+    consent record (#1104).
+
+    The credential on this route is the tenant's write token, which the
+    agent that proposed the action holds too. This used to mint an
+    ActionConfirmation and an "approved via review-page" audit row from it,
+    so the proposer could record a consent no person gave, and the person's
+    own Approve then answered 409 here and never reached confirm. There are
+    no decisions to carry on this branch (the page showed the payload
+    verbatim), so there is nothing for it to record: the confirm route mints
+    the confirmation, under the approval credential bound to that payload.
+    It still answers 200, because the approve surface's relay sends this
+    request first and goes on to confirm only on a 200.
+    """
+    _audit_review(action, tenant_id,
+                  'review received via review-page; kind=%s; no approval '
+                  'recorded' % action.kind)
+    db.session.commit()
     return _reviewed(response={'id': action.id, 'status': action.status,
-                               'approved_via': 'review-page',
                                'next_step': _APPROVE_NEXT_STEP})
 
 
 def _audit_review(action, tenant_id, detail):
-    """The one audit row for a recorded review, either kind. Added before the
-    commit that stores the confirmation, so the consent record and its audit
-    land together or not at all."""
+    """The one audit row for a review POST, either kind. Added before the
+    commit, so on the form-fill branch the consent record and its audit land
+    together or not at all."""
     add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
