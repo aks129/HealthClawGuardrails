@@ -79,6 +79,8 @@ def _audit_rows(tenant=TENANT):
     ('put', '/r6/actions/contacts/c_0000'),
 ])
 def test_a_write_token_saves_nothing(client, app, method, path):
+    # No audit row either. A bounded refusal row is #1131; an unbounded
+    # one would let any caller write rows for a tenant id it names.
     resp = getattr(client, method)(path, headers=_agent(), json=BODY)
     assert resp.status_code == 403
     with app.app_context():
