@@ -23,8 +23,9 @@ import {
 // earlier deploy never runs against this page (#909). A static import
 // cannot carry it.
 const {
-  MADE_UP_MESSAGE, buildResponse, itemHeading, matchItems, prepareRecords,
-  recordNames, relaySaysMadeUp, requestedTypes, unowned, websiteHeading,
+  MADE_UP_MESSAGE, buildResponse, formState, itemHeading, matchItems,
+  prepareRecords, recordNames, relaySaysMadeUp, requestedTypes, unowned,
+  websiteHeading,
 } = await import(`./checkin_answer.js${new URL(import.meta.url).search}`);
 
 const $ = (id) => document.getElementById(id);
@@ -167,26 +168,113 @@ function describe(m, made) {
   return made ? recordNames(m).map(unowned) : recordNames(m);
 }
 
-/* A form's questions (checkin_answer.js readForm), one radio group each.
-   A group's questions sit together under its heading and display lines
-   (#1049). A question this wallet does not answer is shown in its place,
-   with a line saying so and no options. The text is the website's:
-   textContent only, never markup. Nothing is picked to start with. */
+/* The controls for one question, by its kind (checkin_answer.js
+   readItems): radios for one pick or yes/no, checkboxes for
+   pick-several, and a box to type in for a number, words, or a
+   pick-or-type question's own words. Typing is held to the lengths the
+   answer layer takes (answerOf). */
+function questionControls(set, q, name, legendId) {
+  const choice = (type, value, words) => {
+    const lab = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = type;
+    input.name = name;
+    input.value = value;
+    lab.append(input, ` ${words}`);
+    set.append(lab);
+  };
+  const typing = (tag, max, label) => {
+    const box = document.createElement(tag);
+    box.className = "checkin-typed";
+    box.name = `${name}-typed`;
+    box.maxLength = max;
+    box.autocomplete = "off";
+    if (tag === "input") box.type = "text";
+    else box.rows = 3;
+    if (label) {
+      const lab = document.createElement("label");
+      lab.className = "checkin-typed-label";
+      lab.append(label, box);
+      set.append(lab);
+    } else {
+      box.setAttribute("aria-labelledby", legendId);
+      set.append(box);
+    }
+    return box;
+  };
+  const many = q.repeats ? "checkbox" : "radio";
+  switch (q.kind) {
+    case "boolean":
+      choice("radio", "true", "Yes");
+      choice("radio", "false", "No");
+      break;
+    case "integer":
+    case "decimal": {
+      const box = typing("input", q.kind === "integer" ? 10 : 17);
+      box.inputMode = q.kind === "integer" ? "numeric" : "decimal";
+      break;
+    }
+    case "string": typing("input", 2000); break;
+    case "text": typing("textarea", 2000); break;
+    default: {
+      q.options.forEach((o, oi) => choice(many, String(oi), o.display));
+      if (q.kind !== "open-choice") break;
+      const box = typing("input", 2000, "In your own words: ");
+      if (!q.repeats) {
+        // One answer: a pick, or words of the person's own, not both.
+        box.addEventListener("input", () => {
+          if (box.value) set.querySelectorAll("input[type=radio]").forEach((r) => { r.checked = false; });
+        });
+        set.querySelectorAll("input[type=radio]").forEach((r) =>
+          r.addEventListener("change", () => { box.value = ""; }));
+      }
+    }
+  }
+  // An optional one-pick answer can be taken back: a radio cannot be
+  // unticked by tapping it again.
+  if (!q.required && !q.repeats && (q.kind === "boolean" || q.kind === "open-choice")) {
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "checkin-clear";
+    undo.textContent = "Clear this answer";
+    undo.addEventListener("click", () => {
+      clearInputs(set);
+      set.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    set.append(undo);
+  }
+}
+
+function clearInputs(set) {
+  set.querySelectorAll("input, textarea").forEach((el) => {
+    if (el.type === "radio" || el.type === "checkbox") el.checked = false;
+    else el.value = "";
+  });
+}
+
+/* A form's questions (checkin_answer.js readForm), each with the controls
+   its kind takes. A group's questions sit together under its heading and
+   display lines (#1049). A question this wallet does not answer is shown
+   in its place, with a line saying so and no options. A question or note
+   with enableWhen is shown only while it holds (formState), and a
+   question that is hidden loses what was put in it, so a hidden answer is
+   never kept to be sent. The text is the website's: textContent only,
+   never markup. Nothing is picked or filled in to start with. */
 function formQuestions(form, i) {
   const box = document.createElement("div");
   box.className = "checkin-form";
-  // In the form's order: each skipped question before questions[at].
-  const rows = [];
-  let s = 0;
-  form.questions.forEach((q, qi) => {
-    while (s < form.skipped.length && form.skipped[s].at === qi) rows.push({ skip: form.skipped[s++] });
-    rows.push({ q, qi });
-  });
-  while (s < form.skipped.length) rows.push({ skip: form.skipped[s++] });
+  box.dataset.form = String(i);
+  // In the form's order.
+  const rows = [
+    ...form.questions.map((q, qi) => ({ q, qi, seq: q.seq })),
+    ...form.skipped.map((skip) => ({ skip, seq: skip.seq })),
+    ...form.notes.map((note) => ({ note, seq: note.seq })),
+  ].sort((a, b) => a.seq - b.seq);
+  const gated = [];   // [element, linkId, is a question] for enableWhen
   let into = box;
   let shown = null;   // the group whose questions are being drawn
-  rows.forEach(({ q, qi, skip }) => {
-    const group = q ? q.group : skip.group;
+  rows.forEach(({ q, qi, skip, note }) => {
+    const group = (q || skip || note).group;
     if (group !== shown) {
       shown = group;
       into = box;
@@ -234,24 +322,43 @@ function formQuestions(form, i) {
       into.append(row);
       return;
     }
+    if (note) {
+      const line = document.createElement("p");
+      // Set apart as the website's, as its other lines are: it appears on
+      // a tap, where it could pass for the wallet's own reply (#1030 F3).
+      line.className = "checkin-group-note checkin-form-note checkin-from-website";
+      line.textContent = note.text;
+      gated.push([line, note.linkId, false]);
+      into.append(line);
+      return;
+    }
     const set = document.createElement("fieldset");
     set.className = "checkin-question";
+    set.dataset.q = String(qi);
     const legend = document.createElement("legend");
+    legend.id = `form-${i}-q-${qi}`;
     legend.textContent = q.prefix ? `${q.prefix} ${q.text}` : q.text;
     set.append(legend);
-    q.options.forEach((o, oi) => {
-      const lab = document.createElement("label");
-      const input = document.createElement("input");
-      input.type = "radio";
-      input.name = `form-${i}-${qi}`;
-      input.value = String(oi);
-      lab.append(input, ` ${o.display}`);
-      set.append(lab);
-    });
+    questionControls(set, q, `form-${i}-${qi}`, legend.id);
     // Answered: no longer marked as needing an answer.
     set.addEventListener("change", () => unmark(set));
+    set.addEventListener("input", () => unmark(set));
+    if (q.when) gated.push([set, q.linkId, true]);
     into.append(set);
   });
+  if (gated.length) {
+    const refresh = () => {
+      const { shown: on } = formState(form, formAnswers(form, i, box));
+      gated.forEach(([el, linkId, question]) => {
+        const hide = !on.has(linkId);
+        if (hide && question && !el.hidden) { clearInputs(el); unmark(el); }
+        el.hidden = hide;
+      });
+    };
+    box.addEventListener("change", refresh);
+    box.addEventListener("input", refresh);
+    refresh();
+  }
   return box;
 }
 
@@ -260,12 +367,29 @@ function formQuestions(form, i) {
 function mark(set) { set.classList.add("checkin-missing"); set.setAttribute("aria-invalid", "true"); }
 function unmark(set) { set.classList.remove("checkin-missing"); set.removeAttribute("aria-invalid"); }
 
-/* { linkId: option index } for the questions answered on item i. */
-function formAnswers(form, i) {
+/* { linkId: answer } for the questions answered on item i, as
+   checkin_answer.js answerOf reads them: an option index, a list of them,
+   { picked, other } for pick-or-type, a boolean, or the words typed. A
+   question with nothing in it is left out. `box` is the form's own
+   element, before it is on the page. */
+function formAnswers(form, i, box = $("wallet-items").querySelector(`[data-form="${i}"]`)) {
   const out = {};
   form.questions.forEach((q, qi) => {
-    const picked = $("wallet-items").querySelector(`input[name="form-${i}-${qi}"]:checked`);
-    if (picked) out[q.linkId] = Number(picked.value);
+    const set = box.querySelector(`fieldset[data-q="${qi}"]`);
+    const picks = [...set.querySelectorAll(`input[name="form-${i}-${qi}"]:checked`)];
+    const typed = set.querySelector(".checkin-typed");
+    const words = typed && typed.value.trim() ? typed.value : undefined;
+    let v;
+    if (q.kind === "boolean") v = picks.length ? picks[0].value === "true" : undefined;
+    else if (q.kind === "open-choice") {
+      v = picks.length || words ? { picked: picks.map((p) => Number(p.value)), other: words } : undefined;
+    } else if (q.kind === "choice") {
+      if (q.repeats) v = picks.length ? picks.map((p) => Number(p.value)) : undefined;
+      else v = picks.length ? Number(picks[0].value) : undefined;
+    } else v = words;
+    // A "__proto__" linkId cannot be an own key by assignment, and is not
+    // made one: left unanswered, so its form fails closed (phq2-attack).
+    if (v !== undefined && q.linkId !== "__proto__") out[q.linkId] = v;
   });
   return out;
 }
@@ -411,17 +535,21 @@ function review(request, origin, matches, using, made) {
         answers[m.item.id] = given;
         // A form is sent whole or not at all: say so rather than decline it,
         // and show which questions, on a form that can be long (#1061 patient
-        // test). "Every" is not said: a skipped question needs no answer.
-        const sets = [];
-        m.form.questions.forEach((q, qi) => {
-          if (Object.hasOwn(given, q.linkId)) return;
-          sets.push(list.querySelector(`input[name="form-${i}-${qi}"]`).closest("fieldset"));
-        });
+        // test). "Every" is not said: an optional question needs no answer,
+        // and a hidden one is not asked (formState).
+        const { missing, invalid } = formState(m.form, given);
+        const setOf = (qi) => list.querySelector(`[data-form="${i}"] fieldset[data-q="${qi}"]`);
+        const pick = (ids) => m.form.questions.flatMap((q, qi) => (ids.includes(q.linkId) ? [setOf(qi)] : []));
+        const bad = pick(invalid);
+        const sets = bad.length ? bad : pick(missing);
         if (sets.length && !problem) {
           sets.forEach(mark);
           firstMissing = sets[0];
-          const n = sets.length === 1 ? "1 question" : `${sets.length} questions`;
-          problem = `${n} in "${isolate(itemHeading(m), 80)}" still ${sets.length === 1 ? "needs" : "need"} an answer. The first one is highlighted. Answer ${sets.length === 1 ? "it" : "them"}, or choose Don't share for it.`;
+          const one = sets.length === 1;
+          const where = `in "${isolate(itemHeading(m), 80)}"`;
+          problem = bad.length
+            ? `${one ? "1 answer" : `${sets.length} answers`} ${where} can't be sent as typed. The first one is highlighted. A number takes up to 9 digits, and up to 6 more after a decimal point.`
+            : `${one ? "1 question" : `${sets.length} questions`} ${where} still ${one ? "needs" : "need"} an answer. The first one is highlighted. Answer ${one ? "it" : "them"}, or choose Don't share for it.`;
         }
       });
       if (problem) {
@@ -430,7 +558,7 @@ function review(request, origin, matches, using, made) {
           // The message is announced (role=alert); the person is taken to
           // the question itself.
           firstMissing.scrollIntoView({ block: "center" });
-          firstMissing.querySelector("input").focus({ preventScroll: true });
+          firstMissing.querySelector("input, textarea").focus({ preventScroll: true });
         }
         return;
       }

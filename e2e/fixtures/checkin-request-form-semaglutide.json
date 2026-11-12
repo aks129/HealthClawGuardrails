@@ -1,0 +1,367 @@
+{
+  "type": "smart-health-checkin-request",
+  "version": "1",
+  "id": "replace-with-a-unique-id",
+  "purpose": "Pre-visit check-in",
+  "fhirVersions": [
+    "4.0.1"
+  ],
+  "items": [
+    {
+      "id": "semaglutide",
+      "title": "How your new medicine is going",
+      "summary": "A short check-in from your doctor about the semaglutide shots you started about a month ago.",
+      "content": {
+        "kind": "form.fhir",
+        "questionnaireCanonical": "https://smart-health-checkin.org/connectathon/Questionnaire/semaglutide-4-week-checkin.json",
+        "questionnaire": {
+          "resourceType": "Questionnaire",
+          "text": {
+            "status": "generated",
+            "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\"><p><b>Semaglutide 4-week check-in</b></p><ol><li>How many weekly shots have you taken so far?</li><li>Have you missed a shot or taken one more than 2 days late?</li><li>What got in the way?</li><li>Any trouble with the pen or the shots? Check any that apply, or describe it in your own words.</li><li>In the past week, how much nausea have you had?</li><li>In the past week, have you vomited?</li><li>How have your bowels been?</li><li>Are you able to drink enough fluids each day?</li><li>How has your appetite changed?</li><li>Have you had spells of feeling shaky, sweaty, or confused that went away after eating?</li><li>Have you had any of these? Check all that apply.</li><li>The usual plan is to step up to the next dose after 4 weeks. How do you feel about that?</li><li>What questions do you have for me about this medicine?</li></ol></div>"
+          },
+          "url": "https://smart-health-checkin.org/connectathon/Questionnaire/semaglutide-4-week-checkin.json",
+          "version": "1",
+          "name": "SemaglutideFourWeekCheckin",
+          "title": "Semaglutide 4-week check-in",
+          "status": "draft",
+          "subjectType": [
+            "Patient"
+          ],
+          "date": "2026-09-25",
+          "publisher": "SMART Health IT (connectathon example)",
+          "description": "Example physician-authored follow-up form for a patient about 4 weeks after starting weekly semaglutide. Asks only what the patient's record can't answer: how the shots are going, side effects, red-flag symptoms, and readiness to step up the dose. Synthetic example for the KTC SMART Health Check-in connectathon; not clinical guidance.",
+          "item": [
+            {
+              "linkId": "intro",
+              "type": "display",
+              "text": "You started semaglutide (Ozempic or Wegovy) about a month ago. These questions help me see how it's going before your visit. It takes about 3 minutes."
+            },
+            {
+              "linkId": "doses-taken",
+              "type": "integer",
+              "text": "How many weekly shots have you taken so far?"
+            },
+            {
+              "linkId": "missed",
+              "type": "choice",
+              "text": "Have you missed a shot or taken one more than 2 days late?",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "no",
+                    "display": "No"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "once",
+                    "display": "Once"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "more",
+                    "display": "More than once"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "missed-why",
+              "type": "text",
+              "text": "What got in the way?",
+              "enableWhen": [
+                {
+                  "question": "missed",
+                  "operator": "=",
+                  "answerCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "once",
+                    "display": "Once"
+                  }
+                },
+                {
+                  "question": "missed",
+                  "operator": "=",
+                  "answerCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "more",
+                    "display": "More than once"
+                  }
+                }
+              ],
+              "enableBehavior": "any"
+            },
+            {
+              "linkId": "pen-trouble",
+              "type": "open-choice",
+              "text": "Any trouble with the pen or the shots? Check any that apply, or describe it in your own words.",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "setup",
+                    "display": "Trouble setting the dose or attaching the needle"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "site",
+                    "display": "Pain, bruising, or a lump where I inject"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "supply",
+                    "display": "Trouble getting refills or needles"
+                  }
+                }
+              ],
+              "repeats": true
+            },
+            {
+              "linkId": "nausea",
+              "type": "choice",
+              "text": "In the past week, how much nausea have you had?",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "none",
+                    "display": "None"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "mild",
+                    "display": "Mild, it doesn't change what I do"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "moderate",
+                    "display": "Moderate, I eat less or change plans because of it"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "severe",
+                    "display": "Severe, hard to get through the day"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "vomiting",
+              "type": "choice",
+              "text": "In the past week, have you vomited?",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "no",
+                    "display": "No"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "1-2",
+                    "display": "Once or twice"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "more",
+                    "display": "More than twice"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "bowels",
+              "type": "choice",
+              "text": "How have your bowels been?",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "normal",
+                    "display": "About normal"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "constipated",
+                    "display": "Constipated"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "loose",
+                    "display": "Loose or diarrhea"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "both",
+                    "display": "Going back and forth"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "fluids",
+              "type": "boolean",
+              "text": "Are you able to drink enough fluids each day?"
+            },
+            {
+              "linkId": "appetite",
+              "type": "choice",
+              "text": "How has your appetite changed?",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "much-less",
+                    "display": "Much less hungry, I get full quickly"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "bit-less",
+                    "display": "A bit less hungry"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "same",
+                    "display": "About the same"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "more",
+                    "display": "Hungrier than before"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "low-sugar",
+              "type": "boolean",
+              "text": "Have you had spells of feeling shaky, sweaty, or confused that went away after eating?"
+            },
+            {
+              "linkId": "red-flags",
+              "type": "choice",
+              "repeats": true,
+              "text": "Have you had any of these? Check all that apply.",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "belly-pain",
+                    "display": "Severe belly pain that won't go away, sometimes going into the back"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "cant-keep-fluids",
+                    "display": "Vomiting so much you can't keep fluids down"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "yellow",
+                    "display": "Yellow skin or eyes"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "neck",
+                    "display": "A lump or swelling in your neck, or new trouble swallowing"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "vision",
+                    "display": "New blurry vision"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "red-flags-note",
+              "type": "display",
+              "text": "If you checked any of these, please call the office today rather than waiting for your visit.",
+              "enableWhen": [
+                {
+                  "question": "red-flags",
+                  "operator": "exists",
+                  "answerBoolean": true
+                }
+              ]
+            },
+            {
+              "linkId": "next-dose",
+              "type": "choice",
+              "text": "The usual plan is to step up to the next dose after 4 weeks. How do you feel about that?",
+              "answerOption": [
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "ready",
+                    "display": "Ready to go up"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "wait",
+                    "display": "I'd like to stay at this dose a while longer"
+                  }
+                },
+                {
+                  "valueCoding": {
+                    "system": "https://smart-health-checkin.org/connectathon/CodeSystem/semaglutide-checkin",
+                    "code": "discuss",
+                    "display": "I'm not sure, let's talk about it"
+                  }
+                }
+              ]
+            },
+            {
+              "linkId": "questions",
+              "type": "text",
+              "text": "What questions do you have for me about this medicine?"
+            }
+          ]
+        }
+      },
+      "accept": [
+        "application/fhir+json"
+      ]
+    }
+  ]
+}
