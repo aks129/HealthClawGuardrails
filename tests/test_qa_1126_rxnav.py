@@ -168,61 +168,36 @@ MIXED_SALTS = ("amphetamine aspartate 2.5 MG / amphetamine sulfate 2.5 MG / "
                "sulfate 2.5 MG Oral Tablet")
 
 
-@pytest.mark.xfail(strict=True, reason=(
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
     "#1132: the controlled-substance check should use the concept's "
     "ingredient codes (Concept.ingredients), not the label text"))
 @pytest.mark.parametrize("code,body,text", [
     ("541892", _body(MIXED_SALTS, "SCD"), "MAS 10 mg tab"),
     ("84815", _body("Adderall", "BN"), "ADD 10 tab"),
 ], ids=["a-generic-with-a-long-name", "a-brand-name-code"])
-def test_a_schedule_ii_order_is_still_refused_with_the_lookup_on(
+def test_the_schedule_ii_check_catches_a_code_the_client_does_not_name(
         code, body, text, switched_on, monkeypatch):
     """On main the resolver named both codes (properties.json), the name
-    carried "amphetamine" or "adderall", and SCHEDULE_II_TERMS refused the
-    transfer. Product and brand codes are caught by name only: the code
-    list in rx_transfer.py is ingredient-level. The feed's own text here
-    names no listed term, as an abbreviation does not."""
+    carried "amphetamine" or "adderall", and SCHEDULE_II_TERMS matched.
+    Product and brand codes are caught by name only: the code list in
+    rx_transfer.py is ingredient-level. The feed's own text here names no
+    listed term, as an abbreviation does not.
+
+    Asked of the check itself, not of the call builder or its route: #1120
+    removes both, and a reproduction aimed at them would go on failing for
+    that reason (an AttributeError, a 410) whatever became of the check.
+    `raises=AssertionError` so that only the miss counts as the expected
+    failure."""
     assert len(MIXED_SALTS) > rxnav.LABEL_MAX
     monkeypatch.setattr(rxnav, "_session", lambda: _Session({code: body}))
     order = {"resourceType": "MedicationRequest", "status": "active",
              "medicationCodeableConcept": {
                  "text": text, "coding": [{"system": RXNORM, "code": code}]}}
 
-    result = rx_transfer.build_transfer_request(
-        [order], {"name": "Corner Pharmacy", "phone": "555-0100"})
+    names = rx_transfer.medication_names(order)
 
-    # Either refusal will do (as Schedule II, or as unverifiable).
-    assert result["allowed"] == []
-    assert len(result["refused"]) == 1
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "#1132, through the route: the check reads the label text, not the "
-    "concept's ingredient codes"))
-def test_the_transfer_route_drafts_no_call_for_that_order(
-        switched_on, monkeypatch, client, auth_headers):
-    """The same order through POST /r6/actions/rx-transfer/propose, which
-    reads the stored rows as written (text and display included)."""
-    monkeypatch.setattr(rxnav, "_session", lambda: _Session(
-        {"541892": _body(MIXED_SALTS, "SCD")}))
-    order = {"resourceType": "MedicationRequest", "status": "active",
-             "intent": "order", "subject": {"reference": "Patient/qa-1126"},
-             "medicationCodeableConcept": {
-                 "text": "MAS 10 mg tab",
-                 "coding": [{"system": RXNORM, "code": "541892"}]}}
-    created = client.post(
-        "/r6/fhir/MedicationRequest", data=json.dumps(order),
-        headers={**auth_headers, "X-Human-Confirmed": "true",
-                 "Content-Type": "application/fhir+json"})
-    assert created.status_code == 201, created.get_data(as_text=True)
-
-    resp = client.post(
-        "/r6/actions/rx-transfer/propose",
-        headers={**auth_headers, "Content-Type": "application/json"},
-        data=json.dumps({"to_pharmacy": {"name": "Corner Pharmacy",
-                                         "phone": "+15551230000"}}))
-
-    assert resp.status_code == 422, resp.get_data(as_text=True)
+    assert names == [text]  # the client gave the code no label
+    assert rx_transfer._is_schedule_ii(order, names)
 
 
 def test_the_offline_guard_fails_a_test_that_reaches_rxnav(switched_on):
