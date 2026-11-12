@@ -187,8 +187,9 @@ def test_the_schedule_ii_check_catches_a_code_the_client_does_not_name(
     removes both, and a reproduction aimed at them would go on failing for
     that reason (an AttributeError, a 410) whatever became of the check.
     `raises=AssertionError` so that only the miss counts as the expected
-    failure."""
-    assert len(MIXED_SALTS) > rxnav.LABEL_MAX
+    failure. The set-up is checked with pytest.fail, which is not an
+    AssertionError: if a labelling change gives either code a name, this
+    goes red and says so, where an assert would be read as the miss."""
     monkeypatch.setattr(rxnav, "_session", lambda: _Session({code: body}))
     order = {"resourceType": "MedicationRequest", "status": "active",
              "medicationCodeableConcept": {
@@ -196,7 +197,9 @@ def test_the_schedule_ii_check_catches_a_code_the_client_does_not_name(
 
     names = rx_transfer.medication_names(order)
 
-    assert names == [text]  # the client gave the code no label
+    if names != [text]:
+        pytest.fail("set-up no longer holds: the client names this code "
+                    "(%r), so this is not the case #1132 describes" % names)
     assert rx_transfer._is_schedule_ii(order, names)
 
 
