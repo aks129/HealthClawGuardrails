@@ -12,6 +12,10 @@ else. A tenant token of any scope is refused on both, before anything is
 read, stored or audited: an agent never sees these values, and never sets
 them.
 
+What the engine knows is what the secret's holder tells it. It does not
+see the person type or tick anything: `attested_at` records when the
+holder said the person did.
+
 One row per tenant and key. Audit detail names the keys, never a value.
 """
 

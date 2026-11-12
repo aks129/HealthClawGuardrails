@@ -79,13 +79,22 @@ def _audit_rows(tenant=TENANT):
     ('put', '/r6/actions/contacts/c_0000'),
 ])
 def test_a_write_token_saves_nothing(client, app, method, path):
-    # No audit row either. A bounded refusal row is #1131; an unbounded
-    # one would let any caller write rows for a tenant id it names.
-    resp = getattr(client, method)(path, headers=_agent(), json=BODY)
+    # A contact that exists, so the refused re-save has a row to change.
+    saved = _save(client)
+    path = path.replace('c_0000', saved['id'])
+    with app.app_context():
+        audited = len(_audit_rows())
+    resp = getattr(client, method)(
+        path, headers=_agent(),
+        json=dict(BODY, label='Agent Chosen', phone_e164='+14125550199'))
     assert resp.status_code == 403
     with app.app_context():
-        assert DelegationContact.query.count() == 0
-        assert _audit_rows() == []
+        row = DelegationContact.query.one()
+        assert (row.label, row.phone_e164) == (LABEL, NUMBER)
+        # No audit row for the refusal. A bounded refusal row is #1131,
+        # which moves this pin; an unbounded one would let any caller
+        # write rows for a tenant id it names.
+        assert len(_audit_rows()) == audited
 
 
 def test_an_unset_secret_refuses_every_write(client, app, monkeypatch):
@@ -95,6 +104,7 @@ def test_an_unset_secret_refuses_every_write(client, app, monkeypatch):
     assert resp.status_code == 403
     with app.app_context():
         assert DelegationContact.query.count() == 0
+        assert _audit_rows() == []
 
 
 def test_a_save_stores_the_contact_and_audits_it(client, app):

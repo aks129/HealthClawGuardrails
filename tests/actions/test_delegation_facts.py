@@ -14,6 +14,7 @@ MUTATIONS, each caught by the test named beside it:
   accept a truthy attestation              -> ..._a_write_that_fails_a_rule_names_the_field_only
   accept an undefined key                  -> ..._a_write_that_fails_a_rule_names_the_field_only
   accept any date fromisoformat reads      -> ..._a_write_that_fails_a_rule_names_the_field_only
+  check names with str.isalpha only        -> ..._names_in_other_scripts_and_forms_are_accepted
   drop the table from the purge list       -> ..._purge_removes_facts
   drop both boot imports                   -> ..._a_fresh_process_serves_the_routes
 """
