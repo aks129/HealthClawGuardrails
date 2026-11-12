@@ -20,6 +20,7 @@ MUTATIONS, each caught by the test named beside it:
   drop the grant on the agent's list        -> ..._the_agents_list_needs_a_tenant_token
   put the label in audit detail             -> ..._no_label_or_number_in_audit
   accept a truthy business-line tick        -> ..._a_save_that_fails_a_rule_names_the_field_only
+  drop the digit limit on a label           -> ..._a_save_that_fails_a_rule_names_the_field_only
   drop the table from the purge list        -> ..._purge_removes_contacts
   drop both boot imports (main.py and
   register_model_metadata; either one
@@ -178,6 +179,8 @@ def test_a_toll_free_number_is_accepted(client):
     ('business_line', False), ('business_line', 'yes'), ('business_line', 1),
     ('label', ''), ('label', '   '), ('label', 'x' * 61),
     ('label', 'Pharmacy <script>'), ('label', 'Line\nbreak'), ('label', 7),
+    ('label', '412-555-0142'), ('label', 'Pharmacy (412) 555-0142'),
+    ('label', 'Rx 4 1 2 5 5 5 0'), ('label', 'Say "hello"'),
     ('callee_kind', 'person'), ('callee_kind', None),
     ('tz', 'Mars/Olympus'), ('tz', ''), ('tz', '../etc/passwd'), ('tz', 5),
 ])
@@ -210,6 +213,11 @@ def test_the_agents_list_carries_no_number(client):
          'status': 'active'}]
     assert NUMBER not in resp.get_data(as_text=True)
     assert NUMBER[2:] not in resp.get_data(as_text=True)
+
+
+def test_a_label_may_carry_a_store_number_but_not_a_phone_number(client):
+    assert _save(client, label='Corner Pharmacy #10442')['label'] == (
+        'Corner Pharmacy #10442')
 
 
 def test_the_form_read_returns_the_number(client):
