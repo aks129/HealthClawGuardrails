@@ -170,11 +170,11 @@ class TestExecutorEnv:
 
     def test_missing_env_is_red_with_var_named(self, action_registry,
                                                monkeypatch):
-        monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+        monkeypatch.delenv('TWILIO_AUTH_TOKEN', raising=False)
         results = {r['name']: r for r in checks.check_executor_env()}
-        r = results['rail:phone-call']
+        r = results['rail:sms']
         assert r['ok'] is False
-        assert 'BLAND_AI_API_KEY' in r['detail']
+        assert 'TWILIO_AUTH_TOKEN' in r['detail']
 
     def test_present_env_is_green(self, action_registry, monkeypatch):
         monkeypatch.setenv('TWILIO_ACCOUNT_SID', 'AC123')
@@ -348,7 +348,7 @@ class TestPreflightEndpoint:
     def test_nonfatal_failures_do_not_flip_overall_ok(
             self, client, auth_headers, green_fatal_env, monkeypatch):
         # Non-fatal reds: dark rail, no telegram admin, reaper never run.
-        monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+        monkeypatch.delenv('TWILIO_AUTH_TOKEN', raising=False)
         monkeypatch.delenv('TELEGRAM_ADMIN_CHAT_ID', raising=False)
         resp = client.get('/r6/ops/preflight', headers=auth_headers)
         body = resp.get_json()

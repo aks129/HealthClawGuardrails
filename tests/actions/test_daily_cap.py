@@ -28,7 +28,6 @@ SMS = {'kind': 'sms',
 
 @pytest.fixture
 def providers_configured(monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
     monkeypatch.setenv('TWILIO_ACCOUNT_SID', 'AC-test')
     monkeypatch.setenv('TWILIO_AUTH_TOKEN', 'test-token')
     monkeypatch.setenv('TWILIO_FROM_NUMBER', '+15555550100')
@@ -48,17 +47,17 @@ def _approve(client, headers, body):
     return action_id, resp
 
 
-def test_a_call_over_the_cap_is_refused_before_the_provider(
+def test_a_text_over_the_cap_is_refused_before_the_provider(
         client, auth_headers, app, action_registry, fake_providers,
         providers_configured, monkeypatch):
     monkeypatch.setenv('ACTIONS_DAILY_CAP', '2')
 
     for _ in range(2):
-        _, resp = _approve(client, auth_headers, PHONE)
+        _, resp = _approve(client, auth_headers, SMS)
         assert resp.status_code == 200, resp.get_data(as_text=True)
     assert len(fake_providers) == 2
 
-    action_id, resp = _approve(client, auth_headers, PHONE)
+    action_id, resp = _approve(client, auth_headers, SMS)
     assert resp.status_code == 429, resp.get_data(as_text=True)
     assert resp.get_json()['error_code'] == errors.DAILY_CAP_REACHED
     # THE guarantee: the refused approval made no provider request.
@@ -74,41 +73,43 @@ def test_the_cap_is_per_kind(client, auth_headers, action_registry,
                              fake_providers, providers_configured,
                              monkeypatch):
     monkeypatch.setenv('ACTIONS_DAILY_CAP', '1')
+    # An approved call is claimed, and so counted, though no rail dials it.
     _, resp = _approve(client, auth_headers, PHONE)
-    assert resp.status_code == 200
+    assert resp.status_code == 502
+    assert resp.get_json()['error_code'] == errors.PROVIDER_NOT_CONFIGURED
     # A call does not spend the text budget.
     _, resp = _approve(client, auth_headers, SMS)
     assert resp.status_code == 200, resp.get_data(as_text=True)
     _, resp = _approve(client, auth_headers, SMS)
     assert resp.status_code == 429
     assert resp.get_json()['error_code'] == errors.DAILY_CAP_REACHED
-    assert len(fake_providers) == 2
+    assert len(fake_providers) == 1
 
 
 def test_the_cap_is_per_tenant(client, auth_headers, other_tenant_headers,
                                action_registry, fake_providers,
                                providers_configured, monkeypatch):
     monkeypatch.setenv('ACTIONS_DAILY_CAP', '1')
-    _, resp = _approve(client, auth_headers, PHONE)
+    _, resp = _approve(client, auth_headers, SMS)
     assert resp.status_code == 200
-    # Another person's calls are not counted against this one's cap.
-    _, resp = _approve(client, other_tenant_headers, PHONE)
+    # Another person's texts are not counted against this one's cap.
+    _, resp = _approve(client, other_tenant_headers, SMS)
     assert resp.status_code == 200, resp.get_data(as_text=True)
     assert len(fake_providers) == 2
 
 
-def test_yesterdays_calls_do_not_count(client, auth_headers, app,
+def test_yesterdays_texts_do_not_count(client, auth_headers, app,
                                        action_registry, fake_providers,
                                        providers_configured, monkeypatch):
     from datetime import timedelta
     monkeypatch.setenv('ACTIONS_DAILY_CAP', '1')
-    first, resp = _approve(client, auth_headers, PHONE)
+    first, resp = _approve(client, auth_headers, SMS)
     assert resp.status_code == 200
     with app.app_context():
         row = db.session.get(ProposedAction, first)
         row.claimed_at = row.claimed_at - timedelta(days=1)
         db.session.commit()
-    _, resp = _approve(client, auth_headers, PHONE)
+    _, resp = _approve(client, auth_headers, SMS)
     assert resp.status_code == 200, resp.get_data(as_text=True)
 
 

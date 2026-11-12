@@ -124,23 +124,6 @@ def _setup_condition(app):
     return {}
 
 
-def _setup_transferable_medication(app):
-    """rx-transfer/propose becomes a write only once a draft exists.
-
-    Deliberate design: a read-scoped caller may preview the "nothing to
-    transfer" refusal (422) without a write token, so the step-up gate sits
-    BELOW the draft build. Without this seed the probe would measure the 422
-    and conclude, wrongly, that the route has no step-up gate.
-    """
-    for tenant in (PRIVATE_TENANT, TENANT):
-        _seed_resource(app, tenant, "MedicationRequest", f"gm-med-{tenant}", {
-            "resourceType": "MedicationRequest", "status": "active",
-            "intent": "order",
-            "medicationCodeableConcept": {"text": "Metformin 500 MG"},
-            "subject": {"reference": "Patient/guard-matrix-pt"}})
-    return {}
-
-
 def _setup_fasten_connection(app):
     """A unique org_connection_id per run: re-registering an id answers 200/409
     from the idempotency branch, which would mask the guard under test."""
@@ -171,7 +154,6 @@ def _setup_fasten_connection(app):
 # POST /r6/fhir/$share-bundle (checkin)    |  x  | x |    | x  |    |      |  x   |  x
 # POST .../QuestionnaireResponse/$extract  |  x  | x | x  | x  |    |      |  x   |  x
 # POST /r6/actions/propose                 |  x  | x |    | x  |    |      |  x   |  x  <- #1001
-# POST /r6/actions/rx-transfer/propose     |  x  | x | x  | x  |    |      |  x   |  x
 # POST /r6/actions/<id>/commit             |  x  | x |    | x  |    |      |  x   |  x
 # POST /r6/actions/<id>/confirm            |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/<id>/decline            |  x  | x |    | x  | x  |      |  x   |  x
@@ -393,22 +375,6 @@ MATRIX: tuple = (
              "write grant, checked before the body is parsed.",
     ),
     Row(
-        id="actions-rx-transfer-propose",
-        method="POST", path="/r6/actions/rx-transfer/propose",
-        endpoint="actions.propose_rx_transfer",
-        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, READ_AUTH, STEP_UP,
-                          TENANT_FILTER, AUDIT}),
-        anon_refusal=(400,), step_up_missing_status=401,
-        body={"to_pharmacy": {"name": "Corner Pharmacy",
-                              "phone": "+15555550111"}},
-        setup=_setup_transferable_medication,
-        parses_body_before_step_up=True,
-        note="Parses the body before the step-up gate BY DESIGN, and this is "
-             "the one row where that is defensible: a read-scoped caller is "
-             "allowed to preview the 'nothing transferable' refusal, so the "
-             "gate cannot run until the draft has been built.",
-    ),
-    Row(
         id="actions-commit",
         method="POST", path="/r6/actions/{action_id}/commit",
         endpoint="actions.commit_action",
@@ -472,7 +438,7 @@ MATRIX: tuple = (
     ),
     Row(
         id="actions-callback",
-        method="POST", path="/r6/actions/callback/bland",
+        method="POST", path="/r6/actions/callback/twilio",
         endpoint="actions.action_callback",
         guards=frozenset({INTERNAL_SECRET, TENANT_FILTER, AUDIT}),
         anon_refusal=(403,), internal_secret_status=403,
@@ -480,7 +446,9 @@ MATRIX: tuple = (
              "the only guard in the matrix that does, so a header-oriented "
              "kernel must not assume otherwise. Fail-closed when "
              "ACTIONS_WEBHOOK_SECRET is unset. The tenant comes from the "
-             "action row, never from the request.",
+             "action row, never from the request. It resolves texts only: "
+             "any other kind is a 404 with the right secret too "
+             "(tests/actions/test_free_text_calls_cannot_dial.py).",
     ),
     Row(
         id="fasten-webhook",
@@ -619,6 +587,11 @@ BY_ID = {row.id: row for row in MATRIX}
 # ---------------------------------------------------------------------------
 
 NON_CLINICAL_MUTATORS = {
+    # Was a MATRIX row (read auth, then step-up once a draft existed). The
+    # route no longer drafts anything: it answers 410 before it reads a
+    # credential or a body, so there is no gate left to probe. Pinned in
+    # tests/actions/test_free_text_calls_cannot_dial.py.
+    "actions.propose_rx_transfer": "retired: 410 to every caller; no write",
     # Present only when no extension provides the operation
     # (r6/extensions.py): a fixed 501 not-supported that reads and writes
     # nothing, so there is no guard for a row to hold.
