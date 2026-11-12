@@ -23,9 +23,14 @@ import pathlib
 import subprocess
 import sys
 
+import unicodedata
+from datetime import timedelta
+
 import pytest
 
 from models import db
+from r6.actions import facts as facts_module
+from r6.actions.models import _utcnow
 from r6.actions.facts import FACT_RULES, DelegationFact
 from r6.models import AuditEventRecord
 from r6.stepup import generate_step_up_token
@@ -169,13 +174,72 @@ def test_a_write_that_fails_a_rule_names_the_field_only(
     resp = _attest(client, facts, attested=attested)
     assert resp.status_code == 422
     assert resp.get_json()['errors'] == errors
+    # Nothing the caller sent comes back: no value, and no key this module
+    # does not define.
     text = resp.get_data(as_text=True)
-    for refused in ('R2-D2', 'Sunny', '2999', 'BAD ID', 'sentinel-key',
-                    'shoe_size'):
-        assert refused not in text
+    sent = facts.items() if isinstance(facts, dict) else []
+    for key, value in sent:
+        if key not in FACT_RULES:
+            assert key not in text
+        if isinstance(value, str) and value.strip():
+            assert value not in text
     with app.app_context():
         assert DelegationFact.query.count() == 0
         assert _audit_rows() == []
+
+
+@pytest.mark.parametrize('name', [
+    'Jos\u00e9 Sample',                       # composed
+    'Jose\u0301 Sample',                      # the same name, decomposed
+    '\u0905\u0928\u093f\u0924\u093e \u0936\u0930\u094d\u092e\u093e',   # Devanagari, with vowel signs
+    "Mary-Anne O'Sample Jr.",
+])
+def test_names_in_other_scripts_and_forms_are_accepted(client, app, name):
+    resp = _attest(client, {'legal_name': name, 'preferred_name': name})
+    assert resp.status_code == 200, resp.get_json()
+    stored = resp.get_json()['facts']['legal_name']['value']
+    assert stored == unicodedata.normalize('NFC', name)
+
+
+@pytest.mark.parametrize('name', [
+    '\u0301Jose',          # starts with a combining mark
+    'Sam \U0001F600',      # a symbol
+    'Sam\u200b',           # a zero-width space
+    'Sam_1',
+])
+def test_names_that_are_not_names_are_refused(client, name):
+    resp = _attest(client, {'preferred_name': name})
+    assert resp.status_code == 422
+    assert resp.get_json()['errors'] == ['preferred_name']
+
+
+def test_the_date_of_birth_edges(client):
+    today = _utcnow().date()
+    for value, status in ((today.isoformat(), 200),
+                          ((today + timedelta(days=1)).isoformat(), 422),
+                          ('1900-01-01', 200), ('1899-12-31', 422)):
+        resp = _attest(client, {'date_of_birth': value})
+        assert resp.status_code == status, value
+
+
+def test_a_callback_number_outside_north_america_is_refused(client):
+    resp = _attest(client, {'callback_phone': '+442079460000'})
+    assert resp.get_json()['errors'] == ['callback_phone']
+
+
+def test_two_first_saves_of_one_key_do_not_crash(client, app, monkeypatch):
+    """The second of two racing first saves finds the row already there.
+    It is told to send again; nothing is half-written."""
+    assert _attest(client, {'member_id': 'FIRST-1'}).status_code == 200
+    monkeypatch.setattr(facts_module, '_tenant_facts', lambda tenant_id: {})
+    raced = _attest(client, {'member_id': 'SECOND-2'})
+    assert raced.status_code == 409
+    assert 'SECOND-2' not in raced.get_data(as_text=True)
+    monkeypatch.undo()
+    with app.app_context():
+        assert db.session.get(DelegationFact,
+                              (TENANT, 'member_id')).value == 'FIRST-1'
+        assert len(_audit_rows()) == 1
 
 
 def test_a_legal_name_needs_a_preferred_name(client, app):
