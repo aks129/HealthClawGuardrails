@@ -8,17 +8,22 @@ data only: 555-01xx numbers and made-up labels.
 
 MUTATIONS, each caught by the test named beside it:
   drop the secret check on the write        -> ..._a_write_token_saves_nothing
-  drop tenant_id from the contact lookup    -> ..._another_tenants_contact_is_not_found
+  open the gate when the secret is unset    -> ..._an_unset_secret_refuses_every_write
+  drop tenant_id from the re-save lookup    -> ..._another_tenants_contact_is_not_found
+  drop tenant_id from the suspend lookup    -> ..._another_tenants_contact_is_not_found
   drop tenant_id from the list query        -> ..._the_list_is_the_tenants_own
   remove the N11 rule                       -> ..._numbers_that_are_not_a_business_line
+  remove the premium-rate rule              -> ..._numbers_that_are_not_a_business_line
+  match digits with \\d                     -> ..._numbers_that_are_not_a_business_line
   add phone_e164 to the agent's serializer  -> ..._the_agents_list_carries_no_number
+  give the agent the form view              -> ..._the_agents_list_carries_no_number
   drop the grant on the agent's list        -> ..._the_agents_list_needs_a_tenant_token
   put the label in audit detail             -> ..._no_label_or_number_in_audit
+  accept a truthy business-line tick        -> ..._a_save_that_fails_a_rule_names_the_field_only
   drop the table from the purge list        -> ..._purge_removes_contacts
   drop both boot imports (main.py and
   register_model_metadata; either one
   alone still attaches the routes)          -> ..._a_fresh_process_serves_the_routes
-  match digits with \\d                     -> ..._numbers_that_are_not_a_business_line
 """
 
 import os
@@ -74,6 +79,8 @@ def _audit_rows(tenant=TENANT):
     ('put', '/r6/actions/contacts/c_0000'),
 ])
 def test_a_write_token_saves_nothing(client, app, method, path):
+    # No audit row either. A bounded refusal row is #1131; an unbounded
+    # one would let any caller write rows for a tenant id it names.
     resp = getattr(client, method)(path, headers=_agent(), json=BODY)
     assert resp.status_code == 403
     with app.app_context():
@@ -170,7 +177,8 @@ def test_a_save_that_fails_a_rule_names_the_field_only(client, app, field,
                        json=dict(BODY, **{field: value}))
     assert resp.status_code == 422
     assert resp.get_json()['errors'] == [field]
-    assert str(value) not in resp.get_data(as_text=True) or not str(value)
+    if isinstance(value, str) and value.strip():
+        assert value not in resp.get_data(as_text=True)
     with app.app_context():
         assert DelegationContact.query.count() == 0
 
@@ -265,7 +273,8 @@ def test_no_label_or_number_in_audit(client, app):
         suspend_contact(TENANT, saved['id'])
         db.session.commit()
         rows = _audit_rows()
-        # save, re-save, two reads, suspend: every access leaves a row.
+        # save, re-save, two reads, suspend: each leaves a row. The save
+        # that failed a rule stored nothing and leaves none.
         assert len(rows) == 5
         for row in rows:
             text = ' '.join(str(v) for v in (
