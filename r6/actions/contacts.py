@@ -8,8 +8,18 @@ typed the number and ticked that it is a business line. A tenant write
 token is refused, because an agent holds one: the party asking for a call
 must not also be the one that says where calls may go.
 
+What the engine knows is what the secret's holder tells it. It does not
+see the person type or tick anything: `attested_at` records when the
+holder said the person did, and the holder is trusted to be a signed-in
+page acting for that person and no one else.
+
 Two reads. A tenant-bound token lists id, label, kind and status, never a
 number. The secret lists everything, to prefill the person's own form.
+
+The label reaches the agent as the person typed it, so the agent can tell
+contacts apart when asked to call one. A contact is not a clinical record
+and does not pass through record redaction; the label's own rule (letters,
+digits and business punctuation, 60 characters) is what bounds it.
 
 A label and a number say which pharmacy or dentist a person uses, so they
 stay out of audit detail: a row carries the contact id and the kind.
@@ -136,8 +146,8 @@ def _fields_or_errors(body):
 
 def internal_only_preamble():
     """(tenant, None) for a caller holding the internal secret, else
-    (None, refusal). The gate for every route only a signed-in page's
-    server may call, here and in the attested-facts store.
+    (None, refusal). The gate for a route only a signed-in page's server
+    may call.
 
     The secret is checked before anything is read, stored or audited, so a
     caller without it leaves no trace of what it tried to save.
