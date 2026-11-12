@@ -7,12 +7,14 @@ a tenant token, which an agent holds, gets neither. Synthetic data only.
 MUTATIONS, each caught by the test named beside it:
   drop the secret check                    -> ..._a_tenant_token_neither_writes_nor_reads
   open the gate when the secret is unset   -> ..._an_unset_secret_refuses
+  let the read skip the gate               -> ..._a_tenant_token_neither_writes_nor_reads
   drop tenant_id from the facts query      -> ..._facts_are_the_tenants_own
   log a value in audit detail              -> ..._no_value_in_audit
-  drop the table from the purge list       -> ..._purge_removes_facts
   drop the preferred-name rule             -> ..._a_legal_name_needs_a_preferred_name
   accept a truthy attestation              -> ..._a_write_that_fails_a_rule_names_the_field_only
+  accept an undefined key                  -> ..._a_write_that_fails_a_rule_names_the_field_only
   accept any date fromisoformat reads      -> ..._a_write_that_fails_a_rule_names_the_field_only
+  drop the table from the purge list       -> ..._purge_removes_facts
   drop both boot imports                   -> ..._a_fresh_process_serves_the_routes
 """
 
@@ -69,6 +71,8 @@ def test_every_fact_has_a_passing_example():
 # --- who may write and read ------------------------------------------------
 
 def test_a_tenant_token_neither_writes_nor_reads(client, app):
+    # No audit row for the refusals. A bounded refusal row is #1131; an
+    # unbounded one would let any caller write rows for a tenant id it names.
     assert _attest(client).status_code == 200
     with app.app_context():
         before = len(_audit_rows())
