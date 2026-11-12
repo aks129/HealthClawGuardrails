@@ -2,7 +2,7 @@
 
 No network. The first half pins behaviour the client already has but that no
 test held (each row names the mutation it catches; all survived the PR's two
-test files). The second half is three reproductions, marked
+test files). The second half is two reproductions of #1132, marked
 ``xfail(strict=True)``: each goes red on the day its defect is fixed, which
 is the cue to drop the marker.
 """
@@ -169,8 +169,8 @@ MIXED_SALTS = ("amphetamine aspartate 2.5 MG / amphetamine sulfate 2.5 MG / "
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "#1126 QA finding 1: with the lookup on, a Schedule II product whose "
-    "RxNorm name the client refuses is no longer refused for transfer"))
+    "#1132: the controlled-substance check should use the concept's "
+    "ingredient codes (Concept.ingredients), not the label text"))
 @pytest.mark.parametrize("code,body,text", [
     ("541892", _body(MIXED_SALTS, "SCD"), "MAS 10 mg tab"),
     ("84815", _body("Adderall", "BN"), "ADD 10 tab"),
@@ -197,7 +197,8 @@ def test_a_schedule_ii_order_is_still_refused_with_the_lookup_on(
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "#1126 QA finding 1, through the route: the proposal is drafted"))
+    "#1132, through the route: the check reads the label text, not the "
+    "concept's ingredient codes"))
 def test_the_transfer_route_drafts_no_call_for_that_order(
         switched_on, monkeypatch, client, auth_headers):
     """The same order through POST /r6/actions/rx-transfer/propose, which
@@ -224,13 +225,12 @@ def test_the_transfer_route_drafts_no_call_for_that_order(
     assert resp.status_code == 422, resp.get_data(as_text=True)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#1126 QA finding 2: the offline guard's AssertionError is caught by "
-    "rxnav.history and again by resolve(), so it cannot fail a test"))
 def test_the_offline_guard_fails_a_test_that_reaches_rxnav(switched_on):
-    """A test that reaches RxNav without replaying an answer should go red.
-    Today it gets None, the same answer as an outage. If the fix records
-    the attempt and fails at teardown instead of raising, rewrite this."""
+    """A test that reaches RxNav without replaying an answer goes red: the
+    guard in tests/conftest.py raises what `except Exception` cannot catch.
+
+    MUTATION: raise AssertionError from the guard -> the client reads it as
+    an outage and resolve() returns None."""
     with pytest.raises(BaseException) as caught:
         terminology_resolver.resolve(RXNORM, "861007")
     assert not isinstance(caught.value, rxnav.Unavailable)

@@ -72,7 +72,9 @@ class Concept:
     """What RxNav says about one code. ``label`` is None when it has no name
     we will use; ``kind`` is "product" or "named" exactly when it has one.
     ``tty`` is the term type of the concept the label came from, which for a
-    remapped code is the concept it was remapped to."""
+    remapped code is the concept it was remapped to. ``ingredients`` is that
+    concept's ingredient RxCUIs, each shaped like one, whether or not it has
+    a label: a check keyed by ingredient code must not depend on the name."""
 
     rxcui: str
     status: str
@@ -80,6 +82,7 @@ class Concept:
     label: str | None
     kind: str | None
     remapped_to: str | None
+    ingredients: tuple[str, ...] = ()
 
 
 def is_rxcui(code) -> bool:
@@ -112,7 +115,8 @@ def _text(value) -> str:
 
 def parse(body: dict) -> dict:
     """A historystatus body as the plain dict the recorded fixture holds
-    (tests/fixtures/rxnav_concepts.json), plus ``scd_name`` and ``remapped``.
+    (tests/fixtures/rxnav_concepts.json), plus ``scd_name``, ``remapped``
+    and ``ingredient_rxcuis``.
     """
     history = body["rxcuiStatusHistory"]
     attrs = history.get("attributes") or {}
@@ -146,6 +150,8 @@ def parse(body: dict) -> dict:
                           .get("scdConceptName")),
         "remapped": [_text(r.get("remappedRxCui"))
                      for r in derived.get("remappedConcept") or []],
+        "ingredient_rxcuis": [_text(i.get("ingredientRxcui"))
+                              for i in derived.get("ingredientConcept") or []],
     }
 
 
@@ -225,9 +231,13 @@ def history(code: str, session=None) -> dict:
     return concept
 
 
-def fetch(code: str, session=None) -> Concept | None:
+def fetch(code: str, session=None, may_follow=None) -> Concept | None:
     """What RxNav says about this code, or None if it is not an RxCUI (in
     which case nothing is sent). Raises Unavailable if it could not be asked.
+
+    A remapped code costs a second request. ``may_follow`` is asked before
+    that request is made; a caller with a budget spends it there. If it
+    says no, the code could not be asked: Unavailable, not a verdict.
     """
     if not is_rxcui(code):
         return None
@@ -243,8 +253,12 @@ def fetch(code: str, session=None) -> Concept | None:
         # chain ends there. With several targets the code is ambiguous:
         # name_for sees the Remapped concept itself and names nothing.
         if len(targets) == 1 and is_rxcui(targets[0]):
+            if may_follow is not None and not may_follow():
+                raise Unavailable("no room for the second request")
             remapped_to = targets[0]
             concept = history(remapped_to, session)
     label, kind = name_for(concept)
     tty = concept["tty"] if _TTY.fullmatch(concept["tty"]) else ""
-    return Concept(code, status, tty, label, kind, remapped_to)
+    ingredients = tuple(dict.fromkeys(
+        rxcui for rxcui in concept["ingredient_rxcuis"] if is_rxcui(rxcui)))
+    return Concept(code, status, tty, label, kind, remapped_to, ingredients)

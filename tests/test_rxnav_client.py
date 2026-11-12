@@ -12,6 +12,8 @@ MUTATION, each caught here:
 - loosen or remove is_rxcui: test_a_code_that_is_not_an_rxcui_is_never_sent;
 - name an SBD by its own (brand) name: test_a_branded_drug_is_named_by_
   its_generic.
+The full list (42 mutants, with tests/test_qa_1126_rxnav.py and
+tests/test_rxnav_exploits_pr1126.py) is in the pull request.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ import copy
 import json
 from pathlib import Path
 
+import flask
 import pytest
 
 from r6 import rxnav, terminology, terminology_resolver
@@ -120,7 +123,7 @@ def test_a_clinical_drug_is_named_by_rxnorm():
     assert concept == rxnav.Concept(
         rxcui="861007", status="active", tty="SCD",
         label="metformin hydrochloride 500 MG Oral Tablet", kind="product",
-        remapped_to=None)
+        remapped_to=None, ingredients=("6809",))
 
 
 def test_a_branded_drug_is_named_by_its_generic():
@@ -185,7 +188,7 @@ def test_a_remap_to_one_concept_is_followed_one_hop():
     assert concept == rxnav.Concept(
         rxcui="205510", status="remapped", tty="SBD",
         label="bupivacaine hydrochloride 5 MG/ML Injectable Solution",
-        kind="product", remapped_to="1012457")
+        kind="product", remapped_to="1012457", ingredients=("1815",))
 
 
 def test_a_remap_to_two_concepts_gets_no_name_and_no_second_request():
@@ -217,6 +220,49 @@ def test_a_remap_target_that_is_not_an_rxcui_is_never_sent():
 def test_a_failed_second_hop_is_unavailable_not_a_verdict():
     with pytest.raises(rxnav.Unavailable):
         rxnav.fetch("205510", session=_Session({"205510": BODIES["205510"]}))
+
+
+def test_the_second_request_is_made_only_if_the_caller_allows_it():
+    session = _Session()
+    with pytest.raises(rxnav.Unavailable):
+        rxnav.fetch("205510", session=session, may_follow=lambda: False)
+    assert session.urls == [URL % "205510"]
+
+    asked = []
+    rxnav.fetch("205510", session=_Session(),
+                may_follow=lambda: asked.append(1) or True)
+    rxnav.fetch("861007", session=_Session(), may_follow=asked.append)
+    rxnav.fetch("205516", session=_Session(), may_follow=asked.append)
+    assert asked == [1]  # asked once, and only where a second request follows
+
+
+# --- ingredient codes: reported whether or not there is a name -----------
+
+@pytest.mark.parametrize("code,tty", [
+    ("541892", "SCD"),  # RxNorm's name is 142 characters: no label
+    ("84815", "BN"),    # a brand name: no label
+])
+def test_a_concept_with_no_label_still_reports_its_ingredient_codes(code, tty):
+    concept = rxnav.fetch(code, session=_Session())
+    assert (concept.status, concept.tty, concept.label) == ("active", tty, None)
+    assert concept.ingredients == ("3288", "725")
+
+
+def test_ingredient_codes_are_rxcuis_once_each_and_nothing_else():
+    body = _varied("541892", derivedConcepts__ingredientConcept=[
+        {"ingredientRxcui": "3288", "ingredientName": "<b>x</b>"},
+        {"ingredientRxcui": "3288"}, {"ingredientRxcui": "725 Jane"},
+        {"ingredientRxcui": 725}, {"ingredientName": "amphetamine"},
+        {"ingredientRxcui": "725"}])
+    concept = rxnav.fetch("541892", session=_Session({"541892": body}))
+    assert concept.ingredients == ("3288", "725")
+    assert rxnav.fetch("99999999", session=_Session()).ingredients == ()
+    assert rxnav.fetch("205516", session=_Session()).ingredients == ()
+
+
+def test_a_retired_concept_reports_its_ingredient_codes_without_a_name():
+    concept = rxnav.fetch("205517", session=_Session())
+    assert (concept.label, concept.ingredients) == (None, ("873",))
 
 
 # --- every static-table row, from the recorded parsed copy ---------------
@@ -324,6 +370,32 @@ def test_the_resolver_caches_a_verdict_but_not_an_outage(resolver, monkeypatch):
     assert terminology_resolver.resolve(terminology.RXNORM, "861007") is None
     assert len(down.calls) == 1
     assert terminology_resolver.cache_size() == 1
+
+
+def test_a_remap_spends_the_budget_once_per_request(resolver):
+    """MUTATION: drop `may_follow=_budget_take` in resolve() -> one unit for
+    two requests."""
+    with flask.Flask(__name__).test_request_context("/"):
+        terminology_resolver.resolve(terminology.RXNORM, "205510")
+        assert terminology_resolver._budget_state()["used"] == 2
+    assert len(resolver.calls) == 2
+
+
+def test_the_second_request_respects_the_deadline(resolver, monkeypatch):
+    """MUTATION: spend without asking `_budget_allows()` in _budget_take ->
+    the second request goes out after the deadline."""
+    class _Slow(_Session):
+        def get(self, url, **kwargs):  # the first answer uses up the time
+            terminology_resolver._budget_state()["deadline"] = 0.0
+            return super().get(url, **kwargs)
+
+    slow = _Slow()
+    monkeypatch.setattr(rxnav, "_session", lambda: slow)
+    with flask.Flask(__name__).test_request_context("/"):
+        assert terminology_resolver.resolve(
+            terminology.RXNORM, "205510") is None
+    assert slow.urls == [URL % "205510"]
+    assert terminology_resolver.cache_size() == 0  # not a verdict
 
 
 def test_a_failed_lookup_does_not_log_the_code(resolver, monkeypatch, caplog):

@@ -468,5 +468,150 @@
    "pack": {},
    "derivedConcepts": {}
   }
+ },
+ "541892": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "092005",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "092005",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "541892",
+    "name": "amphetamine aspartate 2.5 MG / amphetamine sulfate 2.5 MG / dextroamphetamine saccharate 2.5 MG / dextroamphetamine sulfate 2.5 MG Oral Tablet",
+    "tty": "SCD",
+    "isMultipleIngredient": "YES",
+    "isBranded": "NO"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "3288",
+      "baseName": "dextroamphetamine",
+      "bossRxcui": "221088",
+      "bossName": "dextroamphetamine saccharate",
+      "activeIngredientRxcui": "221088",
+      "activeIngredientName": "dextroamphetamine saccharate",
+      "moietyRxcui": "3288",
+      "moietyName": "dextroamphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "3288",
+      "baseName": "dextroamphetamine",
+      "bossRxcui": "3287",
+      "bossName": "dextroamphetamine sulfate",
+      "activeIngredientRxcui": "3287",
+      "activeIngredientName": "dextroamphetamine sulfate",
+      "moietyRxcui": "3288",
+      "moietyName": "dextroamphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "725",
+      "baseName": "amphetamine",
+      "bossRxcui": "221057",
+      "bossName": "amphetamine aspartate",
+      "activeIngredientRxcui": "221057",
+      "activeIngredientName": "amphetamine aspartate",
+      "moietyRxcui": "725",
+      "moietyName": "amphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "725",
+      "baseName": "amphetamine",
+      "bossRxcui": "81952",
+      "bossName": "amphetamine sulfate",
+      "activeIngredientRxcui": "81952",
+      "activeIngredientName": "amphetamine sulfate",
+      "moietyRxcui": "725",
+      "moietyName": "amphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "317541",
+      "doseFormName": "Oral Tablet"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151131",
+      "doseFormGroupName": "Oral Product"
+     },
+     {
+      "doseFormGroupRxcui": "1151133",
+      "doseFormGroupName": "Pill"
+     }
+    ]
+   },
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "3288",
+      "ingredientName": "dextroamphetamine"
+     },
+     {
+      "ingredientRxcui": "725",
+      "ingredientName": "amphetamine"
+     }
+    ]
+   }
+  }
+ },
+ "84815": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "042005",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "042005",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "84815",
+    "name": "Adderall",
+    "tty": "BN",
+    "isMultipleIngredient": "YES",
+    "isBranded": "YES"
+   },
+   "definitionalFeatures": {},
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "3288",
+      "ingredientName": "dextroamphetamine"
+     },
+     {
+      "ingredientRxcui": "725",
+      "ingredientName": "amphetamine"
+     }
+    ]
+   }
+  }
  }
 }

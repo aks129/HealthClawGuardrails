@@ -62,6 +62,9 @@ TEST_TENANT_ID = 'test-tenant'
 def _rxnav_stays_offline():
     """No test reaches RxNav. r6/rxnav.py opens its session through this one
     function; a test that wants an answer replaces it with a recorded one.
+    A test that reaches it goes red: pytest.fail raises a BaseException, so
+    neither the client's nor the resolver's `except Exception` can read the
+    guard as an outage.
 
     Its own MonkeyPatch, not the `monkeypatch` fixture: asking for that here
     would set it up before every other fixture, so a test's patches would be
@@ -70,7 +73,7 @@ def _rxnav_stays_offline():
     from r6 import rxnav
 
     def _offline():
-        raise AssertionError("a test tried to reach RxNav")
+        pytest.fail("a test tried to reach RxNav")
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(rxnav, "_session", _offline)

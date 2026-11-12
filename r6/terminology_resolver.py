@@ -159,6 +159,18 @@ def _budget_spend() -> None:
         state["used"] += 1
 
 
+def _budget_take() -> bool:
+    """Spend one unit if there is room and time left; say whether it was.
+
+    Handed to r6/rxnav.py for a remapped code's second request, so the cap
+    counts outbound requests and the deadline is checked before each one.
+    """
+    if not _budget_allows():
+        return False
+    _budget_spend()
+    return True
+
+
 def resolve(system: str, code: str) -> str | None:
     """A label for this code from a terminology service, or None.
 
@@ -195,7 +207,7 @@ def resolve(system: str, code: str) -> str | None:
             # and by rule (a brand by its generic). Unavailable lands in the
             # except below and is not cached; a concept with no label is an
             # answer and is.
-            concept = _rxnav_mod.fetch(code)
+            concept = _rxnav_mod.fetch(code, may_follow=_budget_take)
             label = concept.label if concept is not None else None
         else:
             result = _engine()._lookup_code(system, code)
