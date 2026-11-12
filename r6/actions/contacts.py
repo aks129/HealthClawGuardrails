@@ -134,11 +134,13 @@ def _fields_or_errors(body):
             'callee_kind': body['callee_kind'], 'tz': body['tz']}, []
 
 
-def _write_preamble():
-    """(tenant, None) for an authorized write, else (None, refusal).
+def internal_only_preamble():
+    """(tenant, None) for a caller holding the internal secret, else
+    (None, refusal). The gate for every route only a signed-in page's
+    server may call, here and in the attested-facts store.
 
     The secret is checked before anything is read, stored or audited, so a
-    caller without it leaves no trace of the contact it tried to save.
+    caller without it leaves no trace of what it tried to save.
     """
     tenant = _tenant_or_none()
     if tenant is None:
@@ -171,7 +173,7 @@ def _audit_saved(contact, event_type):
 @actions_blueprint.route('/contacts', methods=['POST'])
 def save_contact():
     """Save a contact the person typed and attested on a signed-in page."""
-    tenant, refusal = _write_preamble()
+    tenant, refusal = internal_only_preamble()
     if refusal is not None:
         return refusal
     fields, refusal = _validated_fields()
@@ -188,7 +190,7 @@ def save_contact():
 @actions_blueprint.route('/contacts/<contact_id>', methods=['PUT'])
 def resave_contact(contact_id):
     """Save a contact again. A fresh attestation, so it is active again."""
-    tenant, refusal = _write_preamble()
+    tenant, refusal = internal_only_preamble()
     if refusal is not None:
         return refusal
     contact = DelegationContact.query.filter_by(
