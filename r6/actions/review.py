@@ -46,6 +46,7 @@ from flask import render_template, request
 from models import db
 from r6.actions.confirmations import has_confirmation, issue_confirmation
 from r6.actions.models import PayloadSealed, ProposedAction
+from r6.actions.registry import get_executor
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
 from r6.internal_auth import internal_secret_presented
@@ -198,6 +199,9 @@ def _approve_context(action):
     return {
         'action_id': action.id,
         'kind_label': _KIND_LABELS.get(action.kind, action.kind),
+        # No rail means an approval could only fail: the page says so and
+        # offers no Approve.
+        'available': get_executor(action.kind) is not None,
         'body_label': _BODY_LABELS.get(action.kind, 'Request'),
         'to': payload.get('to'),
         'phone': payload.get('phone'),
@@ -540,6 +544,13 @@ def review_submit(action_id):
         return _error(404, 'Unknown action')
 
     if action.kind != 'form-fill':
+        if get_executor(action.kind) is None:
+            # Nothing can carry this kind out, so no consent record is made
+            # for it; the page offers no Approve, and a POST that skips the
+            # page gets the same answer.
+            return _error(409, 'This kind of request is not available and '
+                               'cannot be carried out, so it cannot be '
+                               'approved. You can decline it.')
         return _approve_submit(action, tenant_id)
 
     # A submitted review is final. This route does NOT transition the action

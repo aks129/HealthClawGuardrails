@@ -436,8 +436,8 @@
               gateMsg.textContent =
                 "We couldn't finish this request. " +
                 "Approving again won't retry it. " +
-                'Ask your assistant to try again. ' +
-                'Your home page lists it as not finished.';
+                {% if available is not defined or available %}'Ask your assistant to try again. ' +
+                {% endif %}                'Your home page lists it as not finished.';
               return;
             }
             if (status === 'unknown') {

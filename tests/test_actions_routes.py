@@ -9,7 +9,7 @@ double-submit, tenant isolation, audit hygiene).
 import json
 
 from r6.actions.models import ProposedAction
-from tests.approval_helpers import propose_headers
+from tests.approval_helpers import propose_headers, sms_rail_env
 
 
 def _approval_headers(auth_headers, action_id):
@@ -20,7 +20,7 @@ def _approval_headers(auth_headers, action_id):
 
 
 PROPOSE_BODY = {
-    'kind': 'phone-call',
+    'kind': 'sms',
     'payload': {
         'to': 'CVS Pharmacy',
         'phone': '617-555-0100',
@@ -273,7 +273,7 @@ def test_commit_then_confirm_executes(client, tenant_headers, auth_headers,
                                       monkeypatch):
     """Full happy path: submit executes nothing; the out-of-band Approve is
     what dials the provider (once)."""
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     resp = client.post('/r6/actions/%s/commit' % action_id,
                        headers=auth_headers)
@@ -337,7 +337,7 @@ def test_confirm_outcome_unknown_maps_to_unknown_status(
         client, tenant_headers, auth_headers, app, action_registry,
         monkeypatch):
     import requests as req
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _submit(client, tenant_headers, auth_headers)
 
     def timeout(method, url, **kw):
@@ -358,7 +358,7 @@ def test_confirm_outcome_unknown_maps_to_unknown_status(
 def test_confirm_4xx_provider_error_is_failed(client, tenant_headers,
                                               auth_headers, app,
                                               action_registry, monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _submit(client, tenant_headers, auth_headers)
 
     class _Resp:
@@ -383,7 +383,7 @@ def test_confirm_4xx_provider_error_is_failed(client, tenant_headers,
 def test_confirm_5xx_provider_error_is_unknown(client, tenant_headers,
                                                auth_headers, app,
                                                action_registry, monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _submit(client, tenant_headers, auth_headers)
 
     class _Resp:
