@@ -38,7 +38,7 @@ ACCOUNT_HOLDER = 'account-holder'
 # punctuation a business name carries; nothing a renderer or a voice reads
 # as markup.
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&()/#-]{0,59}")
-# North American numbers only: +1, then an area code and an exchange that
+# +1 numbers only: then an area code and an exchange that
 # each start 2-9. ASCII digits only: \d would also take other scripts'
 # digits, which the service-code rules below would not recognize.
 _NANP = re.compile(r'\+1([2-9][0-9]{2})([2-9][0-9]{2})[0-9]{4}')
@@ -54,9 +54,12 @@ def _is_n11(three_digits):
 def valid_business_number(value):
     """True for a +1 number that can be a business line.
 
-    Refuses anything outside North America, the N11 service codes (911 and
-    the rest) as an area code or an exchange, and premium-rate 900 and 976.
-    Toll-free numbers pass: pharmacies use them.
+    +1 numbers only, which is the whole North American plan: the United
+    States, Canada and the Caribbean countries that share it. Refuses the
+    N11 service codes (911 and the rest) as an area code or an exchange,
+    and premium-rate 900 and 976. Toll-free numbers pass: pharmacies use
+    them. This is a short deny-list, not a directory: it does not screen
+    other premium ranges or say what kind of line a number is.
     """
     if not isinstance(value, str):
         return False
