@@ -94,6 +94,17 @@ def test_a_tenant_token_neither_writes_nor_reads(client, app):
         assert len(_audit_rows()) == before
 
 
+def test_a_refused_request_reads_nothing(client, monkeypatch):
+    """The gate runs before the facts are looked up, on both routes."""
+    def _never(tenant_id):
+        raise AssertionError('facts were read before the gate refused')
+    monkeypatch.setattr(facts_module, '_tenant_facts', _never)
+    assert client.get('/r6/actions/facts', headers=_agent()).status_code == 403
+    assert client.put('/r6/actions/facts', headers=_agent(),
+                      json={'facts': FACTS, 'attested': True}
+                      ).status_code == 403
+
+
 def test_an_unset_secret_refuses(client, app, monkeypatch):
     monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET')
     headers = dict(_agent(), **{'X-Internal-Secret': ''})
@@ -230,7 +241,8 @@ def test_a_callback_number_outside_north_america_is_refused(client):
 
 def test_two_first_saves_of_one_key_do_not_crash(client, app, monkeypatch):
     """The second of two racing first saves finds the row already there.
-    It is told to send again; nothing is half-written."""
+    It is told to send again; nothing is half-written. The race is
+    simulated by making the lookup miss; no test runs two connections."""
     assert _attest(client, {'member_id': 'FIRST-1'}).status_code == 200
     monkeypatch.setattr(facts_module, '_tenant_facts', lambda tenant_id: {})
     raced = _attest(client, {'member_id': 'SECOND-2'})
