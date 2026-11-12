@@ -19,7 +19,11 @@ number. The secret lists everything, to prefill the person's own form.
 The label reaches the agent as the person typed it, so the agent can tell
 contacts apart when asked to call one. A contact is not a clinical record
 and does not pass through record redaction; the label's own rule (letters,
-digits and business punctuation, 60 characters) is what bounds it.
+business punctuation, 60 characters, at most six digits so it cannot carry
+a phone number) is what bounds it.
+
+No page that calls these routes is in this repository, and no test here
+fails if the holder of the secret is something else.
 
 A label and a number say which pharmacy or dentist a person uses, so they
 stay out of audit detail: a row carries the contact id and the kind.
@@ -45,9 +49,17 @@ STATUSES = ('active', 'suspended')
 ACCOUNT_HOLDER = 'account-holder'
 
 # The label is spoken on a call, so it is letters, digits, spaces and the
-# punctuation a business name carries; nothing a renderer or a voice reads
-# as markup.
+# punctuation a business name carries. No angle brackets, quotes or line
+# breaks.
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&()/#-]{0,59}")
+# The agent reads labels and must not read numbers, so a label cannot hold
+# enough digits to be one, however they are spaced or punctuated.
+_LABEL_MAX_DIGITS = 6
+
+
+def _valid_label(label):
+    return (_LABEL.fullmatch(label) is not None
+            and sum(ch.isdigit() for ch in label) <= _LABEL_MAX_DIGITS)
 # +1 numbers only: then an area code and an exchange that
 # each start 2-9. ASCII digits only: \d would also take other scripts'
 # digits, which the service-code rules below would not recognize.
@@ -129,7 +141,7 @@ def _fields_or_errors(body):
     label = body.get('label')
     label = label.strip() if isinstance(label, str) else ''
     checks = (
-        ('label', _LABEL.fullmatch(label) is not None),
+        ('label', _valid_label(label)),
         ('phone_e164', valid_business_number(body.get('phone_e164'))),
         ('callee_kind', body.get('callee_kind') in CALLEE_KINDS),
         ('tz', _valid_tz(body.get('tz'))),
