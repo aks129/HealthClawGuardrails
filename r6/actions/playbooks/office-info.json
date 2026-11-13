@@ -1,0 +1,26 @@
+{
+  "id": "office-info",
+  "version": 1,
+  "title": "Ask an office a general question",
+  "callee_kinds": ["clinic", "dentist", "pharmacy", "other"],
+  "slots": {
+    "topic": {
+      "type": "enum",
+      "sources": ["stated"],
+      "label": "Question",
+      "required": true,
+      "choices": {
+        "hours": "their opening hours",
+        "fax_number": "their fax number",
+        "address": "their street address",
+        "accepts_new_patients": "whether they are taking new patients"
+      }
+    }
+  },
+  "commitments": [],
+  "request_template": "I'm calling to ask about {topic}.",
+  "outcome": {
+    "answer_given": {"type": "bool"},
+    "answer_time": {"type": "datetime"}
+  }
+}
