@@ -37,7 +37,8 @@ def _raw(slots=None, template='Could you check something for {when}?'):
         'callee_kinds': ['clinic'],
         'slots': slots or {'when': {'type': 'enum', 'sources': ['stated'],
                                     'label': 'When', 'required': True,
-                                    'choices': {'today': 'today'}}},
+                                    'choices': {'today': {
+                                        'say': 'today', 'show': 'Today'}}}},
         'commitments': [],
         'request_template': template,
         'outcome': {'done': {'type': 'bool'}},
@@ -91,25 +92,26 @@ def test_the_callback_number_is_said_only_after_the_verify_step():
     spoken = '412-555-0177'
     first = prompt.index(spoken)
     assert first > verify
-    assert prompt.count(spoken) == 2   # the facts list and the closing
+    # Review round: the closing only; it is no longer a fact to offer.
+    assert prompt.count(spoken) == 1
 
 
 @pytest.mark.parametrize('topic', ['hours', 'fax_number', 'address',
                                    'accepts_new_patients'])
 def test_every_office_info_topic_renders_one_question(topic):
     script = _render(stated={'topic': topic})
-    phrase = _office_info().slots['topic'].choices[topic]
+    choice = _office_info().slots['topic'].choices[topic]
     ask = [line for line in script.agent_prompt.split('\n')
            if line.startswith('Step 2')]
-    assert len(ask) == 1 and ask[0].endswith('%s.' % phrase)
+    assert len(ask) == 1 and ask[0].endswith('%s?' % choice.say)
     disclosed = [d for d in script.disclosures if d.slot == 'topic']
-    assert [(d.value, d.source) for d in disclosed] == [(phrase, 'stated')]
+    assert [(d.value, d.source) for d in disclosed] == [(choice.show,
+                                                         'stated')]
 
 
 # --- defects found in review (strict xfail: the fix turns these red) ----------
 
-@pytest.mark.xfail(strict=True, reason='QA #1137: a placeholder whose slot '
-                   'name has an underscore fails the template text check')
+# Fixed in the review round (F2).
 @pytest.mark.parametrize('name', ['rx_number', 'last_fill'])
 def test_a_placeholder_may_name_any_valid_slot(tmp_path, name):
     slots = {name: {'type': 'rx_number', 'sources': ['stated'],
@@ -118,8 +120,7 @@ def test_a_placeholder_may_name_any_valid_slot(tmp_path, name):
     assert set(load_playbook(_write(tmp_path, raw)).slots) == {name}
 
 
-@pytest.mark.xfail(strict=True, reason='QA #1137: an unhashable value raises '
-                   'TypeError, not RenderError')
+# Fixed in the review round (F3).
 @pytest.mark.parametrize('value', [['hours'], {'hours': 1}])
 def test_a_non_string_enum_value_is_a_render_error(value):
     with pytest.raises(RenderError):
@@ -138,8 +139,7 @@ def test_a_stated_date_must_be_a_real_day(tmp_path, value):
         _render(book, stated={'day': value})
 
 
-@pytest.mark.xfail(strict=True, reason='QA #1137: the question is spoken to '
-                   'the office but refers to it as "their"/"they"')
+# Fixed in the review round (F1).
 @pytest.mark.parametrize('topic', ['hours', 'fax_number', 'address',
                                    'accepts_new_patients'])
 def test_the_question_addresses_the_office_in_the_second_person(topic):

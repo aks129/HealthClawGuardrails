@@ -22,17 +22,25 @@ from types import MappingProxyType
 from typing import Mapping
 
 PLAYBOOK_DIR = Path(__file__).resolve().parent
+#: A playbook is a short file; anything larger is refused unread.
+MAX_FILE_BYTES = 64 * 1024
 
 SLOT_TYPES = ('enum', 'date', 'time_windows', 'rx_number', 'person_name',
               'phone', 'member_id', 'payer_name')
 SOURCES = ('profile', 'record', 'stated')
 #: Only these types may come from what the assistant says the person said.
-#: A name, number, member id or payer is typed by the person on an
-#: authenticated page, never supplied by the model.
 STATED_TYPES = ('enum', 'date', 'time_windows', 'rx_number')
-#: Attested facts the model may never supply, whatever type a slot declares.
-PROFILE_ONLY_SLOTS = ('legal_name', 'date_of_birth', 'member_id',
-                      'group_number', 'payer_name')
+#: Identity types: only the person's own attestation (`profile`) fills them.
+IDENTITY_TYPES = ('person_name', 'phone', 'member_id', 'payer_name')
+#: Words that mark a slot as an identity fact, whatever its type: a birth
+#: date, a legal name, an insurance identifier. Matched against every word
+#: of the slot's name and label, so `dob`, `birth_date` and a "Date of
+#: birth" label are caught alike, not one spelling. A slot that matches may
+#: take only `profile`: never the record, never the assistant.
+IDENTITY_WORDS = frozenset((
+    'birth', 'birthday', 'birthdate', 'born', 'dob', 'legal', 'member',
+    'subscriber', 'payer', 'insurer', 'insurance', 'policy', 'group', 'ssn',
+    'social'))
 #: Facts every call carries, whatever the playbook. Not slots.
 PREAMBLE_FACTS = ('preferred_name', 'callback_phone')
 CALLEE_KINDS = ('clinic', 'dentist', 'pharmacy', 'other')
@@ -52,13 +60,19 @@ class PlaybookError(ValueError):
 
 
 @dataclass(frozen=True)
+class Choice:
+    say: str   # spoken to the callee, addressing them ("your opening hours")
+    show: str  # shown on the approval card ("Opening hours")
+
+
+@dataclass(frozen=True)
 class Slot:
     name: str
     type: str
     sources: tuple[str, ...]
     label: str
     required: bool
-    choices: Mapping[str, str]  # enum value -> fixed spoken phrase
+    choices: Mapping[str, Choice]  # enum value -> its fixed phrases
 
 
 @dataclass(frozen=True)
@@ -121,22 +135,31 @@ def _subset(value, allowed, where, least=1):
 
 def placeholders(template, where='request_template'):
     """The slot names a template uses. Only bare `{name}` fields are
-    allowed: no attribute or index access, conversion or format spec."""
-    if not isinstance(template, str) or len(template) > 200 \
-            or not _TEXT.fullmatch(template.replace('{', '').replace('}', '')):
-        _fail(where, 'must be one line of plain text, at most 200')
+    allowed: no attribute or index access, conversion or format spec, and
+    no escaped braces, which would render as a literal brace."""
+    if not isinstance(template, str) or len(template) > 200:
+        _fail(where, 'must be a string of at most 200 characters')
     names = []
     try:
         parsed = list(string.Formatter().parse(template))
     except ValueError as exc:
         _fail(where, str(exc))
     for literal, field, spec, conversion in parsed:
+        # The text between placeholders; an escaped `{{` arrives as `{`.
+        if literal and not _TEXT.fullmatch(literal):
+            _fail(where, 'text outside placeholders must be one line of '
+                  'plain text, with no braces')
         if field is None:
             continue
         if spec or conversion or not _NAME.fullmatch(field):
             _fail(where, 'placeholder {%s} is not a bare slot name' % field)
         names.append(field)
     return names
+
+
+def _is_identity(name, label):
+    words = set(re.split(r'[^a-z]+', ('%s %s' % (name, label)).lower()))
+    return bool(words & IDENTITY_WORDS)
 
 
 def _slot(name, raw):
@@ -149,8 +172,11 @@ def _slot(name, raw):
     if kind not in SLOT_TYPES:
         _fail(where, 'type must be one of %s' % ','.join(SLOT_TYPES))
     sources = _subset(raw['sources'], SOURCES, where + '.sources')
-    if 'stated' in sources and (kind not in STATED_TYPES
-                                or name in PROFILE_ONLY_SLOTS):
+    label = _text(raw['label'], where, 40)
+    if (kind in IDENTITY_TYPES or _is_identity(name, label)) \
+            and sources != ('profile',):
+        _fail(where, 'an identity fact comes only from the profile')
+    if 'stated' in sources and kind not in STATED_TYPES:
         _fail(where, 'a %s cannot come from the assistant' % kind)
     if not isinstance(raw['required'], bool):
         _fail(where, 'required must be true or false')
@@ -159,13 +185,15 @@ def _slot(name, raw):
         raw_choices = raw.get('choices')
         if not isinstance(raw_choices, dict) or not raw_choices:
             _fail(where, 'an enum needs choices')
-        for value, phrase in raw_choices.items():
-            choices[_name(value, where + '.choices')] = _text(
-                phrase, '%s.choices.%s' % (where, value), 80)
+        for value, phrases in raw_choices.items():
+            at = '%s.choices.%s' % (where, _name(value, where + '.choices'))
+            _keys(phrases, at, ('say', 'show'))
+            choices[value] = Choice(_text(phrases['say'], at, 80),
+                                    _text(phrases['show'], at, 80))
     elif 'choices' in raw:
         _fail(where, 'only an enum has choices')
-    return Slot(name, kind, sources, _text(raw['label'], where, 40),
-                raw['required'], MappingProxyType(choices))
+    return Slot(name, kind, sources, label, raw['required'],
+                MappingProxyType(choices))
 
 
 def _outcome(raw):
@@ -229,8 +257,8 @@ def parse_playbook(raw, expected_id):
             _fail('request_template',
                   '{%s} is not a declared, required slot' % name)
     return Playbook(raw['id'], version, _text(raw['title'], 'title', 80),
-                    kinds, MappingProxyType(slots), tuple(groups), tuple(commitments),
-                    template, _outcome(raw['outcome']))
+                    kinds, MappingProxyType(slots), tuple(groups),
+                    tuple(commitments), template, _outcome(raw['outcome']))
 
 
 def _no_duplicates(pairs):
@@ -247,14 +275,28 @@ def _no_constants(token):
 
 
 def load_playbook(path):
-    """Read and validate one playbook file. Raises PlaybookError."""
+    """Read and validate one playbook file. Raises PlaybookError, and only
+    PlaybookError, for any file that is not a valid playbook."""
     path = Path(path)
+    where = path.name
+    if path.suffix != '.json' or path.is_symlink() or not path.is_file():
+        _fail(where, 'must be a regular .json file, not a link')
     try:
-        raw = json.loads(path.read_text(encoding='utf-8'),
+        data = path.read_bytes()
+    except OSError as exc:
+        _fail(where, 'unreadable (%s)' % type(exc).__name__)
+    if len(data) > MAX_FILE_BYTES:
+        _fail(where, 'larger than %d bytes' % MAX_FILE_BYTES)
+    try:
+        raw = json.loads(data.decode('utf-8'),
                          object_pairs_hook=_no_duplicates,
                          parse_constant=_no_constants)
-    except json.JSONDecodeError as exc:
-        raise PlaybookError('%s: %s' % (path.name, exc)) from None
+    except PlaybookError:
+        raise
+    # Bad UTF-8, bad JSON and an integer past the digit limit are all
+    # ValueError; nesting too deep to parse is RecursionError.
+    except (ValueError, RecursionError) as exc:
+        _fail(where, 'not strict JSON (%s)' % type(exc).__name__)
     return parse_playbook(raw, path.stem)
 
 

@@ -10,15 +10,19 @@
       "label": "Question",
       "required": true,
       "choices": {
-        "hours": "their opening hours",
-        "fax_number": "their fax number",
-        "address": "their street address",
-        "accepts_new_patients": "whether they are taking new patients"
+        "hours": {"say": "your opening hours",
+                  "show": "Their opening hours"},
+        "fax_number": {"say": "your fax number",
+                       "show": "Their fax number"},
+        "address": {"say": "your street address",
+                    "show": "Their street address"},
+        "accepts_new_patients": {"say": "whether you are taking new patients",
+                                 "show": "Whether they take new patients"}
       }
     }
   },
   "commitments": [],
-  "request_template": "I'm calling to ask about {topic}.",
+  "request_template": "Could you tell me {topic}?",
   "outcome": {
     "answer_given": {"type": "bool"},
     "answer_time": {"type": "datetime"}

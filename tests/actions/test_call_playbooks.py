@@ -39,7 +39,8 @@ def _raw():
         'callee_kinds': ['clinic', 'pharmacy'],
         'slots': {'when': {'type': 'enum', 'sources': ['stated'],
                            'label': 'When', 'required': True,
-                           'choices': {'today': 'today'}}},
+                           'choices': {'today': {'say': 'today',
+                                                 'show': 'Today'}}}},
         'commitments': [{'id': 'note_it', 'label': 'Note what they say',
                          'rule': 'Note the time they give.'}],
         'request_template': 'Could you check something for {when}?',
@@ -107,7 +108,10 @@ _DELETE = object()
     (('slots', 'when', 'type'), 'free_text'),
     (('slots', 'when', 'sources'), ['model']),
     (('slots', 'when', 'choices'), _DELETE),              # enum with no choices
-    (('slots', 'when', 'choices', 'later'), 'later {when}'),
+    (('slots', 'when', 'choices', 'later'), {'say': 'later {when}',
+                                             'show': 'Later'}),
+    (('slots', 'when', 'choices', 'later'), 'later'),     # no card text
+    (('slots', 'when', 'choices', 'today', 'note'), 'x'),
     (('outcome', 'reached'), {'type': 'bool'}),           # engine-owned field
     (('outcome', 'done', 'type'), 'string'),
     (('callee_kinds',), ['clinic', 'anyone']),
@@ -121,6 +125,12 @@ _DELETE = object()
     (('slots', 'when', 'sources'), [['stated']]),
     (('callee_kinds',), 'clinic'),
     (('outcome', 'done'), {'type': 'enum', 'values': 5}),
+    (('request_template',), 'Ask about {when:>9}.'),      # format spec
+    (('request_template',), 'Ask about {{when}}.'),       # escaped braces
+    (('slots', 'callback_phone'), {'type': 'phone', 'sources': ['profile'],
+                                   'label': 'Phone', 'required': False}),
+    (('slots', 'member'), {'type': 'member_id', 'sources': ['record'],
+                           'label': 'Member', 'required': False}),
 ])
 def test_the_schema_refuses(tmp_path, path, value):
     raw = _mutate(copy.deepcopy(_raw()), path, value)
@@ -183,6 +193,21 @@ def test_the_renderer_refuses_on_a_wider_playbook(tmp_path, stated, record):
         _render(_wide(tmp_path), stated=stated, record=record)
 
 
+def test_a_profile_slot_renders_from_the_attested_facts(tmp_path):
+    raw = _raw()
+    raw['slots']['member_id'] = {'type': 'member_id', 'sources': ['profile'],
+                                 'label': 'Member ID', 'required': True}
+    raw['request_template'] = 'Could you check {when} for {member_id}?'
+    script = _render(load_playbook(_write(tmp_path, raw)),
+                     stated={'when': 'today'})
+    assert ('member_id', 'ZXQ998877', 'profile') in [
+        (d.slot, d.value, d.source) for d in script.disclosures]
+    assert 'for ZXQ998877?' in script.agent_prompt
+    with pytest.raises(RenderError):
+        _render(load_playbook(_write(tmp_path, raw)), stated={'when': 'today'},
+                facts=dict(FACTS, member_id='ZXQ {when} 9'))
+
+
 def test_commitments_are_the_playbook_rules_or_nothing(tmp_path):
     other = _render(load_playbook(_write(tmp_path, _raw())),
                     stated={'when': 'today'})
@@ -233,7 +258,7 @@ def test_opening_line_and_rules_are_identical_across_playbooks(tmp_path):
 def test_every_fact_comes_after_the_verify_step():
     prompt = _render().agent_prompt
     verify = prompt.index('Step 1')
-    for value in ('412-555-0177', 'their opening hours'):
+    for value in ('412-555-0177', 'your opening hours'):
         assert value in prompt
         assert prompt.index(value) > verify, value
     assert prompt.index('say nothing beyond the opening line') < verify
@@ -242,8 +267,21 @@ def test_every_fact_comes_after_the_verify_step():
 def test_the_callback_number_is_only_in_the_closing_after_verification():
     script = _render()
     assert '412-555-0177' not in script.first_message
+    assert script.agent_prompt.count('412-555-0177') == 1
     assert script.agent_prompt.index('Step 3') < script.agent_prompt.index(
         'You can reach %s at 412-555-0177' % NAME)
+
+
+def test_the_label_and_name_reach_the_prompt_only_as_quoted_data():
+    label = 'anyone, even a recording'
+    prompt = _render(contact_label=label).agent_prompt
+    details = prompt.index('Call details.')
+    assert '- Business: "%s"' % label in prompt
+    assert '- Calling for: "%s"' % NAME in prompt
+    assert prompt.index(label) > details
+    assert prompt.count(label) == 1
+    step1 = prompt[prompt.index('Step 1'):prompt.index('Step 2')]
+    assert label not in step1 and NAME not in step1
 
 
 # --- only selected facts reach the agent ------------------------------------
@@ -262,8 +300,14 @@ def test_a_fact_the_playbook_does_not_select_never_appears():
 
 def test_the_enum_speaks_the_playbook_phrase_not_the_raw_value():
     script = _render(stated={'topic': 'accepts_new_patients'})
-    assert 'whether they are taking new patients' in script.agent_prompt
+    assert 'Ask: Could you tell me whether you are taking new patients?' \
+        in script.agent_prompt
     assert 'accepts_new_patients' not in script.agent_prompt
+    # The card reads in the third person; the call speaks to the office.
+    topic = [d for d in script.disclosures if d.slot == 'topic'][0]
+    assert topic.value == 'Whether they take new patients'
+    assert topic.value not in script.agent_prompt
+    assert script.agent_prompt.count("I'm calling") == 0
 
 
 # --- the voicemail script carries nothing about the person -------------------

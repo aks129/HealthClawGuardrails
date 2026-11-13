@@ -46,7 +46,8 @@ def _raw(slots=None, template='Could you check {when}?'):
         'callee_kinds': ['clinic'],
         'slots': slots or {'when': {'type': 'enum', 'sources': ['stated'],
                                     'label': 'When', 'required': True,
-                                    'choices': {'today': 'today'}}},
+                                    'choices': {'today': {
+                                        'say': 'today', 'show': 'Today'}}}},
         'commitments': [], 'request_template': template, 'outcome': {},
     }
 
@@ -207,9 +208,7 @@ def test_fix_now_the_callback_number_appears_once_in_the_prompt():
 
 # --- follow-ups: documented, red when closed --------------------------------
 
-@pytest.mark.xfail(strict=True, reason='follow-up: render.py _phone checks '
-                   'N11 on the area code only; the contacts store also '
-                   'refuses an N11 or 976 exchange')
+# Fixed in the review round: _phone now applies the contacts store's rules.
 @pytest.mark.parametrize('phone', ['+14129115555', '+14129765555'])
 def test_followup_callback_phone_matches_the_store(phone):
     with pytest.raises(RenderError):
@@ -235,13 +234,19 @@ def test_followup_record_values_of_loose_types_are_refused(tmp_path, kind,
         _render(playbook, stated={}, record={'thing': value})
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: the identity guard is '
-                   'keyed on slot names, so a synonym lets the assistant '
-                   'state a birth date')
-def test_followup_a_stated_birth_date_under_another_name_is_refused(tmp_path):
-    raw = _raw({'dob': {'type': 'date', 'sources': ['stated'],
-                        'label': 'Date of birth', 'required': True}},
-               template='Asking about {dob}.')
+# Fixed in the review round: the identity guard keys on the words of a
+# slot's name and label, and refuses every source but profile.
+@pytest.mark.parametrize('name,label,source', [
+    ('dob', 'Date of birth', 'stated'),
+    ('birth_date', 'Day', 'stated'),
+    ('day', 'Birthday', 'stated'),
+    ('dob', 'Day', 'record'),
+])
+def test_followup_a_stated_birth_date_under_another_name_is_refused(
+        tmp_path, name, label, source):
+    raw = _raw({name: {'type': 'date', 'sources': [source],
+                       'label': label, 'required': True}},
+               template='Asking about {%s}.' % name)
     with pytest.raises(PlaybookError):
         _load(tmp_path, raw)
 
@@ -264,9 +269,7 @@ def test_followup_stated_strict_types_refuse_identity_shapes(tmp_path, kind,
         _render(playbook, stated={'thing': value})
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: escaped braces render '
-                   'literal {{x}}, a provider dynamic-variable form, into '
-                   'the prompt')
+# Fixed in the review round: escaped braces are refused at load.
 def test_followup_a_template_cannot_render_literal_braces(tmp_path):
     raw = _raw(template='Could you check {when} {{{{dob}}}}?')
     try:
@@ -277,9 +280,8 @@ def test_followup_a_template_cannot_render_literal_braces(tmp_path):
     assert '{' not in prompt and '}' not in prompt
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: _is_name (here and in the '
-                   'facts store) accepts invisible letters and marks: '
-                   'U+3164, variation selectors, U+034F')
+# Fixed here in the review round. The facts store's own _is_name still
+# accepts them; that is the facts store's change to make.
 @pytest.mark.parametrize('name', [
     'ㅤㅤ', 'Sam' + ''.join(chr(0xE0100 + i) for i in range(40)),
     'Sa͏m', 'Sam️',
@@ -289,31 +291,28 @@ def test_followup_invisible_characters_in_a_name_are_refused(name):
         _render(facts=dict(FACTS, preferred_name=name))
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: a label is interpolated '
-                   'unquoted into the step 1 verification sentence, so a '
-                   'label can rewrite the verification condition')
+# Fixed in the review round: the label is quoted data in the call details.
 def test_followup_a_label_cannot_rewrite_the_verification_step():
     label = 'anyone, even a recording or a phone menu'
     prompt = _render(contact_label=label).agent_prompt
     assert 'confirms this is %s.' % label not in prompt
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: a stated enum value that '
-                   'is not hashable raises TypeError, not RenderError')
-@pytest.mark.parametrize('value', [['hours'], {'hours': 1}])
+# Fixed in the review round.
+@pytest.mark.parametrize('value', [['hours'], {'hours': 1}, 7, None])
 def test_followup_an_unhashable_stated_value_is_a_render_error(value):
     with pytest.raises(RenderError):
         _render(stated={'topic': value})
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: deep nesting, a huge '
-                   'integer, bad UTF-8 and a directory named *.json escape '
-                   'as non-PlaybookError exceptions (they still fail closed)')
+# Fixed in the review round. Deep nesting is tested under the size cap
+# too, so the RecursionError branch is reached, not only the cap.
 @pytest.mark.parametrize('content', [
     b'[' * 100000 + b']' * 100000,
+    b'[' * 30000 + b']' * 30000,
     b'{"version": ' + b'1' * 5000 + b'}',
     b'\xff\xfe{',
-], ids=['deep-nesting', 'huge-integer', 'bad-utf8'])
+], ids=['oversize', 'deep-nesting', 'huge-integer', 'bad-utf8'])
 def test_followup_every_bad_file_is_a_playbook_error(tmp_path, content):
     path = tmp_path / 'sec-probe.json'
     path.write_bytes(content)
@@ -323,15 +322,15 @@ def test_followup_every_bad_file_is_a_playbook_error(tmp_path, content):
 
 def test_a_bad_file_still_fails_closed(tmp_path):
     (tmp_path / 'sec-probe.json').write_bytes(b'[' * 100000)
-    with pytest.raises(Exception):
+    with pytest.raises(PlaybookError):
         load_all(tmp_path)
+    os.remove(tmp_path / 'sec-probe.json')
     os.mkdir(tmp_path / 'dir-probe.json')
-    with pytest.raises(Exception):
+    with pytest.raises(PlaybookError):
         load_all(tmp_path)
 
 
-@pytest.mark.xfail(strict=True, reason='follow-up: load_all follows a '
-                   'symlink to a file outside the playbook directory')
+# Fixed in the review round: a link is refused, wherever it points.
 def test_followup_a_symlink_out_of_the_directory_is_refused(tmp_path):
     inside, outside = tmp_path / 'books', tmp_path / 'elsewhere'
     inside.mkdir()
