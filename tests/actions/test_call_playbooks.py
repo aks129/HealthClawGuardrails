@@ -154,6 +154,7 @@ def test_an_identity_type_takes_only_the_profile_under_any_name(tmp_path,
     ('chart_no', 'Chart'),                 # a listed word, no fragment
     ('subscriberid', 'Code'),              # a fragment inside a compound
     ('code', 'Accountnumber'),             # a fragment inside the label
+    ('patientname', 'Who'),                # "name" run into another word
 ])
 def test_identity_words_and_compounds_take_only_the_profile(tmp_path, name,
                                                            label):
