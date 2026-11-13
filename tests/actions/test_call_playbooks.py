@@ -138,6 +138,25 @@ def test_the_schema_refuses(tmp_path, path, value):
         load_playbook(_write(tmp_path, raw, name='second-kind'))
 
 
+@pytest.mark.parametrize('kind', ['person_name', 'phone', 'member_id',
+                                  'payer_name'])
+def test_an_identity_type_takes_only_the_profile_under_any_name(tmp_path,
+                                                                kind):
+    # Neither the name nor the label says "identity": the type alone must.
+    raw = _raw()
+    raw['slots']['who'] = {'type': kind, 'sources': ['record'],
+                           'label': 'Who', 'required': False}
+    with pytest.raises(PlaybookError):
+        load_playbook(_write(tmp_path, raw))
+
+
+def test_an_oversized_file_is_refused_unparsed(tmp_path):
+    path = _write(tmp_path, _raw())
+    path.write_text(path.read_text() + ' ' * (64 * 1024))
+    with pytest.raises(PlaybookError):
+        load_playbook(path)
+
+
 def test_the_id_must_match_the_file_name(tmp_path):
     with pytest.raises(PlaybookError):
         load_playbook(_write(tmp_path, _raw(), name='other-name'))
