@@ -22,7 +22,8 @@ from types import MappingProxyType
 from typing import Mapping
 
 PLAYBOOK_DIR = Path(__file__).resolve().parent
-#: A playbook is a short file; anything larger is refused unread.
+#: A playbook is a short file. A larger one is refused on its size, before
+#: a byte of it is read.
 MAX_FILE_BYTES = 64 * 1024
 
 SLOT_TYPES = ('enum', 'date', 'time_windows', 'rx_number', 'person_name',
@@ -33,14 +34,21 @@ STATED_TYPES = ('enum', 'date', 'time_windows', 'rx_number')
 #: Identity types: only the person's own attestation (`profile`) fills them.
 IDENTITY_TYPES = ('person_name', 'phone', 'member_id', 'payer_name')
 #: Words that mark a slot as an identity fact, whatever its type: a birth
-#: date, a legal name, an insurance identifier. Matched against every word
-#: of the slot's name and label, so `dob`, `birth_date` and a "Date of
-#: birth" label are caught alike, not one spelling. A slot that matches may
-#: take only `profile`: never the record, never the assistant.
+#: date, a name, a chart or account number, an insurance identifier.
+#: Matched against every word of the slot's name and label, so `dob`,
+#: `birth_date` and a "Date of birth" label are caught alike. A slot that
+#: matches may take only `profile`: never the record, never the assistant.
 IDENTITY_WORDS = frozenset((
-    'birth', 'birthday', 'birthdate', 'born', 'dob', 'legal', 'member',
-    'subscriber', 'payer', 'insurer', 'insurance', 'policy', 'group', 'ssn',
-    'social'))
+    'birth', 'birthday', 'birthdate', 'born', 'dob', 'legal', 'name',
+    'member', 'subscriber', 'payer', 'insurer', 'insurance', 'policy',
+    'group', 'ssn', 'social', 'mrn', 'chart', 'medicare', 'medicaid',
+    'account'))
+#: Fragments matched inside the run-together letters of a name or label,
+#: so a compound spelling (`dateofbirth`, `bday`, `patientname`) is caught
+#: as well as the separate words.
+IDENTITY_FRAGMENTS = ('birth', 'bday', 'dob', 'name', 'mrn', 'ssn',
+                      'medicare', 'medicaid', 'member', 'subscriber',
+                      'insur', 'payer', 'policy', 'account')
 #: Facts every call carries, whatever the playbook. Not slots.
 PREAMBLE_FACTS = ('preferred_name', 'callback_phone')
 CALLEE_KINDS = ('clinic', 'dentist', 'pharmacy', 'other')
@@ -158,8 +166,12 @@ def placeholders(template, where='request_template'):
 
 
 def _is_identity(name, label):
-    words = set(re.split(r'[^a-z]+', ('%s %s' % (name, label)).lower()))
-    return bool(words & IDENTITY_WORDS)
+    text = ('%s %s' % (name, label)).lower()
+    if set(re.split(r'[^a-z]+', text)) & IDENTITY_WORDS:
+        return True
+    compounds = (re.sub(r'[^a-z]', '', name.lower()),
+                 re.sub(r'[^a-z]', '', label.lower()))
+    return any(f in c for f in IDENTITY_FRAGMENTS for c in compounds)
 
 
 def _slot(name, raw):
@@ -282,10 +294,13 @@ def load_playbook(path):
     if path.suffix != '.json' or path.is_symlink() or not path.is_file():
         _fail(where, 'must be a regular .json file, not a link')
     try:
+        # The size is checked before anything is read.
+        if path.stat().st_size > MAX_FILE_BYTES:
+            _fail(where, 'larger than %d bytes' % MAX_FILE_BYTES)
         data = path.read_bytes()
     except OSError as exc:
         _fail(where, 'unreadable (%s)' % type(exc).__name__)
-    if len(data) > MAX_FILE_BYTES:
+    if len(data) > MAX_FILE_BYTES:  # grew between the stat and the read
         _fail(where, 'larger than %d bytes' % MAX_FILE_BYTES)
     try:
         raw = json.loads(data.decode('utf-8'),

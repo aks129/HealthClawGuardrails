@@ -14,9 +14,10 @@ playbook key can reach them (the schema is closed):
   are confirmed;
 - the voicemail message, which names no one and carries no number.
 
-The business label and the person's name reach the prompt only as quoted
-data in a delimited block, never inside an instruction. The callback number
-is said once, in the closing, after verification.
+The business label, the person's name and the callback number reach the
+prompt only as quoted data, never inside an instruction or a line the agent
+is told to say. The label and name are in the call details block; the
+callback number is in the closing, after verification, and nowhere else.
 
 Values are checked, never coerced. Every value is substituted once, as
 literal text, so a value that looks like a placeholder stays literal.
@@ -79,10 +80,11 @@ _STRICT = {
 #: Profile-typed values the person entered on an authenticated page. The
 #: assistant can never supply these (the schema refuses `stated` for them).
 _TYPED = re.compile(r"[A-Za-z0-9 .,:'/-]{1,80}").fullmatch
-#: Letters and marks that render as nothing: fillers, variation selectors,
-#: the grapheme joiner. A name made of them would be spoken as silence.
-_INVISIBLE = frozenset(
-    [0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0]
+#: Letters and marks that render as nothing (fillers, variation selectors,
+#: the grapheme joiner), plus modifier letters that look like a double
+#: quote (U+02BA, U+02EE) and could appear to close a quoted value.
+_REFUSED_IN_NAMES = frozenset(
+    [0x02BA, 0x02EE, 0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0]
     + list(range(0x180B, 0x1810)) + list(range(0xFE00, 0xFE10))
     + list(range(0xE0100, 0xE01F0)))
 
@@ -95,7 +97,7 @@ def _is_name(value):
     return (0 < len(value) <= 80
             and unicodedata.category(value[0])[0] == 'L'
             and all((unicodedata.category(ch)[0] in 'LM' or ch in " .,'-")
-                    and ord(ch) not in _INVISIBLE for ch in value))
+                    and ord(ch) not in _REFUSED_IN_NAMES for ch in value))
 
 
 def _is_label(value):
@@ -238,7 +240,8 @@ def render_call_script(playbook: Playbook, *, contact_label: str,
     first = OPENING.format(name=name, label=label)
     request = _fill(playbook.request_template,
                     {d.slot: spoken for d, spoken in slots})
-    # The callback number is not a fact to offer: it is said once, below.
+    # The callback number is not a fact to offer: it is given once, in the
+    # closing.
     facts_block = '\n'.join('- %s: %s' % (d.label, spoken)
                             for d, spoken in slots) or 'None.'
     agree = '\n'.join('- %s' % c.rule for c in playbook.commitments) \
@@ -253,8 +256,9 @@ def render_call_script(playbook: Playbook, *, contact_label: str,
         'Step 2, only after step 1. Ask: ' + request,
         'Facts you may share, only after step 1:\n' + facts_block,
         'You may agree to:\n' + agree,
-        'Step 3, closing. Say: "You can reach %s at %s. Thank you, goodbye." '
-        'Then end the call.' % (name, callback),
+        'Step 3, closing. Say that the person named in the call details can '
+        'be reached at the callback number below. Then thank them, say '
+        'goodbye and end the call.\n- Callback number: "%s"' % callback,
     ))
     return CallScript(
         playbook.id, playbook.version, first, prompt, VOICEMAIL_MESSAGE,

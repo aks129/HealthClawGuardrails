@@ -150,6 +150,20 @@ def test_an_identity_type_takes_only_the_profile_under_any_name(tmp_path,
         load_playbook(_write(tmp_path, raw))
 
 
+@pytest.mark.parametrize('name,label', [
+    ('chart_no', 'Chart'),                 # a listed word, no fragment
+    ('subscriberid', 'Code'),              # a fragment inside a compound
+    ('code', 'Accountnumber'),             # a fragment inside the label
+])
+def test_identity_words_and_compounds_take_only_the_profile(tmp_path, name,
+                                                           label):
+    raw = _raw()
+    raw['slots'][name] = {'type': 'rx_number', 'sources': ['stated'],
+                          'label': label, 'required': False}
+    with pytest.raises(PlaybookError, match='only from the profile'):
+        load_playbook(_write(tmp_path, raw))
+
+
 def test_an_oversized_file_is_refused_unparsed(tmp_path):
     path = _write(tmp_path, _raw())
     path.write_text(path.read_text() + ' ' * (64 * 1024))
@@ -288,7 +302,9 @@ def test_the_callback_number_is_only_in_the_closing_after_verification():
     assert '412-555-0177' not in script.first_message
     assert script.agent_prompt.count('412-555-0177') == 1
     assert script.agent_prompt.index('Step 3') < script.agent_prompt.index(
-        'You can reach %s at 412-555-0177' % NAME)
+        '- Callback number: "412-555-0177"')
+    # The name is data in the call details only, never in a line to say.
+    assert script.agent_prompt.count(NAME) == 1
 
 
 def test_the_label_and_name_reach_the_prompt_only_as_quoted_data():
