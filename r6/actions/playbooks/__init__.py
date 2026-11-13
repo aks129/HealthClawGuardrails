@@ -109,6 +109,16 @@ def _name(value, where):
     return value
 
 
+def _subset(value, allowed, where, least=1):
+    """A list of distinct strings, all in `allowed`, at least `least`."""
+    if (not isinstance(value, list) or len(value) < least
+            or not all(isinstance(v, str) and v in allowed for v in value)
+            or len(set(value)) != len(value)):
+        _fail(where, 'must be %d or more distinct of %s'
+              % (least, ','.join(allowed)))
+    return tuple(value)
+
+
 def placeholders(template, where='request_template'):
     """The slot names a template uses. Only bare `{name}` fields are
     allowed: no attribute or index access, conversion or format spec."""
@@ -138,12 +148,7 @@ def _slot(name, raw):
     kind = raw['type']
     if kind not in SLOT_TYPES:
         _fail(where, 'type must be one of %s' % ','.join(SLOT_TYPES))
-    sources = raw['sources']
-    if (not isinstance(sources, list) or not sources
-            or len(set(sources)) != len(sources)
-            or not set(sources) <= set(SOURCES)):
-        _fail(where, 'sources must be a non-empty subset of %s'
-              % ','.join(SOURCES))
+    sources = _subset(raw['sources'], SOURCES, where + '.sources')
     if 'stated' in sources and (kind not in STATED_TYPES
                                 or name in PROFILE_ONLY_SLOTS):
         _fail(where, 'a %s cannot come from the assistant' % kind)
@@ -159,7 +164,7 @@ def _slot(name, raw):
                 phrase, '%s.choices.%s' % (where, value), 80)
     elif 'choices' in raw:
         _fail(where, 'only an enum has choices')
-    return Slot(name, kind, tuple(sources), _text(raw['label'], where, 40),
+    return Slot(name, kind, sources, _text(raw['label'], where, 40),
                 raw['required'], MappingProxyType(choices))
 
 
@@ -177,8 +182,12 @@ def _outcome(raw):
             _fail(where, 'type must be one of %s' % ','.join(OUTCOME_TYPES))
         if (spec['type'] == 'enum') != ('values' in spec):
             _fail(where, 'values are required for an enum, and only for one')
-        for value in spec.get('values', ()):
-            _name(value, where + '.values')
+        if 'values' in spec:
+            values = spec['values']
+            if not isinstance(values, list) or not values:
+                _fail(where, 'values must be a non-empty list')
+            for value in values:
+                _name(value, where + '.values')
         fields[name] = spec['type']
     return MappingProxyType(fields)
 
@@ -195,20 +204,15 @@ def parse_playbook(raw, expected_id):
     version = raw['version']
     if type(version) is not int or version < 1:
         _fail('version', 'must be a positive integer')
-    kinds = raw['callee_kinds']
-    if (not isinstance(kinds, list) or not kinds
-            or len(set(kinds)) != len(kinds)
-            or not set(kinds) <= set(CALLEE_KINDS)):
-        _fail('callee_kinds', 'must be a non-empty subset of %s'
-              % ','.join(CALLEE_KINDS))
+    kinds = _subset(raw['callee_kinds'], CALLEE_KINDS, 'callee_kinds')
     if not isinstance(raw['slots'], dict):
         _fail('slots', 'must be an object')
     slots = {n: _slot(n, s) for n, s in raw['slots'].items()}
     groups = raw.get('require_any', [])
-    if not isinstance(groups, list) or any(
-            not isinstance(g, list) or len(g) < 2
-            or not set(g) <= set(slots) for g in groups):
-        _fail('require_any', 'each group must name two or more slots')
+    if not isinstance(groups, list):
+        _fail('require_any', 'must be a list')
+    groups = [_subset(g, tuple(slots), 'require_any', least=2)
+              for g in groups]
     commitments = []
     if not isinstance(raw['commitments'], list):
         _fail('commitments', 'must be a list')
@@ -220,11 +224,12 @@ def parse_playbook(raw, expected_id):
                                       _text(c['rule'], where, 200)))
     template = raw['request_template']
     for name in placeholders(template):
-        if name not in slots:
-            _fail('request_template', '{%s} is not a declared slot' % name)
+        # A placeholder must always have a value to fill it.
+        if name not in slots or not slots[name].required:
+            _fail('request_template',
+                  '{%s} is not a declared, required slot' % name)
     return Playbook(raw['id'], version, _text(raw['title'], 'title', 80),
-                    tuple(kinds), MappingProxyType(slots),
-                    tuple(tuple(g) for g in groups), tuple(commitments),
+                    kinds, MappingProxyType(slots), tuple(groups), tuple(commitments),
                     template, _outcome(raw['outcome']))
 
 

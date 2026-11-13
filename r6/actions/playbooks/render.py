@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import string
+import unicodedata
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -57,16 +58,25 @@ CALL_RULES = '\n'.join((
     '9. End the call within the time limit.',
 ))
 
-_PERSON_NAME = re.compile(r"[^\W\d_](?:[^\W\d_]|[ .'-]){0,59}")
-_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&()/-]{0,59}")
+_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&()/#-]{0,59}")
 _NANP = re.compile(r'\+1([2-9][0-9]{2})([2-9][0-9]{2})([0-9]{4})')
-_VALUE = {
-    'person_name': _PERSON_NAME,
-    'rx_number': re.compile(r'[A-Za-z0-9-]{4,20}'),
-    'date': re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}'),
-    'phone': _NANP,
+_STRICT = {
+    'rx_number': re.compile(r'[A-Za-z0-9-]{4,20}').fullmatch,
+    'date': re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}').fullmatch,
 }
-_GENERIC = re.compile(r"[A-Za-z0-9 .,:'/-]{1,80}")
+#: Profile-typed values the person entered on an authenticated page. The
+#: assistant can never supply these (the schema refuses `stated` for them).
+_TYPED = re.compile(r"[A-Za-z0-9 .,:'/-]{1,80}").fullmatch
+
+
+def _is_name(value):
+    """Letters and combining marks, with the punctuation a name carries,
+    starting with a letter: the rule the attested-facts store applies."""
+    value = unicodedata.normalize('NFC', value)
+    return (0 < len(value) <= 80
+            and unicodedata.category(value[0])[0] == 'L'
+            and all(unicodedata.category(ch)[0] in 'LM' or ch in " .,'-"
+                    for ch in value))
 
 
 class RenderError(ValueError):
@@ -101,10 +111,30 @@ def _phone(value):
     return '-'.join(m.groups())
 
 
-def _check(value, pattern, what):
-    if not isinstance(value, str) or not pattern.fullmatch(value):
+def _check(value, ok, what):
+    if not isinstance(value, str) or not ok(value):
         raise RenderError('%s is not valid' % what)
-    return value
+    return unicodedata.normalize('NFC', value)
+
+
+def _value(slot, value, source):
+    """The spoken form of one slot value, or RenderError."""
+    if slot.type == 'enum':
+        if value not in slot.choices:
+            raise RenderError('%s is not one of its choices' % slot.name)
+        return slot.choices[value]
+    if slot.type == 'phone':
+        return _phone(value)
+    if slot.type == 'person_name':
+        return _check(value, _is_name, slot.name)
+    if slot.type in _STRICT:
+        return _check(value, _STRICT[slot.type], slot.name)
+    if source == 'stated':
+        # No strict format yet (time windows): never take it from the
+        # assistant as loose text.
+        raise RenderError('%s has no format the assistant can supply'
+                          % slot.name)
+    return _check(value, _TYPED, slot.name)
 
 
 def _fill(template, values):
@@ -136,15 +166,8 @@ def _slot_values(playbook, facts, stated, record):
                 raise RenderError('%s is required' % name)
             continue
         source, value = found[0]
-        if slot.type == 'enum':
-            if value not in slot.choices:
-                raise RenderError('%s is not one of its choices' % name)
-            spoken = slot.choices[value]
-        elif slot.type == 'phone':
-            spoken = _phone(value)
-        else:
-            spoken = _check(value, _VALUE.get(slot.type, _GENERIC), name)
-        out.append(Disclosure(name, slot.label, spoken, source))
+        out.append(Disclosure(name, slot.label, _value(slot, value, source),
+                              source))
     filled = {d.slot for d in out}
     for group in playbook.require_any:
         if not filled & set(group):
@@ -167,8 +190,8 @@ def render_call_script(playbook: Playbook, *, contact_label: str,
     stated, record = stated or {}, record or {}
     if callee_kind not in playbook.callee_kinds:
         raise RenderError('%s does not call a %s' % (playbook.id, callee_kind))
-    label = _check(contact_label, _LABEL, 'contact_label')
-    name = _check(facts.get('preferred_name'), _PERSON_NAME, 'preferred_name')
+    label = _check(contact_label, _LABEL.fullmatch, 'contact_label')
+    name = _check(facts.get('preferred_name'), _is_name, 'preferred_name')
     callback = _phone(facts.get('callback_phone'))
     slots = _slot_values(playbook, facts, stated, record)
     disclosures = [Disclosure('preferred_name', 'Name used on the call', name,
