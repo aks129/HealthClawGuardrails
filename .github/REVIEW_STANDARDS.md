@@ -38,13 +38,13 @@ review bot reads THIS file, so keep it current.)
    engine records what the secret's holder reports. It does not observe the
    person, and the write is not human confirmation. A PR may use the
    exception only if all five hold, and it says so in its description:
-   - (a) **Tenant tokens of every scope are refused.** The party asking for
-     an action must not also set what that action may use.
-   - (b) **The only caller is one handler on the approval surface**, and that
-     handler is login-required, CSRF-protected and ownership-checked. It
-     lives outside this repository, so no test here fails if it changes. The
-     PR states that dependency beside the claim, in the code and in the
-     description.
+   - (a) **The write refuses tenant tokens of every scope.** The party asking
+     for an action must not also set what that action may use.
+   - (b) **The only caller of the write is a handler on the approval
+     surface**, and that handler is login-required, CSRF-protected and
+     ownership-checked. It lives outside this repository, so no test here
+     fails if it changes. The PR states that dependency beside the claim, in
+     the code and in the description.
    - (c) **The write is never a clinical FHIR write and never an approval.**
      It creates or changes no FHIR resource, and it approves, commits or
      executes no action.
@@ -55,8 +55,8 @@ review bot reads THIS file, so keep it current.)
    - (e) **Refused calls are audited under a budget (#1131), before the first
      real call.** The stores may merge first: until something calls them the
      routes are unused, so this is not the split standard 21 forbids. A PR
-     that adds a caller of these routes, or a reader of a stored value, is
-     REQUEST_CHANGES until #1131 has merged.
+     that adds a caller of the write, or reads a stored value into an action,
+     is REQUEST_CHANGES until #1131 has merged.
 
    Anything outside those five is standard 4 as written.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
