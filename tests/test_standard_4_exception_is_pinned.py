@@ -39,11 +39,21 @@ LABELS = ["a", "b", "c", "d", "e"]
 # stand in for one that was reworded here (catalogue §4).
 PHRASES = [
     ("a", "every scope"),
+    ("a", "names the test that fails when a tenant token of each scope is "
+          "accepted"),
     ("b", "handler on the approval surface"),
     ("b", "login-required, CSRF-protected and ownership-checked"),
+    ("b", "is not checked here"),
     ("c", "never a clinical FHIR write"),
+    ("c", "never an approval"),
     ("d", "without truncation or normalisation"),
     ("e", "before the first real call"),
+    ("e", "is not deployed, or does not exist yet"),
+    ("e", "fails when a caller of its write appears in shipped code in this "
+          "repository"),
+    ("e", "callers outside it are unobserved"),
+    ("e", "asserts that it scanned a non-empty set of files"),
+    ("e", "is REQUEST_CHANGES until #1131 has merged"),
 ]
 
 
@@ -84,7 +94,10 @@ def _condition(label: str) -> str:
 
 
 def test_the_exception_is_inside_standard_4():
-    """MUTATION: delete the exception's heading line -> red."""
+    """MUTATION: delete the exception's bold heading -> red.
+
+    The heading opens a paragraph; it is not a line of its own.
+    """
     assert HEADING in _standard_4()
 
 
@@ -104,11 +117,19 @@ def test_each_condition_keeps_its_phrase(label, phrase):
 
     MUTATION, one per row, each keeping the label:
       (a) "every scope" -> "read scope" -> red
+      (a) "names the test" -> "may name a test" -> red
       (b) "is a handler" -> "is a service" -> red
       (b) drop "CSRF-protected" -> red
+      (b) "is not checked here" -> "is checked here" -> red
       (c) "never a clinical" -> "not usually a clinical" -> red
+      (c) "never an approval" -> "rarely an approval" -> red
       (d) drop "without truncation or normalisation" -> red
       (e) "before the first real call" -> "soon" -> red
+      (e) "is not deployed, or does not exist yet" -> "is known" -> red
+      (e) "fails when a caller" -> "notes when a caller" -> red
+      (e) "are unobserved" -> "are rare" -> red
+      (e) "a non-empty set of files" -> "the files" -> red
+      (e) "REQUEST_CHANGES until #1131 has merged" -> "... is planned" -> red
     """
     assert phrase in _fold(_condition(label)), (
         "condition (%s) of standard 4's exception no longer says %r"

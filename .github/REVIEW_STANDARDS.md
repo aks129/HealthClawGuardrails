@@ -50,7 +50,9 @@ review bot reads THIS file, so keep it current.)
    A PR may use the exception only if all five hold, and it says so in its
    description:
    - (a) **The write refuses tenant tokens of every scope.** The party asking
-     for an action must not also set what that action may use.
+     for an action must not also set what that action may use. The PR names
+     the test that fails when a tenant token of each scope is accepted, and
+     reports the mutation that turns it red.
    - (b) **The only caller of the write is a handler on the approval
      surface**, and that handler is login-required, CSRF-protected and
      ownership-checked. It lives outside this repository, so no test here
@@ -58,7 +60,9 @@ review bot reads THIS file, so keep it current.)
      the code and in the description. It also links the handler's change (a
      link the maintainer can open) and names the test there that fails if
      login, CSRF or the ownership check is removed. A claim of (b) without
-     that link and that test name is REQUEST_CHANGES.
+     that link and that test name is REQUEST_CHANGES. Whether that test
+     really fails when one of the three is removed is not checked here; the
+     linked change is asked to report that mutation.
    - (c) **The write is never a clinical FHIR write and never an approval.**
      It creates or changes no FHIR resource, and it approves, commits or
      executes no action.
@@ -72,22 +76,30 @@ review bot reads THIS file, so keep it current.)
      unauthenticated caller cannot write rows without limit. A PR claims
      refused calls are audited only by naming the test that fails when a
      refused call leaves no AuditEvent. Until #1131 has merged no PR can
-     name one, so a store PR does not claim it: it states that #1131 is open
-     and that nothing calls the write. It carries a test that fails when a
-     caller of its write appears in shipped code in this repository, with a
-     failure message that names #1131. Such a PR may merge; standard 21
-     carries the matching sentence. The residual risk is stated, not
-     removed: the route exists and takes the internal secret, and until
-     #1131 merges its refusals leave no AuditEvent. A PR that adds a caller
-     of the write, or reads a stored value into an action, is
-     REQUEST_CHANGES until #1131 has merged and the PR names that test.
+     name one, so a store PR does not claim it. It states that #1131 is
+     open, and that the approval-surface handler that will call the write is
+     not deployed, or does not exist yet. It also carries a no-caller test:
+     one that fails when a caller of its write appears in shipped code in
+     this repository, with a failure message that names #1131. That test
+     covers this repository only, and callers outside it are unobserved,
+     which is why the statement about the handler is required. The test
+     reads code, not text (an AST or import scan that cannot match its own
+     failure message), and asserts that it scanned a non-empty set of files.
+     The PR reports the mutation: add a caller, and the test goes red. Such
+     a PR may merge; standard 21 carries the matching sentence. The residual
+     risk is stated, not removed: the route exists and takes the internal
+     secret, and until #1131 merges its refusals leave no AuditEvent. A PR
+     that adds a caller of the write, or reads a stored value into an
+     action, is REQUEST_CHANGES until #1131 has merged and the PR names that
+     test.
 
    None of the five is checked mechanically against a PR's code.
    `tests/test_standard_4_exception_is_pinned.py` checks that this text keeps
-   its heading, its five labels and one phrase in each condition. It does
-   not check that a PR meets them. A reviewer checks (a), (c), (d) and (e)
-   against the diff and the tests the PR names, and (b) against the linked
-   change. Anything outside those five is standard 4 as written.
+   its heading, its five labels and the phrases that file lists for each
+   condition. It does not check that a PR meets them. A reviewer checks (a),
+   (c), (d) and (e) against the diff and the tests the PR names, and (b)
+   against the linked change. Anything outside those five is standard 4 as
+   written.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
 6. **Tenant isolation:** every `R6Resource` (and sibling-table) query filters
