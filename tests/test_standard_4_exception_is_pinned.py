@@ -69,8 +69,14 @@ def test_there_are_exactly_five_conditions():
 
 
 def test_the_refusal_audit_condition_names_its_issue():
-    """MUTATION: drop "(#1131)" from condition (e) -> red."""
-    assert "#1131" in _condition("e")
+    """MUTATION: drop "(#1131)" from condition (e)'s bold title -> red.
+
+    The title, not the bullet: the bullet names the issue four times, and the
+    first version of this test stayed green with the title's mention gone.
+    """
+    title = re.match(r"   - \(e\) \*\*(.*?)\*\*", _condition("e"), re.DOTALL)
+    assert title, "condition (e) has no bold title"
+    assert "(#1131)" in title.group(1)
 
 
 def test_the_exception_waives_step_up_only():
