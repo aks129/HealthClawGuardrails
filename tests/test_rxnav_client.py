@@ -5,6 +5,11 @@ bodies recorded from RxNav on 2026-11-11, keyed by code;
 tests/fixtures/rxnav_concepts.json is the parsed copy of every static-table
 row. A body marked "varied" below is a recorded one with one field changed.
 
+rxnav_historystatus.json was captured by hand, one request per code, and no
+script re-records it: scripts/record_rxnav_fixture.py writes only
+rxnav_concepts.json. To add a body, ask RxNav for that code's
+historystatus.json and add the answer under the code.
+
 MUTATION, each caught here:
 - drop the status check in name_for: test_a_retired_concept_gets_no_name;
 - compare the status case-sensitively: test_the_status_is_compared_

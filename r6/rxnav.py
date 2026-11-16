@@ -10,7 +10,7 @@ What this must never lose
 -------------------------
 1. **Only the code leaves.** A code is sent only if it is one to eight ASCII
    digits. Anything else (free text in a code slot, a code with a name after
-   it) is never formatted into a URL. Nothing here logs.
+   it) is never formatted into a URL.
 2. **A retired code has no name.** Only an Active concept is named. A code
    remapped to exactly one concept is followed one hop; remapped to several,
    it is ambiguous and gets none.
@@ -74,7 +74,9 @@ class Concept:
     ``tty`` is the term type of the concept the label came from, which for a
     remapped code is the concept it was remapped to. ``ingredients`` is that
     concept's ingredient RxCUIs, each shaped like one, whether or not it has
-    a label: a check keyed by ingredient code must not depend on the name."""
+    a label: a check keyed by ingredient code must not depend on the name.
+    Nothing reads ``ingredients`` yet. Its caller is #1132, which moves the
+    controlled-substance check in ``r6/actions/rx_transfer.py`` onto it."""
 
     rxcui: str
     status: str

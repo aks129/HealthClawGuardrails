@@ -4,7 +4,8 @@
 Writes tests/fixtures/rxnav_concepts.json, which
 tests/test_terminology_rxnorm_drift.py checks the table against. The test
 never uses the network; this script is how the fixture is refreshed after a
-row is added.
+row is added. It does not write tests/fixtures/rxnav_historystatus.json;
+those raw bodies were captured by hand.
 
     uv run python scripts/record_rxnav_fixture.py
 

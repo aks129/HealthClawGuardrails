@@ -357,6 +357,13 @@ def test_the_resolver_now_produces_a_label_for_a_medication_code(monkeypatch):
     RxNorm no longer goes through the curatr engine: resolve() asks
     r6/rxnav.py, which reads historystatus (tests/test_rxnav_client.py pins
     the rules). The engine here answers only to prove it is not consulted.
+
+    MUTATION: send RxNorm to the engine again (`if system == _RXNORM:` ->
+    `if False:` in resolve()). This goes red: no label comes back and the
+    engine is asked. The mutant this docstring used to name, restoring
+    `"display": None` in _validate_rxnorm, is on a path resolve() no longer
+    takes for RxNorm; test_a_valid_rxcui_returns_the_drug_name above still
+    catches it.
     """
     from r6 import rxnav
     from r6 import terminology_resolver as resolver
