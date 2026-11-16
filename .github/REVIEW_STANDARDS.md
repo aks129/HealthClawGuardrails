@@ -28,6 +28,37 @@ review bot reads THIS file, so keep it current.)
      known gap tracked in #214, not a control. **Reject new write paths that
      rely on this header**, and reject any text that describes it as human
      confirmation. Route new write paths through the action rail.
+
+   **One exception: person-attested configuration.** A store of what a
+   person has attested for later actions (saved contacts, attested facts) may
+   take its write from the internal secret alone, without
+   `validate_step_up_token`. The approval-token mint
+   (`r6/actions/routes.py`) already trusts that secret and is the root of the
+   human gate, so this adds no trust the gate does not already rest on. The
+   engine records what the secret's holder reports. It does not observe the
+   person, and the write is not human confirmation. A PR may use the
+   exception only if all five hold, and it says so in its description:
+   - (a) **Tenant tokens of every scope are refused.** The party asking for
+     an action must not also set what that action may use.
+   - (b) **The only caller is one handler on the approval surface**, and that
+     handler is login-required, CSRF-protected and ownership-checked. It
+     lives outside this repository, so no test here fails if it changes. The
+     PR states that dependency beside the claim, in the code and in the
+     description.
+   - (c) **The write is never a clinical FHIR write and never an approval.**
+     It creates or changes no FHIR resource, and it approves, commits or
+     executes no action.
+   - (d) **Every stored value is shown back verbatim on the approval card
+     before anything uses it.** A PR that reads a stored value into an action
+     puts that value, unaltered, on the card the person approves. That
+     approval on the action rail stays the human step.
+   - (e) **Refused calls are audited under a budget (#1131), before the first
+     real call.** The stores may merge first: until something calls them the
+     routes are unused, so this is not the split standard 21 forbids. A PR
+     that adds a caller of these routes, or a reader of a stored value, is
+     REQUEST_CHANGES until #1131 has merged.
+
+   Anything outside those five is standard 4 as written.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
 6. **Tenant isolation:** every `R6Resource` (and sibling-table) query filters
