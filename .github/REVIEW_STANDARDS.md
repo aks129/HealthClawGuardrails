@@ -30,11 +30,15 @@ review bot reads THIS file, so keep it current.)
      confirmation. Route new write paths through the action rail.
 
    **One exception: person-attested configuration.** A store of what a
-   person has attested for later actions (saved contacts, attested facts) may
-   take its write from the internal secret alone, without
-   `validate_step_up_token`. The approval-token mint
+   person has attested for later actions may take its write from the
+   internal secret alone, without `validate_step_up_token`. It covers two
+   stores and no others: saved contacts and attested facts. Extending it to
+   another store means editing this standard. The approval-token mint
    (`r6/actions/routes.py`) already trusts that secret and is the root of the
-   human gate, so this adds no trust the gate does not already rest on. The
+   human gate, so this adds no new party the gate does not already trust. It
+   does widen what that party can do: the mint is per-action and single-use,
+   and this write is standing configuration. The compensating control is
+   (d), which can be checked only in the PR that reads a stored value. The
    engine (the guardrail service in this repository, which holds the stores)
    records what the secret's holder reports. It does not observe the person,
    and the write is not human confirmation.
@@ -69,16 +73,21 @@ review bot reads THIS file, so keep it current.)
      refused calls are audited only by naming the test that fails when a
      refused call leaves no AuditEvent. Until #1131 has merged no PR can
      name one, so a store PR does not claim it: it states that #1131 is open
-     and that nothing calls the write. Such a PR may merge, because unused
-     routes are not the split standard 21 forbids. A PR that adds a caller
+     and that nothing calls the write. It carries a test that fails when a
+     caller of its write appears in shipped code in this repository, with a
+     failure message that names #1131. Such a PR may merge; standard 21
+     carries the matching sentence. The residual risk is stated, not
+     removed: the route exists and takes the internal secret, and until
+     #1131 merges its refusals leave no AuditEvent. A PR that adds a caller
      of the write, or reads a stored value into an action, is
      REQUEST_CHANGES until #1131 has merged and the PR names that test.
 
    None of the five is checked mechanically against a PR's code.
-   `tests/test_standard_4_exception_is_pinned.py` pins that this text stays,
-   not that a PR meets it. A reviewer checks (a), (c), (d) and (e) against
-   the diff and the tests the PR names, and (b) against the linked change.
-   Anything outside those five is standard 4 as written.
+   `tests/test_standard_4_exception_is_pinned.py` checks that this text keeps
+   its heading, its five labels and one phrase in each condition. It does
+   not check that a PR meets them. A reviewer checks (a), (c), (d) and (e)
+   against the diff and the tests the PR names, and (b) against the linked
+   change. Anything outside those five is standard 4 as written.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
 6. **Tenant isolation:** every `R6Resource` (and sibling-table) query filters
@@ -139,6 +148,9 @@ in CI, on added lines only. The items below need judgment, so they are yours.
 21. **Feature and hardening ship together.** If a PR adds a capability whose
     review raised security findings, both land in the same merge or neither
     does. Splitting them has put live vulnerabilities into production here.
+    One written carve-out: a store under standard 4's exception may merge
+    before its refusal audit (#1131), on the terms of that exception's
+    condition (e) and with the residual risk it names.
 22. **Deep modules.** A new interface should hide more than it exposes. Flag
     wide interfaces over thin wrappers, and any function whose correct use
     requires knowing its internals.
