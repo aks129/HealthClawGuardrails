@@ -35,29 +35,49 @@ review bot reads THIS file, so keep it current.)
    `validate_step_up_token`. The approval-token mint
    (`r6/actions/routes.py`) already trusts that secret and is the root of the
    human gate, so this adds no trust the gate does not already rest on. The
-   engine records what the secret's holder reports. It does not observe the
-   person, and the write is not human confirmation. A PR may use the
-   exception only if all five hold, and it says so in its description:
+   engine (the guardrail service in this repository, which holds the stores)
+   records what the secret's holder reports. It does not observe the person,
+   and the write is not human confirmation.
+
+   The exception waives step-up only. Standards 3 and 6 still apply to the
+   stored write: a successful write emits an AuditEvent and is filtered by
+   `tenant_id`, with the tenant taken from `X-Tenant-Id`.
+
+   A PR may use the exception only if all five hold, and it says so in its
+   description:
    - (a) **The write refuses tenant tokens of every scope.** The party asking
      for an action must not also set what that action may use.
    - (b) **The only caller of the write is a handler on the approval
      surface**, and that handler is login-required, CSRF-protected and
      ownership-checked. It lives outside this repository, so no test here
      fails if it changes. The PR states that dependency beside the claim, in
-     the code and in the description.
+     the code and in the description. It also links the handler's change (a
+     link the maintainer can open) and names the test there that fails if
+     login, CSRF or the ownership check is removed. A claim of (b) without
+     that link and that test name is REQUEST_CHANGES.
    - (c) **The write is never a clinical FHIR write and never an approval.**
      It creates or changes no FHIR resource, and it approves, commits or
      executes no action.
-   - (d) **Every stored value is shown back verbatim on the approval card
-     before anything uses it.** A PR that reads a stored value into an action
-     puts that value, unaltered, on the card the person approves. That
-     approval on the action rail stays the human step.
+   - (d) **Every stored value is shown back verbatim, without truncation or
+     normalisation, on the approval card before anything uses it.** A PR
+     that reads a stored value into an action puts that value, unaltered, on
+     the card the person approves. That approval on the action rail stays
+     the human step.
    - (e) **Refused calls are audited under a budget (#1131), before the first
-     real call.** The stores may merge first: until something calls them the
-     routes are unused, so this is not the split standard 21 forbids. A PR
-     that adds a caller of the write, or reads a stored value into an action,
-     is REQUEST_CHANGES until #1131 has merged.
+     real call.** The budget is a cap on refusal audit rows per client, so an
+     unauthenticated caller cannot write rows without limit. A PR claims
+     refused calls are audited only by naming the test that fails when a
+     refused call leaves no AuditEvent. Until #1131 has merged no PR can
+     name one, so a store PR does not claim it: it states that #1131 is open
+     and that nothing calls the write. Such a PR may merge, because unused
+     routes are not the split standard 21 forbids. A PR that adds a caller
+     of the write, or reads a stored value into an action, is
+     REQUEST_CHANGES until #1131 has merged and the PR names that test.
 
+   None of the five is checked mechanically against a PR's code.
+   `tests/test_standard_4_exception_is_pinned.py` pins that this text stays,
+   not that a PR meets it. A reviewer checks (a), (c), (d) and (e) against
+   the diff and the tests the PR names, and (b) against the linked change.
    Anything outside those five is standard 4 as written.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
