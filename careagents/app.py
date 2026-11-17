@@ -3168,8 +3168,11 @@ def create_app(config: Config | None = None,
                 and re.match(r"^https?://", link, re.IGNORECASE)):
             link = None
         state = status.get("status")
+        # A declined request says so after a reload, never "already done"
+        # (#1099 QA): it was refused, and nothing was carried out.
         shown = ("ready" if state == "completed" and link else
-                 "preparing" if state == "executing" else "done")
+                 "preparing" if state == "executing" else
+                 "declined" if state == "declined" else "done")
         # Corrections and other requests pass this way too; only a form
         # (the intake rail, or an engine that names no kind) is "your form".
         is_form = status.get("kind") in (None, "form-fill")

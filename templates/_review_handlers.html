@@ -27,9 +27,13 @@
       gateMsg.parentNode.insertBefore(a, gateMsg.nextSibling);
     }
 
+    // Set once the card says declined (settleDeclined, below): nothing on
+    // it may be submitted after that (#1099 security F2).
+    var settled = false;
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
-      if (!evaluate()) { return; }
+      if (settled || !evaluate()) { return; }
       var payload = {};
       new FormData(form).forEach(function (v, k) { payload[k] = v; });
       var nka = form.querySelector('#nka');
@@ -472,6 +476,7 @@
               return;
             }
             if (status === 'declined') {
+              settleDeclined();
               gateMsg.className = 'alert alert-secondary';
               gateMsg.textContent =
                 'This request was declined and will not be carried out. ' +
@@ -512,6 +517,25 @@
     // back; a request that never arrived (status 0) or a gateway speaking
     // for a silent engine sends the person to a reload instead.
     var declineBtn = document.getElementById('decline-btn');
+
+    // Declined: the card stops asking, and neither button is left on
+    // screen; a disabled Approve read as a question still open (#1093).
+    // Every input goes dead too, on both paths here: a live box re-ticked
+    // ran evaluate(), which re-armed the hidden Approve and printed
+    // "Ready" over "declined" (#1099 security F2). Only
+    // action_approve.html has the state badge.
+    function settleDeclined() {
+      settled = true;
+      form.querySelectorAll('input').forEach(function (el) {
+        el.disabled = true;
+      });
+      btn.disabled = true;
+      btn.hidden = true;
+      declineBtn.hidden = true;
+      var state = document.getElementById('review-state');
+      if (state) { state.textContent = 'proposed by an agent · declined'; }
+    }
+
     declineBtn.addEventListener('click', function () {
       declineBtn.disabled = true;
       btn.disabled = true;
@@ -530,9 +554,7 @@
           if (res.status === 200 && res.b.declined === true) {
             // Declined: nothing on the page is a question any more, so no
             // choice stays live to suggest otherwise (#884 G7).
-            form.querySelectorAll('input').forEach(function (el) {
-              el.disabled = true;
-            });
+            settleDeclined();
             gateMsg.className = 'alert alert-secondary';
             gateMsg.textContent =
               'This request was declined and will not be carried out. ' +
