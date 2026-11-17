@@ -179,6 +179,13 @@ This is **not** an execution bypass — `/confirm` still requires a grant with
 H3 and H4 hold. What fails is the evidentiary layer this set's claim rests on,
 which is the half a reviewer would otherwise take on trust.
 
+*Update (#1104):* closed for every kind but form-fill. That branch of the
+review POST no longer records a confirmation; the only one is minted at
+`/confirm`, under the approval credential. The form-fill branch still mints
+from the write token, because the reviewed answers arrive only on that
+request; closing it needs the approve surface to present the approval
+credential there (#1116).
+
 ### 2.3 The in-band tells
 
 A step is in-band, and therefore worthless as evidence, if any of these is
