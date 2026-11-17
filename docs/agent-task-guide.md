@@ -19,6 +19,9 @@ in-app webviews, reduced motion — that outrank visual preference.
 
 ---
 
+Before parallel work, follow the [worker coordination protocol](runbooks/worker-coordination.md)
+and read the shared ownership/handoff log linked there.
+
 ## 1. What this project is, in one paragraph
 
 HealthClaw Guardrails is a safety layer between AI agents and FHIR health data.
