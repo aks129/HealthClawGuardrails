@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text()
 
 _BADGE = re.compile(
-    r"badge/tests-([\d%C]+)%2B%20Python%20%2B%20(\d+)%20Node-")
+    r"badge/tests-([\d%C]+)%2B%20Python%20%2B%20(\d+)%2B%20Node-")
 _PY_TEST = re.compile(r"^\s*(?:async\s+)?def test_", re.M)
 _NODE_TEST = re.compile(r"^\s*(?:it|test)(?:\.each\([^)]*\))?\(", re.M)
 
@@ -54,7 +54,7 @@ def test_the_node_floor_is_reached():
 # A count near the word "tests" on one line, in either order: "4,000+ Python
 # and 200+ Node tests", or "Python tests (1,490+ across 90+ files".
 _STRAY = re.compile(
-    r"\d[\d,]*\+[^\n]{0,40}\btests\b|\btests\b[^\n]{0,20}\(\s*\d[\d,]*\+")
+    r"\d[\d,]*\+?[^\n]{0,40}\btests\b|\btests\b[^\n]{0,20}\(\s*\d[\d,]*")
 
 # The lines that went stale, verbatim. The matcher must flag each one.
 _WENT_STALE = (
@@ -62,6 +62,9 @@ _WENT_STALE = (
     "across 29 MCP tools.",
     "# Python tests (1,490+ across 90+ files; includes action-rail, SDC)",
     "7,000+ Python tests",
+    "7,617 tests",
+    "170 Node tests",
+    "3,153 tests pass",
 )
 
 

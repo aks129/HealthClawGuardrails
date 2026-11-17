@@ -30,7 +30,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-7%2C000%2B%20Python%20%2B%20170%20Node-22c55e?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-7%2C000%2B%20Python%20%2B%20170%2B%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#what-this-grade-means-and-what-it-doesnt)
@@ -90,7 +90,7 @@ A short map for a reviewer. Each line links to the detail and to something you c
 **Where it falls short.** The full list is under [Known Limitations](#known-limitations). The three that matter most here:
 
 - Direct clinical FHIR writes do not have a real human gate. They wait for an `X-Human-Confirmed` header, and the caller sets that header itself ([#214](../../issues/214)). Only the action rail has the out-of-band approval.
-- A step-up token works for several writes inside its five minutes. It is not single-use.
+- A step-up token works for several writes inside its five minutes. It is not single-use. No test pins this; validation does not consume the token's nonce unless a caller asks it to (`r6/stepup.py`).
 - The conformance grade is a self-test on synthetic data. No third party has audited this, and no clinician has signed off.
 
 ## Try it in 60 seconds — no clone, no keys
@@ -191,6 +191,8 @@ HealthClaw Guardrail Conformance — https://app.healthclaw.io [tenant=desktop-d
   [PASS] Step-Up Authorization    [PASS] Medical Disclaimers
   [PASS] Error Fidelity — A (local-fhir-only)
 ```
+
+"Human-in-the-Loop" is the grader's name for the property. It checks the HTTP 428 on a clinical write without the confirmation header, not that a person approved ([#214](../../issues/214)).
 
 Or hit the **one-URL self-test** on any running deployment — no token needed, it
 self-tenants internally and returns 200 at Grade A (503 otherwise):
@@ -309,7 +311,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | Tool | Description |
 | --- | --- |
 | `fhir_propose_write` | Validate + preview without committing |
-| `fhir_commit_write` | Commit with step-up auth + human-in-the-loop |
+| `fhir_commit_write` | Commit with step-up auth. Clinical writes also wait for the `X-Human-Confirmed` header, which the caller sets ([#214](../../issues/214)) |
 | `questionnaire_extract` | SDC `$extract` — extract resources from a completed QuestionnaireResponse |
 | `curatr_apply_fix` | Apply patient-approved fixes with Provenance tracking |
 | `action_propose` / `action_commit` | Propose / commit a real-world SMS. A phone call can still be proposed but is not placed: an approved one ends failed |
@@ -361,7 +363,7 @@ Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, a
 ## Testing
 
 ```bash
-# Python tests (action-rail, SDC, quality, labs, ops and CareAgents suites among them)
+# Python tests; the badge counts test functions, not parametrized cases (action-rail, SDC, quality, labs, ops and CareAgents suites among them)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
@@ -425,7 +427,7 @@ FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py
 Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
 
 **Put the guardrails in front of your FHIR server** — recipe for running the
-redaction + audit + step-up + human-in-the-loop stack in front of **Medplum**
+redaction + audit + step-up stack in front of **Medplum**
 (the same pattern works for Aidbox, Google Cloud Healthcare, or any FHIR R4
 server): [docs/recipes/healthclaw-in-front-of-medplum.md](docs/recipes/healthclaw-in-front-of-medplum.md).
 A repeatable integration test (`tests/test_medplum_in_front.py`) proves a
@@ -618,7 +620,7 @@ e2e/                            Playwright end-to-end tests
 templates/                      Jinja2 (landing page, dashboard)
 static/                         CSS + JS for interactive dashboard
 skills/curatr/                  Curatr OpenClaw skill definition
-tests/                          266 pytest tests (8 files, incl. test_us_core_r4.py)
+tests/                          pytest suite (incl. test_us_core_r4.py)
 ```
 
 ## Personal FHIR data store — patient import flow
