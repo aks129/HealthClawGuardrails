@@ -1,0 +1,617 @@
+{
+ "861007": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "092009",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "092009",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "861007",
+    "name": "metformin hydrochloride 500 MG Oral Tablet",
+    "tty": "SCD",
+    "isMultipleIngredient": "NO",
+    "isBranded": "NO"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "6809",
+      "baseName": "metformin",
+      "bossRxcui": "235743",
+      "bossName": "metformin hydrochloride",
+      "activeIngredientRxcui": "235743",
+      "activeIngredientName": "metformin hydrochloride",
+      "moietyRxcui": "6809",
+      "moietyName": "metformin",
+      "numeratorValue": "500",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "317541",
+      "doseFormName": "Oral Tablet"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151131",
+      "doseFormGroupName": "Oral Product"
+     },
+     {
+      "doseFormGroupRxcui": "1151133",
+      "doseFormGroupName": "Pill"
+     }
+    ]
+   },
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "6809",
+      "ingredientName": "metformin"
+     }
+    ]
+   }
+  }
+ },
+ "617314": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "052006",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "052006",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "617314",
+    "name": "atorvastatin 10 MG Oral Tablet [Lipitor]",
+    "tty": "SBD",
+    "isMultipleIngredient": "NO",
+    "isBranded": "YES"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "83367",
+      "baseName": "atorvastatin",
+      "bossRxcui": "83367",
+      "bossName": "atorvastatin",
+      "activeIngredientRxcui": "83366",
+      "activeIngredientName": "atorvastatin calcium",
+      "moietyRxcui": "83367",
+      "moietyName": "atorvastatin",
+      "numeratorValue": "10",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "317541",
+      "doseFormName": "Oral Tablet"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151131",
+      "doseFormGroupName": "Oral Product"
+     },
+     {
+      "doseFormGroupRxcui": "1151133",
+      "doseFormGroupName": "Pill"
+     }
+    ]
+   },
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "83367",
+      "ingredientName": "atorvastatin"
+     }
+    ],
+    "scdConcept": {
+     "scdConceptRxcui": "617312",
+     "scdConceptName": "atorvastatin 10 MG Oral Tablet"
+    }
+   }
+  }
+ },
+ "748856": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "012008",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "012008",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "748856",
+    "name": "{24 (drospirenone 3 MG / ethinyl estradiol 0.02 MG Oral Tablet) / 4 (inert ingredients 1 MG Oral Tablet) } Pack [Yaz 28 Day]",
+    "tty": "BPCK",
+    "isMultipleIngredient": "YES",
+    "isBranded": "YES"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "11636",
+      "baseName": "drospirenone",
+      "bossRxcui": "11636",
+      "bossName": "drospirenone",
+      "activeIngredientRxcui": "11636",
+      "activeIngredientName": "drospirenone",
+      "moietyRxcui": "11636",
+      "moietyName": "drospirenone",
+      "numeratorValue": "3",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "4124",
+      "baseName": "ethinyl estradiol",
+      "bossRxcui": "4124",
+      "bossName": "ethinyl estradiol",
+      "activeIngredientRxcui": "4124",
+      "activeIngredientName": "ethinyl estradiol",
+      "moietyRxcui": "4124",
+      "moietyName": "ethinyl estradiol",
+      "numeratorValue": "0.02",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "748794",
+      "baseName": "inert ingredients",
+      "bossRxcui": "748794",
+      "bossName": "inert ingredients",
+      "activeIngredientRxcui": "748794",
+      "activeIngredientName": "inert ingredients",
+      "moietyRxcui": "748794",
+      "moietyName": "inert ingredients",
+      "numeratorValue": "1",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "746839",
+      "doseFormName": "Pack"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151131",
+      "doseFormGroupName": "Oral Product"
+     },
+     {
+      "doseFormGroupRxcui": "1151133",
+      "doseFormGroupName": "Pill"
+     }
+    ]
+   },
+   "pack": {
+    "packAlias": "Yaz 28 Day",
+    "packConcept": [
+     {
+      "packRxcui": "630734",
+      "packName": "drospirenone 3 MG / ethinyl estradiol 0.02 MG Oral Tablet",
+      "packNumber": "24"
+     },
+     {
+      "packRxcui": "748797",
+      "packName": "inert ingredients 1 MG Oral Tablet",
+      "packNumber": "4"
+     }
+    ]
+   },
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "11636",
+      "ingredientName": "drospirenone"
+     },
+     {
+      "ingredientRxcui": "4124",
+      "ingredientName": "ethinyl estradiol"
+     },
+     {
+      "ingredientRxcui": "748794",
+      "ingredientName": "inert ingredients"
+     }
+    ]
+   }
+  }
+ },
+ "205510": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Remapped",
+    "source": "RXNORM",
+    "releaseStartDate": "042005",
+    "releaseEndDate": "092010",
+    "isCurrent": "NO",
+    "activeStartDate": "042005",
+    "activeEndDate": "092010",
+    "remappedDate": "102010"
+   },
+   "attributes": {
+    "rxcui": "205510",
+    "name": "Bupivacaine 5 MG/ML Injectable Solution [Sensorcaine]",
+    "tty": "SBD",
+    "isMultipleIngredient": "",
+    "isBranded": ""
+   },
+   "definitionalFeatures": {},
+   "pack": {},
+   "derivedConcepts": {
+    "remappedConcept": [
+     {
+      "remappedRxCui": "1012457",
+      "remappedName": "bupivacaine hydrochloride 5 MG/ML Injectable Solution [Sensorcaine]",
+      "remappedTTY": "SBD",
+      "remappedActive": "YES"
+     }
+    ]
+   }
+  }
+ },
+ "1012457": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "102010",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "102010",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "1012457",
+    "name": "bupivacaine hydrochloride 5 MG/ML Injectable Solution [Sensorcaine]",
+    "tty": "SBD",
+    "isMultipleIngredient": "NO",
+    "isBranded": "YES"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "1815",
+      "baseName": "bupivacaine",
+      "bossRxcui": "267396",
+      "bossName": "bupivacaine hydrochloride",
+      "activeIngredientRxcui": "267396",
+      "activeIngredientName": "bupivacaine hydrochloride",
+      "moietyRxcui": "1815",
+      "moietyName": "bupivacaine",
+      "numeratorValue": "5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "ML"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "316949",
+      "doseFormName": "Injectable Solution"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151126",
+      "doseFormGroupName": "Injectable Product"
+     }
+    ]
+   },
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "1815",
+      "ingredientName": "bupivacaine"
+     }
+    ],
+    "scdConcept": {
+     "scdConceptRxcui": "1012404",
+     "scdConceptName": "bupivacaine hydrochloride 5 MG/ML Injectable Solution"
+    }
+   }
+  }
+ },
+ "205516": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Remapped",
+    "source": "RXNORM",
+    "releaseStartDate": "042005",
+    "releaseEndDate": "032008",
+    "isCurrent": "NO",
+    "activeStartDate": "042005",
+    "activeEndDate": "102007",
+    "remappedDate": "042008"
+   },
+   "attributes": {
+    "rxcui": "205516",
+    "name": "Bupivacaine 7.5 MG/ML Injectable Solution [Sensorcaine-MPF]",
+    "tty": "SBD",
+    "isMultipleIngredient": "",
+    "isBranded": ""
+   },
+   "definitionalFeatures": {},
+   "pack": {},
+   "derivedConcepts": {
+    "remappedConcept": [
+     {
+      "remappedRxCui": "1724807",
+      "remappedName": "2 ML bupivacaine hydrochloride 7.5 MG/ML Injection [Sensorcaine]",
+      "remappedTTY": "SBD",
+      "remappedActive": "YES"
+     },
+     {
+      "remappedRxCui": "1724808",
+      "remappedName": "bupivacaine hydrochloride 7.5 MG/ML Injection [Sensorcaine]",
+      "remappedTTY": "SBD",
+      "remappedActive": "NO"
+     }
+    ]
+   }
+  }
+ },
+ "205517": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Obsolete",
+    "source": "RXNORM",
+    "releaseStartDate": "042005",
+    "releaseEndDate": "",
+    "isCurrent": "NO",
+    "activeStartDate": "042005",
+    "activeEndDate": "022013",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "205517",
+    "name": "anthralin 0.0025 MG/MG Topical Ointment [Anthra-Derm]",
+    "tty": "SBD",
+    "isMultipleIngredient": "NO",
+    "isBranded": "YES"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "873",
+      "baseName": "anthralin",
+      "bossRxcui": "873",
+      "bossName": "anthralin",
+      "activeIngredientRxcui": "873",
+      "activeIngredientName": "anthralin",
+      "moietyRxcui": "873",
+      "moietyName": "anthralin",
+      "numeratorValue": "0.0025",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "MG"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "316985",
+      "doseFormName": "Topical Ointment"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151122",
+      "doseFormGroupName": "Topical Product"
+     }
+    ]
+   },
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "873",
+      "ingredientName": "anthralin"
+     }
+    ],
+    "scdConcept": {
+     "scdConceptRxcui": "204397",
+     "scdConceptName": "anthralin 0.0025 MG/MG Topical Ointment"
+    }
+   }
+  }
+ },
+ "99999999": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "UNKNOWN",
+    "source": "NONE",
+    "releaseStartDate": "",
+    "releaseEndDate": "",
+    "isCurrent": "NO",
+    "activeStartDate": "",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "99999999",
+    "name": "",
+    "tty": "",
+    "isMultipleIngredient": "",
+    "isBranded": ""
+   },
+   "definitionalFeatures": {},
+   "pack": {},
+   "derivedConcepts": {}
+  }
+ },
+ "541892": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "092005",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "092005",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "541892",
+    "name": "amphetamine aspartate 2.5 MG / amphetamine sulfate 2.5 MG / dextroamphetamine saccharate 2.5 MG / dextroamphetamine sulfate 2.5 MG Oral Tablet",
+    "tty": "SCD",
+    "isMultipleIngredient": "YES",
+    "isBranded": "NO"
+   },
+   "definitionalFeatures": {
+    "ingredientAndStrength": [
+     {
+      "baseRxcui": "3288",
+      "baseName": "dextroamphetamine",
+      "bossRxcui": "221088",
+      "bossName": "dextroamphetamine saccharate",
+      "activeIngredientRxcui": "221088",
+      "activeIngredientName": "dextroamphetamine saccharate",
+      "moietyRxcui": "3288",
+      "moietyName": "dextroamphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "3288",
+      "baseName": "dextroamphetamine",
+      "bossRxcui": "3287",
+      "bossName": "dextroamphetamine sulfate",
+      "activeIngredientRxcui": "3287",
+      "activeIngredientName": "dextroamphetamine sulfate",
+      "moietyRxcui": "3288",
+      "moietyName": "dextroamphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "725",
+      "baseName": "amphetamine",
+      "bossRxcui": "221057",
+      "bossName": "amphetamine aspartate",
+      "activeIngredientRxcui": "221057",
+      "activeIngredientName": "amphetamine aspartate",
+      "moietyRxcui": "725",
+      "moietyName": "amphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     },
+     {
+      "baseRxcui": "725",
+      "baseName": "amphetamine",
+      "bossRxcui": "81952",
+      "bossName": "amphetamine sulfate",
+      "activeIngredientRxcui": "81952",
+      "activeIngredientName": "amphetamine sulfate",
+      "moietyRxcui": "725",
+      "moietyName": "amphetamine",
+      "numeratorValue": "2.5",
+      "numeratorUnit": "MG",
+      "denominatorValue": "1",
+      "denominatorUnit": "EACH"
+     }
+    ],
+    "doseFormConcept": [
+     {
+      "doseFormRxcui": "317541",
+      "doseFormName": "Oral Tablet"
+     }
+    ],
+    "doseFormGroupConcept": [
+     {
+      "doseFormGroupRxcui": "1151131",
+      "doseFormGroupName": "Oral Product"
+     },
+     {
+      "doseFormGroupRxcui": "1151133",
+      "doseFormGroupName": "Pill"
+     }
+    ]
+   },
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "3288",
+      "ingredientName": "dextroamphetamine"
+     },
+     {
+      "ingredientRxcui": "725",
+      "ingredientName": "amphetamine"
+     }
+    ]
+   }
+  }
+ },
+ "84815": {
+  "rxcuiStatusHistory": {
+   "metaData": {
+    "status": "Active",
+    "source": "RXNORM",
+    "releaseStartDate": "042005",
+    "releaseEndDate": "",
+    "isCurrent": "YES",
+    "activeStartDate": "042005",
+    "activeEndDate": "",
+    "remappedDate": ""
+   },
+   "attributes": {
+    "rxcui": "84815",
+    "name": "Adderall",
+    "tty": "BN",
+    "isMultipleIngredient": "YES",
+    "isBranded": "YES"
+   },
+   "definitionalFeatures": {},
+   "pack": {},
+   "derivedConcepts": {
+    "ingredientConcept": [
+     {
+      "ingredientRxcui": "3288",
+      "ingredientName": "dextroamphetamine"
+     },
+     {
+      "ingredientRxcui": "725",
+      "ingredientName": "amphetamine"
+     }
+    ]
+   }
+  }
+ }
+}
