@@ -30,7 +30,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-13%2C000%2B%20Python%20%2B%20170%20Node-22c55e?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-7%2C000%2B%20Python%20%2B%20170%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#what-this-grade-means-and-what-it-doesnt)
@@ -53,7 +53,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v2.1.0, with 13,000+ Python tests across 29 MCP tools.
+**At a glance:** v2.1.0, with 29 MCP tools.
 **[CareAgents](https://careagents.cloud)** is the hosted consumer app: passkey sign-in, advisors, and chat on the web. iMessage works where it's offered; Telegram is not open in the beta.
 Two rails run end to end — real-world actions behind a provably out-of-band gate, and forms (`$populate` → human review → provenance PDF).
 Standards: FHIR R4 US Core v9 and R6 v6.0.0-ballot3, HL7 SDC forms, NQF 0018.
@@ -65,15 +65,15 @@ Also a Claude Code plugin and OpenAI/Gemini adapters.
 
 A short map for a reviewer. Each line links to the detail and to something you can run.
 
-**The problem.** An AI agent connected to a health record can read more than it needs, write what nobody approved, and start things that cannot be undone, such as a text message or a submitted form. Most FHIR MCP servers hand the agent the record and the write path as they are.
+**The problem.** An AI agent connected to a health record can read more than it needs and write what nobody approved. It can also start things that cannot be undone, such as a text message or a submitted form. Most FHIR MCP servers hand the agent the record and the write path as they are.
 
 **The approach.** The agent gets a narrower path than the person it works for:
 
-- **It reads less.** Names, identifiers, addresses and birth dates are redacted before the model sees a record. Every read and write leaves an audit record.
-- **It cannot write on its session alone.** Each write needs a separate, tenant-bound step-up token that expires in five minutes.
-- **It cannot approve its own action.** For a real-world action the agent can only *propose*. `commit` submits the action and returns HTTP 202. Nothing runs until a person approves on a separate page, with a single-use credential bound to a digest of the exact payload they were shown. If the payload changes after they saw it, the approval does not match.
-- **It fails loudly.** An action kind with no working executor ends as `failed`, never as a simulated success. A decline is recorded as a decline.
-- **It stays in its tenant.** Every query is scoped to one tenant.
+- **It reads less.** Names, identifiers, addresses and birth dates are redacted before the model sees a record. Reads and writes leave an audit record. Pinned by the redaction and audit properties in [`tests/test_guardrail_conformance.py`](tests/test_guardrail_conformance.py), and per write route in [`tests/test_write_guard_matrix.py`](tests/test_write_guard_matrix.py).
+- **It cannot write on its session alone.** Each write needs a separate, tenant-bound step-up token that expires in five minutes. Pinned by the step-up property in the conformance test.
+- **It cannot approve its own action.** For a real-world action the agent can only *propose*. `commit` submits the action and returns HTTP 202. Nothing runs until a person approves on a separate page, with a single-use credential bound to a digest of the exact payload they were shown. If the payload changes after they saw it, the approval does not match. Pinned by [`tests/actions/test_payload_immutability.py`](tests/actions/test_payload_immutability.py) and [`tests/actions/test_confirmations.py`](tests/actions/test_confirmations.py).
+- **It fails loudly.** An action kind with no working executor ends as `failed`, not as a simulated success. A decline is recorded as a decline. Pinned by [`tests/actions/test_free_text_calls_cannot_dial.py`](tests/actions/test_free_text_calls_cannot_dial.py) and [`tests/actions/test_decline_is_a_state.py`](tests/actions/test_decline_is_a_state.py).
+- **It stays in its tenant.** A read with another tenant's id is refused. Pinned by the tenant-isolation property in the conformance test.
 
 **What can run today.** Form filling runs end to end. Text messages run only on a server with a provider configured. Phone calls can be proposed, but no call executor is registered, so an approved call fails loudly and nothing dials.
 
@@ -85,7 +85,7 @@ A short map for a reviewer. Each line links to the detail and to something you c
 - The propose, commit, approve, execute sequence: [`tests/test_actions_routes.py`](tests/test_actions_routes.py).
 - The guardrails in front of a real FHIR server, each property asserted: [Aidbox example](examples/aidbox-healthclaw-guardrails/).
 - Mistakes this codebase has already made, with what each cost: [defect catalogue](docs/defect-catalogue.md).
-- The full suite is 13,000+ Python tests, run on every pull request.
+- The full suite runs on every pull request ([`ci.yml`](.github/workflows/ci.yml)); the badge above carries the count.
 
 **Where it falls short.** The full list is under [Known Limitations](#known-limitations). The three that matter most here:
 
@@ -361,7 +361,7 @@ Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, a
 ## Testing
 
 ```bash
-# Python tests (13,000+; includes action-rail, SDC, quality, labs, ops, CareAgents suites)
+# Python tests (action-rail, SDC, quality, labs, ops and CareAgents suites among them)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
