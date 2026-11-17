@@ -51,8 +51,28 @@ def test_the_node_floor_is_reached():
         "README tests badge claims more Node tests than the MCP server defines")
 
 
-def test_the_python_count_is_stated_only_in_the_badge():
+# A count near the word "tests" on one line, in either order: "4,000+ Python
+# and 200+ Node tests", or "Python tests (1,490+ across 90+ files".
+_STRAY = re.compile(
+    r"\d[\d,]*\+[^\n]{0,40}\btests\b|\btests\b[^\n]{0,20}\(\s*\d[\d,]*\+")
+
+# The lines that went stale, verbatim. The matcher must flag each one.
+_WENT_STALE = (
+    "**At a glance:** v2.1.0, with 4,000+ Python and 200+ Node tests "
+    "across 29 MCP tools.",
+    "# Python tests (1,490+ across 90+ files; includes action-rail, SDC)",
+    "7,000+ Python tests",
+)
+
+
+def test_the_matcher_flags_the_lines_that_went_stale():
+    for line in _WENT_STALE:
+        assert _STRAY.search(line), "matcher is blind to: %r" % line
+
+
+def test_no_test_count_is_stated_outside_the_badge():
+    assert len(README) > 1000 and _BADGE.search(README)
     prose = _BADGE.sub("", README)
-    stray = re.findall(r"[\d,]{3,}\+?\s+(?:Python\s+)?tests\b", prose)
+    stray = [m.group(0) for m in _STRAY.finditer(prose)]
     assert not stray, (
         "a test count outside the badge will go stale: %r" % stray)

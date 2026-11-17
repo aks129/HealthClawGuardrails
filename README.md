@@ -85,7 +85,7 @@ A short map for a reviewer. Each line links to the detail and to something you c
 - The propose, commit, approve, execute sequence: [`tests/test_actions_routes.py`](tests/test_actions_routes.py).
 - The guardrails in front of a real FHIR server, each property asserted: [Aidbox example](examples/aidbox-healthclaw-guardrails/).
 - Mistakes this codebase has already made, with what each cost: [defect catalogue](docs/defect-catalogue.md).
-- The full suite runs on every pull request ([`ci.yml`](.github/workflows/ci.yml)); the badge above carries the count.
+- The `python-tests` job runs `pytest tests/` on every pull request ([`ci.yml`](.github/workflows/ci.yml)); the badge above carries the count.
 
 **Where it falls short.** The full list is under [Known Limitations](#known-limitations). The three that matter most here:
 
@@ -156,7 +156,7 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
                          PHI redaction              Medplum, etc.)
                          Audit trail
                          Step-up auth
-                         Human-in-the-loop
+                         Approval (action rail)
 ```
 
 ### How it differs from a plain FHIR MCP server
