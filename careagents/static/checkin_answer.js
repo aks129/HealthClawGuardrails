@@ -15,7 +15,8 @@
                   refuted record or one said only in words reads unavailable
      declined     there is something, and the person did not choose to share
      fulfilled    the person chose to share it: one Bundle, fhirVersion 4.0.1
-                  (a form: one QuestionnaireResponse, every question answered)
+                  (a form: one QuestionnaireResponse, every shown question
+                  that must be answered answered, no hidden one sent)
 
    Request keys are read with Object.hasOwn (own()), never `in` or a bare
    lookup: the request is the website's, and a key named like a built-in
@@ -131,51 +132,73 @@ function answerable(item, unsupported) {
    options. One level of `group` is allowed too, as the SPEED dry eye form
    has (#1049): a heading over display lines and choice questions held to
    the same rules, the heading's words checked as a question's are. A
-   group inside a group is not. A question of another kind (free text, a
-   number, a date, pick-several) is not answered here: when it is optional
-   it is shown as one this wallet does not answer and left out of the
-   response, as the contact lens trial form's are; when it is `required`,
-   or carries an extension that could say so, the form cannot be completed
-   without it, so the form is unsupported. So is any form with a
-   modifierExtension or an SDC constraint (changesWhatIsRequired).
+   group inside a group is not. A yes/no, a number, words, pick-several and
+   pick-or-type questions are answered too, each optional unless
+   `required`, and none carrying an extension (one could say it is
+   required another way, questionnaire-minOccurs, #1061 security F1). A
+   question of another kind (a date, a file) is not answered here: when it
+   is optional it is shown as one this wallet does not answer and left out
+   of the response; when it is `required`, or carries an extension, the
+   form is unsupported. So is any form with a modifierExtension, an SDC
+   constraint or an expression (needsMoreThanItReads).
+   A question or display line may carry `enableWhen` (spec §5.4.2's
+   physician form): only the plain operators, against an answer the person
+   gave to an earlier question of this form (readWhen). A hidden question
+   is never sent, whatever was typed into it (formState).
    Everything shown is the website's own words, put on the page as text,
    never as markup; the Questionnaire's generated narrative is never read.
-   Anything else is unsupported rather than half shown. The answers stay in
-   this tab: they go only into the sealed response. */
+   Nothing is filled in to start with. Anything else is unsupported rather
+   than half shown. The answers stay in this tab: they go only into the
+   sealed response. */
 
 const FORM_MAX_CHARS = 32768;      // the Questionnaire, serialised
-// The contact lens trial form asks 19 (it was 10, PHQ-2 and SPEED sized).
+// The contact lens trial form asks 26 (it was 10, PHQ-2 and SPEED sized).
 const FORM_MAX_QUESTIONS = 30;
 const FORM_MAX_SKIPPED = 10;       // questions shown as not answered here
 const FORM_MAX_OPTIONS = 10;
 const FORM_TEXT_MAX = 500;
 const FORM_CANONICAL_MAX = 1024;
-// What would make a question more than one pick from a fixed list. `item`
-// is allowed on a top-level group only (readItems).
-const FORM_REFUSED_KEYS = ["item", "enableWhen", "answerValueSet", "initial"];
+const FORM_ANSWER_MAX = 2000;      // what the person may type in one answer
+const FORM_MAX_CONDITIONS = 5;     // enableWhen entries on one item
+const FORM_MAX_ALL_CONDITIONS = 30;
+// A typed number: at most 9 digits (inside FHIR's 32-bit integer), and a
+// decimal at most 6 more after the point.
+const FORM_INTEGER = /^-?\d{1,9}$/;
+const FORM_DECIMAL = /^-?\d{1,9}(\.\d{1,6})?$/;
+// `item` is allowed on a top-level group only (readItems).
+const FORM_REFUSED_KEYS = ["item", "answerValueSet", "initial"];
+// What the person can answer besides one pick from a list (readItems).
+const FORM_ANSWERED_TYPES = ["boolean", "decimal", "integer", "string",
+  "text", "choice", "open-choice"];
 // The other FHIR R4 question types: left out when optional (readItems). A
-// type outside this list is not a question to leave out.
-const FORM_SKIPPED_TYPES = ["boolean", "decimal", "integer", "date",
-  "dateTime", "time", "string", "text", "url", "choice", "open-choice",
+// type outside both lists is not a question to leave out.
+const FORM_SKIPPED_TYPES = ["date", "dateTime", "time", "url",
   "attachment", "reference", "quantity"];
+// FHIR R4 enableWhen operators. Nothing else is evaluated.
+const FORM_OPERATORS = ["exists", "=", "!=", ">", "<", ">=", "<="];
 
 const FORM_CONSTRAINT =
   "http://hl7.org/fhir/StructureDefinition/questionnaire-constraint";
 
 /* Whether anything in the Questionnaire could change what must be
-   answered beyond what readItems reads (#1061 security F1): a
-   modifierExtension anywhere (FHIR: one not understood means the element
-   must not be processed), or an SDC questionnaire-constraint anywhere,
-   which can require an answer to a question this wallet leaves out.
-   Walked with a stack, not recursion: the size cap bounds the work, not
-   the depth. */
-function changesWhatIsRequired(q) {
+   answered, or what is shown, beyond what readItems reads (#1061 security
+   F1): a modifierExtension anywhere (FHIR: one not understood means the
+   element must not be processed), an SDC questionnaire-constraint
+   anywhere, which can require an answer to a question this wallet leaves
+   out, any Expression (`valueExpression`: SDC's enableWhenExpression,
+   answerExpression, initialExpression, calculatedExpression, variable,
+   all FHIRPath or CQL, which this wallet never runs), or `contained`
+   resources (a ValueSet to look answers up in). Walked with a stack, not
+   recursion: the size cap bounds the work, not the depth. */
+function needsMoreThanItReads(q) {
   const stack = [q];
   while (stack.length) {
     const node = stack.pop();
     if (node === null || typeof node !== "object") continue;
     if (Array.isArray(node)) { node.forEach((v) => stack.push(v)); continue; }
     if (Object.hasOwn(node, "modifierExtension") ||
+        Object.hasOwn(node, "valueExpression") ||
+        Object.hasOwn(node, "contained") ||
         own(node, "url") === FORM_CONSTRAINT) return true;
     Object.values(node).forEach((v) => stack.push(v));
   }
@@ -220,15 +243,85 @@ function readOption(option) {
   return { coding, display };
 }
 
+/* One enableWhen entry, or null when this wallet will not evaluate it:
+   `question` names a question read before this item (`seen`), so the
+   conditions are worked out in one pass in the form's order and none can
+   name itself or a later item; `operator` is one of FORM_OPERATORS; and
+   there is exactly one answer[x], of a kind that question's answers can be
+   compared with. Ordering operators compare numbers only; a coding
+   compares by system and code, never its display. Nothing else on the
+   entry is allowed. */
+function readCondition(c, seen) {
+  if (c === null || typeof c !== "object" || Array.isArray(c)) return null;
+  const keys = Object.keys(c);
+  const key = keys.find((k) => k.startsWith("answer"));
+  if (!key || keys.some((k) => k !== "question" && k !== "operator" && k !== key)) {
+    return null;
+  }
+  const linkId = own(c, "question");
+  const q = typeof linkId === "string" ? seen.get(linkId) : undefined;
+  const operator = own(c, "operator");
+  if (!q || !FORM_OPERATORS.includes(operator)) return null;
+  const v = c[key];
+  if (operator === "exists") {
+    return key === "answerBoolean" && typeof v === "boolean"
+      ? { question: linkId, operator, type: "exists", value: v } : null;
+  }
+  let type = null;
+  let value = v;
+  if (key === "answerCoding" && ["choice", "open-choice"].includes(q.kind)) {
+    const code = text(own(v, "code"), 256);
+    const system = own(v, "system");
+    if (code && (system === undefined || text(system, FORM_CANONICAL_MAX))) {
+      type = "coding";
+      value = { system: system === undefined ? null : system, code };
+    }
+  } else if (key === "answerString" &&
+      ["string", "text", "open-choice"].includes(q.kind)) {
+    if (text(v)) type = "string";
+  } else if (key === "answerBoolean" && q.kind === "boolean") {
+    if (typeof v === "boolean") type = "boolean";
+  } else if ((key === "answerInteger" || key === "answerDecimal") &&
+      ["integer", "decimal"].includes(q.kind)) {
+    if (key === "answerInteger" ? Number.isSafeInteger(v) : Number.isFinite(v)) {
+      type = "number";
+    }
+  }
+  if (!type || (type !== "number" && operator !== "=" && operator !== "!=")) return null;
+  return { question: linkId, operator, type, value };
+}
+
+/* An item's enableWhen: null when it has none, false when this wallet
+   will not evaluate it, else { behavior, conditions }. More than one
+   condition needs enableBehavior `all` or `any` (FHIR que-12). */
+function readWhen(it, seen, form) {
+  const conds = own(it, "enableWhen");
+  const behavior = own(it, "enableBehavior");
+  if (conds === undefined) return behavior === undefined ? null : false;
+  if (!Array.isArray(conds) || !conds.length || conds.length > FORM_MAX_CONDITIONS) {
+    return false;
+  }
+  if (behavior === undefined ? conds.length > 1 : behavior !== "all" && behavior !== "any") {
+    return false;
+  }
+  const conditions = conds.map((c) => readCondition(c, seen));
+  if (conditions.includes(null)) return false;
+  form.conditions += conditions.length;
+  return { behavior: behavior || "all", conditions };
+}
+
 /* Reads `items` into `form`, in order: display lines into the form's
-   `displays` (or, inside a group, the group's), choice questions into
+   `displays` (or, inside a group, the group's), questions into
    form.questions, each with the index into form.groups of the group it
    sits in, or null at the top. `group` is that index while reading a
-   group's own items. An optional question of another kind goes into
-   form.skipped, with its group and `at`, the number of questions before
-   it, which says where it sits among them. False when any item is outside
-   the rules. */
-function readItems(items, form, linkIds, group) {
+   group's own items. A display line with enableWhen goes into form.notes
+   instead, to be shown in its place and only when it holds. An optional
+   question of a kind not answered here goes into form.skipped. Each of
+   these carries `seq`, its place in the form, and a skipped one `at`, the
+   number of questions before it. `seen` maps each linkId read so far to
+   its question, or null for an item that is not one. False when any item
+   is outside the rules. */
+function readItems(items, form, seen, group) {
   for (const it of items) {
     if (it === null || typeof it !== "object") return false;
     const type = own(it, "type");
@@ -240,24 +333,49 @@ function readItems(items, form, linkIds, group) {
     if (repeats && (type === "display" || type === "group")) return false;
     const linkId = text(own(it, "linkId"), 255);
     const said = words(own(it, "text"));
-    if (!linkId || !said || linkIds.has(linkId)) return false;
-    linkIds.add(linkId);
+    if (!linkId || !said || seen.has(linkId)) return false;
+    const when = readWhen(it, seen, form);
+    if (when === false || (when && type === "group")) return false;
+    seen.set(linkId, null);
+    const seq = form.seq++;
     if (type === "display") {
-      (group === null ? form.displays : form.groups[group].displays).push(said);
+      if (when) form.notes.push({ linkId, text: said, group, seq, when });
+      else (group === null ? form.displays : form.groups[group].displays).push(said);
       continue;
     }
     const prefix = own(it, "prefix");
     if (prefix !== undefined && !words(prefix, 16)) return false;
-    if (!isGroup && (type !== "choice" || repeats)) {
-      // Not one pick from a list: shown, never answered, its options (if
-      // any) unread. Required, it cannot be left out of a completed form;
-      // and an extension may say so another way (questionnaire-minOccurs),
-      // so one that carries any is not left out either (#1061 security F1).
-      const required = own(it, "required");
-      if (!FORM_SKIPPED_TYPES.includes(type) || Object.hasOwn(it, "extension") ||
+    const required = own(it, "required");
+    if (!isGroup && (type !== "choice" || repeats) &&
+        FORM_ANSWERED_TYPES.includes(type)) {
+      // Answered, and optional unless `required` says, as a boolean, it is
+      // not. An extension may say so another way (questionnaire-minOccurs,
+      // #1061 security F1), or carry an expression: refused.
+      if (Object.hasOwn(it, "extension") ||
+          (required !== undefined && typeof required !== "boolean")) return false;
+      const options = own(it, "answerOption");
+      let read = [];
+      if (type === "choice" || type === "open-choice") {
+        if (!Array.isArray(options) || options.length < (type === "choice" ? 2 : 1) ||
+            options.length > FORM_MAX_OPTIONS) return false;
+        read = options.map(readOption);
+        if (read.includes(null)) return false;
+      } else if (options !== undefined) return false;
+      const question = { linkId, prefix: prefix || "", text: said, kind: type,
+        repeats, required: required === true, options: read, group, seq, when };
+      form.questions.push(question);
+      seen.set(linkId, question);
+      continue;
+    }
+    if (!isGroup && type !== "choice") {
+      // Not answered here: shown, never answered, its options (if any)
+      // unread. Required, it cannot be left out of a completed form; and an
+      // extension may say so another way (questionnaire-minOccurs), so one
+      // that carries any is not left out either (#1061 security F1).
+      if (when || !FORM_SKIPPED_TYPES.includes(type) || Object.hasOwn(it, "extension") ||
           (required !== undefined && required !== false)) return false;
       form.skipped.push({ linkId, prefix: prefix || "", text: said, group,
-        at: form.questions.length });
+        at: form.questions.length, seq });
       continue;
     }
     if (isGroup) {
@@ -267,25 +385,139 @@ function readItems(items, form, linkIds, group) {
       if (Object.hasOwn(it, "answerOption") || !Array.isArray(children)) return false;
       const before = form.questions.length;
       form.groups.push({ linkId, prefix: prefix || "", text: said, displays: [] });
-      if (!readItems(children, form, linkIds, form.groups.length - 1)) return false;
+      if (!readItems(children, form, seen, form.groups.length - 1)) return false;
       if (form.questions.length === before) return false;
       continue;
     }
+    // One pick from a list: always to be answered while it is shown.
     const options = own(it, "answerOption");
     if (!Array.isArray(options) || options.length < 2 ||
         options.length > FORM_MAX_OPTIONS) return false;
     const read = options.map(readOption);
     if (read.includes(null)) return false;
-    form.questions.push({ linkId, prefix: prefix || "", text: said, options: read, group });
+    const question = { linkId, prefix: prefix || "", text: said, kind: "choice",
+      repeats: false, required: true, options: read, group, seq, when };
+    form.questions.push(question);
+    seen.set(linkId, question);
   }
   return true;
 }
 
+/* The person's answer to `q` as QuestionnaireResponse answers, from what
+   the page gathered (`raw`): undefined when there is none, null when it is
+   not one this question takes. One pick: an option index; pick-several: an
+   array of distinct indices; pick-or-type: { picked: [indices], other:
+   typed words }; yes/no: a boolean; a number or words: the string typed.
+   Each answer is of the type the form declares (valueCoding,
+   valueBoolean, valueInteger, valueDecimal, valueString). */
+function answerOf(q, raw) {
+  if (raw === undefined) return undefined;
+  const typed = (s) => {
+    if (typeof s !== "string") return null;
+    const t = s.trim();
+    if (!t) return undefined;
+    return t.length <= FORM_ANSWER_MAX ? t : null;
+  };
+  const picks = (list) => {
+    if (!Array.isArray(list) || list.length > q.options.length ||
+        new Set(list).size !== list.length ||
+        list.some((i) => !Number.isInteger(i) || i < 0 || i >= q.options.length)) return null;
+    return list.map((i) => ({ valueCoding: { ...q.options[i].coding } }));
+  };
+  let out;
+  switch (q.kind) {
+    case "boolean":
+      return typeof raw === "boolean" ? [{ valueBoolean: raw }] : null;
+    case "integer":
+    case "decimal": {
+      const t = typed(raw);
+      if (!t) return t;
+      if (!(q.kind === "integer" ? FORM_INTEGER : FORM_DECIMAL).test(t)) return null;
+      return [q.kind === "integer" ? { valueInteger: Number(t) } : { valueDecimal: Number(t) }];
+    }
+    case "string":
+    case "text": {
+      const t = typed(raw);
+      return t ? [{ valueString: t }] : t;
+    }
+    case "open-choice": {
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const picked = picks(own(raw, "picked") || []);
+      const other = own(raw, "other") === undefined ? undefined : typed(own(raw, "other"));
+      if (!picked || other === null) return null;
+      out = other ? [...picked, { valueString: other }] : picked;
+      break;
+    }
+    default:
+      if (!q.repeats) {
+        return Number.isInteger(raw) && raw >= 0 && raw < q.options.length
+          ? [{ valueCoding: { ...q.options[raw].coding } }] : null;
+      }
+      out = picks(raw);
+      if (!out) return null;
+  }
+  if (!out.length) return undefined;
+  return q.repeats || out.length === 1 ? out : null;
+}
+
+/* Whether one enableWhen entry holds, given `answers`, the answers of the
+   question it names (none when that question is hidden or unanswered).
+   FHIR R4: `=` and the ordering operators hold when any answer does; `!=`
+   when no answer equals; `exists` when having an answer is `value`. */
+function holds(c, answers) {
+  if (c.type === "exists") return (answers.length > 0) === c.value;
+  const key = { coding: "valueCoding", string: "valueString", boolean: "valueBoolean" }[c.type];
+  const values = answers.map((a) => (key ? own(a, key)
+    : own(a, "valueInteger") ?? own(a, "valueDecimal"))).filter((v) => v !== undefined);
+  const same = (v) => (c.type === "coding"
+    ? own(v, "code") === c.value.code &&
+      (c.value.system === null || own(v, "system") === c.value.system)
+    : v === c.value);
+  switch (c.operator) {
+    case "=": return values.some(same);
+    case "!=": return !values.some(same);
+    case ">": return values.some((v) => v > c.value);
+    case "<": return values.some((v) => v < c.value);
+    case ">=": return values.some((v) => v >= c.value);
+    case "<=": return values.some((v) => v <= c.value);
+    default: return false;
+  }
+}
+
+/* What `picked` ({ linkId: raw answer }) makes of the form, worked out in
+   the form's order: `shown`, the linkIds of the questions and notes whose
+   enableWhen holds (or that have none); `answers`, a Map of each shown
+   question's answers; `missing`, shown questions that must be answered and
+   are not; `invalid`, shown questions whose answer is not one they take.
+   A hidden question's answer is never read: it counts as none, for the
+   items after it too, and is never sent. */
+export function formState(form, picked) {
+  const shown = new Set();
+  const answers = new Map();
+  const missing = [];
+  const invalid = [];
+  const rows = [...form.questions, ...form.notes].sort((a, b) => a.seq - b.seq);
+  for (const row of rows) {
+    if (row.when) {
+      const met = row.when.conditions.map((c) => holds(c, answers.get(c.question) || []));
+      if (!(row.when.behavior === "any" ? met.some(Boolean) : met.every(Boolean))) continue;
+    }
+    shown.add(row.linkId);
+    if (!row.kind) continue;   // a note
+    const a = answerOf(row, own(picked, row.linkId));
+    if (a === null) invalid.push(row.linkId);
+    else if (a === undefined) { if (row.required) missing.push(row.linkId); }
+    else answers.set(row.linkId, a);
+  }
+  return { shown, answers, missing, invalid };
+}
+
 /* The form an item carries, or null when this wallet will not answer it:
    { canonical, title, displays: [text], groups: [{ linkId, prefix, text,
-   displays: [text] }], questions: [{ linkId, prefix, text, options:
-   [{ coding, display }], group: index into groups or null }], skipped:
-   [{ linkId, prefix, text, group, at }] }. Questions are in the
+   displays: [text] }], questions: [{ linkId, prefix, text, kind, repeats,
+   required, options: [{ coding, display }], group: index into groups or
+   null, seq, when }], skipped: [{ linkId, prefix, text, group, at, seq }],
+   notes: [{ linkId, text, group, seq, when }] }. Questions are in the
    Questionnaire's order, so a group's are next to each other; the
    30-question cap counts them all. A skipped question is shown in its
    place, before questions[at] (or after the last), and never answered.
@@ -301,7 +533,7 @@ export function readForm(item) {
   if (own(q, "resourceType") !== "Questionnaire") return null;
   let size;
   try { size = JSON.stringify(q).length; } catch (e) { return null; }
-  if (size > FORM_MAX_CHARS || changesWhatIsRequired(q)) return null;
+  if (size > FORM_MAX_CHARS || needsMoreThanItReads(q)) return null;
 
   // What the answer names: the item's canonical exactly as sent (a `|1`
   // version included), else the inline url, with its version if it has one.
@@ -316,26 +548,31 @@ export function readForm(item) {
 
   const items = own(q, "item");
   if (!Array.isArray(items)) return null;
-  const form = { displays: [], groups: [], questions: [], skipped: [] };
-  if (!readItems(items, form, new Set(), null)) return null;
-  const { displays, groups, questions, skipped } = form;
+  const form = { displays: [], groups: [], questions: [], skipped: [], notes: [],
+    seq: 0, conditions: 0 };
+  if (!readItems(items, form, new Map(), null)) return null;
+  const { displays, groups, questions, skipped, notes } = form;
   if (!questions.length || questions.length > FORM_MAX_QUESTIONS ||
-      skipped.length > FORM_MAX_SKIPPED) return null;
+      skipped.length > FORM_MAX_SKIPPED ||
+      form.conditions > FORM_MAX_ALL_CONDITIONS) return null;
   return { canonical, title: words(own(q, "title")) || "", displays, groups,
-    questions, skipped };
+    questions, skipped, notes };
 }
 
-/* The QuestionnaireResponse for `picked` ({ linkId: option index }), or
-   null unless every question has exactly one of its own options. A
-   group's answers sit under the group's linkId, as FHIR nests them. */
+/* The QuestionnaireResponse for `picked` ({ linkId: raw answer, as
+   answerOf reads it }), or null unless every shown question that must be
+   answered is, and every answer given to a shown question is one it
+   takes. Only shown, answered questions are in it (formState). A group's
+   answers sit under the group's linkId, as FHIR nests them. */
 function questionnaireResponse(form, picked) {
+  const { answers, missing, invalid } = formState(form, picked);
+  if (missing.length || invalid.length || !answers.size) return null;
   const item = [];
   let into = null;   // the group being filled, while its questions last
   for (const question of form.questions) {
-    const i = own(picked, question.linkId);
-    if (!Number.isInteger(i) || i < 0 || i >= question.options.length) return null;
-    const answered = { linkId: question.linkId, text: question.text,
-      answer: [{ valueCoding: { ...question.options[i].coding } }] };
+    const answer = answers.get(question.linkId);
+    if (!answer) continue;
+    const answered = { linkId: question.linkId, text: question.text, answer };
     if (question.group === null) { into = null; item.push(answered); continue; }
     if (!into || into.at !== question.group) {
       const g = form.groups[question.group];
@@ -454,8 +691,9 @@ export function matchItems(request, unsupportedItems, records) {
 
 /* The SMART response. `share` maps item id -> true for what the person
    chose to share; anything else is not shared. `answers` maps a form's
-   item id -> { linkId: option index }; a form chosen with any question
-   unanswered is declined, never sent in part. No HTEST tag: the records
+   item id -> { linkId: answer } (answerOf); a form chosen with a question
+   it must have unanswered, or an answer it cannot take, is declined,
+   never sent in part. No HTEST tag: the records
    are the account's own now, not the synthetic test patient, and a test
    marker on them would mislabel them (the #960 note said the real-record
    export drops it). */

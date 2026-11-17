@@ -72,8 +72,8 @@ function newRequest() {
                   { valueCoding: { system: "http://loinc.org", code: "LA33-6", display: "Yes" } },
                   { valueCoding: { system: "http://loinc.org", code: "LA32-8", display: "No" } },
                 ] },
-              // Free text: the wallet leaves it for the person to tell the
-              // clinic themselves.
+              // Free text: never answered from records; the person may
+              // type it, or tell the clinic themselves.
               { linkId: "reason", type: "string", text: QUESTIONS.reason },
             ],
           },
@@ -160,7 +160,11 @@ function showAnswer(response) {
   const display = pick && typeof pick.display === "string" ? pick.display : "";
   cards.push(card(QUESTIONS["first-visit"], display ? [display] : [],
     whose(said(response.status("intake")))));
-  cards.push(card(QUESTIONS.reason, [],
+  // The person's own words, if they typed any: shown as text, never markup.
+  const reason = answered.find((q) => q && q.linkId === "reason");
+  const typed = reason && Array.isArray(reason.answer) && reason.answer[0] &&
+    reason.answer[0].valueString;
+  cards.push(card(QUESTIONS.reason, typeof typed === "string" && typed ? [typed] : [],
     whose("Not answered from your records. You'd tell the clinic yourself.")));
   showResult(made ? "The form, filled in from made-up records" : "Your form, filled in",
     "This is what the clinic would get. It stays on this page and is gone when you close it.",

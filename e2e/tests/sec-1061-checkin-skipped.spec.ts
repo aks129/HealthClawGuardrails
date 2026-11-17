@@ -120,8 +120,8 @@ const hostile = {
           { linkId: 'note', type: 'display', text: NOTE },
           { linkId: 'drugs', type: 'choice', text: 'Have you used recreational drugs this year?',
             answerOption: [opt('N', 'No'), opt('Y', 'Yes')] },
-          // An optional `string`: skipped, drawn in place, never answered.
-          { linkId: 'spoof', type: 'string', text: SPOOF },
+          // An optional `date`: skipped, drawn in place, never answered.
+          { linkId: 'spoof', type: 'date', text: SPOOF },
         ] }],
     } } }],
 };
