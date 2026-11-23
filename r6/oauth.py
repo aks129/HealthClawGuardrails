@@ -446,6 +446,8 @@ def _refresh_grant(body):
         return jsonify({'error': 'invalid_grant'}), 400
     if not consent_is_live(record.get('consent_id')):
         return jsonify({'error': 'invalid_grant'}), 400
+    if tenant_closed(record.get('tenant_id')):
+        return jsonify({'error': 'invalid_grant'}), 400
     resource = (body.get('resource') or '').strip()
     if resource and resource != record.get('aud'):
         return jsonify({'error': 'invalid_target'}), 400
@@ -928,6 +930,10 @@ def register_oauth_routes(blueprint):
         if (not isinstance(tenant_id, str) or not _TENANT_ID_PATTERN.fullmatch(tenant_id)
                 or not isinstance(consent_id, str) or not consent_id):
             return jsonify({'error': 'invalid_request'}), 400
+        # An approval that arrives after the tenant was closed stores no
+        # consent and issues no code: closure wins the race.
+        if tenant_closed(tenant_id):
+            return _redirect_to_client(redirect_uri, state, error='access_denied')
 
         from r6.audit import add_audit_event
         from r6.models import db
@@ -1076,6 +1082,10 @@ def register_oauth_routes(blueprint):
         ok, info = validate_bearer_token(token_value)
         if not ok or not isinstance(info, dict):
             return inactive
+        # A live token for a tenant its account holder has since closed is
+        # inactive here too: introspection is what a resource server trusts.
+        if tenant_closed(info.get('tenant_id')):
+            return inactive
         response = jsonify({
             'active': True,
             'token_type': 'Bearer',
@@ -1134,6 +1144,18 @@ def validate_bearer_token(token):
         return False, 'Consent revoked'
 
     return True, token_info
+
+
+def tenant_closed(tenant_id):
+    """True when the tenant's account holder disconnected or deleted it.
+
+    A closed tenant answers inactive at introspection, refuses a refresh and
+    a consent return, and refuses an OAuth read (r6.read_auth). Resolved by
+    module attribute at call time, and imported lazily: r6.fasten imports
+    the access kernel, which imports this module through r6.read_auth.
+    """
+    from r6.fasten import models as _fasten_models_mod
+    return _fasten_models_mod.tenant_closed(tenant_id)
 
 
 def consent_is_live(consent_id):
