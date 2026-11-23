@@ -12,9 +12,10 @@ Synthetic ids only.
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from models import db
 from r6.fasten.models import FastenConnection, FastenJob, TenantClosure
@@ -131,6 +132,52 @@ def test_a_redelivered_failure_keeps_one_failed_row(client):
         ('fasten_import_failed', 'failure', 'job=task-qa1155-c')] * 2
 
 
+def _lose_the_insert_race(client, tenant, org, task):
+    """Two deliveries for one task both saw no row; the other one has
+    already committed its row. Replays this delivery's half: its lookup
+    misses, so it inserts the same task_id into the unique column."""
+    _connection(tenant, org)
+    db.session.add(FastenJob(task_id=task, org_connection_id=org,
+                             tenant_id=tenant, status='pending'))
+    db.session.commit()
+    miss = MagicMock()
+    miss.filter_by.return_value.first.return_value = None
+    with patch.object(FastenJob, 'query', miss):
+        return _fail(client, {'org_connection_id': org, 'task_id': task,
+                              'failure_reason': 'timeout'})
+
+
+def test_a_failure_that_loses_the_insert_race_converges_on_redelivery(
+        client):
+    """The losing delivery errors (Fasten redelivers a non-2xx); the
+    redelivery finds the winner's row and fails it. One row, one audit."""
+    with pytest.raises(IntegrityError):
+        _lose_the_insert_race(client, 'qa1155-r', 'oc-qa1155-r',
+                              'task-qa1155-r')
+    db.session.rollback()
+
+    resp, _ = _fail(client, {'org_connection_id': 'oc-qa1155-r',
+                             'task_id': 'task-qa1155-r',
+                             'failure_reason': 'timeout'})
+
+    assert resp.status_code == 200
+    assert [j.status for j in _rows('task-qa1155-r')] == ['failed']
+    assert _audit('qa1155-r') == [
+        ('fasten_import_failed', 'failure', 'job=task-qa1155-r')]
+
+
+@pytest.mark.xfail(strict=True, raises=IntegrityError, reason=(
+    'New with #1155 (the failure handler did not insert before): a '
+    'failure that loses the insert race to a concurrent delivery raises '
+    'IntegrityError, a 500 in production, and its audit row rolls back '
+    'with it. Goes green if the handler re-reads the row after a '
+    'unique-constraint conflict.'))
+def test_a_failure_that_loses_the_insert_race_still_answers_200(client):
+    resp, _ = _lose_the_insert_race(client, 'qa1155-s', 'oc-qa1155-s',
+                                    'task-qa1155-s')
+    assert resp.status_code == 200
+
+
 # --- inputs the new branch must not turn into a row ---------------------------
 
 @pytest.mark.parametrize('task', ['<absent>', '', None])
@@ -199,10 +246,10 @@ def test_the_audit_row_carries_the_job_id_and_not_the_reason(client):
 # --- what reads the row ---------------------------------------------------------
 
 def test_the_job_list_and_retry_read_a_linkless_failed_row(client):
-    """The list shows the new row first and failed (CareAgents reads the
-    newest status as the import's state); the single-job read finds it; a
-    retry is refused because there are no links to re-run, and launches
-    nothing."""
+    """The list shows the new row first and failed (the consumer client
+    reads the newest status as the import's state); the single-job read
+    finds it; a retry is refused because there are no links to re-run, and
+    launches nothing."""
     _connection('qa1155-f', 'oc-qa1155-f')
     db.session.add(FastenJob(
         task_id='task-qa1155-f-old', org_connection_id='oc-qa1155-f',
@@ -239,8 +286,10 @@ def test_the_job_list_and_retry_read_a_linkless_failed_row(client):
 
 def test_a_revoked_connection_gets_a_failed_row_but_no_ingest(client):
     """After a disconnect the early failure still lands as a failed row
-    (terminal, no links). Neither a later ready webhook nor a retry turns
-    it into an import into the closed tenant."""
+    (terminal, no links). That row is current behaviour, pinned here, not
+    a ruling that it is wanted. What must hold either way: neither a later
+    ready webhook nor a retry turns it into an import into the closed
+    tenant."""
     _connection('qa1155-g', 'oc-qa1155-g', status='revoked')
     db.session.add(TenantClosure(tenant_id='qa1155-g'))
     db.session.commit()
