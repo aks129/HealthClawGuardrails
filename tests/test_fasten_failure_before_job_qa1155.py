@@ -133,21 +133,38 @@ def _lose_the_insert_race(client, tenant, org, task):
     db.session.add(FastenJob(task_id=task, org_connection_id=org,
                              tenant_id=tenant, status='pending'))
     db.session.commit()
-    miss = MagicMock()
-    miss.filter_by.return_value.first.return_value = None
-    with patch.object(FastenJob, 'query', miss):
-        return _fail(client, {'org_connection_id': org, 'task_id': task,
+    # Only this delivery's FIRST job lookup misses (the race); the recovery
+    # lookup after the IntegrityError reads the real table.
+    real = FastenJob.query
+    calls = {'n': 0}
+
+    def filter_by(**kw):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            miss = MagicMock()
+            miss.first.return_value = None
+            return miss
+        return real.filter_by(**kw)
+
+    fake = MagicMock()
+    fake.filter_by.side_effect = filter_by
+    with patch.object(FastenJob, 'query', fake):
+        resp = _fail(client, {'org_connection_id': org, 'task_id': task,
                               'failure_reason': 'timeout'})
+    assert calls['n'] >= 2, 'the recovery lookup never ran'
+    return resp
 
 
 def test_a_failure_that_loses_the_insert_race_converges_on_redelivery(
         client):
-    """The losing delivery now uses the winner's row instead of erroring;
-    a redelivery after it still leaves one failed row. Each delivery is
+    """The losing delivery uses the winner's row: by itself it leaves that
+    row failed. A redelivery after it changes nothing. Each delivery is
     audited once."""
     resp, _ = _lose_the_insert_race(client, 'qa1155-r', 'oc-qa1155-r',
                                     'task-qa1155-r')
     assert resp.status_code == 200
+    assert [(j.status, j.failure_reason) for j in _rows('task-qa1155-r')] \
+        == [('failed', 'timeout')]
 
     resp, _ = _fail(client, {'org_connection_id': 'oc-qa1155-r',
                              'task_id': 'task-qa1155-r',
@@ -271,12 +288,10 @@ def test_the_job_list_and_retry_read_a_linkless_failed_row(client):
     assert _rows('task-qa1155-f')[0].status == 'failed'
 
 
-def test_a_revoked_connection_gets_a_failed_row_but_no_ingest(client):
-    """After a disconnect the early failure still lands as a failed row
-    (terminal, no links). That row is current behaviour, pinned here, not
-    a ruling that it is wanted. What must hold either way: neither a later
-    ready webhook nor a retry turns it into an import into the closed
-    tenant."""
+def test_a_closed_tenant_gets_no_failed_row_and_no_ingest(client):
+    """After a disconnect (a closed tenant) an early failure writes no job
+    row: nothing new is stored in a closed tenant. A later ready webhook or
+    a retry still cannot start an import there."""
     _connection('qa1155-g', 'oc-qa1155-g', status='revoked')
     db.session.add(TenantClosure(tenant_id='qa1155-g'))
     db.session.commit()
@@ -290,17 +305,16 @@ def test_a_revoked_connection_gets_a_failed_row_but_no_ingest(client):
 
     assert ready.status_code == 200
     assert not ready_thread.called
-    assert retry.status_code == 409
+    assert retry.status_code == 404  # no job to retry
     assert not retry_thread.called
-    (job,) = _rows('task-qa1155-g')
-    assert (job.status, job.download_links_json) == ('failed', None)
+    assert _rows('task-qa1155-g') == []
 
 
 @pytest.mark.xfail(strict=True, reason=(
     'Pre-existing, not introduced by #1155: the failure handler finds the '
     'job by task_id alone, so a failure naming connection A with a task id '
-    'of tenant B flips B\'s job and audits it under A. Goes green when the '
-    'lookup also matches org_connection_id.'))
+    'of tenant B flips B\'s job and audits it under A (#1156). Goes green '
+    'when the lookup also matches org_connection_id.'))
 def test_a_failure_on_one_connection_leaves_another_tenants_job_alone(
         client):
     _connection('qa1155-h1', 'oc-qa1155-h1')
