@@ -288,6 +288,12 @@ def _handle_export_failed(payload: dict) -> None:
     tenant_id = conn.tenant_id if conn else 'unknown'
 
     job = FastenJob.query.filter_by(task_id=task_id).first()
+    if not job and conn and task_id:
+        # Failed before the ready webhook made a row: record it, or
+        # /fasten/jobs reads as "never started" and the client waits forever.
+        job = FastenJob(task_id=task_id, org_connection_id=org_connection_id,
+                        tenant_id=conn.tenant_id)
+        db.session.add(job)
     if job:
         job.status = 'failed'
         job.failure_reason = failure_reason
