@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from models import db
 from r6.fasten.models import FastenConnection, FastenJob, TenantClosure
@@ -96,12 +95,6 @@ def test_a_ready_after_an_early_failure_reuses_the_row_and_ingests(client):
         'fasten_import_failed', 'fasten_import_start']
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    'New in this order since #1155: before it, a ready after a failure made '
-    'a fresh row with no finish time; now it reuses the failed row, and the '
-    'reprocess resets status but not completed_at (a gap every reprocessed '
-    'failed job already had), so /fasten/jobs shows a pending job with a '
-    'finish time. Goes green when the reprocess clears it.'))
 def test_a_ready_after_an_early_failure_clears_the_finish_time(client):
     _connection('qa1155-b', 'oc-qa1155-b')
     _fail(client, {'org_connection_id': 'oc-qa1155-b',
@@ -149,12 +142,12 @@ def _lose_the_insert_race(client, tenant, org, task):
 
 def test_a_failure_that_loses_the_insert_race_converges_on_redelivery(
         client):
-    """The losing delivery errors (Fasten redelivers a non-2xx); the
-    redelivery finds the winner's row and fails it. One row, one audit."""
-    with pytest.raises(IntegrityError):
-        _lose_the_insert_race(client, 'qa1155-r', 'oc-qa1155-r',
-                              'task-qa1155-r')
-    db.session.rollback()
+    """The losing delivery now uses the winner's row instead of erroring;
+    a redelivery after it still leaves one failed row. Each delivery is
+    audited once."""
+    resp, _ = _lose_the_insert_race(client, 'qa1155-r', 'oc-qa1155-r',
+                                    'task-qa1155-r')
+    assert resp.status_code == 200
 
     resp, _ = _fail(client, {'org_connection_id': 'oc-qa1155-r',
                              'task_id': 'task-qa1155-r',
@@ -163,15 +156,9 @@ def test_a_failure_that_loses_the_insert_race_converges_on_redelivery(
     assert resp.status_code == 200
     assert [j.status for j in _rows('task-qa1155-r')] == ['failed']
     assert _audit('qa1155-r') == [
-        ('fasten_import_failed', 'failure', 'job=task-qa1155-r')]
+        ('fasten_import_failed', 'failure', 'job=task-qa1155-r')] * 2
 
 
-@pytest.mark.xfail(strict=True, raises=IntegrityError, reason=(
-    'New with #1155 (the failure handler did not insert before): a '
-    'failure that loses the insert race to a concurrent delivery raises '
-    'IntegrityError, a 500 in production, and its audit row rolls back '
-    'with it. Goes green if the handler re-reads the row after a '
-    'unique-constraint conflict.'))
 def test_a_failure_that_loses_the_insert_race_still_answers_200(client):
     resp, _ = _lose_the_insert_race(client, 'qa1155-s', 'oc-qa1155-s',
                                     'task-qa1155-s')
