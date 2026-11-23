@@ -931,6 +931,11 @@ def register_oauth_routes(blueprint):
 
         from r6.audit import add_audit_event
         from r6.models import db
+        # A consent id with a record already is either a replay or one the
+        # consent surface revoked before this return arrived (its tombstone,
+        # below). Neither becomes a live consent.
+        if _oauth_store_get('consent', consent_id) is not None:
+            return _redirect_to_client(redirect_uri, state, error='access_denied')
         _oauth_store_set('consent', consent_id, {
             'tenant_id': tenant_id,
             'client_id': parked['client_id'],
@@ -969,6 +974,11 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'forbidden'}), 403
         consent = _oauth_store_get('consent', consent_id)
         if not consent:
+            # Not here yet: the person revoked before the signed return
+            # arrived. Remember the revocation so that return stores nothing
+            # live. Still 404, which the caller reads as already gone.
+            _oauth_store_set('consent', consent_id, {'revoked_at': time.time()},
+                             ttl=CONSENT_TTL_SECONDS)
             return jsonify({'error': 'not_found'}), 404
         if not consent.get('revoked_at'):
             consent['revoked_at'] = time.time()
