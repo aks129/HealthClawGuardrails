@@ -1,0 +1,139 @@
+"""A closed tenant refuses OAuth reads.
+
+Disconnect writes the tenant tombstone (r6.fasten.models.TenantClosure). A
+patient connect token stops reading then (SEC940-F2), but a SMART OAuth
+bearer the account holder approved earlier was still accepted by the read
+gate until it expired: the bearer branch of authorize_tenant_read never
+asked whether the tenant was closed. It asks now, after the token is
+validated (so an unauthenticated caller learns nothing about which tenants
+are closed), and the refusal writes one PHI-free AuditEvent.
+
+Synthetic tenant ids only. Each test names the mutation that turns it red.
+"""
+
+from __future__ import annotations
+
+import secrets
+import time
+
+import pytest
+from sqlalchemy.exc import OperationalError
+
+from r6 import oauth
+
+FHIR_RESOURCE = 'http://localhost/r6/fhir'
+TENANT = 'oauth-closed-t1'
+OTHER = 'oauth-open-t2'
+REFUSAL_DETAIL = 'OAuth read refused at {endpoint}: tenant disconnected'
+
+
+@pytest.fixture
+def env(monkeypatch):
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+
+
+def _store_token(tenant_id, aud=FHIR_RESOURCE, scopes=('fhir.read',)):
+    token = secrets.token_urlsafe(24)
+    oauth._oauth_store_set('access-token', token, {
+        'client_id': 'closed-tenant-test', 'scopes': list(scopes),
+        'tenant_id': tenant_id, 'aud': aud, 'exp': time.time() + 300},
+        ttl=300)
+    return token
+
+
+def _read(client, tenant_id, token):
+    return client.get('/r6/fhir/Patient?_summary=count', headers={
+        'X-Tenant-Id': tenant_id, 'Authorization': f'Bearer {token}'})
+
+
+def _close(app, tenant_id):
+    from models import db
+    from r6.fasten.models import TenantClosure
+    with app.app_context():
+        db.session.add(TenantClosure(tenant_id=tenant_id))
+        db.session.commit()
+
+
+def _failure_rows(app, tenant_id):
+    from r6.models import AuditEventRecord
+    with app.app_context():
+        return [(r.event_type, r.detail) for r in AuditEventRecord.query
+                .filter_by(tenant_id=tenant_id, outcome='failure').all()]
+
+
+def test_an_oauth_bearer_stops_reading_once_its_tenant_is_closed(
+        client, app, env):
+    """MUTATION: drop the closed-tenant check on the OAuth branch of
+    r6/read_auth.authorize_tenant_read -> the bearer keeps answering 200."""
+    token = _store_token(TENANT)
+    assert _read(client, TENANT, token).status_code == 200
+
+    _close(app, TENANT)
+    resp = _read(client, TENANT, token)
+    assert resp.status_code == 401, resp.get_data(as_text=True)
+    assert token not in resp.get_data(as_text=True)
+
+
+def test_the_refusal_writes_one_phi_free_audit_row(client, app, env):
+    """MUTATION: drop the audit call from the refusal -> no failure row."""
+    token = _store_token(TENANT)
+    _close(app, TENANT)
+    assert _read(client, TENANT, token).status_code == 401
+
+    rows = _failure_rows(app, TENANT)
+    assert rows == [('read', REFUSAL_DETAIL.format(
+        endpoint='r6.search_resources'))], rows
+    # No token, no path, no query string, no header in the detail.
+    assert token not in rows[0][1]
+    assert 'Patient' not in rows[0][1]
+
+
+def test_an_open_tenant_keeps_reading(client, app, env):
+    """Closure is per tenant: closing one leaves another's bearer working."""
+    _close(app, TENANT)
+    assert _read(client, OTHER, _store_token(OTHER)).status_code == 200
+    assert _failure_rows(app, OTHER) == []
+
+
+def test_an_invalid_bearer_on_a_closed_tenant_is_not_told_it_is_closed(
+        client, app, env):
+    """The closure is asked only after the token is validated, so an
+    unauthenticated caller gets the plain 401 and writes no closure row."""
+    _close(app, TENANT)
+    resp = _read(client, TENANT, 'not-a-real-token')
+    assert resp.status_code == 401
+    assert all('disconnected' not in (d or '')
+               for _e, d in _failure_rows(app, TENANT))
+
+
+def test_an_audit_store_failure_still_refuses(client, app, env, monkeypatch):
+    """The fail-closed state of a refusal is the refusal: an audit write
+    that fails is logged, and the bearer still gets no data."""
+    import r6.access as access_mod
+
+    def _broken_audit(**_kwargs):
+        raise OperationalError('INSERT', {}, Exception('store down'))
+
+    token = _store_token(TENANT)
+    _close(app, TENANT)
+    monkeypatch.setattr(access_mod, 'audit', _broken_audit)
+    assert _read(client, TENANT, token).status_code == 401
+
+
+def test_a_closure_lookup_failure_never_answers_with_data(
+        client, app, env, monkeypatch):
+    """Fail closed: when the tombstone cannot be read, the bearer is not
+    treated as reading an open tenant."""
+    from r6.fasten import models as fasten_models
+
+    def _broken_lookup(_tenant_id):
+        raise OperationalError('SELECT', {}, Exception('store down'))
+
+    token = _store_token(TENANT)
+    monkeypatch.setattr(fasten_models, 'tenant_closed', _broken_lookup)
+    try:
+        status = _read(client, TENANT, token).status_code
+    except OperationalError:
+        return  # propagated in testing mode: no response, no data
+    assert status != 200
