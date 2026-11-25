@@ -48,7 +48,7 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
-                       _patient_identity, require_grant, require_open_tenant,
+                       patient_identity, require_grant, require_open_tenant,
                        tenant_from_request)
 from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
@@ -3259,13 +3259,13 @@ def mcp_app_wearables():
 
 def _intake_strip(original):
     """Intake: Patient name/birthDate/address/telecom rebuilt element by
-    element (_patient_identity, #964); all else apply_redaction (strip, then
+    element (patient_identity, #964); all else apply_redaction (strip, then
     relabel by code); no SSN or free text (#282)."""
     res = apply_redaction(original)
     if original.get('resourceType') == 'Patient':
         for k in ('name', 'birthDate', 'address', 'telecom'):
             res.pop(k, None)
-        res.update(_patient_identity(original))
+        res.update(patient_identity(original))
     for key in ('note', 'text', 'conclusion'):
         res.pop(key, None)
     _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn', 'urn:oid:2.16.840.1.113883.4.1')
