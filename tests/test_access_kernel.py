@@ -1866,7 +1866,10 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      'r6/checkin.py',
                      # SHL PR 1: the ktc branch, the check-in's sibling,
                      # born on the kernel the same way.
-                     'r6/ktc.py'}
+                     'r6/ktc.py',
+                     # The provider-directory search route, born on the
+                     # kernel: tenant_from_request and require_grant.
+                     'r6/directory_routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

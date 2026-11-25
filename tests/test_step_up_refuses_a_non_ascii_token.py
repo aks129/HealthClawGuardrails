@@ -124,6 +124,8 @@ ROWS = [
         body={'profile': 'ktc', 'patient_id': 'non-ascii-probe',
               'resource_types': ['Patient']},
         env={'KTC_EXPORT_ENABLED': 'true'}),
+    Row('directory-search', 'r6/directory_routes.py:search',
+        'GET', '/r6/directory/search?kind=pharmacy&zip=19103', 401),
     Row('actions-propose', 'r6/actions/routes.py:propose_action',
         'POST', '/r6/actions/propose', 401,
         body={'kind': 'sms', 'payload': {'phone': '+15555550100',
