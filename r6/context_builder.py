@@ -120,16 +120,8 @@ class ContextBuilder:
                 ).first()
 
                 if existing:
-                    # The upsert is the PUT by another door, so a completed
-                    # form's delivered records refuse it too (#1171).
-                    from r6.actions.rails.form_fill import (
-                        delivered_record_locked)
-                    if delivered_record_locked(tenant_id, resource_type,
-                                               resource_id):
-                        db.session.rollback()
-                        raise ValueError(
-                            f'entry {index}: {resource_type} belongs to a '
-                            f'completed form and cannot be replaced')
+                    # Raises RecordLocked for a completed form's records
+                    # (#1171); the route answers 400 and audits it.
                     existing.update_resource(resource_json)
                     # A re-ingest of a tombstoned (tenant, type, id) revives
                     # it, as r6/fasten/ingester.py does (#509 defect 2), and

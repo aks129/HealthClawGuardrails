@@ -15,6 +15,7 @@ fabricates a completed form.
 Only on a fully rendered+persisted+linked PDF does it return 'completed'.
 """
 
+import json
 import os
 
 from r6 import constant_time
@@ -196,10 +197,12 @@ def _foreign_link_ids(questionnaire_response):
 
 def reviewed_subject_label(reviewed_qr):
     """The human name for the PDF title: the first and last name answers in
-    the reviewed response, exactly as the review page showed them.
+    the reviewed response.
 
-    Snapshotted at review and bound by the answers digest (#1171), so no
-    write after the review changes whose form it says it is. It is never
+    Taken when the review is submitted and bound by the answers digest
+    (#1171), so no write after the submit changes whose form it says it is.
+    The submit re-populates from the live Patient, so a rename between the
+    page being shown and the submit is not caught here (#1174). It is never
     copied into the payload, which the status and confirm responses return.
     None when neither answer is present — the renderer treats a missing
     label as "no name". The populate step reads the structured name only,
@@ -221,24 +224,48 @@ def reviewed_subject_label(reviewed_qr):
 
 
 def delivered_record_locked(tenant_id, resource_type, resource_id):
-    """True when this is the delivered DocumentReference or the reviewed
-    QuestionnaireResponse of a completed form-fill (#1171).
+    """True for the reviewed QuestionnaireResponse and the delivered
+    DocumentReference of a form-fill that is executing or completed (#1171).
 
     Both were ordinary tenant resources, so the write token the proposing
     agent holds could rewrite them after the person approved, and the
-    signed link then served the agent's bytes. Keyed on server-owned state
-    only: the completed action's provider ref and its sealed payload.
+    signed link then served the agent's bytes. The lock holds from the
+    moment execution starts, not from 'completed': the PDF is committed
+    inside execute(), before the action is marked completed, and a write in
+    that window was accepted. Keyed on server-owned state: the action's
+    status, its sealed reviewed_qr_id, its provider ref, and the reference
+    to that response which persist_intake_document wrote on the document.
     """
     from r6.actions.models import ProposedAction
     if resource_type not in ('DocumentReference', 'QuestionnaireResponse'):
         return False
-    completed = ProposedAction.query.filter_by(
-        tenant_id=tenant_id, kind='form-fill', status='completed')
-    if resource_type == 'DocumentReference':
-        return completed.filter_by(
-            external_ref=resource_id).first() is not None
-    return any(a.payload.get('reviewed_qr_id') == resource_id
-               for a in completed.all())
+    actions = ProposedAction.query.filter(
+        ProposedAction.tenant_id == tenant_id,
+        ProposedAction.kind == 'form-fill',
+        ProposedAction.status.in_(('executing', 'completed'))).all()
+    reviewed = {a.payload.get('reviewed_qr_id') for a in actions}
+    reviewed.discard(None)
+    if resource_type == 'QuestionnaireResponse':
+        return resource_id in reviewed
+    if any(a.status == 'completed' and a.external_ref == resource_id
+           for a in actions):
+        return True
+    row = R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type='DocumentReference',
+        id=resource_id).first()
+    if row is None:
+        return False
+    try:
+        doc = json.loads(row.resource_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(doc, dict) or not isinstance(doc.get('relatesTo'),
+                                                   list):
+        return False
+    targets = {rel['target'].get('reference') for rel in doc['relatesTo']
+               if isinstance(rel, dict) and isinstance(rel.get('target'),
+                                                        dict)}
+    return any('QuestionnaireResponse/%s' % qr in targets for qr in reviewed)
 
 
 def register():

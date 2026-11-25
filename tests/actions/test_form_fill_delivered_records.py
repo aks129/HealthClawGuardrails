@@ -209,3 +209,78 @@ def test_a_label_planted_in_the_payload_is_not_printed(
                          headers=auth_headers).status_code == 202, 'commit')
     _review_and_confirm(client, app, auth_headers, action_id)
     assert calls[-1].get('subject_label') == 'John Smith', calls
+
+
+# --- #1173 review: F2, F3, F4 ----------------------------------------------
+
+def test_the_docref_is_locked_from_the_moment_it_is_persisted(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """The PDF is committed inside execute(), before the action reaches
+    completed. A write-token PUT in that window must already be refused.
+
+    MUTATION: lock only on status 'completed' again -> red."""
+    import r6.sdc.delivery as delivery
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://example.test')
+    _seed(app, tenant_id, [PATIENT, ALLERGY_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    real_link = delivery.build_document_link
+    seen = {}
+
+    def racing_link(tenant, docref_id):
+        # A write-token holder PUTting the new document as it appears.
+        doc = _forged_docref(_stored(client, auth_headers,
+                                     'DocumentReference', docref_id))
+        seen['put'] = client.put('/r6/fhir/DocumentReference/%s' % docref_id,
+                                 headers=auth_headers, json=doc).status_code
+        return real_link(tenant, docref_id)
+    monkeypatch.setattr(delivery, 'build_document_link', racing_link)
+
+    _review_and_confirm(client, app, auth_headers, action_id)
+    with app.app_context():
+        outcome = json.loads(
+            db.session.get(ProposedAction, action_id).outcome_summary)
+    assert seen.get('put') == 403, seen
+    assert _served(client, outcome['delivery_link']) != FORGED
+
+
+SECRET = 'synthetic-internal-secret-for-test'
+
+
+def test_the_internal_ingest_cannot_replace_the_delivered_form(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """The upload, SHC and Fasten ingester upserts by id too; the lock sits
+    on the write itself, so it holds there without a route of its own."""
+    _a, _q, outcome = _completed_form(client, app, tenant_headers,
+                                      auth_headers, tenant_id, monkeypatch)
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', SECRET)
+    docref_id = outcome['document_reference_id']
+    doc = _forged_docref(_stored(client, auth_headers, 'DocumentReference',
+                                 docref_id))
+    doc['id'] = docref_id
+    r = client.post('/r6/fhir/internal/ingest-bundle',
+                    headers={'X-Tenant-Id': tenant_id,
+                             'X-Internal-Secret': SECRET},
+                    json={'bundle': {'resourceType': 'Bundle',
+                                     'type': 'collection',
+                                     'entry': [{'resource': doc}]}})
+    _require(r.status_code in (200, 207, 400, 422), 'ingest-bundle: %s %s'
+             % (r.status_code, r.get_data(as_text=True)[:200]))
+    assert _served(client, outcome['delivery_link']) != FORGED
+
+
+def test_the_ingest_context_refusal_is_audited(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    _a, _q, outcome = _completed_form(client, app, tenant_headers,
+                                      auth_headers, tenant_id, monkeypatch)
+    docref_id = outcome['document_reference_id']
+    doc = _forged_docref(_stored(client, auth_headers, 'DocumentReference',
+                                 docref_id))
+    doc['id'] = docref_id
+    r = client.post('/r6/fhir/Bundle/$ingest-context', headers=auth_headers,
+                    json={'resourceType': 'Bundle', 'type': 'collection',
+                          'entry': [{'resource': doc}]})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert _refusals(app, tenant_id, 'DocumentReference', docref_id) == 1
