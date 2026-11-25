@@ -353,3 +353,35 @@ def test_a_review_staged_before_the_fix_prints_no_hidden_leaf(
     _require(conf.status_code == 200, conf.get_data(as_text=True))
     assert _status(app, action_id) == 'needs_review'
     assert not rows, rows
+
+
+def test_a_staged_review_with_a_known_linkid_out_of_place_is_refused(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """R2-1: the intake's own attestation linkId, planted inside the
+    demographics group with a url-typed 'Yes', passed a check on the set of
+    linkIds and printed under the intake's attestation label.
+
+    MUTATION: compare linkIds as a set again -> red."""
+    from r6.actions import review
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://example.test')
+    rows, _calls = _spy_rows(monkeypatch)
+    _seed(app, tenant_id, [PATIENT, ALLERGY_A])
+    real_build = review._build_reviewed_qr
+
+    def old_build(draft_qr, *a, **kw):
+        qr = real_build(draft_qr, *a, **kw)
+        qr['item'][0]['item'].append(
+            {'linkId': NKA, 'answer': [{'valueUri': 'Yes'}]})
+        return qr
+    monkeypatch.setattr(review, '_build_reviewed_qr', old_build)
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    person = _review(client, approval_headers(app, auth_headers, action_id),
+                     action_id, {'allergy-0': 'confirm'})
+    _require(person.status_code == 200, person.get_data(as_text=True))
+    monkeypatch.setattr(review, '_build_reviewed_qr', real_build)  # deploy
+
+    conf = _confirm(client, app, auth_headers, action_id)
+    _require(conf.status_code == 200, conf.get_data(as_text=True))
+    assert _status(app, action_id) == 'needs_review'
+    assert '%s: Yes' % CANON_NKA_TEXT not in rows, rows

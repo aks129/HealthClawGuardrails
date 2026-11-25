@@ -107,11 +107,14 @@ class FormFillExecutor:
         # review now builds the response from fixed ids, but one reviewed
         # before that change still carries whatever leaf a planted
         # Questionnaire added, under a digest that matches. The PDF labels
-        # an unknown leaf by its linkId, which that Questionnaire chose, so
-        # such a response is refused, never rendered without the leaf: the
-        # person's review covered a form that is not this one.
-        foreign = _foreign_link_ids(reviewed_qr)
-        if foreign:
+        # an unknown leaf by its linkId, which that Questionnaire chose, and
+        # a known linkId out of its place (the attestation inside the
+        # demographics group) prints the intake's own label beside an answer
+        # nobody gave. So each item must sit where the intake puts it, with
+        # the answer type the intake gives it; otherwise the response is
+        # refused, never rendered without the item: the person's review
+        # covered a form that is not this one.
+        if _off_form(reviewed_qr):
             return ExecutionResult(
                 status='needs_review',
                 outcome={'reason': 'the reviewed answers include items that '
@@ -180,19 +183,41 @@ class FormFillExecutor:
         )
 
 
-def _foreign_link_ids(questionnaire_response):
-    """The linkIds in a response that the built-in intake does not define."""
-    from r6.sdc.intake import intake_questionnaire
-    known, seen = set(), set()
+#: The answer keys each intake item type may carry ("choice" is a string
+#: from the Patient, or a coding from an observation).
+_ANSWER_KEYS = {'string': {'valueString'}, 'date': {'valueDate'},
+                'boolean': {'valueBoolean'},
+                'choice': {'valueString', 'valueCoding'}}
 
-    def walk(items, into):
+
+def _off_form(questionnaire_response):
+    """True when any item is not where the built-in intake puts it: an
+    unknown linkId, a known one under another parent, a second copy of an
+    item that does not repeat, or an answer of another type (#1172)."""
+    from r6.sdc.intake import intake_questionnaire
+
+    def off(items, spec_items):
+        spec = {q['linkId']: q for q in spec_items or []}
+        seen = set()
         for item in items or []:
-            if isinstance(item, dict):
-                into.add(item.get('linkId'))
-                walk(item.get('item'), into)
-    walk(intake_questionnaire().get('item'), known)
-    walk(questionnaire_response.get('item'), seen)
-    return seen - known
+            if not isinstance(item, dict):
+                return True
+            q = spec.get(item.get('linkId'))
+            if q is None or (item['linkId'] in seen and not q.get('repeats')):
+                return True
+            seen.add(item['linkId'])
+            if q['type'] == 'group':
+                if item.get('answer') or off(item.get('item'), q.get('item')):
+                    return True
+                continue
+            keys = _ANSWER_KEYS.get(q['type'], set())
+            if item.get('item') or not all(
+                    isinstance(a, dict) and a and set(a) <= keys
+                    for a in item.get('answer') or []):
+                return True
+        return False
+    return off(questionnaire_response.get('item'),
+               intake_questionnaire().get('item'))
 
 
 def reviewed_subject_label(reviewed_qr):
