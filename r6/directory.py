@@ -44,13 +44,13 @@ CACHE_SECONDS = 600
 CACHE_MAX = 256
 
 #: NUCC taxonomy codes for pharmacies a person can walk into or call, with
-#: our own wording. Mail-order, institutional, long-term-care, nuclear and
-#: home-infusion pharmacies are left out on purpose.
+#: our own wording. Each code was seen with this meaning in NPPES answers on
+#: 2026-11-25. Mail-order, managed-care and home-infusion pharmacies are
+#: left out on purpose; a code not listed here is not shown.
 PHARMACY_TYPES = {
     "333600000X": "Pharmacy",
     "3336C0003X": "Community pharmacy",
     "3336C0002X": "Clinic pharmacy",
-    "3336C0004X": "Compounding pharmacy",
     "3336S0011X": "Specialty pharmacy",
 }
 
