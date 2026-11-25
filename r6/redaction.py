@@ -143,10 +143,18 @@ def _redact_fields(resource, narrative=True):
             if 'value' in telecom and isinstance(telecom['value'], str):
                 telecom['value'] = '[Redacted]'
     # An extension's ContactPoint, the same number under another key
-    # (#1161). Whatever the value's shape, it is not passed on.
-    point = resource.get('valueContactPoint')
-    if isinstance(point, dict) and 'value' in point:
-        point['value'] = '[Redacted]'
+    # (#1161). Whatever the value's shape, it is not passed on, and nor is
+    # its `_value` companion, whose extensions can hold the number too.
+    points = resource.get('valueContactPoint')
+    if isinstance(points, dict):
+        points = [points]
+    if isinstance(points, list):
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            if 'value' in point:
+                point['value'] = '[Redacted]'
+            point.pop('_value', None)
 
     # Location.position is a latitude and longitude, and a Location can be
     # the person's home (`mode: instance`). `position` is not this element on

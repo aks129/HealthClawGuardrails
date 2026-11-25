@@ -172,6 +172,48 @@ def test_a_contact_point_value_of_any_shape_is_replaced():
     assert out['extension'][0]['valueContactPoint']['value'] == '[Redacted]'
 
 
+def test_a_list_of_value_contact_points_is_redacted():
+    """Security review of #1165, F-1: a list-valued valueContactPoint is
+    accepted on ingest and returned whole on every profile."""
+    out = apply_redaction({'resourceType': 'Patient', 'extension': [
+        {'url': 'u', 'valueContactPoint': [
+            {'system': 'phone', 'value': PHONE}, 'not-a-point']}]})
+    assert out['extension'][0]['valueContactPoint'] == [
+        {'system': 'phone', 'value': '[Redacted]'}, 'not-a-point']
+
+
+def test_a_contact_point_value_companion_is_removed():
+    """F-2: `_value` can carry the number in its own extensions."""
+    out = apply_redaction({'resourceType': 'Patient', 'extension': [
+        {'url': 'u', 'valueContactPoint': {
+            'system': 'phone',
+            '_value': {'extension': [{'url': 'u', 'valueCode': PHONE}]}}}]})
+    assert out['extension'][0]['valueContactPoint'] == {'system': 'phone'}
+
+
+@pytest.mark.parametrize('surface', ['read', 'intake', 'deidentified'])
+def test_a_list_valued_contact_point_leaves_no_phone_on_any_surface(
+        client, auth_headers, surface):
+    patient = {'resourceType': 'Patient', 'id': 'cp-list', 'gender': 'male',
+               'extension': [{'url': 'http://example.org/phone',
+                              'valueContactPoint': [
+                                  {'system': 'phone', 'value': PHONE}]}]}
+    r = client.post('/r6/fhir/Bundle/$ingest-context', headers=auth_headers,
+                    json={'resourceType': 'Bundle', 'type': 'collection',
+                          'entry': [{'resource': patient}]})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    if surface == 'read':
+        resp = client.get('/r6/fhir/Patient/cp-list', headers=auth_headers)
+    else:
+        resp = client.post('/r6/fhir/$share-bundle', headers=auth_headers,
+                           json={'patient_id': 'cp-list', 'profile': surface,
+                                 'resource_types': ['Patient']})
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert 'cp-list' in body and 'valueContactPoint' in body
+    assert PHONE not in body
+
+
 def test_a_list_of_value_addresses_gets_the_address_rule():
     out = apply_redaction({'resourceType': 'Patient', 'extension': [
         {'url': 'u', 'valueAddress': [_address(), _address()]}]})
