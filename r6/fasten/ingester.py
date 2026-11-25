@@ -28,7 +28,7 @@ from models import db
 from r6.audit import add_audit_event
 from r6.fasten.models import connection_revoked, tenant_closed
 from r6.log_safety import loggable_id
-from r6.models import RECORD_SOURCES, R6Resource
+from r6.models import RECORD_SOURCES, R6Resource, RecordLocked
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ _RESOURCE_ID_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]{1,255}$')
 # and not news. Both call sites used to collapse the two, so a real export
 # carrying an id outside the charset would be dropped, counted as a skip, and
 # reported as a successful import with nothing to page on (#293).
-REFUSED_OUTCOMES = frozenset({'invalid_id', 'forbidden'})
+REFUSED_OUTCOMES = frozenset({'invalid_id', 'forbidden', 'locked'})
 
 # FHIR resource type names this code is willing to REPEAT.
 #
@@ -516,7 +516,17 @@ def _ingest_one(resource: dict, tenant_id: str,
         # Re-ingest of a row we already hold — including one that was
         # soft-deleted: a fresh import of the same (tenant, type, id)
         # revives it rather than colliding with the tombstone.
-        existing.update_resource(resource_json)
+        try:
+            existing.update_resource(resource_json)
+        except RecordLocked:
+            # A completed form's record (#1173). Audited like the PUT and
+            # $ingest-context refusals, and returned rather than raised, so
+            # the caller's savepoint does not roll the audit row back.
+            add_audit_event('update', resource_type=resource_type,
+                            resource_id=resource_id, tenant_id=tenant_id,
+                            agent_id=agent_id, outcome='failure',
+                            detail='refused: record of a completed form')
+            return 'locked', None
         existing.source = source
         # Lifting a tombstone is recorded as such (#558): the audit row
         # below says 'update' with the revive named, never a plain create.

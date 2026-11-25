@@ -2425,6 +2425,12 @@ def ingest_bundle():
                            'code': 'invalid_resource_id',
                            'message': 'entry.resource.id is not a valid '
                                       'FHIR id and was refused'})
+        elif result == 'locked':
+            skipped += 1
+            errors.append({'index': idx, 'resourceType': rtype,
+                           'code': 'locked_record',
+                           'message': 'This record belongs to a completed '
+                                      'form and cannot be replaced'})
         else:
             skipped += 1
             errors.append({'index': idx, 'resourceType': rtype,

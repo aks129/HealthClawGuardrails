@@ -601,37 +601,30 @@ def test_persist_intake_document_return_value_reaches_no_caller():
     it. `test_the_confirm_response_carries_no_rendered_document` above is the
     behavioural half, and is the one that would survive the function being
     rewritten.
+
+    Since #1173 the rail chooses the document id itself (to lock it before
+    the document exists), so it reads nothing at all off the return value:
+    every call must be a bare expression statement, its value discarded.
     """
     import inspect
     from r6.actions.rails import form_fill
     source = inspect.getsource(form_fill.FormFillExecutor.execute)
-    uses = set(re.findall(r"docref\[([^\]]+)\]", source))
-    assert uses == {"'id'"}, (
-        "form_fill now reads more than the id off persist_intake_document's "
-        "return value (%s); documents.py:72 may now be an exit point and "
-        "needs its own probe" % sorted(uses))
-
     tree = ast.parse(textwrap.dedent(source))
-    loads = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Name) and n.id == "docref"
-             and isinstance(n.ctx, ast.Load)]
-    id_subscripts = [n for n in ast.walk(tree)
-                     if isinstance(n, ast.Subscript)
-                     and isinstance(n.value, ast.Name)
-                     and n.value.id == "docref"
-                     and isinstance(n.slice, ast.Constant)
-                     and n.slice.value == "id"]
-    assert len(id_subscripts) == 1, (
-        "expected exactly one docref['id'] read; found %d, so the shape this "
-        "row measures changed" % len(id_subscripts))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "persist_intake_document"]
+    discarded = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Expr) and n.value in calls]
+    assert len(calls) == 1, (
+        "expected one persist_intake_document call in execute(); found %d, "
+        "so the shape this row measures changed" % len(calls))
     # getsource() starts at the `def`, so an AST lineno is an offset into it.
     offset = form_fill.FormFillExecutor.execute.__code__.co_firstlineno - 1
-    assert len(loads) == 1, (
-        "`docref` is read %d times in execute() but subscripted for 'id' "
-        "once — the dict itself is being passed somewhere, and every field "
-        "persist_intake_document built (including the base64 PDF) travels "
-        "with it. form_fill.py lines: %s"
-        % (len(loads), sorted({n.lineno + offset for n in loads})))
+    assert len(discarded) == 1, (
+        "persist_intake_document's return value is used in execute() "
+        "(form_fill.py line %d): every field it built, including the base64 "
+        "PDF, may now travel with it, and documents.py:72 needs its own "
+        "probe" % (calls[0].lineno + offset))
 
 
 def test_document_reference_read_drops_the_embedded_pdf(
