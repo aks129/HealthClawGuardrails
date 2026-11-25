@@ -10,13 +10,16 @@ fabricates a completed form.
   - PUBLIC_BASE_URL unset               -> failed / PROVIDER_NOT_CONFIGURED
   - no reviewed QR on the action        -> needs_review (never 'completed')
   - reviewed QR vanished (deleted/stale)-> failed / STALE_SOURCE_DATA
+  - reviewed QR not the reviewed answers-> needs_review (#1163)
   - any render/persist/link exception   -> failed / PROVIDER_ERROR
 Only on a fully rendered+persisted+linked PDF does it return 'completed'.
 """
 
 import os
 
+from r6 import constant_time
 from r6.actions import errors
+from r6.actions.confirmations import reviewed_answers_digest
 from r6.actions.registry import ExecutionResult, register_executor
 from r6.models import R6Resource
 
@@ -73,6 +76,25 @@ class FormFillExecutor:
         if row is None:
             return ExecutionResult(status='failed',
                                    error=errors.STALE_SOURCE_DATA)
+
+        # (3a) The answers must be the ones the person reviewed (#1163). The
+        # payload names the response by id, and a write token can PUT over
+        # that id, so an id alone let the answers change between the review
+        # and this read. The review route stores a keyed digest of the stored
+        # response beside the id; a payload without one was never reviewed
+        # here (an id planted at propose has none it could compute), and a
+        # mismatch means the response was rewritten. Either way nothing is
+        # rendered: the honest state is needs_review, as for no review.
+        expected = action.payload.get('reviewed_qr_digest')
+        if not isinstance(expected, str) or not constant_time.equal(
+                expected, reviewed_answers_digest(action.id,
+                                                  row.resource_json)):
+            return ExecutionResult(
+                status='needs_review',
+                outcome={'reason': 'the reviewed answers do not match what '
+                                   'was reviewed — open the review page and '
+                                   'review the form again'},
+            )
         reviewed_qr = row.to_fhir_json()
 
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud

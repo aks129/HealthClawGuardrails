@@ -43,6 +43,7 @@ from r6.models import R6Resource
 from r6.sdc.intake import INITIAL_EXPRESSION_URL, intake_questionnaire
 from tests.test_redaction_probes_multistep import pdf_text
 from tests.approval_helpers import propose_headers
+from tests.approval_helpers import approval_headers
 
 pytestmark = pytest.mark.extension
 
@@ -163,7 +164,9 @@ def test_the_signed_delivery_link_carries_only_the_allowlisted_demographics(
     # No allergy rows exist, so the attestation gate needs the explicit NKA
     # checkbox — the only way that answer is ever set.
     review = client.post("/r6/actions/%s/review" % action_id,
-                         headers=auth_headers, json={"nka": "true"})
+                         headers=approval_headers(client.application,
+                                                  auth_headers, action_id),
+                         json={"nka": "true"})
     assert review.status_code == 200, review.get_data(as_text=True)
     reviewed_qr_id = review.get_json()["reviewed_qr_id"]
 

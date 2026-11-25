@@ -68,6 +68,29 @@ def payload_digest(payload_json):
                     hashlib.sha256).hexdigest()
 
 
+_REVIEWED_ANSWERS_LABEL = 'reviewed-answers:'
+
+
+def reviewed_answers_digest(action_id, resource_json):
+    """Keyed digest over a reviewed QuestionnaireResponse as stored, and the
+    action it was reviewed for (#1163).
+
+    The form-fill payload carries the response by id, and a write token may
+    PUT over that id, so the approval digest over the payload never covered
+    the answers themselves. The review route stores this digest in the
+    payload before it is sealed, so the confirmation and the approval
+    credential cover it, and the executor recomputes it from the row before
+    rendering. Keyed with the confirmation key, so it cannot be planted at
+    propose. The action id is inside it, so another action's digest does not
+    carry over.
+    """
+    canonical = json.dumps(json.loads(resource_json), sort_keys=True,
+                           separators=(',', ':'), ensure_ascii=False)
+    message = _REVIEWED_ANSWERS_LABEL + action_id + ':' + canonical
+    return hmac.new(_digest_key(), message.encode('utf-8'),
+                    hashlib.sha256).hexdigest()
+
+
 def approval_operation(action_id, payload_json):
     """The operation an approval credential is bound to: the action AND the
     keyed digest of the payload the person was shown when it was minted

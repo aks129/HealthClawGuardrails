@@ -9,8 +9,6 @@ The approval is recorded by the confirm route, under the action-bound
 credential only the approve surface can mint. These tests hold the review
 POST to recording none.
 """
-import pytest
-
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
@@ -99,17 +97,12 @@ def test_two_approvals_after_a_write_token_review_execute_once(
 
 
 def _require(cond, msg):
-    """Set-up check. RuntimeError, so the strict xfail below (which expects
-    AssertionError) fails loudly on a broken set-up instead of passing as
-    "still open"."""
+    """Set-up check. RuntimeError, so a broken set-up is told apart from the
+    refusal the test asserts (this was a strict xfail until #1116)."""
     if not cond:
         raise RuntimeError(msg)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    '#1116: the form-fill review POST takes the same write token, and '
-    'closing it needs the approve surface to present the approval '
-    'credential on this request'))
 def test_a_write_token_cannot_submit_attested_answers(
         client, app, tenant_headers, auth_headers, tenant_id):
     _seed(app, tenant_id, [PATIENT])
@@ -129,6 +122,14 @@ def test_a_write_token_cannot_submit_attested_answers(
         assert R6Resource.query.filter_by(
             resource_type='QuestionnaireResponse',
             tenant_id=tenant_id).count() == 0
+    # Positive control: the same answers on the person's credential land,
+    # so the refusal above is the credential and not a broken request.
+    person = _post_answers(client,
+                           approval_headers(app, auth_headers, action_id),
+                           action_id, {'nka': 'true'})
+    assert person.status_code == 200, person.get_data(as_text=True)
+    assert [c.approved_via for c in _confirmations(app, action_id)] == [
+        'review-page']
 
 
 def _post_answers(client, headers, action_id, body):

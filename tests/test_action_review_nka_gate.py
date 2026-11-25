@@ -21,6 +21,7 @@ from models import db
 from r6.actions.review import _is_absence_entry
 from r6.models import R6Resource
 from tests.approval_helpers import propose_headers
+from tests.approval_helpers import approval_headers
 
 TENANT = 'test-tenant'
 PATIENT_ID = 'fhi58-patient'
@@ -86,8 +87,11 @@ def _committed_action(client, tenant_headers, auth_headers):
 
 
 def _review(client, auth_headers, action_id, **answers):
+    # The person's credential (#1116): the write token is refused here.
     return client.post('/r6/actions/%s/review' % action_id,
-                       headers=auth_headers, json=answers)
+                       headers=approval_headers(client.application,
+                                                auth_headers, action_id),
+                       json=answers)
 
 
 def _page(client, auth_headers, action_id):

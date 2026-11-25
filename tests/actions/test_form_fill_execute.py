@@ -19,6 +19,7 @@ from r6.sdc.documents import get_document_pdf_bytes
 from tests.actions.test_review_flow import (
     PATIENT, MED_A, ALLERGY_A, _seed, _staged_form_fill,
 )
+from tests import approval_helpers
 
 BASE_URL = 'https://example.test'
 
@@ -54,8 +55,22 @@ def _persist_qr(tenant, qr):
     return row.id
 
 
-def _action(tenant, payload):
-    return ProposedAction(tenant_id=tenant, kind='form-fill', payload=payload)
+def _action(tenant, payload, action_id='act-form-fill-unit'):
+    return ProposedAction(tenant_id=tenant, kind='form-fill', payload=payload,
+                          id=action_id)
+
+
+def _reviewed_action(tenant, qr_id, action_id='act-form-fill-unit'):
+    """An action carrying the reviewed response the way the review route
+    leaves it: the id AND the keyed digest of the row as stored (#1163)."""
+    from r6.actions.confirmations import reviewed_answers_digest
+    row = db.session.get(R6Resource, (tenant, 'QuestionnaireResponse', qr_id))
+    return _action(tenant, {
+        'questionnaire': 'healthclaw-intake', 'body': 'x',
+        'reviewed_qr_id': qr_id,
+        'reviewed_qr_digest': reviewed_answers_digest(action_id,
+                                                      row.resource_json)},
+        action_id=action_id)
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +127,8 @@ def test_a_soft_deleted_reviewed_qr_fails_loud_like_a_missing_one(
     _seed(app, tenant_id, [PATIENT, MED_A, ALLERGY_A])
     with app.app_context():
         live_id = _persist_qr(tenant_id, _reviewed_qr())
-        live = FormFillExecutor().execute(_action(
-            tenant_id, {'questionnaire': 'healthclaw-intake', 'body': 'x',
-                        'reviewed_qr_id': live_id}))
+        live = FormFillExecutor().execute(_reviewed_action(tenant_id,
+                                                           live_id))
         assert live.status == 'completed', (
             f'the live control did not complete ({live.error}); this test '
             'would pass for the wrong reason')
@@ -125,9 +139,8 @@ def test_a_soft_deleted_reviewed_qr_fails_loud_like_a_missing_one(
         row.is_deleted = True
         db.session.commit()
 
-        result = FormFillExecutor().execute(_action(
-            tenant_id, {'questionnaire': 'healthclaw-intake', 'body': 'x',
-                        'reviewed_qr_id': gone_id}))
+        result = FormFillExecutor().execute(_reviewed_action(tenant_id,
+                                                             gone_id))
 
     assert result.status == 'failed', (
         'a deleted QuestionnaireResponse was rendered into a form')
@@ -139,8 +152,7 @@ def test_execute_happy_path_renders_persists_and_links(app, tenant_id,
     monkeypatch.setenv('PUBLIC_BASE_URL', BASE_URL)
     with app.app_context():
         qr_id = _persist_qr(tenant_id, _reviewed_qr())
-        action = _action(tenant_id, {'questionnaire': 'healthclaw-intake',
-                                     'body': 'x', 'reviewed_qr_id': qr_id})
+        action = _reviewed_action(tenant_id, qr_id)
         result = FormFillExecutor().execute(action)
 
         assert result.status == 'completed', result.outcome
@@ -155,6 +167,60 @@ def test_execute_happy_path_renders_persists_and_links(app, tenant_id,
         # The DocumentReference exists for the tenant and carries real PDF bytes.
         pdf = get_document_pdf_bytes(tenant_id, docref_id)
         assert pdf and pdf.startswith(b'%PDF')
+
+
+# ---------------------------------------------------------------------------
+# The answers rendered are the answers reviewed (#1163)
+# ---------------------------------------------------------------------------
+
+def _not_rendered(result):
+    assert result.status == 'needs_review', (result.status, result.outcome)
+    assert result.provider_ref is None
+
+
+def test_a_response_rewritten_after_review_is_not_rendered(
+        app, tenant_id, monkeypatch):
+    """MUTATION: skip the digest compare in execute() -> red, and the
+    rewritten answers ("no known allergies") are rendered."""
+    monkeypatch.setenv('PUBLIC_BASE_URL', BASE_URL)
+    with app.app_context():
+        qr_id = _persist_qr(tenant_id, _reviewed_qr(nka=False))
+        action = _reviewed_action(tenant_id, qr_id)
+        # Positive control: as reviewed, it renders.
+        assert FormFillExecutor().execute(action).status == 'completed'
+
+        row = db.session.get(
+            R6Resource, (tenant_id, 'QuestionnaireResponse', qr_id))
+        row.resource_json = json.dumps(_reviewed_qr(nka=True))
+        db.session.commit()
+        _not_rendered(FormFillExecutor().execute(action))
+
+
+def test_a_planted_response_id_without_a_digest_is_not_rendered(
+        app, tenant_id, monkeypatch):
+    monkeypatch.setenv('PUBLIC_BASE_URL', BASE_URL)
+    with app.app_context():
+        qr_id = _persist_qr(tenant_id, _reviewed_qr())
+        _not_rendered(FormFillExecutor().execute(_action(
+            tenant_id, {'questionnaire': 'healthclaw-intake', 'body': 'x',
+                        'reviewed_qr_id': qr_id})))
+        _not_rendered(FormFillExecutor().execute(_action(
+            tenant_id, {'questionnaire': 'healthclaw-intake', 'body': 'x',
+                        'reviewed_qr_id': qr_id,
+                        'reviewed_qr_digest': 'f' * 64})))
+
+
+def test_another_actions_digest_does_not_carry_over(
+        app, tenant_id, monkeypatch):
+    """The digest names the action, so a real review's id and digest copied
+    into a second action's payload do not render there."""
+    monkeypatch.setenv('PUBLIC_BASE_URL', BASE_URL)
+    with app.app_context():
+        qr_id = _persist_qr(tenant_id, _reviewed_qr())
+        reviewed = _reviewed_action(tenant_id, qr_id, action_id='act-a')
+        assert FormFillExecutor().execute(reviewed).status == 'completed'
+        copied = _action(tenant_id, dict(reviewed.payload), action_id='act-b')
+        _not_rendered(FormFillExecutor().execute(copied))
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +239,8 @@ def test_end_to_end_propose_review_confirm_download(client, app, tenant_headers,
 
     # Review: act on the med and CONFIRM the real allergy (no NKA needed).
     review = client.post('/r6/actions/%s/review' % action_id,
-                         headers=auth_headers,
+                         headers=approval_helpers.approval_headers(
+                             app, auth_headers, action_id),
                          json={'med-0': 'yes', 'allergy-0': 'confirm'})
     assert review.status_code == 200, review.get_data(as_text=True)
     assert review.get_json()['reviewed_qr_id']

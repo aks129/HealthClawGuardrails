@@ -32,13 +32,16 @@ Its POST records NO approval (#1104). The confirm route records it, under the
 action-bound credential only the approve surface can mint, bound to the
 payload the person was shown; that is also the only place an action executes.
 
-Auth: X-Tenant-Id + a tenant-bound X-Step-Up-Token with write scope. That is
-the token the proposing agent also holds, so nothing this route records from
-it alone may stand as a person's consent. The form-fill branch still mints
-its confirmation from it (#1116). The token is validated multi-use (not
-nonce-consumed) so the page can be re-opened and submitted with the same
-credential; the load-bearing gate here is the per-item + allergy-attestation
-check, not single-use.
+Auth: X-Tenant-Id plus X-Step-Up-Token. For every kind but form-fill that is
+the tenant's write token, which the proposing agent also holds, so nothing
+this route records from it may stand as a person's consent. The form-fill
+POST does record the person's answers and a confirmation, so it takes the
+action-approval credential instead (#1116): the one only the approve surface
+can mint, bound to this action and its payload as it stands. It is validated
+multi-use (not nonce-consumed) so a 422 can be corrected and re-submitted
+with the same credential; the load-bearing gate after it is the per-item +
+allergy-attestation check. The answers are bound by content, not only by id
+(#1163): see reviewed_answers_digest.
 """
 import json
 import logging
@@ -47,7 +50,10 @@ from dataclasses import dataclass, field
 from flask import render_template, request
 
 from models import db
-from r6.actions.confirmations import has_confirmation, issue_confirmation
+from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
+                                      approval_operation, has_confirmation,
+                                      issue_confirmation,
+                                      reviewed_answers_digest)
 from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.registry import get_executor
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
@@ -159,6 +165,29 @@ def _require_step_up(tenant):
     require_grant(
         scope=Scope.WRITE,
         tenant=tenant,
+        absent_status=401,
+        rejected_status=401,
+    )
+
+
+def _require_approval_credential(tenant, action):
+    """Require the action-approval credential bound to `action` as it
+    stands, or raise (#1116).
+
+    The form-fill review POST writes the answers a person attests to,
+    "no known allergies" among them, and the confirmation over them. The
+    write token cannot carry that: the agent that proposed the action holds
+    it too. The approval credential is minted only with the internal secret
+    and is bound to this action and the keyed digest of its payload, the
+    same binding confirm checks. Not nonce-consumed, so a review refused 422
+    can be corrected and sent again. A second credential is minted for
+    confirm, because a successful review changes the payload it binds.
+    """
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        audience=ACTION_APPROVAL_AUDIENCE,
+        operation=approval_operation(action.id, action.payload_json),
         absent_status=401,
         rejected_status=401,
     )
@@ -538,7 +567,16 @@ def review_submit(action_id):
     if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
-    _require_step_up(tenant)
+    # Which credential depends on the kind, so the action is read first,
+    # tenant-scoped, as confirm does. Every caller still passes a gate before
+    # any answer about the action: an unknown id takes the write-token gate,
+    # then the 404 below.
+    bound = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    if bound is not None and bound.kind == 'form-fill':
+        _require_approval_credential(tenant, bound)
+    else:
+        _require_step_up(tenant)
     # A closed tenant takes no reviewed QuestionnaireResponse (409, audited).
     require_open_tenant(tenant)
 
@@ -655,9 +693,15 @@ def review_submit(action_id):
     # confirmation already committed. Same answer as the pre-check — this is
     # the branch that made it a 500, and the FHIR re-population between the
     # two is exactly wide enough for a double-tap to land in it.
+    # The digest of the answers as stored rides in the payload, so the
+    # confirmation below and the approval credential minted for confirm both
+    # cover the answers and not just their id (#1163). The executor refuses a
+    # response that no longer matches it.
     try:
         payload = action.payload
         payload['reviewed_qr_id'] = qr_row.id
+        payload['reviewed_qr_digest'] = reviewed_answers_digest(
+            action_id, qr_row.resource_json)
         action.payload_json = json.dumps(payload)
         issue_confirmation(action_id, approved_via='review-page',
                            ttl_minutes=15,
