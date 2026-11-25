@@ -4,7 +4,8 @@ FHIR Resource Redaction.
 Standard redaction profile for PHI protection applied consistently
 on all resource access paths (not just context ingestion).
 
-- Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R.")
+- Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R."),
+  in `name` and in an extension's `valueHumanName`
 - Identifiers: Remove the value from every Identifier under a key in
   `_IDENTIFIER_KEYS` (`identifier`, `accessionIdentifier`, `requisition`,
   `valueIdentifier`, ...); keep `system` and `type`. Safe Harbor
@@ -66,9 +67,18 @@ def apply_redaction(resource):
 
 def _redact_fields(resource, narrative=True):
     """Redact PHI fields from a single resource dict (in-place)."""
-    # Redact names: truncate family and given to first initial only
-    if 'name' in resource and isinstance(resource['name'], list):
-        for name_entry in resource['name']:
+    # Redact names: truncate family and given to first initial only. An
+    # extension's valueHumanName is the same datatype and was kept whole
+    # until #1164; it gets the same rule until names go entirely (#1161 PR 1).
+    names = resource.get('name')
+    names = list(names) if isinstance(names, list) else []
+    human_name = resource.get('valueHumanName')
+    if isinstance(human_name, dict):
+        names.append(human_name)
+    elif isinstance(human_name, list):
+        names.extend(human_name)
+    if names:
+        for name_entry in names:
             if isinstance(name_entry, dict):
                 if 'family' in name_entry and isinstance(name_entry['family'], str):
                     f = name_entry['family']
@@ -466,6 +476,17 @@ def _redact_recursive(obj):
         _redact_recursive(value)
 
 
+def _drop_key(obj, key):
+    """Remove `key` from every dict in the tree, in place."""
+    if isinstance(obj, list):
+        for item in obj:
+            _drop_key(item, key)
+    elif isinstance(obj, dict):
+        obj.pop(key, None)
+        for value in obj.values():
+            _drop_key(value, key)
+
+
 def apply_patient_controlled_redaction(resource, patient_id):
     """
     Patient-controlled deidentification mode.
@@ -515,6 +536,10 @@ def apply_patient_controlled_redaction(resource, patient_id):
     # generalPractitioner[].display, any reference's .display) survives this
     # untouched, because the walker does not stop at the top level.
     _redact_recursive(result)
+    # The base pass cuts an extension's valueHumanName to initials. This
+    # output is stamped ANONYED, so a name in any extension goes whole, at
+    # any depth (#1164).
+    _drop_key(result, 'valueHumanName')
 
     # Everything below is this function's OWN, stronger, top-level-only
     # policy layered on top of the base pass above.
