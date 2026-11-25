@@ -212,7 +212,16 @@ class FormFillExecutor:
 #: Characters a printed demographic answer may hold beside letters, marks
 #: and digits: enough for names, addresses and phone numbers, and no colon,
 #: so an answer cannot read as a "label: value" row.
-_PRINTABLE_PUNCTUATION = frozenset(" .,'-/#&+()")
+_PRINTABLE_PUNCTUATION = frozenset(" .,'’-/#&+()")
+
+#: The modifier letters (Lm) that real names are written with: the okina
+#: and modifier apostrophe (Hawaiian, transliterations), the CJK iteration
+#: mark, the katakana long-vowel mark and the Thai repetition mark.
+_NAME_MODIFIER_LETTERS = frozenset('ʻʼ々ーๆ')
+
+#: Same-script signs that read as a colon at a word's end: Devanagari and
+#: Tamil visarga, the Mongolian visarga, the Vedic ardhavisarga.
+_COLON_LIKE_SIGNS = frozenset('ःஃᢁᳲ')
 PRINTABLE_MAX = 64
 
 
@@ -223,16 +232,23 @@ def printable_answer(value):
     response and the executor."""
     if not isinstance(value, str) or not 0 < len(value) <= PRINTABLE_MAX:
         return False
-    # Letters by category, not isalnum(): modifier letters (Lm) include the
-    # look-alike colon U+02D0. A mark is accepted only on a letter, and only
-    # a generic COMBINING diacritic or one of that letter's own script, so a
-    # Devanagari visarga (U+0903) cannot sit on a Latin name as a colon
-    # (#1175 R2-2).
+    # An allowlist, not isalnum(): letters of Lu, Ll, Lt and Lo, and only the
+    # modifier letters real names use (_NAME_MODIFIER_LETTERS); the rest of
+    # Lm holds look-alike colons such as U+02D0. A mark is accepted only on
+    # a letter, and only a generic COMBINING diacritic or one of that
+    # letter's own script, so a Devanagari visarga cannot sit on a Latin
+    # name. A same-script sign that reads as a colon is refused at the end
+    # of the value or before a space, where it would act as one (#1175
+    # R2-2, R3-2).
     script = None
-    for ch in value:
+    for i, ch in enumerate(value):
+        if ch in _COLON_LIKE_SIGNS and (i == len(value) - 1
+                                        or value[i + 1] == ' '):
+            return False
         category = unicodedata.category(ch)
         name = unicodedata.name(ch, '')
-        if category.startswith('L') and category != 'Lm':
+        if category in ('Lu', 'Ll', 'Lt', 'Lo') \
+                or ch in _NAME_MODIFIER_LETTERS:
             script = name.split(' ', 1)[0]
         elif category.startswith('M') and script and (
                 name.startswith('COMBINING ')

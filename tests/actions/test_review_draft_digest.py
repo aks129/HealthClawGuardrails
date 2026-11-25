@@ -41,6 +41,9 @@ STALE = 'changed after this page was shown'
     'محمد',                    # Arabic
     '김민준', 'Đặng',        # Hangul, Vietnamese
     '+1 (555) 010-0199', '12 Main St, Apt 4/B',
+    # R3-2: names written with an allowed modifier letter or U+2019.
+    'Kaʻahumanu', 'ジョー', '佐々木',
+    'O’Brien', 'เด็กๆ',
 ])
 def test_real_names_and_numbers_are_printable(value):
     from r6.actions.rails.form_fill import printable_answer
@@ -53,6 +56,11 @@ def test_real_names_and_numbers_are_printable(value):
     'Johnः Yes',     # the same, on a Latin letter
     'John: Yes', 'John： Yes', 'John∶ Yes', 'John‎',
     'John‮', 'John\nYes', '́John', 'x' * 65, '',
+    # R3-2: other look-alike colons, and a same-script visarga where it
+    # would act as a colon (end of value, before a space).
+    'Johnˑ Yes', 'John꞉ Yes',
+    'दुः Yes', 'दुः',
+    'சஃ Yes',
 ])
 def test_lookalike_colons_and_controls_are_not_printable(value):
     """R2-2. MUTATION: accept any alnum or mark again -> red on the first
