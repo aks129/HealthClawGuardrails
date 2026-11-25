@@ -349,11 +349,12 @@ def test_stored_response_rows_carry_no_upstream_display(
         client, app, tenant_id, tenant_headers):
     """Redacting the stored response is not enough on its own. Observation
     extraction copies the Questionnaire's `item.code` into `Observation.code`
-    verbatim, and a stored Questionnaire is read unredacted. A display there
-    is an upstream `display` like any other, so the extracted rows go
-    through apply_redaction too, and are labelled by code afterwards.
+    verbatim, so a stored Questionnaire's upstream `display` would reach the
+    rows. The stored Questionnaire is redacted when it is loaded, like the
+    response. tests/test_sdc_1167_attack.py covers the same Questionnaire
+    behind an inline response.
 
-    MUTATION: return the stored-response rows unredacted -> red.
+    MUTATION: load the referenced Questionnaire unredacted -> red.
     """
     _store(app, {
         "resourceType": "Questionnaire", "id": "sdc-leak-display-q",

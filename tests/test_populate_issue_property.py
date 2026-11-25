@@ -470,6 +470,10 @@ def test_the_issue_text_is_true_whether_the_value_was_withheld_or_absent():
     # The allowlist is public and is the actionable half.
     for element in ("name", "birthDate", "gender", "telecom", "address"):
         assert element in NOT_POPULATED, element
+    # Over HTTP the name, telecom and address are removed before population
+    # (spec 2026-11-24 PR 3). Without this sentence an unanswered name leaf
+    # reads to a model as a record with no name.
+    assert "not shared with the assistant" in NOT_POPULATED
     # Nothing that reads as a claim about this patient or this request.
     for forbidden in ("withheld", "refused", "denied", "not permitted",
                       "does not have", "no such"):

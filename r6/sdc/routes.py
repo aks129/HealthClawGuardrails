@@ -117,21 +117,23 @@ def register_sdc_routes(blueprint, deps):
 
         params = request.get_json(silent=True) or {}
         qr = _param_resource(params, "questionnaire-response")
-        from_store = False
         if qr is None and qr_id:
-            # A STORED response is record content, so extraction reads what
-            # GET /QuestionnaireResponse/{id} returns and no more. Without
-            # this a read-tier dry run echoed answers a read hides: a
-            # subject-less response's name and birth date came back in full
-            # (spec 2026-11-24 §2.2). The input is redacted, not only the
-            # extracted rows: a caller may send its own Questionnaire, which
-            # can map a free-text answer into `gender` or `address.state`,
-            # elements the walker keeps. The rows are redacted as well, at
-            # the exit below. An inline response is the caller's own data
-            # and is extracted as sent.
+            # ONE RULE: whatever this route loads from the store, it
+            # extracts from as a read would return it. Here the response;
+            # the referenced Questionnaire in
+            # _resolve_referenced_questionnaire. Without this a read-tier
+            # dry run echoed answers a read hides: a subject-less response's
+            # name and birth date came back in full (spec 2026-11-24 §2.2).
+            # It is the input that is redacted, not the extracted rows: a
+            # caller may send its own Questionnaire, which can map a
+            # free-text answer into `gender` or `address.state`, elements
+            # the walker keeps. Commit mode extracts from the same redacted
+            # input; nothing commits today (COMMIT_WITHOUT_CONFIRMATION is
+            # empty), and clearing a type there means revisiting this. An
+            # inline response is the caller's own data and is extracted as
+            # sent.
             stored = _load_stored("QuestionnaireResponse", qr_id, tenant_id)
             qr = apply_redaction(stored) if stored is not None else None
-            from_store = qr is not None
         if qr is None:
             return operation_outcome(
                 "error", "invalid",
@@ -213,16 +215,6 @@ def register_sdc_routes(blueprint, deps):
                 "error", "exception",
                 "Failed to commit extracted resources"), 500
 
-        if from_store:
-            # The rows also take from the Questionnaire: observation
-            # extraction copies `item.code` verbatim, and a stored
-            # Questionnaire is read unredacted, so its upstream `display`
-            # would reach the caller. Built after the commit block, so what
-            # is written is never the redacted copy.
-            bundle = dict(bundle, entry=[
-                dict(entry, resource=apply_redaction(entry["resource"]))
-                for entry in bundle["entry"]])
-
         return jsonify({
             "resourceType": "Parameters",
             "parameter": [{"name": "return", "resource": bundle}],
@@ -285,11 +277,19 @@ def register_sdc_routes(blueprint, deps):
         return content
 
     def _resolve_referenced_questionnaire(qr, tenant_id):
+        # A stored Questionnaire is record content too, whatever the
+        # response's source: observation extraction copies its `item.code`
+        # into the rows verbatim, and a Questionnaire that arrived through
+        # ingest can carry an upstream `display` that a GET of it hides
+        # (security review of #1167). Redacted here, before extraction;
+        # `definition`, `linkId`, the codes and the extract extensions
+        # survive, so extraction runs unchanged.
         canonical = qr.get("questionnaire")
         if not canonical:
             return None
         ident = canonical.split("|")[0].split("/")[-1]
-        return _load_stored("Questionnaire", ident, tenant_id)
+        stored = _load_stored("Questionnaire", ident, tenant_id)
+        return apply_redaction(stored) if stored is not None else None
 
     return sdc_populate, sdc_extract
 
