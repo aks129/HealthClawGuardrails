@@ -369,3 +369,55 @@ def test_a_failed_execution_after_persist_holds_no_lock(
         assert not delivered_record_locked(
             tenant_id, 'QuestionnaireResponse',
             action.payload['reviewed_qr_id'])
+
+
+def test_precreating_the_minted_id_delivers_nothing(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """R3-3: the id was committed to external_ref before the document, and
+    the status route shows external_ref to the write token. A document
+    created under it first made persist fail, and the clean-up then raised
+    on the unusable session: confirm 500'd and the action stayed in
+    'executing'. Now the ref and the document commit together, so the id is
+    not visible first, and any persist failure ends cleanly in 'failed'.
+
+    The attacker here is handed the id outright, which is more than the
+    status route now gives it."""
+    import r6.sdc.documents as documents
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://example.test')
+    _seed(app, tenant_id, [PATIENT, ALLERGY_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    real = documents.persist_intake_document
+    seen = {}
+
+    def racing(tenant, subject_ref, pdf_bytes, **kw):
+        st = client.get('/r6/actions/%s' % action_id, headers=auth_headers)
+        seen['ref_visible'] = (st.get_json() or {}).get('external_ref')
+        doc = {'resourceType': 'DocumentReference', 'id': kw['resource_id'],
+               'status': 'current',
+               'subject': {'reference': 'Patient/%s' % PATIENT['id']},
+               'content': [{'attachment': {
+                   'contentType': 'application/pdf',
+                   'data': base64.b64encode(FORGED).decode()}}]}
+        seen['create'] = client.post('/r6/fhir/DocumentReference',
+                                     headers=auth_headers,
+                                     json=doc).status_code
+        return real(tenant, subject_ref, pdf_bytes, **kw)
+    monkeypatch.setattr(documents, 'persist_intake_document', racing)
+
+    person = _review(client, approval_headers(app, auth_headers, action_id),
+                     action_id, {'allergy-0': 'confirm'})
+    _require(person.status_code == 200, person.get_data(as_text=True))
+    conf = _confirm(client, app, auth_headers, action_id)
+    assert conf.status_code != 500, conf.get_data(as_text=True)[:300]
+    assert seen.get('ref_visible') is None, seen
+    with app.app_context():
+        action = db.session.get(ProposedAction, action_id)
+        status, ref, outcome = (action.status, action.external_ref,
+                                action.outcome_summary)
+    if status == 'completed':
+        link = json.loads(outcome)['delivery_link']
+        assert _served(client, link) != FORGED
+    else:
+        assert status == 'failed' and ref is None, (status, ref)
+        assert 'delivery_link' not in (outcome or '')
