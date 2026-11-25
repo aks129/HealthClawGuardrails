@@ -35,8 +35,10 @@ def _reviewed_qr(subject_id='test-patient-1', nka=True):
         'subject': {'reference': 'Patient/%s' % subject_id},
         'item': [
             {'linkId': 'medications', 'item': [
-                {'linkId': 'medications.med', 'text': 'Metformin 500 mg tablet',
-                 'answer': [{'valueString': 'Metformin 500 mg tablet'}]},
+                {'linkId': 'medications.item', 'item': [
+                    {'linkId': 'medications.item.name',
+                     'answer': [{'valueString': 'Metformin 500 mg tablet'}]},
+                ]},
             ]},
             {'linkId': 'allergies', 'item': [
                 {'linkId': 'allergies.no-known-allergies',
