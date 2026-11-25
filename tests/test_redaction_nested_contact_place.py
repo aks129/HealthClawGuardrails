@@ -220,6 +220,51 @@ def test_uuid_and_expression_values_are_removed():
         'url': 'http://example.org/expr'}
 
 
+def _f1_positions():
+    """Rows from the security review of #1162 (#1164 F1): the extension on
+    a primitive companion, on identifier[], on contact[] and on a Coverage."""
+    def ext():
+        return [{'url': 'http://example.org/birthplace',
+                 'valueAddress': {'line': [ADDR_LINE], 'city': ADDR_CITY}},
+                {'url': 'http://example.org/phone',
+                 'valueContactPoint': {'system': 'phone', 'value': PHONE}}]
+    patient = {'resourceType': 'Patient', 'id': 'f1-pt', 'gender': 'female',
+               'birthDate': '1980-02-03', '_birthDate': {'extension': ext()},
+               'identifier': [{'system': 'https://x.example/mrn',
+                               'value': 'MRN-1', 'extension': ext()}],
+               'contact': [{'extension': ext()}]}
+    coverage = {'resourceType': 'Coverage', 'id': 'f1-cov',
+                'status': 'active',
+                'beneficiary': {'reference': 'Patient/f1-pt'},
+                'payor': [{'reference': 'Organization/payer'}],
+                'extension': ext()}
+    return patient, coverage
+
+
+@pytest.mark.parametrize('surface', ['read', 'intake', 'deidentified'])
+def test_f1_extension_positions_leave_no_address_or_phone(
+        client, auth_headers, surface):
+    """The deidentified share is stamped ANONYED, so it matters most there."""
+    r = client.post('/r6/fhir/Bundle/$ingest-context', headers=auth_headers,
+                    json={'resourceType': 'Bundle', 'type': 'collection',
+                          'entry': [{'resource': r}
+                                    for r in _f1_positions()]})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    if surface == 'read':
+        bodies = [client.get(f'/r6/fhir/{p}', headers=auth_headers)
+                  for p in ('Patient/f1-pt', 'Coverage/f1-cov')]
+    else:
+        bodies = [client.post('/r6/fhir/$share-bundle', headers=auth_headers,
+                              json={'patient_id': 'f1-pt', 'profile': surface,
+                                    'resource_types': ['Patient',
+                                                       'Coverage']})]
+    for resp in bodies:
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert 'f1-pt' in body and 'valueContactPoint' in body
+        assert [c for c in (ADDR_LINE, ADDR_CITY, PHONE) if c in body] == []
+
+
 def test_a_patient_read_drops_the_home_geolocation(client, auth_headers):
     """The measured leak on a real read path. The canary scan keeps its
     geolocation off `Patient.address`, which the intake share ships whole by
