@@ -190,6 +190,11 @@ def test_a_write_token_cannot_attest_no_known_allergies_over_a_real_one(
 
 # --- Still open, pre-existing: the reviewed answers are not bound ---------
 
+#: The attestation item the review route writes (r6/actions/review.py,
+#: _build_reviewed_qr).
+NKA = 'allergies.no-known-allergies'
+
+
 def _spy_render(monkeypatch):
     import r6.sdc.pdf as pdf
     real = pdf.render_questionnaire_response_pdf
@@ -199,6 +204,17 @@ def _spy_render(monkeypatch):
         seen.append(json.loads(json.dumps(qr)))
         return real(qr, **kw)
     monkeypatch.setattr(pdf, 'render_questionnaire_response_pdf', spy)
+    # The printed "<label>: <answer>" rows, as the PDF writes them.
+    real_item = pdf._render_item
+
+    def item_spy(item, q_index, styles, level, occurrence):
+        if not pdf._is_group(item):
+            seen_rows.append('%s: %s' % (pdf._label_for(item, q_index),
+                                         pdf._format_answer(item)))
+        return real_item(item, q_index, styles, level, occurrence)
+    seen_rows = []
+    monkeypatch.setattr(pdf, '_render_item', item_spy)
+    spy.rows = seen_rows
     return seen
 
 
@@ -243,8 +259,14 @@ def test_a_write_token_cannot_rewrite_the_reviewed_answers_before_execution(
                    headers=auth_headers)
     _require(g.status_code == 200, 'reviewed QR not readable')
     swapped = g.get_json()
-    swapped['item'] = [{'linkId': 'allergies.nka', 'text': 'No known allergies',
-                        'answer': [{'valueBoolean': True}]}]
+    # The minimal edit: in the person's own allergies group, flip the real
+    # attestation item to true and drop the allergy row they confirmed.
+    groups = [i for i in swapped['item'] if i.get('linkId') == 'allergies']
+    _require(len(groups) == 1, 'no allergies group in the reviewed QR')
+    _require(_nka_answer(swapped).get(NKA) is False,
+             'the person did not leave the attestation false')
+    _require(len(groups[0]['item']) == 2, 'confirmed allergy row missing')
+    groups[0]['item'] = [{'linkId': NKA, 'answer': [{'valueBoolean': True}]}]
     put = client.put('/r6/fhir/QuestionnaireResponse/%s' % qr_id,
                      headers=auth_headers, json=swapped)
 
@@ -257,8 +279,11 @@ def test_a_write_token_cannot_rewrite_the_reviewed_answers_before_execution(
     # Secure outcome: the PUT is refused, or what is rendered is what the
     # person reviewed (no attested "no known allergies" they never gave).
     refused = put.status_code in (401, 403, 409, 422)
-    rendered_swap = any(_nka_answer(q).get('allergies.nka') for q in seen)
-    assert refused or not rendered_swap, (put.status_code, seen)
+    rendered_swap = any(_nka_answer(q).get(NKA) for q in seen)
+    import r6.sdc.pdf as pdf
+    rows = [r for r in pdf.render_questionnaire_response_pdf.rows
+            if 'llerg' in r]
+    assert refused or not rendered_swap, (put.status_code, rows)
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
@@ -273,8 +298,8 @@ def test_a_planted_reviewed_qr_id_is_not_executed(
     _seed(app, tenant_id, [PATIENT])
     forged = {'resourceType': 'QuestionnaireResponse', 'status': 'completed',
               'subject': {'reference': 'Patient/%s' % PATIENT['id']},
-              'item': [{'linkId': 'allergies.nka',
-                        'answer': [{'valueBoolean': True}]}]}
+              'item': [{'linkId': 'allergies', 'item': [
+                  {'linkId': NKA, 'answer': [{'valueBoolean': True}]}]}]}
     c = client.post('/r6/fhir/QuestionnaireResponse', headers=auth_headers,
                     json=forged)
     _require(c.status_code == 201, c.get_data(as_text=True))
