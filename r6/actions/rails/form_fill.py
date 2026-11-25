@@ -216,8 +216,26 @@ def printable_answer(value):
     response and the executor."""
     if not isinstance(value, str) or not 0 < len(value) <= PRINTABLE_MAX:
         return False
-    return all(ch.isalnum() or unicodedata.category(ch).startswith('M')
-               or ch in _PRINTABLE_PUNCTUATION for ch in value)
+    # Letters by category, not isalnum(): modifier letters (Lm) include the
+    # look-alike colon U+02D0. A mark is accepted only on a letter, and only
+    # a generic COMBINING diacritic or one of that letter's own script, so a
+    # Devanagari visarga (U+0903) cannot sit on a Latin name as a colon
+    # (#1175 R2-2).
+    script = None
+    for ch in value:
+        category = unicodedata.category(ch)
+        name = unicodedata.name(ch, '')
+        if category.startswith('L') and category != 'Lm':
+            script = name.split(' ', 1)[0]
+        elif category.startswith('M') and script and (
+                name.startswith('COMBINING ')
+                or name.split(' ', 1)[0] == script):
+            continue
+        elif category == 'Nd' or ch in _PRINTABLE_PUNCTUATION:
+            script = None
+        else:
+            return False
+    return True
 
 
 def demographics_printable(questionnaire_response):

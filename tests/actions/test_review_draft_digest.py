@@ -17,6 +17,8 @@ Set-up steps raise RuntimeError. Synthetic data only.
 import copy
 import json
 
+import pytest
+
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
@@ -29,6 +31,34 @@ from tests.approval_helpers import approval_headers, page_digest, reviewed
 
 SENTENCE = 'No known allergies (patient confirmed)'
 STALE = 'changed after this page was shown'
+
+
+@pytest.mark.parametrize('value', [
+    'Zoë', 'Zoë', "O'Brien-Núñez",
+    'Иван',                    # Cyrillic
+    'देवी',                    # Devanagari, vowel signs
+    'दुःख',                    # Devanagari, visarga
+    'محمد',                    # Arabic
+    '김민준', 'Đặng',        # Hangul, Vietnamese
+    '+1 (555) 010-0199', '12 Main St, Apt 4/B',
+])
+def test_real_names_and_numbers_are_printable(value):
+    from r6.actions.rails.form_fill import printable_answer
+    assert printable_answer(value), value
+
+
+@pytest.mark.parametrize('value', [
+    'Johnː Yes',     # MODIFIER LETTER TRIANGULAR COLON (Lm)
+    'John ः Yes',    # DEVANAGARI SIGN VISARGA, on no letter
+    'Johnः Yes',     # the same, on a Latin letter
+    'John: Yes', 'John： Yes', 'John∶ Yes', 'John‎',
+    'John‮', 'John\nYes', '́John', 'x' * 65, '',
+])
+def test_lookalike_colons_and_controls_are_not_printable(value):
+    """R2-2. MUTATION: accept any alnum or mark again -> red on the first
+    three."""
+    from r6.actions.rails.form_fill import printable_answer
+    assert not printable_answer(value), value
 
 
 def _submit(client, app, auth_headers, action_id, body):

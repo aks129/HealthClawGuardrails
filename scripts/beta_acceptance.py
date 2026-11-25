@@ -96,6 +96,7 @@ _MED_NAME_RE = re.compile(
 _MED_ROW_RE = re.compile(r'name="med-(\d+)"')
 _ALLERGY_ROW_RE = re.compile(r'name="allergy-(\d+)"')
 _NKA_INPUT_RE = re.compile(r'<input[^>]*name="nka"[^>]*>')
+_DRAFT_DIGEST_RE = re.compile(r'name="draft_digest" value="([0-9a-f]{64})"')
 _BRIEF_GAPS_RE = re.compile(
     r"<h2>Preventive care due</h2>(?P<body>.*?)(?:<h2>|\Z)", re.S)
 #: Record jargon the brief must not show a person (#877): the resource type
@@ -328,7 +329,11 @@ def _review_page(s, base, agent, action_id):
         return r.status_code, None
     page = r.text
     nka = _NKA_INPUT_RE.search(page)
+    digest = _DRAFT_DIGEST_RE.search(page)
     return 200, {
+        # The page's own draft digest, sent back as the browser's form does:
+        # the engine records a review only for the draft its page showed.
+        "draft_digest": digest.group(1) if digest else None,
         "meds": len(set(_MED_ROW_RE.findall(page))),
         "allergies": len(set(_ALLERGY_ROW_RE.findall(page))),
         "med_names": [_html.unescape(n).strip()
@@ -415,6 +420,8 @@ def row_form_approve(s, base, agent, action_id, page, run, *,
     name = "intake form approved and PDF delivered"
     fetch = fetch or requests.get
     decisions = {f"med-{i}": "yes" for i in range(page["meds"])}
+    if page.get("draft_digest"):
+        decisions["draft_digest"] = page["draft_digest"]
     decisions.update({f"allergy-{i}": "confirm" for i in range(page["allergies"])})
     if not page["allergies"]:
         if attest_nka is None or not attest_nka():
