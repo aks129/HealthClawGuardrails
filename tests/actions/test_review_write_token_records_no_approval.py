@@ -135,3 +135,38 @@ def test_a_write_token_cannot_submit_attested_answers(
 def _post_answers(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id, headers=headers,
                        json=body)
+
+
+def test_a_credential_for_another_form_is_refused(
+        client, app, tenant_headers, auth_headers, tenant_id):
+    """The credential is bound to one action and its payload (#1116), so an
+    approval minted for another form cannot carry answers into this one.
+
+    MUTATION: drop `operation=` from _require_approval_credential -> red."""
+    _seed(app, tenant_id, [PATIENT])
+    target = _staged_form_fill(client, tenant_headers, auth_headers)
+    other = _staged_form_fill(client, tenant_headers, auth_headers)
+    r = _post_answers(client, approval_headers(app, auth_headers, other),
+                      target, {'nka': 'true'})
+    assert r.status_code == 401, r.get_data(as_text=True)
+    assert _confirmations(app, target) == []
+    with app.app_context():
+        assert 'reviewed_qr_id' not in db.session.get(
+            ProposedAction, target).payload
+    # Positive control: the target's own credential is accepted.
+    own = _post_answers(client, approval_headers(app, auth_headers, target),
+                        target, {'nka': 'true'})
+    assert own.status_code == 200, own.get_data(as_text=True)
+
+
+def test_the_same_credential_works_again_after_a_refused_review(
+        client, app, tenant_headers, auth_headers, tenant_id):
+    """Not nonce-consumed: a review refused 422 (no attestation) is
+    corrected and sent again on the credential the page already holds."""
+    _seed(app, tenant_id, [PATIENT])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    headers = approval_headers(app, auth_headers, action_id)
+    first = _post_answers(client, headers, action_id, {})
+    assert first.status_code == 422, first.get_data(as_text=True)
+    again = _post_answers(client, headers, action_id, {'nka': 'true'})
+    assert again.status_code == 200, again.get_data(as_text=True)

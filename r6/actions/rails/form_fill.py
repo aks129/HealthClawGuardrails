@@ -91,9 +91,9 @@ class FormFillExecutor:
                                                   row.resource_json)):
             return ExecutionResult(
                 status='needs_review',
-                outcome={'reason': 'the reviewed answers do not match what '
-                                   'was reviewed — open the review page and '
-                                   'review the form again'},
+                outcome={'reason': 'the answers on file are not the ones '
+                                   'that were reviewed, so no form was '
+                                   'made'},
             )
         reviewed_qr = row.to_fhir_json()
 
