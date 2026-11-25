@@ -242,9 +242,12 @@ def _off_form(questionnaire_response):
                     return True
                 continue
             keys = _ANSWER_KEYS.get(q['type'], set())
-            if item.get('item') or not all(
+            answers = item.get('answer') or []
+            # One answer per leaf: two on the attestation printed "No, Yes"
+            # (#1172 R3-1). No intake leaf repeats its answer.
+            if item.get('item') or len(answers) > 1 or not all(
                     isinstance(a, dict) and a and set(a) <= keys
-                    for a in item.get('answer') or []):
+                    for a in answers):
                 return True
         return False
     return off(questionnaire_response.get('item'),
