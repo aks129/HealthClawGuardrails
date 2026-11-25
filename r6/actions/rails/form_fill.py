@@ -15,9 +15,9 @@ fabricates a completed form.
 Only on a fully rendered+persisted+linked PDF does it return 'completed'.
 """
 
-import json
 import os
 import unicodedata
+import uuid
 
 from r6 import constant_time
 from r6.actions import errors
@@ -108,11 +108,14 @@ class FormFillExecutor:
         # review now builds the response from fixed ids, but one reviewed
         # before that change still carries whatever leaf a planted
         # Questionnaire added, under a digest that matches. The PDF labels
-        # an unknown leaf by its linkId, which that Questionnaire chose, so
-        # such a response is refused, never rendered without the leaf: the
-        # person's review covered a form that is not this one.
-        foreign = _foreign_link_ids(reviewed_qr)
-        if foreign:
+        # an unknown leaf by its linkId, which that Questionnaire chose, and
+        # a known linkId out of its place (the attestation inside the
+        # demographics group) prints the intake's own label beside an answer
+        # nobody gave. So each item must sit where the intake puts it, with
+        # the answer type the intake gives it; otherwise the response is
+        # refused, never rendered without the item: the person's review
+        # covered a form that is not this one.
+        if _off_form(reviewed_qr):
             return ExecutionResult(
                 status='needs_review',
                 outcome={'reason': 'the reviewed answers include items that '
@@ -130,6 +133,7 @@ class FormFillExecutor:
 
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud
         # PROVIDER_ERROR — an exception must never escape as a fake success.
+        docref_id = None
         try:
             from r6.sdc.pdf import render_questionnaire_response_pdf
             from r6.sdc.documents import persist_intake_document
@@ -155,16 +159,24 @@ class FormFillExecutor:
                 reviewed_qr, questionnaire=questionnaire,
                 reviewed_on=reviewed_on, subject_label=subject_label)
 
-            # (6) Persist the PDF as a FHIR DocumentReference.
-            docref = persist_intake_document(
+            # (6) Persist the PDF as a FHIR DocumentReference. Its id is
+            # recorded on the action first (#1173): the lock on a delivered
+            # document keys on that server-owned ref, so it is in force
+            # before the document exists, not from 'completed' on.
+            docref_id = str(uuid.uuid4())
+            _set_ref(action, None, docref_id)
+            persist_intake_document(
                 action.tenant_id, subject_ref, pdf_bytes,
                 title='Completed intake form',
-                questionnaire_response_id=reviewed_qr_id)
-            docref_id = docref['id']
+                questionnaire_response_id=reviewed_qr_id,
+                resource_id=docref_id)
 
             # (7) Build a signed, expiring download link.
             link = build_document_link(action.tenant_id, docref_id)
         except Exception as exc:  # noqa: BLE001 — fail loud, never fake success
+            # A failed execution delivers nothing, so it holds no lock.
+            if docref_id is not None:
+                _set_ref(action, docref_id, None)
             # Truncate to keep the taxonomy detail PHI-free-ish; do not log PHI.
             return ExecutionResult(status='failed', error=errors.PROVIDER_ERROR,
                                    outcome={'detail': str(exc)[:200]})
@@ -224,19 +236,41 @@ def demographics_printable(questionnaire_response):
     return True
 
 
-def _foreign_link_ids(questionnaire_response):
-    """The linkIds in a response that the built-in intake does not define."""
-    from r6.sdc.intake import intake_questionnaire
-    known, seen = set(), set()
+#: The answer keys each intake item type may carry ("choice" is a string
+#: from the Patient, or a coding from an observation).
+_ANSWER_KEYS = {'string': {'valueString'}, 'date': {'valueDate'},
+                'boolean': {'valueBoolean'},
+                'choice': {'valueString', 'valueCoding'}}
 
-    def walk(items, into):
+
+def _off_form(questionnaire_response):
+    """True when any item is not where the built-in intake puts it: an
+    unknown linkId, a known one under another parent, a second copy of an
+    item that does not repeat, or an answer of another type (#1172)."""
+    from r6.sdc.intake import intake_questionnaire
+
+    def off(items, spec_items):
+        spec = {q['linkId']: q for q in spec_items or []}
+        seen = set()
         for item in items or []:
-            if isinstance(item, dict):
-                into.add(item.get('linkId'))
-                walk(item.get('item'), into)
-    walk(intake_questionnaire().get('item'), known)
-    walk(questionnaire_response.get('item'), seen)
-    return seen - known
+            if not isinstance(item, dict):
+                return True
+            q = spec.get(item.get('linkId'))
+            if q is None or (item['linkId'] in seen and not q.get('repeats')):
+                return True
+            seen.add(item['linkId'])
+            if q['type'] == 'group':
+                if item.get('answer') or off(item.get('item'), q.get('item')):
+                    return True
+                continue
+            keys = _ANSWER_KEYS.get(q['type'], set())
+            if item.get('item') or not all(
+                    isinstance(a, dict) and a and set(a) <= keys
+                    for a in item.get('answer') or []):
+                return True
+        return False
+    return off(questionnaire_response.get('item'),
+               intake_questionnaire().get('item'))
 
 
 def reviewed_subject_label(reviewed_qr):
@@ -276,9 +310,11 @@ def delivered_record_locked(tenant_id, resource_type, resource_id):
     signed link then served the agent's bytes. The lock holds from the
     moment execution starts, not from 'completed': the PDF is committed
     inside execute(), before the action is marked completed, and a write in
-    that window was accepted. Keyed on server-owned state: the action's
-    status, its sealed reviewed_qr_id, its provider ref, and the reference
-    to that response which persist_intake_document wrote on the document.
+    that window was accepted. Keyed on server-owned state only: the
+    action's status, its sealed reviewed_qr_id, and the document id
+    execute() records in external_ref before persisting. Never on the
+    document's own content, which a write token can set on any document
+    (#1173 R2-3: a `relatesTo` key let it pin forged content for good).
     """
     from r6.actions.models import ProposedAction
     if resource_type not in ('DocumentReference', 'QuestionnaireResponse'):
@@ -287,29 +323,21 @@ def delivered_record_locked(tenant_id, resource_type, resource_id):
         ProposedAction.tenant_id == tenant_id,
         ProposedAction.kind == 'form-fill',
         ProposedAction.status.in_(('executing', 'completed'))).all()
-    reviewed = {a.payload.get('reviewed_qr_id') for a in actions}
-    reviewed.discard(None)
     if resource_type == 'QuestionnaireResponse':
-        return resource_id in reviewed
-    if any(a.status == 'completed' and a.external_ref == resource_id
-           for a in actions):
-        return True
-    row = R6Resource.query.filter_by(
-        tenant_id=tenant_id, resource_type='DocumentReference',
-        id=resource_id).first()
-    if row is None:
-        return False
-    try:
-        doc = json.loads(row.resource_json)
-    except (TypeError, ValueError):
-        return False
-    if not isinstance(doc, dict) or not isinstance(doc.get('relatesTo'),
-                                                   list):
-        return False
-    targets = {rel['target'].get('reference') for rel in doc['relatesTo']
-               if isinstance(rel, dict) and isinstance(rel.get('target'),
-                                                        dict)}
-    return any('QuestionnaireResponse/%s' % qr in targets for qr in reviewed)
+        return any(a.payload.get('reviewed_qr_id') == resource_id
+                   for a in actions)
+    return any(a.external_ref == resource_id for a in actions)
+
+
+def _set_ref(action, expected, ref):
+    """Record (or clear) the delivered document's id on the executing
+    action, committed, so another request's lock check reads it."""
+    from models import db
+    from r6.actions.models import ProposedAction
+    ProposedAction.query.filter_by(
+        id=action.id, status='executing', external_ref=expected).update(
+        {'external_ref': ref}, synchronize_session=False)
+    db.session.commit()
 
 
 def register():

@@ -284,3 +284,88 @@ def test_the_ingest_context_refusal_is_audited(
                           'entry': [{'resource': doc}]})
     assert r.status_code == 400, r.get_data(as_text=True)
     assert _refusals(app, tenant_id, 'DocumentReference', docref_id) == 1
+
+
+# --- #1173 re-review: R2-3, R2-4 -------------------------------------------
+
+def test_relates_to_cannot_pin_forged_content_on_another_document(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """R2-3: a document's own relatesTo is content a write token sets. Used
+    as a lock key, it let the token pin forged content on any document
+    against every later correction. The lock reads server state only.
+
+    MUTATION: lock a document whose relatesTo names a reviewed response
+    again -> red."""
+    _a, qr_id, _o = _completed_form(client, app, tenant_headers,
+                                    auth_headers, tenant_id, monkeypatch)
+    feed = {'resourceType': 'DocumentReference', 'id': 'feed-doc-1',
+            'status': 'current',
+            'subject': {'reference': 'Patient/%s' % PATIENT['id']},
+            'content': [{'attachment': {'contentType': 'text/plain',
+                                        'title': 'synthetic visit note'}}]}
+    _seed(app, tenant_id, [feed])
+    pinned = dict(copy.deepcopy(feed), relatesTo=[{
+        'code': 'appends',
+        'target': {'reference': 'QuestionnaireResponse/%s' % qr_id}}])
+    pinned['content'][0]['attachment']['title'] = 'synthetic forged note'
+    put = client.put('/r6/fhir/DocumentReference/feed-doc-1',
+                     headers=auth_headers, json=pinned)
+    _require(put.status_code == 200, 'pin PUT %s' % put.status_code)
+
+    fix = client.put('/r6/fhir/DocumentReference/feed-doc-1',
+                     headers=auth_headers, json=feed)
+    assert fix.status_code == 200, fix.get_data(as_text=True)
+    with app.app_context():
+        raw = R6Resource.query.filter_by(
+            tenant_id=tenant_id, id='feed-doc-1').first().resource_json
+    assert 'synthetic forged note' not in raw
+
+
+def test_the_internal_ingest_refusal_is_audited(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """R2-4: the upload/SHC/Fasten door audits its refusal like the other
+    two. MUTATION: drop the audit in _ingest_one -> red."""
+    _a, _q, outcome = _completed_form(client, app, tenant_headers,
+                                      auth_headers, tenant_id, monkeypatch)
+    docref_id = outcome['document_reference_id']
+    doc = _forged_docref(_stored(client, auth_headers, 'DocumentReference',
+                                 docref_id))
+    doc['id'] = docref_id
+    r = client.post('/r6/fhir/internal/ingest-bundle',
+                    headers={'X-Tenant-Id': tenant_id},
+                    json={'bundle': {'resourceType': 'Bundle',
+                                     'type': 'collection',
+                                     'entry': [{'resource': doc}]}})
+    _require(r.status_code in (200, 207, 400, 422), 'ingest-bundle: %s'
+             % r.status_code)
+    assert _refusals(app, tenant_id, 'DocumentReference', docref_id) == 1
+    assert _served(client, outcome['delivery_link']) != FORGED
+
+
+def test_a_failed_execution_after_persist_holds_no_lock(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """The ref recorded before persisting is cleared when execution fails,
+    so nothing is locked for a form that was never delivered."""
+    import r6.sdc.delivery as delivery
+    from r6.actions.rails.form_fill import delivered_record_locked
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://example.test')
+    _seed(app, tenant_id, [PATIENT, ALLERGY_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    def boom(tenant, docref_id):
+        raise RuntimeError('synthetic link failure')
+    monkeypatch.setattr(delivery, 'build_document_link', boom)
+    person = _review(client, approval_headers(app, auth_headers, action_id),
+                     action_id, {'allergy-0': 'confirm'})
+    _require(person.status_code == 200, person.get_data(as_text=True))
+    _confirm(client, app, auth_headers, action_id)
+    with app.app_context():
+        action = db.session.get(ProposedAction, action_id)
+        assert action.status == 'failed'
+        assert action.external_ref is None
+        assert not delivered_record_locked(
+            tenant_id, 'QuestionnaireResponse',
+            action.payload['reviewed_qr_id'])

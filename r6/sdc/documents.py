@@ -29,7 +29,7 @@ _INTAKE_DOCUMENT_TYPE = {
 
 
 def persist_intake_document(tenant_id, subject_ref, pdf_bytes, *, title=None,
-                             questionnaire_response_id=None):
+                             questionnaire_response_id=None, resource_id=None):
     """Persist `pdf_bytes` as a FHIR DocumentReference under `tenant_id`.
 
     subject_ref: e.g. "Patient/123" — stored as DocumentReference.subject.
@@ -63,8 +63,11 @@ def persist_intake_document(tenant_id, subject_ref, pdf_bytes, *, title=None,
         doc["relatesTo"] = [{"code": "transforms",
                              "target": {"reference": qr_reference}}]
 
+    # resource_id: the form-fill rail chooses it and records it on the action
+    # before this commit, so the delivered document is locked from birth.
     row = R6Resource(resource_type="DocumentReference",
-                     resource_json=json.dumps(doc), tenant_id=tenant_id)
+                     resource_json=json.dumps(doc), tenant_id=tenant_id,
+                     resource_id=resource_id)
     db.session.add(row)
     add_audit_event("create", "DocumentReference", row.id,
                     tenant_id=tenant_id, detail="intake pdf persisted")
