@@ -270,6 +270,18 @@ INTAKE_QUESTIONNAIRE = {
 }
 
 
+#: Every way a form-fill proposal may name the built-in intake. The rail
+#: renders this Questionnaire and no other (#1170): a stored one is chosen
+#: by whoever holds the tenant's write token, which includes the agent that
+#: proposed the form, so a proposal naming anything else is refused.
+INTAKE_REFERENCES = frozenset((
+    INTAKE_QUESTIONNAIRE["id"],
+    "Questionnaire/" + INTAKE_QUESTIONNAIRE["id"],
+    INTAKE_QUESTIONNAIRE["url"],
+    "%s|%s" % (INTAKE_QUESTIONNAIRE["url"], INTAKE_QUESTIONNAIRE["version"]),
+))
+
+
 def intake_questionnaire() -> dict:
     """Return a fresh deep copy of the canonical intake Questionnaire.
 

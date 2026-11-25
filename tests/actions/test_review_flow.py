@@ -16,6 +16,8 @@ rows must be acted on — it never trusts the client about how many rows exist.
 """
 import json
 
+import pytest
+
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
@@ -767,26 +769,28 @@ def _tombstoned(resource, tenant):
     return row
 
 
-def test_tombstoned_questionnaire_does_not_drive_the_draft(app, tenant_id):
-    """A soft-deleted Questionnaire falls back to the built-in intake form,
-    exactly as if it were absent.
+@pytest.mark.parametrize('deleted', [True, False], ids=['tombstoned', 'live'])
+def test_a_stored_questionnaire_never_drives_the_draft(app, tenant_id,
+                                                       deleted):
+    """The draft is the built-in intake whatever the payload names, live
+    row or tombstone (#1170): a stored Questionnaire is the write token's.
 
-    MUTATION: drop `is_deleted=False` from _resolve_questionnaire -> red."""
+    MUTATION: let _draft_qr read the named Questionnaire -> red."""
     from r6.actions import review
     from r6.actions.models import ProposedAction
-    stored = {'resourceType': 'Questionnaire', 'id': 'q-deleted',
-              'status': 'active', 'title': 'Tombstoned questionnaire',
+    stored = {'resourceType': 'Questionnaire', 'id': 'q-stored',
+              'status': 'active', 'title': 'Stored questionnaire',
               'item': []}
     with app.app_context():
-        db.session.add(_tombstoned(stored, tenant_id))
+        row = R6(stored, tenant_id)
+        row.is_deleted = deleted
+        db.session.add(row)
         db.session.commit()
         action = ProposedAction(
             tenant_id=tenant_id, kind='form-fill',
-            payload={'questionnaire': 'Questionnaire/q-deleted'})
-        resolved = review._resolve_questionnaire(action, tenant_id)
-        assert resolved.get('id') != 'q-deleted'
-        assert resolved.get('title') != 'Tombstoned questionnaire'
-        assert resolved == review.intake_questionnaire()
+            payload={'questionnaire': 'Questionnaire/q-stored'})
+        questionnaire, _p, _qr, _c = review._draft_qr(action, tenant_id)
+        assert questionnaire == review.intake_questionnaire()
 
 
 def test_tombstoned_patient_is_not_resolved(app, tenant_id):

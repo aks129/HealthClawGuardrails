@@ -245,26 +245,10 @@ def _approve_context(action):
     }
 
 
-def _resolve_questionnaire(action, tenant_id):
-    """Resolve the action's questionnaire. A stored Questionnaire wins; the
-    canonical intake form is the built-in fallback for 'healthclaw-intake'.
-
-    Every query in this module reads live rows only (is_deleted=False): a
-    tombstoned Questionnaire, Patient or clinical row must not drive a draft
-    a person is asked to approve — the sdc/routes.py shape, ruling D10."""
-    qref = (action.payload.get('questionnaire') or '').strip()
-    ident = qref.split('/')[-1].split('|')[0]
-    row = R6Resource.query.filter_by(
-        resource_type='Questionnaire', id=ident, tenant_id=tenant_id,
-        is_deleted=False).first()
-    if row is not None:
-        return row.to_fhir_json()
-    if ident == 'healthclaw-intake' or not ident:
-        return intake_questionnaire()
-    return intake_questionnaire()
-
-
 def _load_patient(tenant_id, subject_ref=None):
+    """Every query in this module reads live rows only (is_deleted=False): a
+    tombstoned Patient or clinical row must not drive a draft a person is
+    asked to approve — the sdc/routes.py shape, ruling D10."""
     if subject_ref:
         # `urn:uuid:<id>` first (a Bundle's own fullUrl reference), then the
         # last path segment, which covers `Patient/<id>` and an absolute URL.
@@ -343,8 +327,14 @@ def _draft_qr(action, tenant_id):
     used by both the rendered page and the POST gate.
 
     Returns the content marker alongside the QR — an empty QR alone cannot say
-    whether the record is empty or unread, and the page has to say which."""
-    questionnaire = _resolve_questionnaire(action, tenant_id)
+    whether the record is empty or unread, and the page has to say which.
+
+    Always the built-in intake, whatever the payload names (#1170). A stored
+    Questionnaire is whatever the tenant's write token put there, so
+    preferring one let the proposing agent choose the questions, including
+    items this page does not list. Propose refuses any other name; this also
+    covers an action staged before it did."""
+    questionnaire = intake_questionnaire()
     subject_ref = (action.payload.get('subject') or {}).get('reference') \
         if isinstance(action.payload.get('subject'), dict) else None
     patient = _load_patient(tenant_id, subject_ref)
@@ -394,25 +384,38 @@ def _shown(value):
     return value
 
 
+#: The demographics the page shows and the reviewed response carries, in
+#: order. One list for both, so what is stored is what was shown (#1170).
+DEMOGRAPHIC_LABELS = {
+    'demographics.given-name': 'First name',
+    'demographics.family-name': 'Last name',
+    'demographics.birth-date': 'Date of birth',
+    'demographics.gender': 'Gender',
+    'demographics.phone': 'Phone',
+    'demographics.address-line': 'Street address',
+    'demographics.address-city': 'City',
+    'demographics.address-state': 'State',
+    'demographics.address-postal-code': 'Postal code',
+}
+
+#: The leaves a medication, allergy or condition row may carry.
+ROW_LEAVES = {
+    'medications.item': ('medications.item.name', 'medications.item.dose'),
+    'allergies.item': ('allergies.item.allergen', 'allergies.item.reaction'),
+    'conditions.item': ('conditions.item.name',),
+}
+
+
 def _demographics(draft_qr):
     """Ordered (label, value) pairs from the populated demographics group,
     as the page shows them."""
-    labels = {
-        'demographics.given-name': 'First name',
-        'demographics.family-name': 'Last name',
-        'demographics.birth-date': 'Date of birth',
-        'demographics.gender': 'Gender',
-        'demographics.phone': 'Phone',
-        'demographics.address-line': 'Street address',
-        'demographics.address-city': 'City',
-        'demographics.address-state': 'State',
-        'demographics.address-postal-code': 'Postal code',
-    }
     out = []
     for group in draft_qr.get('item', []):
         if group.get('linkId') != 'demographics':
             continue
         for child in group.get('item', []):
+            if child.get('linkId') not in DEMOGRAPHIC_LABELS:
+                continue
             value = None
             for ans in child.get('answer', []):
                 for key in ('valueString', 'valueDate', 'valueBoolean'):
@@ -422,8 +425,8 @@ def _demographics(draft_qr):
                     value = ans['valueCoding'].get('display') \
                         or ans['valueCoding'].get('code')
             if value is not None:
-                out.append((labels.get(child.get('linkId'),
-                                       child.get('linkId')), _shown(value)))
+                out.append((DEMOGRAPHIC_LABELS[child['linkId']],
+                            _shown(value)))
     return out
 
 
@@ -779,16 +782,28 @@ def _reviewed(response):
 def _build_reviewed_qr(draft_qr, patient, med_rows, med_decisions,
                        allergy_rows, allergy_decisions, nka_affirmed,
                        condition_rows, condition_decisions):
-    """Assemble the completed QuestionnaireResponse: demographics carried
-    through, only kept meds/allergies/conditions included, and the NKA boolean
-    set ONLY from the explicit attestation."""
+    """Assemble the completed QuestionnaireResponse: the shown demographics,
+    only kept meds/allergies/conditions included, and the NKA boolean set
+    ONLY from the explicit attestation.
+
+    Built item by item from fixed ids (#1170), never by copying a draft
+    group: a group copied whole carried any leaf the draft held, including
+    one the page never listed, into the answers the person approved. Each
+    item keeps its linkId, its answer and the "from your records" marker,
+    and no text — the PDF prefers an item's own text over the label."""
     from r6.actions.models import _utcnow
 
     items = []
     for group in draft_qr.get('item', []):
         if group.get('linkId') == 'demographics':
-            items.append(group)
+            items.append({'linkId': 'demographics', 'item': [
+                _fixed_item(child) for child in group.get('item', [])
+                if child.get('linkId') in DEMOGRAPHIC_LABELS]})
+            break
 
+    med_rows = [_fixed_row(row) for row in med_rows]
+    allergy_rows = [_fixed_row(row) for row in allergy_rows]
+    condition_rows = [_fixed_row(row) for row in condition_rows]
     kept_meds = [row for row, decision in zip(med_rows, med_decisions)
                  if decision != 'remove']
     meds_group = {'linkId': 'medications', 'item': list(kept_meds)}
@@ -827,3 +842,36 @@ def _build_reviewed_qr(draft_qr, patient, med_rows, med_decisions,
         qr['subject'] = {'reference': 'Patient/%s' % subject['id']}
         qr['source'] = {'reference': 'Patient/%s' % subject['id']}
     return qr
+
+
+def _source_marker(item):
+    """The populate step's "from your records" extension, and nothing else
+    an item carried."""
+    return [ext for ext in item.get('extension') or []
+            if isinstance(ext, dict)
+            and ext.get('url') == POPULATED_ROW_SOURCE_URL]
+
+
+def _fixed_item(item):
+    """One leaf as the reviewed response carries it: linkId, answer and the
+    source marker."""
+    out = {'linkId': item['linkId']}
+    if item.get('answer'):
+        out['answer'] = item['answer']
+    marker = _source_marker(item)
+    if marker:
+        out['extension'] = marker
+    return out
+
+
+def _fixed_row(row):
+    """One medication, allergy or condition row, holding only the leaves
+    ROW_LEAVES names for it."""
+    leaves = ROW_LEAVES.get(row.get('linkId'), ())
+    out = {'linkId': row.get('linkId'),
+           'item': [_fixed_item(child) for child in row.get('item', [])
+                    if child.get('linkId') in leaves]}
+    marker = _source_marker(row)
+    if marker:
+        out['extension'] = marker
+    return out

@@ -17,8 +17,10 @@ Both reach the engine through `populate_questionnaire` directly. The bound
 lives in the engine's `build_context`, so they inherit it — but nothing
 measured that, and a later change that populated the rail from the stored
 Patient directly would have kept every existing test green. These tests run
-the whole rail (propose -> commit -> review -> confirm -> download) against a
-stored Questionnaire that asks for more than the allowlist in two ways:
+the whole rail (propose -> commit -> review -> confirm -> download) against an
+intake Questionnaire that asks for more than the allowlist in two ways. The
+rail reads only the built-in intake (#1170), so the widened form stands in
+for it rather than being stored:
 
   1. an EXISTING demographics item re-pointed at `%patient.identifier`, under
      a linkId the review page has a label for, so the page would print it;
@@ -40,6 +42,7 @@ import pytest
 
 from models import db
 from r6.models import R6Resource
+from r6.sdc import intake
 from r6.sdc.intake import INITIAL_EXPRESSION_URL, intake_questionnaire
 from tests.test_redaction_probes_multistep import pdf_text
 from tests.approval_helpers import propose_headers
@@ -53,7 +56,6 @@ CONTACT_MARKER = "PHICONTACTMARKER368"
 WITHHELD = (IDENTIFIER_MARKER, CONTACT_MARKER)
 
 PATIENT_ID = "bound-rail-patient"
-QUESTIONNAIRE_ID = "bound-rail-intake"
 
 
 def _store(resource, tenant_id):
@@ -84,7 +86,6 @@ def _expr(expression):
 def _widened_intake():
     """The canonical intake, asking for two things D10 does not allow."""
     questionnaire = copy.deepcopy(intake_questionnaire())
-    questionnaire["id"] = QUESTIONNAIRE_ID
     demographics = next(g for g in questionnaire["item"]
                         if g["linkId"] == "demographics")
     phone = next(i for i in demographics["item"]
@@ -106,7 +107,7 @@ def widened_rail(app, tenant_headers, monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.test")
     with app.app_context():
         _store(_patient(), tenant_headers["X-Tenant-Id"])
-        _store(_widened_intake(), tenant_headers["X-Tenant-Id"])
+    monkeypatch.setattr(intake, "INTAKE_QUESTIONNAIRE", _widened_intake())
 
 
 def _propose_and_commit(client, tenant_headers, auth_headers):
@@ -114,7 +115,7 @@ def _propose_and_commit(client, tenant_headers, auth_headers):
         "/r6/actions/propose", headers=propose_headers(tenant_headers),
         json={"kind": "form-fill",
               "payload": {"to": "Intake portal",
-                          "questionnaire": "Questionnaire/%s" % QUESTIONNAIRE_ID,
+                          "questionnaire": "healthclaw-intake",
                           "subject": {"reference": "Patient/%s" % PATIENT_ID},
                           "body": "new patient intake form"}})
     assert proposed.status_code == 201, proposed.get_data(as_text=True)

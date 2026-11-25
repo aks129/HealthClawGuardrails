@@ -33,10 +33,15 @@ class FormFillExecutor:
     required_env = ('PUBLIC_BASE_URL',)
 
     def validate(self, payload):
+        from r6.sdc.intake import INTAKE_REFERENCES
         questionnaire = payload.get('questionnaire')
         body = payload.get('body')
         if (not isinstance(questionnaire, str) or not questionnaire
                 or not isinstance(body, str) or not body):
+            return [errors.PAYLOAD_INVALID]
+        # Only the built-in intake (#1170). Refused rather than ignored, so
+        # the proposal on file always names the form that is rendered.
+        if questionnaire.strip() not in INTAKE_REFERENCES:
             return [errors.PAYLOAD_INVALID]
         return []
 
@@ -104,9 +109,14 @@ class FormFillExecutor:
             from r6.sdc.documents import persist_intake_document
             from r6.sdc.delivery import build_document_link
 
-            # (4) Resolve the questionnaire for nicer labels — non-fatal.
-            questionnaire = self._resolve_questionnaire(
-                reviewed_qr.get('questionnaire'), action.tenant_id)
+            # (4) Labels come from the built-in intake, never a stored
+            # Questionnaire (#1169): a write token can store one under any
+            # id after the review, and the label is what the printed answer
+            # reads as. The reviewed response carries no item text of its
+            # own (review.py builds it from fixed ids), so this is the only
+            # source of every label on the form.
+            from r6.sdc.intake import intake_questionnaire
+            questionnaire = intake_questionnaire()
 
             # (5) Render the reviewed answers to a PDF.
             subject_ref = (reviewed_qr.get('subject') or {}).get('reference')
@@ -137,32 +147,6 @@ class FormFillExecutor:
             outcome={'document_reference_id': docref_id,
                      'delivery_link': link,
                      'questionnaire_response_id': reviewed_qr_id})
-
-    @staticmethod
-    def _resolve_questionnaire(questionnaire_ref, tenant_id):
-        """Best-effort load of the stored Questionnaire for nicer labels.
-
-        Falls back to the canonical intake Questionnaire. Never raises — label
-        resolution is a nicety, not a gate on delivering the reviewed answers.
-        """
-        from r6.sdc.intake import intake_questionnaire
-        try:
-            if questionnaire_ref:
-                q_id = str(questionnaire_ref).split('|')[0]
-                if q_id.startswith('Questionnaire/'):
-                    q_id = q_id.split('/', 1)[1]
-                q_id = q_id.rstrip('/').split('/')[-1]
-                row = R6Resource.query.filter_by(
-                    resource_type='Questionnaire', id=q_id,
-                    tenant_id=tenant_id, is_deleted=False).first()
-                if row is not None:
-                    return row.to_fhir_json()
-        except Exception:  # noqa: BLE001 — non-fatal; fall through to canonical
-            pass
-        try:
-            return intake_questionnaire()
-        except Exception:  # noqa: BLE001
-            return None
 
     @staticmethod
     def _subject_label(subject_ref, tenant_id):
