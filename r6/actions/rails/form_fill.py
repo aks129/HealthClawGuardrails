@@ -118,9 +118,12 @@ class FormFillExecutor:
             from r6.sdc.intake import intake_questionnaire
             questionnaire = intake_questionnaire()
 
-            # (5) Render the reviewed answers to a PDF.
+            # (5) Render the reviewed answers to a PDF. The title name comes
+            # from the reviewed answers (#1171), which the review took and
+            # the digest above binds. The Patient is not read here: a write
+            # token can rename it between the review and this call.
             subject_ref = (reviewed_qr.get('subject') or {}).get('reference')
-            subject_label = self._subject_label(subject_ref, action.tenant_id)
+            subject_label = reviewed_subject_label(reviewed_qr)
             reviewed_on = reviewed_qr.get('authored')
             pdf_bytes = render_questionnaire_response_pdf(
                 reviewed_qr, questionnaire=questionnaire,
@@ -148,41 +151,6 @@ class FormFillExecutor:
                      'delivery_link': link,
                      'questionnaire_response_id': reviewed_qr_id})
 
-    @staticmethod
-    def _subject_label(subject_ref, tenant_id):
-        """Best-effort human name for the PDF title from the subject Patient.
-
-        Returns None when nothing is easily available — the renderer treats a
-        missing label as "no name", never a hard error.
-        """
-        if not subject_ref or not str(subject_ref).startswith('Patient/'):
-            return None
-        try:
-            patient_id = str(subject_ref).split('/', 1)[1]
-            # A deleted Patient's NAME would otherwise be printed on the
-            # title of a form that gets submitted. The renderer treats a
-            # missing label as "no name", which is the right answer here.
-            row = R6Resource.query.filter_by(
-                resource_type='Patient', id=patient_id,
-                tenant_id=tenant_id, is_deleted=False).first()
-            if row is None:
-                return None
-            names = (row.to_fhir_json().get('name') or [])
-            if not names:
-                return None
-            name = names[0]
-            # Never `name.text`: it is the field the redacting read pops
-            # outright (r6/redaction.py) because upstream feeds put junk
-            # there, and it is the one branch that could print arbitrary
-            # upstream free text on a title a patient signs (#367). The
-            # structured parts are what the populate step fills the same
-            # form from, so the two paths now agree.
-            given = ' '.join(name.get('given') or [])
-            label = ('%s %s' % (given, name.get('family') or '')).strip()
-            return label or None
-        except Exception:  # noqa: BLE001 — label is a nicety, never a gate
-            return None
-
     def reconcile(self, action):
         # form-fill has no async provider webhook (unlike Bland.ai/Twilio) and
         # execute() is now synchronous and terminal — it either completes the
@@ -194,6 +162,53 @@ class FormFillExecutor:
             outcome={'reason': 'form-fill execute() is synchronous and '
                                'terminal — nothing to reconcile'},
         )
+
+
+def reviewed_subject_label(reviewed_qr):
+    """The human name for the PDF title: the first and last name answers in
+    the reviewed response, exactly as the review page showed them.
+
+    Snapshotted at review and bound by the answers digest (#1171), so no
+    write after the review changes whose form it says it is. It is never
+    copied into the payload, which the status and confirm responses return.
+    None when neither answer is present — the renderer treats a missing
+    label as "no name". The populate step reads the structured name only,
+    never `name.text` (#367).
+    """
+    answers = {}
+    for group in reviewed_qr.get('item') or []:
+        if group.get('linkId') != 'demographics':
+            continue
+        for item in group.get('item') or []:
+            for answer in item.get('answer') or []:
+                value = answer.get('valueString')
+                if isinstance(value, str):
+                    answers[item.get('linkId')] = value
+    label = ' '.join(answers[k] for k in ('demographics.given-name',
+                                          'demographics.family-name')
+                     if answers.get(k))
+    return label or None
+
+
+def delivered_record_locked(tenant_id, resource_type, resource_id):
+    """True when this is the delivered DocumentReference or the reviewed
+    QuestionnaireResponse of a completed form-fill (#1171).
+
+    Both were ordinary tenant resources, so the write token the proposing
+    agent holds could rewrite them after the person approved, and the
+    signed link then served the agent's bytes. Keyed on server-owned state
+    only: the completed action's provider ref and its sealed payload.
+    """
+    from r6.actions.models import ProposedAction
+    if resource_type not in ('DocumentReference', 'QuestionnaireResponse'):
+        return False
+    completed = ProposedAction.query.filter_by(
+        tenant_id=tenant_id, kind='form-fill', status='completed')
+    if resource_type == 'DocumentReference':
+        return completed.filter_by(
+            external_ref=resource_id).first() is not None
+    return any(a.payload.get('reviewed_qr_id') == resource_id
+               for a in completed.all())
 
 
 def register():

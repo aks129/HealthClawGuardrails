@@ -518,6 +518,20 @@ def read_resource(resource_type, resource_id):
     return response
 
 
+def _refuse_delivered_record(tenant_id, resource_type, resource_id):
+    """True, with an audited refusal, for a completed form's records."""
+    from r6.actions.rails.form_fill import delivered_record_locked
+    if not delivered_record_locked(tenant_id, resource_type, resource_id):
+        return False
+    add_audit_event('update', resource_type=resource_type,
+                    resource_id=resource_id, tenant_id=tenant_id,
+                    agent_id=request.headers.get('X-Agent-Id'),
+                    outcome='failure',
+                    detail='refused: record of a completed form')
+    db.session.commit()
+    return True
+
+
 @r6_blueprint.route('/<resource_type>/<resource_id>', methods=['PUT'])
 def update_resource(resource_type, resource_id):
     """Update an existing R6 FHIR resource."""
@@ -540,6 +554,11 @@ def update_resource(resource_type, resource_id):
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
     require_open_tenant(tenant)
+    # A completed form's delivered records are system-managed (#1171).
+    if _refuse_delivered_record(tenant_id, resource_type, resource_id):
+        return _operation_outcome('error', 'security',
+                                  'This record belongs to a completed form '
+                                  'and cannot be modified via API'), 403
 
     # Unlike create, update gates before it parses, so only a token holder
     # reaches this line. That is a smaller blast radius, not a closed one: a

@@ -286,11 +286,12 @@ def test_the_pdf_text_extractor_actually_reads_text():
 
 
 # ---------------------------------------------------------------------------
-# Site 1: r6/actions/rails/form_fill.py — _subject_label reads Patient.name
-# with no redaction and puts it in the rendered PDF's title. The PDF leaves
-# over a signed link that carries NO tenant or step-up header: the signature
-# is the whole credential. Since #367 it reads only the structured parts
-# (given + family), never `name.text`.
+# Site 1: r6/actions/rails/form_fill.py — the patient's name goes, with no
+# redaction, into the rendered PDF's title. The PDF leaves over a signed link
+# that carries NO tenant or step-up header: the signature is the whole
+# credential. Since #367 it reads only the structured parts (given +
+# family), never `name.text`; since #1171 it reads them from the reviewed
+# response (reviewed_subject_label), not the Patient.
 # ---------------------------------------------------------------------------
 
 def _confirm_the_form(client, tenant_headers, auth_headers):
@@ -377,8 +378,10 @@ def form_fill_ready(app, tenant_headers, monkeypatch):
 
 def test_subject_label_is_built_from_the_structured_name_never_text(
         app, tenant_headers, form_fill_ready):
-    """`FormFillExecutor._subject_label` reads `given + family`, never
-    `name[0].text` (#367).
+    """The PDF title name is built from `given + family`, never
+    `name[0].text` (#367). Since #1171 it is read from the reviewed
+    response's name answers, which the populate step fills from the
+    structured name, rather than from the Patient at execution.
 
     `name.text` is the field the redacting read pops outright
     (r6/redaction.py) because upstream feeds put junk there; it was the one
@@ -388,10 +391,19 @@ def test_subject_label_is_built_from_the_structured_name_never_text(
     the questionnaire body too, so a PDF-level check stays green whichever
     path rendered them (the trap the issue records).
     """
-    from r6.actions.rails.form_fill import FormFillExecutor
+    from r6.actions import review
+    from r6.actions.models import ProposedAction
+    from r6.actions.rails.form_fill import reviewed_subject_label
     with app.app_context():
-        label = FormFillExecutor._subject_label(
-            "Patient/" + PROBE_PATIENT_ID, tenant_headers["X-Tenant-Id"])
+        action = ProposedAction(
+            tenant_id=tenant_headers["X-Tenant-Id"], kind="form-fill",
+            payload={"questionnaire": "healthclaw-intake",
+                     "subject": {"reference": "Patient/" + PROBE_PATIENT_ID}})
+        _q, patient, draft, _c = review._draft_qr(
+            action, tenant_headers["X-Tenant-Id"])
+        reviewed = review._build_reviewed_qr(
+            draft, patient, [], [], [], [], True, [], [])
+        label = reviewed_subject_label(reviewed)
     assert label == "Josephine " + NAME_MARKER, label
     assert SUBJECT_LABEL_MARKER not in label
 
@@ -411,7 +423,7 @@ def test_form_fill_pdf_title_carries_the_structured_name_not_name_text(
         "the extracted text does not look like the intake form, so a marker "
         "search over it proves nothing: " + text[:300])
     assert SUBJECT_LABEL_MARKER not in text, (
-        "Patient.name.text reached the PDF; _subject_label is reading the "
+        "Patient.name.text reached the PDF; the title label is reading the "
         "free-text field again (#367)")
     assert NAME_MARKER in text
 
