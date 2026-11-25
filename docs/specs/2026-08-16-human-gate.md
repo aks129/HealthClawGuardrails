@@ -164,7 +164,8 @@ not depend on the agent's word: who, when, via which channel. Our rail:
 `ActionConfirmation` (`r6/actions/confirmations.py`) plus an AuditEvent whose
 `detail` stays PHI-free.
 
-**H6 does not hold today, and the counter-example is a live route.**
+**H6 did not hold, and the counter-example was a live route.** It still
+does not hold for form-fill (see the update below and #1116).
 `POST /r6/actions/<id>/review` (`r6/actions/review.py:377`) is gated by
 `X-Tenant-Id` plus `_require_step_up(tenant)` — `Scope.WRITE`, which is inside
 `C_agent`. It then calls

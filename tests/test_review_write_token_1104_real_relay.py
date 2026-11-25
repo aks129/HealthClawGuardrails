@@ -44,8 +44,10 @@ def test_a_write_token_review_does_not_block_the_persons_approval(
                               json={'ack': 'true'})
     assert agent.status_code == 200, agent.get_data(as_text=True)
     assert _confirmations(chain, aid) == 0
-    assert not any(d.startswith('approved via')
-                   for d in _audit_details(chain))
+    details = _audit_details(chain)
+    # Positive control: the scan below reads the rows this POST wrote.
+    assert any(d.startswith('review received') for d in details), details
+    assert not any(d.startswith('approved via') for d in details), details
     assert twilio.sent == []
 
     # The person, through the relay. This answered 409 and never confirmed.

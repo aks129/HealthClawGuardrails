@@ -76,7 +76,37 @@ def test_the_real_approval_succeeds_after_a_write_token_review(
     assert len(approved) == 1, approved
 
 
-@pytest.mark.xfail(strict=True, reason=(
+def test_two_approvals_after_a_write_token_review_execute_once(
+        client, app, tenant_headers, auth_headers, tenant_id, seeded):
+    """A second review POST now answers 200 instead of 409, so a double-tap
+    reaches confirm twice. The claim is single-winner: one execution, one
+    consent record, one "approved via" row."""
+    action_id = _staged(client, tenant_headers, auth_headers, CURATR)
+    assert _post(client, auth_headers, action_id).status_code == 200
+    assert _post(client, auth_headers, action_id).status_code == 200
+    h1 = approval_headers(app, auth_headers, action_id)
+    h2 = approval_headers(app, auth_headers, action_id)
+    r1 = client.post('/r6/actions/%s/confirm' % action_id, headers=h1,
+                     json={'approved_via': 'review-page'})
+    r2 = client.post('/r6/actions/%s/confirm' % action_id, headers=h2,
+                     json={'approved_via': 'review-page'})
+    assert sorted([r1.status_code, r2.status_code]) == [200, 409], (
+        r1.get_data(as_text=True), r2.get_data(as_text=True))
+    assert len(_confirmations(app, action_id)) == 1
+    approved = [d for d in _audit_details(app, tenant_id, action_id)
+                if d.startswith('approved via')]
+    assert len(approved) == 1, approved
+
+
+def _require(cond, msg):
+    """Set-up check. RuntimeError, so the strict xfail below (which expects
+    AssertionError) fails loudly on a broken set-up instead of passing as
+    "still open"."""
+    if not cond:
+        raise RuntimeError(msg)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
     '#1116: the form-fill review POST takes the same write token, and '
     'closing it needs the approve surface to present the approval '
     'credential on this request'))
@@ -84,6 +114,14 @@ def test_a_write_token_cannot_submit_attested_answers(
         client, app, tenant_headers, auth_headers, tenant_id):
     _seed(app, tenant_id, [PATIENT])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    # Reach proof: a form-fill action awaiting review, with no answers and
+    # no confirmation yet, so the POST below lands on the open branch.
+    with app.app_context():
+        action = db.session.get(ProposedAction, action_id)
+        _require(action.kind == 'form-fill', 'not a form-fill action')
+        _require(action.status == 'awaiting_confirmation', 'not awaiting')
+        _require('reviewed_qr_id' not in action.payload, 'already reviewed')
+    _require(_confirmations(app, action_id) == [], 'already confirmed')
     r = _post_answers(client, auth_headers, action_id, {'nka': 'true'})
     assert r.status_code in (401, 403), r.get_data(as_text=True)
     assert _confirmations(app, action_id) == []
