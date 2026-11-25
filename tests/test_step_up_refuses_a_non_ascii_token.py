@@ -68,7 +68,7 @@ _NON_ASCII_SUFFIX = 'é'
 #: so a clinical write on /r6/fhir answers 428 before the handler runs and
 #: never reaches its step-up gate. Carrying the header is what puts these
 #: rows in front of the gate they are here to measure — the same thing
-#: tests/test_rx_transfer.py does to seed. Nothing here builds a write path
+#: other tests do to seed a record. Nothing here builds a write path
 #: on the header (#214): every request in this file is refused at step-up.
 _HUMAN_CONFIRMED = {'X-Human-Confirmed': 'true'}
 
@@ -106,23 +106,6 @@ class Row:
             monkeypatch.setenv(name, value)
 
 
-def _seed_medication_request(client, tenant_id, token):
-    """rx-transfer/propose only becomes a write once a draft exists — with no
-    transferable medication it answers 422 before it ever reaches its gate,
-    and the row would then pass while measuring nothing."""
-    med = {'resourceType': 'MedicationRequest', 'status': 'active',
-           'intent': 'order',
-           'medicationCodeableConcept': {'text': 'Atorvastatin 20 mg tablet'},
-           'subject': {'reference': 'Patient/non-ascii-probe'}}
-    resp = client.post('/r6/fhir/MedicationRequest',
-                       headers={'X-Tenant-Id': tenant_id,
-                                'X-Step-Up-Token': token,
-                                **_HUMAN_CONFIRMED,
-                                'Content-Type': 'application/fhir+json'},
-                       data=json.dumps(med))
-    assert resp.status_code == 201, resp.get_data(as_text=True)
-
-
 ROWS = [
     Row('fhir-create', 'r6/routes.py:create_resource',
         'POST', '/r6/fhir/Observation', 401,
@@ -141,12 +124,6 @@ ROWS = [
         body={'profile': 'ktc', 'patient_id': 'non-ascii-probe',
               'resource_types': ['Patient']},
         env={'KTC_EXPORT_ENABLED': 'true'}),
-    Row('actions-rx-transfer-propose',
-        'r6/actions/routes.py:propose_rx_transfer',
-        'POST', '/r6/actions/rx-transfer/propose', 401,
-        body={'to_pharmacy': {'name': 'Walgreens Main St',
-                              'phone': '+15551230000'}},
-        seed=_seed_medication_request),
     Row('actions-propose', 'r6/actions/routes.py:propose_action',
         'POST', '/r6/actions/propose', 401,
         body={'kind': 'sms', 'payload': {'phone': '+15555550100',

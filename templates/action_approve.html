@@ -64,6 +64,14 @@
       </div>
       {% endif %}
 
+      {# `available` is false only when the engine says the kind has no
+         rail; a caller that does not pass it gets the ordinary page. #}
+      {% if available is defined and not available %}
+      <div id="review-gate-msg" class="alert alert-warning" role="alert">
+        This kind of request is not available. It cannot be carried out, so
+        there is nothing to approve. You can decline it.
+      </div>
+      {% else %}
       <div class="form-check mt-2 p-3 bg-body-secondary rounded">
         <input class="form-check-input" type="checkbox" id="ack" name="ack" value="true">
         <label class="form-check-label" for="ack">
@@ -77,6 +85,7 @@
 
       <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve
       </button>
+      {% endif %}
       <button type="button" id="decline-btn" class="btn btn-outline-secondary btn-lg ms-2">Decline
       </button>
     </form>
@@ -91,7 +100,10 @@
   // r6/actions/review.py and the note in action_review.html).
   (function () {
     var form = document.getElementById('review-form');
-    var btn = document.getElementById('approve-btn');
+    // A kind nothing can carry out renders no Approve; the stand-in keeps
+    // the shared handlers' `btn.disabled = true` harmless.
+    var unavailable = {{ 'true' if (available is defined and not available) else 'false' }};
+    var btn = document.getElementById('approve-btn') || {};
     var gateMsg = document.getElementById('review-gate-msg');
 
     // The CareAgents relay marks a text it will not approve (a number that
@@ -100,7 +112,7 @@
     var refused = /\bnot-your-number\b/.test(gateMsg.className);
 
     function evaluate() {
-      if (refused) { btn.disabled = true; return false; }
+      if (refused || unavailable) { btn.disabled = true; return false; }
       var ok = form.querySelector('#ack').checked;
       btn.disabled = !ok;
       gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';

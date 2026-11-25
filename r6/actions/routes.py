@@ -39,12 +39,11 @@ from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       payload_digest)
 from r6.actions.models import ProposedAction, VALID_KINDS, _utcnow
 from r6.actions.registry import get_executor
-from r6.actions.rx_transfer import build_transfer_request, medication_names
 from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
 from r6.audit import add_audit_event
 from r6.rate_limit import rate_limit_middleware
-from r6.read_auth import authenticate_tenant_read, authorize_tenant_read
+from r6.read_auth import authenticate_tenant_read
 from r6.stepup import generate_step_up_token
 from r6.telegram_push import notify_tenant
 from r6.body_guard import json_body_within_depth
@@ -107,9 +106,9 @@ def _emergency_refusal_or_none(tenant_id, text):
 
 def _rail_validation_or_none(kind, payload):
     """Executor validation when a rail is registered for this kind. A
-    VALID_KINDS entry with no registered rail (none today; possible for a
-    future kind) skips this — VALID_KINDS remains the propose gate, and
-    such a kind fails loud at confirm instead."""
+    VALID_KINDS entry with no registered rail (phone-call and insurance-call
+    today) skips this — VALID_KINDS remains the propose gate, and such a
+    kind fails loud at confirm instead."""
     ex = get_executor(kind)
     if ex is None:
         return None
@@ -277,100 +276,12 @@ def _resolve_from_executing(action, result):
 
 @actions_blueprint.route('/rx-transfer/propose', methods=['POST'])
 def propose_rx_transfer():
-    """Build a prescription-transfer request call from the tenant's active
-    MedicationRequests and stage it as a proposed phone-call action.
-
-    Body: {to_pharmacy: {name, phone}, from_pharmacy?: {name, phone},
-           medication_names?: [str]}  (names filter; default = all active)
-
-    Commit is the EXISTING /actions/<id>/commit — step-up stays mandatory and
-    commit only SUBMITS for out-of-band approval; this endpoint only drafts.
-    Schedule II medications are refused with an explanation (never
-    transferable; see rx_transfer.py).
-    """
-    tenant = _tenant_or_none()
-    if tenant is None:
-        return _error(400, 'X-Tenant-Id header is required')
-    tenant_id = tenant.id
-    tenant_id = authorize_tenant_read(tenant_id)
-    if tenant_id is None:
-        return _error(401, 'authentication required for this tenant')
-
-    body = request.get_json(silent=True) or {}
-    to_pharmacy = body.get('to_pharmacy') or {}
-    if not (isinstance(to_pharmacy, dict) and to_pharmacy.get('name')
-            and to_pharmacy.get('phone')):
-        return _error(400, 'to_pharmacy {name, phone} is required')
-    from_pharmacy = body.get('from_pharmacy') \
-        if isinstance(body.get('from_pharmacy'), dict) else None
-    name_filter = body.get('medication_names')
-
-    from r6.models import R6Resource
-    # Live rows only: a medication the patient deleted must not be drafted
-    # into a call a human is then asked to approve (#805's shape).
-    rows = R6Resource.query.filter_by(
-        resource_type='MedicationRequest', tenant_id=tenant_id,
-        is_deleted=False).all()
-    meds = [r.to_fhir_json() for r in rows]
-    if isinstance(name_filter, list) and name_filter:
-        wanted = {n.lower() for n in name_filter if isinstance(n, str)}
-        meds = [m for m in meds
-                if wanted & {n.lower() for n in medication_names(m)}]
-
-    result = build_transfer_request(meds, to_pharmacy,
-                                    from_pharmacy=from_pharmacy)
-    if result['action_payload'] is None:
-        return jsonify({
-            'error': 'no transferable medications',
-            'refused': result['refused'],
-            'detail': ('Nothing to transfer: no active medication orders '
-                       'matched, or all matches are Schedule II (which can '
-                       'never be transferred — a new prescription is '
-                       'required).'),
-        }), 422
-
-    # This endpoint becomes a write only when a transferable draft exists.
-    # Read-scoped credentials may preview the no-action/refusal response above,
-    # but persisting a ProposedAction requires an explicit write-capable token.
-    # Access kernel, slice 5. also_bearer replaces the hand-rolled
-    # Authorization fallback above it: the kernel reads X-Step-Up-Token
-    # first, then Bearer, which is the order this site already used.
-    require_grant(
-        scope=Scope.WRITE,
-        tenant=tenant,
-        also_bearer=True,
-        absent_status=401,
-        rejected_status=401,
-    )
-
-    refusal = _emergency_refusal_or_none(tenant_id,
-                                         result['action_payload'].get('body'))
-    if refusal is not None:
-        return refusal
-    invalid = _rail_validation_or_none('phone-call', result['action_payload'])
-    if invalid is not None:
-        return invalid
-
-    action = ProposedAction(tenant_id=tenant_id, kind='phone-call',
-                            payload=result['action_payload'])
-    db.session.add(action)
-    db.session.flush()
-    add_audit_event(
-        'create', resource_type='ProposedAction', resource_id=action.id,
-        agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-        detail=json.dumps(action.summary()),
-    )
-    db.session.commit()
-
-    return jsonify({
-        'action': action.summary(),
-        'allowed': result['allowed'],
-        'refused': result['refused'],
-        'next_step': ('Review the draft with the patient, then submit via '
-                      'POST /r6/actions/%s/commit with X-Step-Up-Token. The '
-                      'patient then approves out of band (dashboard/Telegram) '
-                      'to execute.' % action.id),
-    }), 201
+    """Gone. This route drafted a free-text call script from the tenant's
+    medication orders and staged it as a phone-call to a number the caller
+    supplied. No rail dials that any more, so it answers 410 to every
+    caller, before any credential or body is read, and stages nothing."""
+    return _error(410, 'Prescription transfer requests are no longer '
+                       'available on this route; nothing was proposed.')
 
 
 @actions_blueprint.route('/propose', methods=['POST'])
@@ -856,8 +767,8 @@ def confirm_action(action_id):
     db.session.commit()
 
     # (e) A kind with no registered rail fails loud — never a fake success.
-    # Every VALID_KINDS entry has a rail today (form-fill's is a Task-3
-    # skeleton), so this is defensive for a future kind added to
+    # This is where an approved phone-call or insurance-call ends: their
+    # rail is gone, so nothing dials. It also catches a future kind added to
     # VALID_KINDS ahead of its rail. Checked before the provider_request_at
     # stamp: no provider call is even possible here.
     ex = get_executor(action.kind)
@@ -1049,7 +960,7 @@ def action_status(action_id):
 
 @actions_blueprint.route('/callback/<provider>', methods=['POST'])
 def action_callback(provider):
-    if provider not in ('bland', 'twilio'):
+    if provider != 'twilio':
         return _error(404, 'Unknown provider')
 
     # Shared-secret verification (constant-time). The secret rides in the
@@ -1063,6 +974,12 @@ def action_callback(provider):
     action_id = request.args.get('action_id', '')
     action = ProposedAction.query.filter_by(id=action_id).first()
     if action is None:
+        return _error(404, 'Unknown action')
+    # This route trusts a secret that rides in the query string and writes
+    # the provider's own words into the action. It resolves texts and
+    # nothing else: for any other kind the answer is the unknown-action 404,
+    # with the right secret too.
+    if action.kind != 'sms':
         return _error(404, 'Unknown action')
 
     body = request.get_json(silent=True)

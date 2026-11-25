@@ -423,13 +423,63 @@ class TestContainment:
         moved = {t['id'] for t in body['transitions']}
         assert moved == {never_called_id, lapsed_id}
 
-    def test_missing_executor_is_contained(self, app, client, auth_headers,
-                                           monkeypatch):
-        action_id = make_action(external_ref='call-42')
+    @pytest.mark.parametrize('kind', ['phone-call', 'insurance-call'])
+    @pytest.mark.parametrize('status', ['executing', 'unknown'])
+    def test_a_retired_call_kind_is_not_left_in_flight(
+            self, status, kind, app, client, auth_headers, action_registry):
+        """The two call kinds have no rail, so no callback and no reconcile
+        can resolve a row of theirs. The provider may have acted, so it
+        ends needs_review. Run against the real registry.
+
+        MUTATION: make _reap_without_a_rail in r6/ops/routes.py return
+        None -> red: the row stays in flight for ever.
+        """
+        action_id = make_action(status=status, external_ref='call-42',
+                                kind=kind)
+        body = reap(client, auth_headers)
+        row = get_action(action_id)
+        assert row.status == 'needs_review'
+        assert 'no_rail_for_kind' in row.outcome_summary
+        assert body['swept'] == 1
+
+    def test_a_fresh_row_of_a_retired_kind_waits_only_while_executing(
+            self, app, client, auth_headers, action_registry):
+        """`executing` keeps its stale window: a fresh row is left alone.
+        `unknown` has no stale window for any kind, so a fresh one moves on
+        this sweep.
+
+        Still never swept, for any kind, before and after this rule: an
+        `unknown` row with no provider reference. The reaper does not
+        select it; this pins that so nobody reads the rule as covering it.
+
+        MUTATION: move the retired-kind check above the freshness return in
+        _reap_executing -> red: the fresh executing row moves.
+        """
+        fresh_executing = make_action(external_ref='call-1', age=timedelta(0),
+                                      kind='phone-call')
+        fresh_unknown = make_action(status='unknown', external_ref='call-2',
+                                    age=timedelta(0), kind='phone-call')
+        unknown_no_ref = make_action(status='unknown', kind='phone-call')
+        reap(client, auth_headers)
+        assert get_action(fresh_executing).status == 'executing'
+        assert get_action(fresh_unknown).status == 'needs_review'
+        assert get_action(unknown_no_ref).status == 'unknown'
+
+    @pytest.mark.parametrize('status', ['executing', 'unknown'])
+    def test_a_rail_that_failed_to_load_does_not_end_its_rows(
+            self, status, app, client, auth_headers, monkeypatch):
+        """A text whose rail is missing from the registry (an import that
+        failed at boot) is left for a person, as before: an outage must not
+        turn every in-flight text into needs_review.
+
+        MUTATION: drop the kind test from the no-executor branch in
+        r6/ops/routes.py, so any kind without an executor is ended -> red.
+        """
+        action_id = make_action(status=status, external_ref='SM-42')
         other_id = make_action(claimed_at=_utcnow() - STALE)
         monkeypatch.setattr('r6.ops.routes.get_executor', lambda kind: None)
         body = reap(client, auth_headers)
-        assert get_action(action_id).status == 'executing'
+        assert get_action(action_id).status == status
         assert get_action(other_id).status == 'failed'
         assert body['swept'] == 1
 

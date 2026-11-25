@@ -106,7 +106,7 @@ def check_nonce_store():
 
 
 def check_actions_webhook():
-    """Provider callbacks (Bland/Twilio) verify a shared secret riding in a
+    """Provider callbacks (Twilio) verify a shared secret riding in a
     URL built from PUBLIC_BASE_URL; unset means callbacks fail closed and
     executing actions never resolve."""
     missing = [var for var in ('ACTIONS_WEBHOOK_SECRET', 'PUBLIC_BASE_URL')

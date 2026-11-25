@@ -5,17 +5,16 @@ header); POST /<id>/confirm = the human's out-of-band Approve, and the ONLY
 place a provider call happens. The guarded claim transition is the mutex
 (single winner); the ActionConfirmation row is the consent record.
 """
-import json
 from datetime import datetime, timedelta, timezone
 
 from models import db
 from r6.actions import errors
 from r6.actions.models import ProposedAction
-from tests.approval_helpers import propose_headers
+from tests.approval_helpers import propose_headers, sms_rail_env
 
 
 PROPOSE_BODY = {
-    'kind': 'phone-call',
+    'kind': 'sms',
     'payload': {
         'to': 'CVS Pharmacy',
         'phone': '617-555-0100',
@@ -67,7 +66,7 @@ def test_commit_returns_202_and_executes_nothing(client, tenant_headers,
                                                  auth_headers, app,
                                                  action_registry,
                                                  fake_providers, monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     resp = _commit(client, auth_headers, action_id)
     assert resp.status_code == 202
@@ -91,7 +90,7 @@ def test_spoofed_human_confirmed_header_does_not_execute(
         fake_providers, monkeypatch):
     """The old spoofable gate is dead: an agent asserting X-Human-Confirmed
     gets a 202 submit like everyone else — never an execution."""
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     headers = dict(auth_headers)
     headers['X-Human-Confirmed'] = 'true'
@@ -108,7 +107,7 @@ def test_spoofed_human_confirmed_header_does_not_execute(
 def test_confirm_executes_exactly_once(client, tenant_headers, auth_headers,
                                        app, action_registry, fake_providers,
                                        monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
 
@@ -168,7 +167,7 @@ def test_human_surface_mints_bound_token_and_confirms(
         client, tenant_headers, auth_headers, action_registry, fake_providers,
         monkeypatch):
     monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'human-surface-secret')
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     assert _commit(client, auth_headers, action_id).status_code == 202
 
@@ -247,7 +246,7 @@ def test_expired_row_cannot_win_confirm_claim(client, tenant_headers,
                                               monkeypatch):
     """Same TOCTOU closure on the execution claim: an approval window that
     lapses between the snapshot check and the claim must never dial."""
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
     with app.app_context():
@@ -282,7 +281,7 @@ def test_confirmation_row_is_the_consent_record(client, tenant_headers,
                                                 auth_headers, app,
                                                 action_registry,
                                                 fake_providers, monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
     resp = _confirm(client, auth_headers, action_id,
@@ -302,7 +301,7 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
                                                   fake_providers, monkeypatch):
     """A 400 on pure input validation happens BEFORE nonce consumption: it
     neither claims the action nor burns the single-use token."""
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
     approval = _approval_headers(auth_headers, action_id)
@@ -347,7 +346,7 @@ def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
                                          app, action_registry, fake_providers,
                                          monkeypatch):
     """An action-bound token is single-use as well as action-specific."""
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
 
     first_action = _propose(client, tenant_headers)
     second_action = _propose(client, tenant_headers)
@@ -374,7 +373,7 @@ def test_generic_commit_token_cannot_confirm(
         client, tenant_headers, auth_headers, action_registry,
         fake_providers, monkeypatch):
     """An agent's normal write token can submit but cannot self-approve."""
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
 
     action_id = _propose(client, tenant_headers)
     assert _commit(client, auth_headers, action_id).status_code == 202
@@ -393,7 +392,7 @@ def test_generic_commit_token_cannot_confirm(
 def test_action_bound_token_cannot_confirm_a_different_action(
         client, tenant_headers, auth_headers, action_registry,
         fake_providers, monkeypatch):
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
     first_action = _propose(client, tenant_headers)
     second_action = _propose(client, tenant_headers)
     assert _commit(client, auth_headers, first_action).status_code == 202
@@ -442,7 +441,7 @@ def test_needs_review_result_maps_to_needs_review(client, tenant_headers,
     from r6.actions.registry import get_executor, ExecutionResult
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
-    ex = get_executor('phone-call')
+    ex = get_executor('sms')
     monkeypatch.setattr(ex, 'execute', lambda action: ExecutionResult(
         status='needs_review', outcome={'reason': 'ivr_loop_detected'}))
     resp = _confirm(client, auth_headers, action_id)
@@ -464,7 +463,7 @@ def test_executing_result_never_clobbers_fast_webhook(client, tenant_headers,
     from r6.actions.state import transition_action
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
-    ex = get_executor('phone-call')
+    ex = get_executor('sms')
 
     def fast_webhook_execute(action):
         transition_action(action.id, from_states=('executing',),
@@ -486,7 +485,7 @@ def test_executing_result_never_clobbers_fast_webhook(client, tenant_headers,
 def test_outcome_unknown_maps_to_unknown(client, tenant_headers, auth_headers,
                                          app, action_registry, monkeypatch):
     import requests as req
-    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    sms_rail_env(monkeypatch)
 
     def timeout(method, url, **kw):
         raise req.Timeout('slow')
@@ -530,10 +529,10 @@ def test_propose_emergency_text_refused_and_audited(client, tenant_headers,
 
 def test_propose_executor_validation_422(client, tenant_headers,
                                          action_registry):
-    # phone-call rail requires payload.phone; propose fails fast with the
+    # the sms rail requires payload.phone; propose fails fast with the
     # taxonomy code instead of staging a doomed action.
     resp = client.post('/r6/actions/propose', json={
-        'kind': 'phone-call',
+        'kind': 'sms',
         'payload': {'to': 'CVS Pharmacy', 'body': 'refill please'},
     }, headers=propose_headers(tenant_headers))
     assert resp.status_code == 422
@@ -542,25 +541,3 @@ def test_propose_executor_validation_422(client, tenant_headers,
     assert data['error']                            # human-readable message
     assert errors.PAYLOAD_INVALID in data['errors']
 
-
-def test_rx_transfer_propose_next_step_describes_new_flow(client, auth_headers,
-                                                          tenant_headers):
-    med = {
-        'resourceType': 'MedicationRequest', 'status': 'active',
-        'intent': 'order',
-        'medicationCodeableConcept': {'text': 'Metformin 500 mg tablet'},
-        'subject': {'reference': 'Patient/rx-test-pt'},
-    }
-    r = client.post('/r6/fhir/MedicationRequest',
-                    headers={**auth_headers, 'X-Human-Confirmed': 'true',
-                             'Content-Type': 'application/fhir+json'},
-                    data=json.dumps(med))
-    assert r.status_code == 201
-    resp = client.post('/r6/actions/rx-transfer/propose',
-                       headers=auth_headers,
-                       json={'to_pharmacy': {'name': 'CVS #1234',
-                                             'phone': '617-555-0100'}})
-    assert resp.status_code == 201
-    next_step = resp.get_json()['next_step']
-    assert 'X-Human-Confirmed' not in next_step
-    assert 'out of band' in next_step or 'approve' in next_step.lower()

@@ -3,7 +3,7 @@ from r6.actions.models import ProposedAction
 from tests.approval_helpers import propose_headers
 
 PROPOSE_BODY = {
-    'kind': 'phone-call',
+    'kind': 'sms',
     'payload': {'to': 'CVS', 'phone': '617-555-0100', 'body': 'script'},
 }
 
@@ -21,11 +21,11 @@ def _executing_action(client, tenant_headers, app):
     return action_id
 
 
-def test_bland_callback_requires_secret(client, tenant_headers, app, monkeypatch):
+def test_callback_requires_secret(client, tenant_headers, app, monkeypatch):
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=wrong' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=wrong' % action_id,
         json={'call_id': 'bl-123', 'status': 'completed',
               'summary': 'Refill confirmed'})
     assert resp.status_code == 403
@@ -36,16 +36,16 @@ def test_callback_rejected_when_secret_unconfigured(client, tenant_headers, app,
     monkeypatch.delenv('ACTIONS_WEBHOOK_SECRET', raising=False)
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=' % action_id,
         json={'status': 'completed'})
     assert resp.status_code == 403
 
 
-def test_bland_callback_completes_action(client, tenant_headers, app, monkeypatch):
+def test_callback_completes_action(client, tenant_headers, app, monkeypatch):
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'bl-123', 'status': 'completed',
               'summary': 'Refill confirmed, ready after 3pm'})
     assert resp.status_code == 200
@@ -64,7 +64,7 @@ def test_callback_resolution_writes_action_event(client, tenant_headers, app,
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'done'})
     assert resp.status_code == 200
     with app.app_context():
@@ -72,14 +72,14 @@ def test_callback_resolution_writes_action_event(client, tenant_headers, app,
         events = ActionEvent.query.filter_by(action_id=action_id,
                                              to_status='completed').all()
         assert len(events) == 1
-        assert events[0].actor == 'callback:bland'
+        assert events[0].actor == 'callback:twilio'
 
 
-def test_bland_callback_failed_call(client, tenant_headers, app, monkeypatch):
+def test_callback_failed_call(client, tenant_headers, app, monkeypatch):
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'bl-123', 'status': 'failed', 'summary': 'no answer'})
     assert resp.status_code == 200
     with app.app_context():
@@ -91,7 +91,7 @@ def test_bland_callback_failed_call(client, tenant_headers, app, monkeypatch):
 def test_callback_duplicate_is_noop(client, tenant_headers, app, monkeypatch):
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
-    url = '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id
+    url = '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id
     first = client.post(url, json={'status': 'completed', 'summary': 'done'})
     assert first.status_code == 200
     second = client.post(url, json={'status': 'failed', 'summary': 'late dupe'})
@@ -116,7 +116,7 @@ def test_callback_notifies_tenant_summary_only(client, tenant_headers, app,
     monkeypatch.setattr('r6.actions.routes.notify_tenant', fake_notify)
     action_id = _executing_action(client, tenant_headers, app)
     client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'done'})
     assert sent['tenant'] == tenant_headers['X-Tenant-Id']
     # PHI-safe: recipient label OK, phone number NOT
@@ -132,7 +132,7 @@ def test_unknown_resolved_by_late_webhook(client, tenant_headers, app, monkeypat
         row.status = 'unknown'
         db.session.commit()
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'late but done'})
     assert resp.status_code == 200
     with app.app_context():
@@ -171,7 +171,7 @@ def test_mismatched_provider_ref_rejected(client, tenant_headers, app, monkeypat
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'DIFFERENT-REF', 'status': 'completed'})
     assert resp.status_code == 404
     with app.app_context():
@@ -184,7 +184,7 @@ def test_non_ascii_secret_returns_403_not_500(client, tenant_headers, app, monke
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=%%C3%%BC' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=%%C3%%BC' % action_id,
         json={'status': 'completed'})
     assert resp.status_code == 403
 
@@ -193,7 +193,7 @@ def test_callback_emits_audit(client, tenant_headers, app, monkeypatch):
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)
     client.post(
-        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
         json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'secret transcript'})
     with app.app_context():
         from r6.models import AuditEventRecord

@@ -1,7 +1,7 @@
 """Rail executors — the new fail-loud ActionExecutor implementations that
 register themselves with r6.actions.registry.
 
-Each rail module (phone.py, sms.py, ...) defines module-level state plus a
+Each rail module (sms.py, form_fill.py, ...) defines module-level state plus a
 `register()` function that calls register_executor() for its kind, and
 calls that function once at import time so importing this package alone
 populates the registry at boot.
@@ -15,13 +15,17 @@ calls each rail's register() function directly (not via import), swallowing
 the duplicate-kind ValueError. Tests should do `_clear(); register_all()`
 to reach a known-good registry state rather than relying on import order.
 
-Scope note: 'insurance-call' registers here too (Task 10) — a tiny subclass
-of PhoneCallExecutor in phone.py that only overrides kind (same Bland.ai
-transport; the insurance script source lives with the proposer). 'form-fill'
-(Task 3) is also registered now, but its execute() is a skeleton: it fails
-loud without PUBLIC_BASE_URL and otherwise returns an honest needs_review
-placeholder — the full populate/review/render/DocumentReference orchestration
-lands in Task 8.
+No rail dials a phone. 'phone-call' and 'insurance-call' took a free-text
+script to any number; their rail is gone, so neither kind has an executor
+and a confirmed one fails loud at confirm (provider_not_configured) with no
+provider request. The kinds stay proposable only because the gate's own
+tests use them as fixtures. The plan is for calls to return as a structured
+plan to a saved contact; nothing here enforces that yet.
+
+Scope note: 'form-fill' (Task 3) is registered, but its execute() is a
+skeleton: it fails loud without PUBLIC_BASE_URL and otherwise returns an
+honest needs_review placeholder — the full
+populate/review/render/DocumentReference orchestration lands in Task 8.
 """
 
 import logging
@@ -92,8 +96,8 @@ def _webhook_url(provider, action_id):
         base, provider, urllib.parse.urlencode(params))
 
 
-# Shared provider-status vocabulary for reconcile(): both phone (Bland.ai)
-# and SMS (Twilio) map onto this same three-way split per the rail spec.
+# Provider-status vocabulary for reconcile(): SMS (Twilio) maps onto this
+# three-way split per the rail spec.
 RECONCILE_COMPLETED_STATUSES = ('completed', 'delivered')
 RECONCILE_FAILED_STATUSES = ('failed', 'no-answer', 'busy', 'canceled', 'undelivered')
 
@@ -104,14 +108,14 @@ def reconcile_needs_review():
     return ExecutionResult(status='needs_review', outcome={'reason': 'reconcile_unreachable'})
 
 
-from r6.actions.rails import curatr_fix, form_fill, phone, sms, webhook_poster  # noqa: E402  (registration side effect)
+from r6.actions.rails import curatr_fix, form_fill, sms, webhook_poster  # noqa: E402  (registration side effect)
 
 
 def register_all():
     """(Re-)register every rail executor. Idempotent: safe to call after
     registry._clear(), and safe to call repeatedly — duplicate-kind
     registrations are swallowed."""
-    for module in (phone, sms, form_fill, webhook_poster, curatr_fix):
+    for module in (sms, form_fill, webhook_poster, curatr_fix):
         try:
             module.register()
         except ValueError:
