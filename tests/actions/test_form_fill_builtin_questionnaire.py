@@ -385,3 +385,35 @@ def test_a_staged_review_with_a_known_linkid_out_of_place_is_refused(
     _require(conf.status_code == 200, conf.get_data(as_text=True))
     assert _status(app, action_id) == 'needs_review'
     assert '%s: Yes' % CANON_NKA_TEXT not in rows, rows
+
+
+def test_two_answers_on_the_attestation_are_refused(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """R3-1: a second answer on the attestation printed "No, Yes".
+
+    MUTATION: drop the one-answer rule from _off_form -> red."""
+    from r6.actions import review
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://example.test')
+    rows, _calls = _spy_rows(monkeypatch)
+    _seed(app, tenant_id, [PATIENT, ALLERGY_A])
+    real_build = review._build_reviewed_qr
+
+    def old_build(draft_qr, *a, **kw):
+        qr = real_build(draft_qr, *a, **kw)
+        for group in qr['item']:
+            for item in group.get('item', []):
+                if item['linkId'] == NKA:
+                    item['answer'].append({'valueBoolean': True})
+        return qr
+    monkeypatch.setattr(review, '_build_reviewed_qr', old_build)
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    person = _review(client, approval_headers(app, auth_headers, action_id),
+                     action_id, {'allergy-0': 'confirm'})
+    _require(person.status_code == 200, person.get_data(as_text=True))
+    monkeypatch.setattr(review, '_build_reviewed_qr', real_build)  # deploy
+
+    conf = _confirm(client, app, auth_headers, action_id)
+    _require(conf.status_code == 200, conf.get_data(as_text=True))
+    assert _status(app, action_id) == 'needs_review'
+    assert not rows, rows
