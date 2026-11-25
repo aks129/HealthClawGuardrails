@@ -48,7 +48,8 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
-                       require_grant, require_open_tenant, tenant_from_request)
+                       _patient_identity, require_grant, require_open_tenant,
+                       tenant_from_request)
 from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -3257,11 +3258,14 @@ def mcp_app_wearables():
 # --- $share-bundle Export (SMART Health Link feed) ---
 
 def _intake_strip(original):
-    """Intake: Patient name/birthDate/address/telecom verbatim; all else
-    apply_redaction (strip, then relabel by code); no SSN or free text (#282)."""
+    """Intake: Patient name/birthDate/address/telecom rebuilt element by
+    element (_patient_identity, #964); all else apply_redaction (strip, then
+    relabel by code); no SSN or free text (#282)."""
     res = apply_redaction(original)
     if original.get('resourceType') == 'Patient':
-        res.update({k: original[k] for k in ('name', 'birthDate', 'address', 'telecom') if k in original})
+        for k in ('name', 'birthDate', 'address', 'telecom'):
+            res.pop(k, None)
+        res.update(_patient_identity(original))
     for key in ('note', 'text', 'conclusion'):
         res.pop(key, None)
     _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn', 'urn:oid:2.16.840.1.113883.4.1')
@@ -3280,7 +3284,8 @@ def share_bundle():
 
     Profiles:
         intake (default) — identified; Patient name/birthDate/address/telecom
-                           verbatim, everything else apply_redaction (upstream
+                           from allow-listed sub-elements (no nested text,
+                           display or extension, #964), everything else apply_redaction (upstream
                            display/text stripped, relabelled by code); SSN-class
                            identifiers, text, note and conclusion removed;
                            meta.tag stamped intake-identified (#282).

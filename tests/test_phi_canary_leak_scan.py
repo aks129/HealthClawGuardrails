@@ -40,7 +40,8 @@ excused, only on that surface:
 - `shl_generate` defaults to the `intake` profile of `$share-bundle`, an
   identified export the patient sends to a clinic
   (`r6/routes.py::_intake_strip`; `tests/test_share_bundle.py`). It keeps
-  the Patient's `name`, `birthDate`, `address` and `telecom` verbatim and
+  the Patient's `name`, `birthDate`, `address` and `telecom`, rebuilt from
+  allow-listed sub-elements (#964: no `name.text` or `address.text`), and
   runs everything else through `apply_redaction` (#282, owner ruling), so
   only those canaries are excused there. Its row asks for every type with a
   patient reference, not the route's default set, so `conclusion`, the
@@ -666,14 +667,14 @@ POPULATE_KEEPS = frozenset({FAMILY, GIVEN, PHONE, EMAIL, ADDR_LINE,
                             ADDR_CITY, ADDR_POSTAL, DOB})
 
 #: The intake share is identified by design: the Patient's name, birthDate,
-#: address and telecom ship verbatim, and nothing else (#282, owner ruling;
-#: r6/routes.py `_intake_strip`). `name.text` and `address.text` are part of
-#: the HumanName and Address kept whole. Every other canary must be absent:
-#: displays, `CodeableConcept.text`, notes, `conclusion`, the MRN, member
-#: numbers and `Patient.contact`.
-INTAKE_KEEPS = frozenset({FAMILY, GIVEN, NAME_TEXT, DOB, PHONE, EMAIL,
-                          ADDR_LINE, ADDR_CITY, ADDR_DISTRICT, ADDR_POSTAL,
-                          ADDR_TEXT})
+#: address and telecom ship, and nothing else (#282, owner ruling;
+#: r6/routes.py `_intake_strip`). They are rebuilt from allow-listed
+#: sub-elements, so `name.text` and `address.text` are scanned like any other
+#: upstream text (#964). Every other canary must be absent: displays,
+#: `CodeableConcept.text`, notes, `conclusion`, the MRN, member numbers and
+#: `Patient.contact`.
+INTAKE_KEEPS = frozenset({FAMILY, GIVEN, DOB, PHONE, EMAIL,
+                          ADDR_LINE, ADDR_CITY, ADDR_DISTRICT, ADDR_POSTAL})
 
 #: `apply_patient_controlled_redaction` keeps the top-level birthDate
 #: verbatim (#617 docstring); nothing else.
