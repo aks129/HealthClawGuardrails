@@ -12,7 +12,9 @@ held for that subject was loaded verbatim into the answer set. Three bounds
 now apply, each in the place that owns it:
 
   1. Expressions see a BOUNDED PROJECTION of the subject, never the stored
-     Patient (r6/sdc/expressions.py).
+     Patient (r6/sdc/expressions.py). Over HTTP that subject has its
+     identity removed first (_identity_free below), because this route's
+     answer reaches a model (spec 2026-11-24 §7 PR 3).
   2. Auto-loaded clinical content goes through apply_redaction before the
      engine sees it (_redacted_for_populate below), so an upstream `display`
      or `CodeableConcept.text` carrying a patient name cannot transit. The
@@ -73,7 +75,8 @@ def register_sdc_routes(blueprint, deps):
         subject = _resolve_subject(params, tenant_id)
         content = _gather_content(params, subject, tenant_id)
 
-        qr, issues = populate_questionnaire(questionnaire, subject, content)
+        qr, issues = populate_questionnaire(
+            questionnaire, _identity_free(subject), content)
 
         add_audit_event("read", "Questionnaire",
                         questionnaire.get("id"),
@@ -94,13 +97,12 @@ def register_sdc_routes(blueprint, deps):
         # Profile.INTAKE, which then popped top-level fields only and changed
         # nothing here. Intake now runs apply_redaction, which would delete
         # every populated answer, so the exit says what bounds the payload:
-        # the %patient projection in r6/sdc/expressions.py and
-        # apply_redaction in _gather_content, both BEFORE population. A strip
-        # afterwards cannot tell a record answer from one the caller typed.
+        # _identity_free on the subject and apply_redaction in
+        # _gather_content, both BEFORE population. A strip afterwards cannot
+        # tell a record answer from one the caller typed.
         return unredacted_response(
             response_params, endpoint=request.endpoint,
-            reason="content redacted before population; subject bounded "
-                   "by the D10 %patient projection")
+            reason="subject and content redacted before population")
 
     @blueprint.route("/QuestionnaireResponse/$extract", methods=["POST"])
     @blueprint.route("/QuestionnaireResponse/<qr_id>/$extract",
@@ -115,8 +117,21 @@ def register_sdc_routes(blueprint, deps):
 
         params = request.get_json(silent=True) or {}
         qr = _param_resource(params, "questionnaire-response")
+        from_store = False
         if qr is None and qr_id:
-            qr = _load_stored("QuestionnaireResponse", qr_id, tenant_id)
+            # A STORED response is record content, so extraction reads what
+            # GET /QuestionnaireResponse/{id} returns and no more. Without
+            # this a read-tier dry run echoed answers a read hides: a
+            # subject-less response's name and birth date came back in full
+            # (spec 2026-11-24 §2.2). The input is redacted, not only the
+            # extracted rows: a caller may send its own Questionnaire, which
+            # can map a free-text answer into `gender` or `address.state`,
+            # elements the walker keeps. The rows are redacted as well, at
+            # the exit below. An inline response is the caller's own data
+            # and is extracted as sent.
+            stored = _load_stored("QuestionnaireResponse", qr_id, tenant_id)
+            qr = apply_redaction(stored) if stored is not None else None
+            from_store = qr is not None
         if qr is None:
             return operation_outcome(
                 "error", "invalid",
@@ -198,6 +213,16 @@ def register_sdc_routes(blueprint, deps):
                 "error", "exception",
                 "Failed to commit extracted resources"), 500
 
+        if from_store:
+            # The rows also take from the Questionnaire: observation
+            # extraction copies `item.code` verbatim, and a stored
+            # Questionnaire is read unredacted, so its upstream `display`
+            # would reach the caller. Built after the commit block, so what
+            # is written is never the redacted copy.
+            bundle = dict(bundle, entry=[
+                dict(entry, resource=apply_redaction(entry["resource"]))
+                for entry in bundle["entry"]])
+
         return jsonify({
             "resourceType": "Parameters",
             "parameter": [{"name": "return", "resource": bundle}],
@@ -226,12 +251,12 @@ def register_sdc_routes(blueprint, deps):
 
     def _gather_content(params, subject, tenant_id):
         # THE SUBJECT IS NOT IN THIS LIST. It reaches the engine as
-        # populate_questionnaire's `subject` argument, and it is NOT redacted
-        # there: an intake form exists to carry the patient's own name, DOB
-        # and address, and apply_redaction would truncate all three. What
-        # bounds it is the %patient projection in r6/sdc/expressions.py — an
-        # allowlist of exactly those elements — plus reference matching,
-        # which reads only the id.
+        # populate_questionnaire's `subject` argument, after _identity_free
+        # removes the identity an intake form would otherwise carry to the
+        # agent. The form-fill rail fills the real name in process for the
+        # human (r6/actions/review.py), not through this route. Reference
+        # matching reads only the id, which is why this list is gathered
+        # from the stored subject.
         #
         # It used to be appended here as well. Nothing read it: the engine
         # filters this list to Observations and to the three list-resource
@@ -320,6 +345,37 @@ def _load_resources_for_patient(resource_type, subject_field, patient_id, tenant
         if resource.get(subject_field, {}).get("reference") == ref:
             out.append(resource)
     return out
+
+
+#: The subject elements $populate over HTTP never fills, whatever the
+#: %patient projection allows: the person's name, phone, email and street
+#: address. Removed outright, not left as the walker's initial or
+#: "[Redacted]" stub, so the leaf reads "not populated" rather than holding
+#: a placeholder an agent could mistake for an answer.
+_IDENTITY_KEYS = ("name", "telecom", "address")
+
+
+def _identity_free(subject):
+    """The subject this route lets the engine see (spec 2026-11-24 §7 PR 3).
+
+    The MCP `questionnaire_populate` tool hands this route's answer to the
+    model, and the stock intake form asks for name, birth date, phone, email
+    and street address. So the subject goes through apply_redaction (birth
+    date cut to the year, and whatever else the standard profile does to a
+    Patient as it changes) and loses the identity elements above. `id` and
+    `gender` stay. An inline subject gets the same rule: the route has one.
+
+    The form-fill rail does NOT come through here. It calls
+    populate_questionnaire in process with the stored Patient, because the
+    person reviews their own name on the page and in the PDF, and the model
+    gets only status and a link.
+    """
+    if not isinstance(subject, dict):
+        return subject
+    bounded = apply_redaction(subject)
+    for key in _IDENTITY_KEYS:
+        bounded.pop(key, None)
+    return bounded
 
 
 def _redacted_for_populate(resources):
