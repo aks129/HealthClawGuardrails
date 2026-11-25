@@ -2,33 +2,35 @@
 
 - Status: design, not built. Draft for review.
 - Date: 2026-11-24
-- Scope: the engine's standard redaction profile, the `$populate` API route,
-  and the copy that describes them.
+- Scope: the engine's standard redaction profile, the two SDC API routes
+  (`$populate`, `$extract`), and the copy that describes them.
 - Requirement (owner, 2026-11-24): "all data is de-identified by default
   before it goes to the model."
 
 ## 0. Decision
 
-1. The standard profile removes every person's name. It does not keep
-   initials and it does not put a placeholder in their place. The stable,
-   non-identifying handle for a person is the resource id that already
-   exists (`Patient/<id>`).
+1. The standard profile removes every `name` element, at any depth, of any
+   type. It does not keep initials and it does not put a placeholder in their
+   place. The stable, non-identifying handle for a person is the resource id
+   that already exists (`Patient/<id>`).
 2. The change goes in the one redaction walker, `r6/redaction.py`. Every
-   engine path to a model already calls it. No new `Profile` member, no
-   model-only layer, no prompt rule.
+   engine route in §5 that returns record content to an agent already calls
+   it. No new `Profile` member, no model-only layer, no prompt rule.
 3. The same walker closes four leaks measured on `main` today. Each one
    passes a full identifier to every agent: a name in `valueHumanName`, a
    street address in `valueAddress`, a phone number in `valueContactPoint`,
    and home coordinates in an Address `geolocation` extension (§2.2).
-4. `Questionnaire/$populate` over HTTP stops pre-filling identity. Today it
-   returns the stored full name, date of birth, phone, email and street
-   address, and the MCP `questionnaire_populate` tool hands that answer to the
-   model. The form-fill action keeps the real name. It populates in process
-   for the human review page and the PDF, and the model never sees those
-   answers.
+4. The two SDC routes stop returning identity over HTTP.
+   `Questionnaire/$populate` returns the stored full name, date of birth,
+   phone, email and street address today, and the MCP
+   `questionnaire_populate` tool hands that answer to the model.
+   `QuestionnaireResponse/{id}/$extract?dryRun=true` returns a stored
+   response's answers that a plain read of the same response hides (§2.2).
+   The form-fill action keeps the real name. It populates in process for the
+   human review page and the PDF, and the model never sees those answers.
 5. A birth year that means 90 or older is removed, as is an Age over 89.
-6. We will **not** meet HIPAA Safe Harbor after this change, because dates of
-   care and resource ids stay (§2). The copy must not say "de-identified".
+6. The result is still **not HIPAA Safe Harbor**, because dates of care and
+   resource ids stay (§2). The copy must not say "de-identified".
    §1 has the phrase to use.
 
 ## 1. Term and copy
@@ -50,7 +52,7 @@ The current claim "Agents work with de-identified data by default"
 (`templates/index.html:156`) is false today and stays false after this
 change. PR 5 replaces it.
 
-## 2. What reaches a model: the 18 Safe Harbor categories
+## 2. What reaches a model, category by category
 
 "Today" is measured on `main` at `db772435` by running `apply_redaction` on
 synthetic canary records. "Proposed" is the state after PRs 1 to 4.
@@ -61,9 +63,9 @@ supported resource types (`r6/models.py:92`). It is not a legal finding.
 
 | # | Category (45 CFR 164.514(b)(2)(i)) | Today | Proposed | Met |
 |---|---|---|---|---|
-| A | Names (the person, relatives, household) | First initial kept: `Patient.name`, `RelatedPerson.name`, `Patient.contact[].name`. **Full name kept** in `valueHumanName`. `FamilyMemberHistory.name` cut to an initial. | Removed (§3 N1 to N4). | Yes |
+| A | Names (the person, relatives, household) | First initial kept on every `name`: `Patient.name`, `RelatedPerson.name`, `Patient.contact[].name`, `FamilyMemberHistory.name`, `CareTeam.name`, a home `Location.name`. **Full name kept** in `valueHumanName`. | Every `name` removed (§3 N1, N2). | Yes |
 | B | Geography smaller than a state | `line`, `city`, `district`, `postalCode`, `text` removed from `address`. **Kept in full**: `valueAddress` (for example `patient-birthPlace`), Address `geolocation` latitude and longitude, `Location.position`. | `valueAddress` gets the address rule. Every Address `extension` removed. `Location.position` removed (§3 G1 to G3). State and country stay. | Yes |
-| C | Dates, except year, tied to the person. Ages over 89. | `birthDate` and `deceasedDateTime` cut to the year. **Every date of care kept in full** (`effectiveDateTime`, `onset*`, `period`, `issued`, `recorded`, `authoredOn`, `occurrence*`). A birth year that means 90+ is kept (1931 survives). An Age over 89 is kept (`onsetAge` 93 survives). | Birth year removed at 90+. An Age over 89 becomes `{"value": 90, "comparator": ">="}` (§3 A1, A2). **Dates of care stay.** | **No** |
+| C | Dates, except year, tied to the person. Ages over 89. | `birthDate` and `deceasedDateTime` cut to the year. **Every date of care kept in full** (`effectiveDateTime`, `onset*`, `period`, `issued`, `recorded`, `authoredOn`, `occurrence*`). A birth year that means 90+ is kept (1931 survives). An Age over 89 is kept (`onsetAge` 93 survives). A relative's `bornDate` and `deceasedDate` are kept in full. | Birth year removed at 90+. Relatives' dates cut to the year. An Age over 89 becomes `{"value": 90, "comparator": ">="}` (§3 A1, A2). **Dates of care stay.** | **No** |
 | D | Telephone numbers | `telecom[].value` and `contact[].telecom[].value` replaced. **Kept** in `valueContactPoint`. | `valueContactPoint` gets the telecom rule (§3 T1). | Yes |
 | E | Fax numbers | As D (a ContactPoint with `system: fax`). | As D. | Yes |
 | F | Email addresses | As D. | As D. | Yes |
@@ -78,7 +80,7 @@ supported resource types (`r6/models.py:92`). It is not a legal finding.
 | O | IP addresses | AuditEvent `agent.network` address removed. | No change. | Yes |
 | P | Biometric identifiers | No element in the supported types. Attachments emptied. | No change. | Yes, by construction |
 | Q | Full-face photographs | `photo` removed. Attachment `data`, `url`, `title` removed. | No change. | Yes |
-| R | Any other unique number or code | Free text removed. **Kept**: resource ids and the ids inside references. Ingest keeps the upstream id (`r6/fasten/ingester.py:493`), so a Patient id can be the EHR's own id for that person. | No change. Follow-up issue. | **No** |
+| R | Any other unique number or code | Free text removed. **Kept**: `valueUuid`, `valueExpression`, resource ids and the ids inside references. Ingest keeps the upstream id (`r6/fasten/ingester.py:493`), so a Patient id can be the EHR's own id for that person. | `valueUuid` and `valueExpression` removed (§3 X1). Ids unchanged. Follow-up issue. | **No** |
 
 ### 2.2 Measured leaks this design closes
 
@@ -94,9 +96,26 @@ Run on `main`, synthetic values, `apply_redaction` output:
 - `birthDate: "1931-04-05"` returned `"1931"`, an age of 95.
 - A contained Device returned `serialNumber` and a `carrierHRF` holding the
   serial.
+- A string `name` keeps its first letter at any depth. `CareTeam.name`
+  ("Zzyzxbarton family care team"), a `Location.name` for the person's home,
+  a `contact[].name` written as a string and `valueContactDetail.name` all
+  returned `"Z."` or `"C."`.
+- `FamilyMemberHistory.bornDate` and `deceasedDate` returned in full.
+  `deceasedAge` 95, `ageAge` 93, `performedAge` 92 and `valueAge` 96 returned
+  unchanged.
+- `valueExpression.expression` and `valueUuid` returned in full.
+- **A read-tier bypass on stored form answers.** A stored, subject-less
+  QuestionnaireResponse whose answers are a family name and a birth date:
+  `GET /QuestionnaireResponse/{id}` hides both. `POST
+  /QuestionnaireResponse/{id}/$extract?dryRun=true` with no step-up token
+  returns both in full (`r6/sdc/routes.py:118-119`, `:201-204`). A response
+  bound to a subject yields no Patient row (#572,
+  `r6/sdc/extract.py:99-111`), so the form-fill path does not produce this
+  shape. Observation-extract answers on a stored response are echoed the
+  same way.
 
 These pass through every agent read today, MCP tools included. They are
-higher priority than the initials, so PR 1 and PR 2 carry them.
+higher priority than the initials, so PRs 1 to 3 carry them.
 
 ### 2.3 Why this is not Safe Harbor
 
@@ -116,16 +135,17 @@ All of these are in the walker (`_redact_fields` / `_redact_recursive`,
 `r6/redaction.py:63` and `:372`). They apply at every depth, so contained
 resources, Bundle entries and extensions get them too.
 
-- **N1.** A `name` whose value is a list is removed. In FHIR a list-valued
-  `name` is always `HumanName[]`: Patient, RelatedPerson, Practitioner,
-  Person. This replaces the initial rule at `r6/redaction.py:65-77`.
-- **N2.** `contact[].name` is removed. It replaces the initial rule at
-  `r6/redaction.py:143-152`.
-- **N3.** `valueHumanName` is removed. Add it to `_FREE_TEXT_KEYS`
+- **N1.** Every `name` key is removed, at any depth, whatever its value.
+  That covers `HumanName[]` (Patient, RelatedPerson, Practitioner, Person),
+  `contact[].name`, `FamilyMemberHistory.name`, `CareTeam.name`,
+  `Location.name`, `Organization.name`, `ContactDetail.name` and
+  `Device.deviceName[].name`. It replaces three rules:
+  `r6/redaction.py:65-77`, `:143-152` and `:416-418`. One rule with no type
+  list is the point. Business names lose an initial that told a reader
+  nothing, and a business name can carry a person's name ("Dr. Zzyzxbarton
+  Family Practice").
+- **N2.** `valueHumanName` is removed. Add it to `_FREE_TEXT_KEYS`
   (`r6/redaction.py:216`).
-- **N4.** `FamilyMemberHistory.name` is removed. It is a string, so the
-  scalar rule at `r6/redaction.py:416` cuts it to an initial today. Scope it
-  by resource type, as `CarePlan.title` is.
 - **G1.** `valueAddress` gets the Address rule: `line`, `text`, `city`,
   `district`, `postalCode` removed, and `state` and `country` kept.
 - **G2.** Every Address loses its `extension`. This covers geolocation and
@@ -136,20 +156,23 @@ resources, Bundle entries and extensions get them too.
 - **T1.** `valueContactPoint.value` becomes `[Redacted]`, as `telecom` does.
 - **D1.** `serialNumber`, `distinctIdentifier`, `carrierHRF` and `carrierAIDC`
   are removed at any depth.
+- **X1.** `valueExpression` and `valueUuid` are removed. Add both to
+  `_FREE_TEXT_KEYS`.
 - **A1.** `birthDate` is cut to the year, as today. It is removed when the
   current year minus the birth year is 90 or more. Year arithmetic can only
   err toward removal. The rule reads the clock, so tests compute years from
-  today, never from a fixed date (#1084).
-- **A2.** An Age (a Quantity under `onsetAge`, `abatementAge`, `ageAge` or
-  `valueAge`) in years with a value over 89 becomes `{"value": 90,
-  "comparator": ">=", "unit", "system", "code"}`. This is the same
-  aggregation the `$deidentify` preview uses (`r6/health_compliance.py:217`).
-  An Age in other units is left alone.
+  today, never from a fixed date (#1084). `FamilyMemberHistory.bornDate` and
+  `deceasedDate` join `_DATE_KEYS` (`r6/redaction.py:227`) and are cut to the
+  year. The regulation's list counts relatives' dates too.
+- **A2.** Any key ending in `Age` whose value is a Quantity in years
+  (`onsetAge`, `abatementAge`, `ageAge`, `deceasedAge`, `performedAge`,
+  `valueAge`) with a value over 89 becomes `{"value": 90, "comparator": ">=",
+  "unit", "system", "code"}`. This is the aggregation the `$deidentify`
+  preview uses (`r6/health_compliance.py:217`). An Age in other units is left
+  alone.
 
 Not changed, on purpose:
 
-- A string `name` on Organization, Location or HealthcareService keeps its
-  initial. It names a business, not a person.
 - `gender`, race, ethnicity, language and marital status stay. They are not
   Safe Harbor identifiers and the model uses them.
 - The relabel by code (`label_codings`, `r6/redaction.py:55`) still runs
@@ -159,10 +182,19 @@ Not changed, on purpose:
 
 **In the walker, `r6/redaction.py`.** The engine cannot tell a model from any
 other caller. The standard profile is by definition what an agent reads.
-Every engine route that answers an agent calls `apply_redaction`, either
-directly (17 call sites in `r6/routes.py`, plus `r6/labs/routes.py:171`,
-`r6/brief/routes.py:58`) or through `fhir_response(profile=STANDARD)`
-(`r6/access.py:1859`). One change covers all of them.
+Every route in §5 that returns record content to an agent calls
+`apply_redaction`, either directly (17 call sites in `r6/routes.py`, plus
+`r6/labs/routes.py:171`, `r6/brief/routes.py:58`) or through
+`fhir_response(profile=STANDARD)` (`r6/access.py:1859`). One change covers
+all of them.
+
+The other routes in `app.url_map` were classified by reading, not measured.
+They return no record content (OAuth, ops, metadata, audit, agent-run
+bookkeeping, Fasten job status, wearables sync), or they serve a human (the
+filled PDF at `/r6/sdc/documents/{id}`, the review page), or they are
+aggregates (`$stats`). `$evaluate-measure`, `$profile-adherence`,
+`$inventory` and `/r6/smbp/report/{id}` go into PR 1's canary sweep so the
+classification becomes a measurement.
 
 Rejected:
 
@@ -181,8 +213,10 @@ PATIENT_CONTROLLED rebuild the top-level identity from the stored original
 alter what a clinic receives. Their nested resources lose initials, which is
 an improvement.
 
-`$populate` is the one HTTP route that answers with identity to an agent
-(`r6/sdc/routes.py:76`, `:100`, `:217-224`). PR 3 changes it.
+The two SDC routes answer around the walker. `$populate` populates from the
+unredacted subject on purpose (`r6/sdc/routes.py:76`, `:100`, `:217-224`).
+`$extract` returns its bundle through `jsonify` with no profile
+(`r6/sdc/routes.py:201-204`). PR 3 changes both.
 
 ## 5. Every path from a record to a model
 
@@ -197,10 +231,10 @@ an improvement.
 | MCP `curatr_apply_fix` | `r6/routes.py:2889` (`:3018`) | STANDARD | Covered |
 | MCP `curatr_evaluate` (`tools.ts:2065`) | `r6/routes.py:2832`, evaluates the unredacted row | Issues text only | **Not verified in this pass.** Issue text is built from codes. Check in PR 1 review. |
 | MCP `fhir_interpret_labs` (`tools.ts:1981`) | `Observation/$interpret`, `r6/labs/routes.py:141` (`:171`) | STANDARD, labels from `LOINC_RANGES` | No identity |
-| MCP `care_gaps` (`tools.ts:2017`) | `Patient/$care-gaps`, `r6/caregaps/routes.py:270` | Reads `birthDate` server-side (`r6/caregaps/evaluate.py:309`), returns no demographics | No identity |
+| MCP `care_gaps` (`tools.ts:2017`) | `Patient/$care-gaps`, `r6/caregaps/routes.py:270` | Reads the stored, unredacted Patient for age and sex (`patient_for`, `r6/caregaps/routes.py:81-94`). Returns no demographics. | No identity. A1 does not change its output. |
 | MCP `fhir_propose_write`, `fhir_commit_write` | POST and PUT echo, `r6/routes.py:401`, `:439`, `:585`, `:634` | STANDARD | Covered |
 | MCP `questionnaire_populate` (`tools.ts:537`, `:1715`) | `Questionnaire/$populate`, `r6/sdc/routes.py:76`, `:100` | **Unredacted subject projection** (name, birthDate, telecom, address) | **Identified today.** PR 3. |
-| MCP `questionnaire_extract` (`tools.ts:1751`) | `QuestionnaireResponse/$extract` | Echoes the caller's own input | No new identity |
+| MCP `questionnaire_extract` (`tools.ts:561`, `:1751`) | `QuestionnaireResponse/$extract`, `r6/sdc/routes.py:105` | The tool sends an inline response, so it echoes the model's own input | No new identity through the tool. The `{id}/$extract` route is open to any read-tier caller and echoes **stored** answers (§2.2). PR 3. |
 | MCP `shl_generate` (`tools.ts:2303`) | `$share-bundle`, `r6/routes.py:3275` | INTAKE or patient-controlled | Returns links only (`tools.ts:2408-2415`). The bundle never enters the model's context. The link is a bearer credential to an identified record, by design and with the person's consent. |
 | MCP `action_status` (`tools.ts:1124`) | action rail status | Outcome holds ids, not field values (`r6/actions/rails/form_fill.py:115`) | No identity |
 | Engine agent client (`r6/agent_client.py:121`, `:160`) | The same routes, through MCP (`:295`) or directly (`:361`) | STANDARD | Covered |
@@ -208,7 +242,8 @@ an improvement.
 | A consumer app's chat agent | Search and read, `$interpret`, `$care-gaps`, the brief, action status | STANDARD | Covered by the walker. Its search tool offers no Patient type, so it reads no Patient today. Its prompt names the person by relationship only. |
 | Form fill (action rail) | In-process populate, `r6/actions/review.py:320`. PDF title from the stored name, `r6/actions/rails/form_fill.py:147-175`. | Identified, for the human | **Not a model exit.** The model gets status and a link. Unchanged. |
 | Check-in wallet, KTC share | `_checkin_profile`, `_ktc_profile`, `r6/access.py:1701`, `:1815` | Identified, for a clinic | Not a model exit. Unchanged. |
-| Delegated call | `r6/actions/playbooks/render.py:232-252` | `preferred_name` is typed by the person, not read from the record | **A model receives a name by design.** The script is sealed and the person approves it before a voice agent speaks it. A named exception to the default. |
+| Delegated call | `r6/actions/playbooks/render.py:232-252` (#1137) | `preferred_name` is a preamble fact (`r6/actions/playbooks/__init__.py:53`). No builder calls the renderer yet. | **When the builder lands, a voice agent receives a name by design**, in a script the person approves before it is spoken. A named exception to the default. Requirement on that builder: `preferred_name` comes from the person, never from `Patient.name`. |
+| Prescription transfer (`tools.ts:1083`) | `r6/actions/rx_transfer.py` | Medicine names from `r6/terminology.py` by code. Pharmacy names and numbers are supplied by the model. | No patient name. Unchanged. |
 | The person's own messages | n/a | none | Reach the model verbatim. Out of scope. The copy says so. |
 
 Search does not give a model a name oracle. The engine honours only
@@ -220,12 +255,19 @@ example. That is misleading, and PR 5 corrects it.
 
 ## 6. What breaks
 
-- **Tests that pin initials.** Seven files assert an initial and must assert
-  absence instead: `tests/test_redaction_identifiers.py:160`,
+Measured, not only predicted. A scratch patch of N1 (every `name` key), the
+`contact[].name` removal and A1 was run against the full Python suite on
+`db772435` with `PYTHONDONTWRITEBYTECODE=1`, then reverted: 13374 passed and
+6 failed. The 6 are exactly the initial-pinning tests listed below.
+`tests/test_guardrail_conformance.py` passed, so Grade A held. The MCP
+server's TypeScript tests were not run against the patch.
+
+- **Tests that pin initials.** Six tests in five files failed under the
+  scratch patch and must assert absence instead:
+  `tests/test_redaction_identifiers.py:160`,
   `tests/test_healthclaw_redact.py:338-339`,
   `tests/test_recursive_redaction.py:148-149` and `:175`,
-  `tests/test_record_source_fhi42.py:497`, `tests/test_medplum_in_front.py:45`,
-  and the fixture in `tests/test_medplum_smoke_auth.py:37`.
+  `tests/test_record_source_fhi42.py:497`, `tests/test_medplum_in_front.py:45`.
 - **`$populate` identity answers.** `tests/test_sdc_populate_bounded.py:366`
   pins a populated given name over HTTP. After PR 3 that leaf is "not
   populated" over HTTP. The in-process form fill keeps it, and a new test pins
@@ -253,10 +295,12 @@ example. That is misleading, and PR 5 corrects it.
   still pass. Grade A holds with no harness change. Do not tighten the
   harness here. It grades partner deployments, and a stricter row would
   regrade them (owner ruling, §10).
-- **Clinical features.** Care gaps, `$interpret`, the trend line and the brief
-  read stored rows server-side. None reads a name or a redacted birth date.
-  A 90+ person's birth year no longer reaches an agent that reads the Patient
-  directly. Care gaps still compute their age.
+- **Clinical features.** Care gaps and the brief's care-gap section read the
+  stored, unredacted Patient (`r6/caregaps/routes.py:81-94`,
+  `r6/brief/routes.py:131-133`), so A1 does not change which screenings fire.
+  `$interpret` and the trend line read stored Observations. None reads a
+  name. A 90+ person's birth year no longer reaches an agent that reads the
+  Patient directly.
 
 ## 7. PR split
 
@@ -265,16 +309,18 @@ must fail on `main` before the fix.
 
 ### PR 1: names (walker)
 
-N1 to N4, the docs that name initials, and the control-panel fallback.
+N1 and N2, the docs that name initials, and the control-panel fallback.
 
 Tests first:
 
 - A canary sweep: one synthetic Patient carrying a unique name in every
-  shape (`name`, `contact[].name`, `valueHumanName`, `name.prefix`, `suffix`,
+  shape (`name`, `contact[].name` as an object and as a string,
+  `valueHumanName`, `valueContactDetail.name`, `name.prefix`, `suffix`,
   `_given` extensions, a contained RelatedPerson and Practitioner, a
-  FamilyMemberHistory). Read it through `GET /Patient/{id}`, search,
-  `/context/{id}`, `$lastn`, `$compiled-truth` and the write echo. Assert no
-  canary substring and no `name` key under any HumanName-bearing type.
+  FamilyMemberHistory, a CareTeam, a home Location). Read it through
+  `GET /{type}/{id}`, search, `/context/{id}`, `$lastn`, `$compiled-truth`,
+  the write echo, `$evaluate-measure`, `$profile-adherence`, `$inventory` and
+  the SMBP report. Assert no canary substring and no `name` key anywhere.
 - Two-sided: the same responses still contain the record, its coded
   `gender`, and a terminology-derived label on a coded child (as the
   conformance label check does). A redactor that deletes everything fails.
@@ -283,16 +329,15 @@ Tests first:
 
 Mutation targets (each must turn a test red):
 
-- Restore the initial rule for list-valued `name`.
+- Restore the initial rule for a list-valued `name`.
+- Restore the initial rule for a string `name`.
 - Skip `contact[].name`.
 - Remove `valueHumanName` from `_FREE_TEXT_KEYS`.
 - Apply N1 only where `resourceType` is present, so contained names survive.
-- Drop the N4 type scope check so `FamilyMemberHistory.name` keeps its
-  initial.
 
 ### PR 2: contact and place in extensions, device serials
 
-G1 to G3, T1, D1.
+G1 to G3, T1, D1, X1.
 
 Tests first: canaries in `valueAddress`, `valueContactPoint`, Address
 `geolocation`, `Location.position`, a contained Device with `serialNumber`
@@ -303,11 +348,14 @@ Mutation targets: remove the `valueAddress` branch, keep Address
 `extension`, drop `serialNumber` from the key set, replace the T1 value with
 the original.
 
-### PR 3: `$populate` over HTTP answers without identity
+### PR 3: the SDC routes answer without identity
 
-The HTTP route passes `populate_questionnaire` a subject with `name`,
-`telecom` and `address` removed and `birthDate` under A1. The in-process
-form fill (`r6/actions/review.py:320`) is unchanged.
+`$populate` over HTTP passes `populate_questionnaire` a subject with `name`,
+`telecom` and `address` removed and `birthDate` under A1. `$extract` runs
+every row of a bundle built from a **stored** response through
+`apply_redaction` before it answers. An inline response is the caller's own
+data and is echoed as today. The in-process form fill
+(`r6/actions/review.py:320`) is unchanged.
 
 Tests first:
 
@@ -319,21 +367,26 @@ Tests first:
 - The form-fill review for the same Patient still shows the real name. This
   test pins that the human path keeps identity, so a change that strips
   both paths fails.
+- `{id}/$extract?dryRun=true` on the stored, subject-less response from
+  §2.2: no canary name or full birth date. Two-sided: the bundle still holds
+  the extracted rows, and an inline response still previews in full.
 
-Mutation targets: pass the stored subject to the HTTP route, and pass the
-identity-free subject to the review path. Each must fail one test.
+Mutation targets: pass the stored subject to the HTTP route, pass the
+identity-free subject to the review path, and skip redaction on the
+stored-response branch of `$extract`. Each must fail one test.
 
-### PR 4: ages 90 and over
+### PR 4: ages 90 and over, relatives' dates
 
 A1 and A2.
 
 Tests first, with years computed from today: birth year at today minus 89
 is kept, at today minus 90 is removed. An `onsetAge` of 89 is kept, 90
-becomes `>= 90`. An Age in months is unchanged. Two-sided: a Patient with a
+becomes `>= 90`, and so do `deceasedAge` and `performedAge`. An Age in
+months is unchanged. `FamilyMemberHistory.bornDate` comes back as a year. Two-sided: a Patient with a
 removed birth date is still returned with its other fields.
 
 Mutation targets: `>= 90` changed to `> 90`, the A2 comparator dropped,
-the A2 unit check removed.
+the A2 unit check removed, A2 limited to `onsetAge`.
 
 ### PR 5: the copy
 
@@ -353,7 +406,9 @@ traps in `docs/agent-task-guide.md` §6.
 ## 8. #964 and #1022
 
 **#964** (intake share bundle copies nested `display` and `text` inside
-Patient name, address and telecom) is independent. `_intake_profile` and
+Patient name, address and telecom) is independent. Its fix is open as a
+draft (#1162) and touches `r6/access.py` and `r6/routes.py`, not
+`r6/redaction.py`. `_intake_profile` and
 `_intake_strip` copy those four fields from the stored original after
 `apply_redaction` (`r6/access.py:1211-1215`, `r6/routes.py:3259`), so this
 design does not change what they emit at the top level. The intake bundle
@@ -373,6 +428,10 @@ same time as PR 1, rebase rather than combine.
   (category N).
 - Tightening the conformance PHI probe to "no `name` element" (owner ruling).
 - `curatr_evaluate` issue text, not verified in this pass (§5).
+- The long-term shape is an allow-list per profile, which #112 named and
+  closed. This design extends the deny-list in the walker because it is the
+  smaller change that closes measured leaks now. Every new `value[x]` type
+  or element FHIR adds is a deny-list gap until then, and §2.2 found six.
 - A QuestionnaireResponse answer typed as `valueInteger` or `valueDecimal`
   is kept. A person could type a phone number there.
 
@@ -383,10 +442,12 @@ same time as PR 1, rebase rather than combine.
 2. **Birth year.** Keep the year under 90 (this design) or move to an age
    band. A band needs an extension and adds a state. This design keeps the
    year.
-3. **Whose names.** This design removes every HumanName, including
-   clinicians' (Practitioner), because one rule is simpler and the initials
-   carried no value. Organization names keep their initial. Confirm.
-4. **`$populate` over HTTP.** Confirm that no API caller needs `$populate` to
-   pre-fill identity. The form-fill action keeps it.
+3. **Whose names.** This design removes every `name` element: clinicians',
+   care teams' and businesses' too. One rule with no type list is simpler,
+   the initials carried no value, and a business name can carry a person's
+   name. Confirm.
+4. **The SDC routes over HTTP.** Confirm that no API caller needs
+   `$populate` to pre-fill identity or `$extract` to return a stored
+   response's answers unredacted. The form-fill action keeps identity.
 5. **Conformance harness.** Whether to add a "no name element" check later,
    knowing it regrades partner deployments.
