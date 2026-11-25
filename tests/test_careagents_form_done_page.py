@@ -107,6 +107,18 @@ def test_a_status_that_cannot_be_read_is_not_a_verdict(
     assert "already done" not in r.get_data(as_text=True)
 
 
+# The engine now refuses a form review sent on the write token: it wants the
+# person's own credential (#1116). The copy of the consumer app in this
+# repository predates that change and is frozen, so its relay still sends the
+# write token, the engine answers 401, and the app shows that as a 503. Strict,
+# so the marker has to come off when the in-repo copy sends the credential.
+_FROZEN_RELAY = pytest.mark.xfail(strict=True, reason=(
+    "the in-repo copy of the consumer app predates the form review's "
+    "credential change and is frozen: its relay still sends the review on "
+    "the write token, which the engine now refuses (401, shown as a 503)"))
+
+
+@_FROZEN_RELAY
 def test_after_approving_the_texted_link_opens_the_pdf(
         cfg, svc, monkeypatch):  # noqa: F811
     """End to end, on the real engine: approve, then open the review URL
