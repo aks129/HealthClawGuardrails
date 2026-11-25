@@ -80,7 +80,9 @@ NOT_POPULATED = (
     'such item by linkId. $populate reads only the %patient projection '
     '(name, birthDate, gender, telecom phone/email, address '
     'line/city/state/postalCode) and coded content this server recognises; '
-    'anything else is not read.'
+    'anything else is not read. Over this API the name, telecom and address '
+    'are not shared with the assistant, so an item asking for one of them '
+    'is never answered here, whatever the record holds.'
 )
 
 INITIAL_EXPRESSION_URL = (
