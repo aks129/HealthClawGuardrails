@@ -19,6 +19,7 @@ import os
 import unicodedata
 import uuid
 
+from models import db
 from r6 import constant_time
 from r6.actions import errors
 from r6.actions.confirmations import reviewed_answers_digest
@@ -159,22 +160,28 @@ class FormFillExecutor:
                 reviewed_qr, questionnaire=questionnaire,
                 reviewed_on=reviewed_on, subject_label=subject_label)
 
-            # (6) Persist the PDF as a FHIR DocumentReference. Its id is
-            # recorded on the action first (#1173): the lock on a delivered
-            # document keys on that server-owned ref, so it is in force
-            # before the document exists, not from 'completed' on.
+            # (6) Persist the PDF as a FHIR DocumentReference, and record its
+            # id on the action, in ONE commit (#1173). The lock on a delivered
+            # document keys on that server-owned ref, so it holds from the
+            # document's first moment. The ref is never committed before the
+            # document: the status route shows it to the write token, which
+            # could otherwise create a document under it first (R3-3).
             docref_id = str(uuid.uuid4())
-            _set_ref(action, None, docref_id)
             persist_intake_document(
                 action.tenant_id, subject_ref, pdf_bytes,
                 title='Completed intake form',
                 questionnaire_response_id=reviewed_qr_id,
-                resource_id=docref_id)
+                resource_id=docref_id, commit=False)
+            _set_ref(action, None, docref_id)
 
             # (7) Build a signed, expiring download link.
             link = build_document_link(action.tenant_id, docref_id)
         except Exception as exc:  # noqa: BLE001 — fail loud, never fake success
-            # A failed execution delivers nothing, so it holds no lock.
+            # A failed execution delivers nothing, so it holds no lock. The
+            # rollback first: a failed flush (an id taken, say) leaves the
+            # session unusable, and the ref update then raised instead,
+            # stranding the action in 'executing' behind a 500.
+            db.session.rollback()
             if docref_id is not None:
                 _set_ref(action, docref_id, None)
             # Truncate to keep the taxonomy detail PHI-free-ish; do not log PHI.
@@ -282,9 +289,12 @@ def _off_form(questionnaire_response):
                     return True
                 continue
             keys = _ANSWER_KEYS.get(q['type'], set())
-            if item.get('item') or not all(
+            answers = item.get('answer') or []
+            # One answer per leaf: two on the attestation printed "No, Yes"
+            # (#1172 R3-1). No intake leaf repeats its answer.
+            if item.get('item') or len(answers) > 1 or not all(
                     isinstance(a, dict) and a and set(a) <= keys
-                    for a in item.get('answer') or []):
+                    for a in answers):
                 return True
         return False
     return off(questionnaire_response.get('item'),
@@ -350,7 +360,6 @@ def delivered_record_locked(tenant_id, resource_type, resource_id):
 def _set_ref(action, expected, ref):
     """Record (or clear) the delivered document's id on the executing
     action, committed, so another request's lock check reads it."""
-    from models import db
     from r6.actions.models import ProposedAction
     ProposedAction.query.filter_by(
         id=action.id, status='executing', external_ref=expected).update(
