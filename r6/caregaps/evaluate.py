@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from r6.caregaps.citations import citation_for
 from r6.safe_read import codes, string_field
 
 REFERENCES = {
@@ -326,6 +327,10 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
         base = {"rule_id": rule["id"], "title": rule["title"],
                 "cadence": cadence, "source": rule["source"],
                 "related_ecqm": rule["related_ecqm"],
+                # The guideline's own statement, or None for a rule whose
+                # citation has not been verified (r6/caregaps/citations.py).
+                # Always a key, as `last_done` is.
+                "citation": citation_for(rule["id"]),
                 "last_done": None, "note": ""}
 
         # Sex gate

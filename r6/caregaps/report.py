@@ -165,6 +165,10 @@ def _consumer_line(r, voice=PATIENT):
     a line is decided by today's wording alone; the sample voice
     (r6/voice.py) only rewords the message."""
     line = _consumer_line_today(r)
+    if line:
+        # Beside the message, never inside it: what the guideline says for a
+        # group of people is not a sentence about this person.
+        line["citation"] = r.get("citation")
     if line and voice == SAMPLE:
         line["message"] = _sample_line(
             r, _screening_phrase(r.get("title"), r.get("cadence")))
