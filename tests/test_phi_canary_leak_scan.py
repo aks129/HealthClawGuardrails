@@ -29,14 +29,9 @@ otherwise pass the scan while measuring nothing.
 
 ## What a surface may keep
 
-Two surfaces keep identity fields on purpose, and only those canaries are
+One surface keeps identity fields on purpose, and only those canaries are
 excused, only on that surface:
 
-- `questionnaire_populate`: the `%patient` projection keeps name given and
-  family, birthDate, telecom phone/email and address line/city/postalCode
-  (council ruling D10; `r6/sdc/expressions.py::_PROJECTED_*`;
-  `tests/test_sdc_populate_bounded.py::PERMITTED`). `name.text` and
-  `identifier.value` are withheld there, and are scanned.
 - `shl_generate` defaults to the `intake` profile of `$share-bundle`, an
   identified export the patient sends to a clinic
   (`r6/routes.py::_intake_strip`; `tests/test_share_bundle.py`). It keeps
@@ -47,6 +42,18 @@ excused, only on that surface:
   attachments and the Encounter canaries are on the wire to be scanned. The
   `deidentified` profile keeps top-level `birthDate` verbatim
   (`apply_patient_controlled_redaction`, #617) and nothing else.
+
+`questionnaire_populate` used to be the second. Its `%patient` projection
+filled the intake form's name, birth date, phone, email and street address,
+and the tool handed that to the model. Over HTTP the subject now has its
+identity removed first (spec 2026-11-24 section 7, PR 3), so the row keeps
+nothing. The form-fill rail keeps the name for the person, in process.
+
+One row is a route, not a tool: `QuestionnaireResponse/{id}/$extract
+?dryRun=true` on a STORED response. The `questionnaire_extract` tool sends
+an inline response, but the route is open at read tier, and it echoed
+answers that a read of the same response hides. It is scanned without a
+step-up token, as a read-tier caller reaches it.
 
 ## What it found (2026-09-24)
 
@@ -634,10 +641,48 @@ def _questionnaire_populate(s):
              "valueReference": {"reference": f"Patient/{PATIENT_ID}"}},
             {"name": "questionnaire",
              "resource": _populate_questionnaire()}]}), "$populate")
-    # The projection must actually have run, or every absence below is
-    # vacuous: the permitted family name is the proof.
-    assert FAMILY in body, body[:400]
+    # Population must actually have run, or every absence below is
+    # vacuous: the cholesterol value matched by code is the proof.
+    answers = {i["linkId"]: i.get("answer")
+               for p in json.loads(body)["parameter"] if p["name"] == "response"
+               for i in p["resource"].get("item", [])}
+    assert "244" in json.dumps(answers.get("chol")), body[:400]
     return [("$populate", body)]
+
+
+def _stored_response_extract(s):
+    from r6.sdc.intake import intake_questionnaire
+    # A subject-less stored response answering the intake demographics with
+    # the Patient's canaries: the shape the dry run used to echo in full.
+    qr = {"resourceType": "QuestionnaireResponse", "status": "completed",
+          "item": [{"linkId": "demographics", "item": [
+              {"linkId": "demographics.given-name",
+               "answer": [{"valueString": GIVEN}]},
+              {"linkId": "demographics.family-name",
+               "answer": [{"valueString": FAMILY}]},
+              {"linkId": "demographics.birth-date",
+               "answer": [{"valueDate": DOB}]},
+              {"linkId": "demographics.gender",
+               "answer": [{"valueCoding": {"code": "female"}}]},
+              {"linkId": "demographics.phone",
+               "answer": [{"valueString": PHONE}]},
+              {"linkId": "demographics.address-line",
+               "answer": [{"valueString": ADDR_LINE}]}]}]}
+    created = s["client"].post("/r6/fhir/QuestionnaireResponse",
+                               headers=s["headers"], json=qr)
+    assert created.status_code == 201, created.get_data(as_text=True)
+    qr_id = created.get_json()["id"]
+    read_tier = {"X-Tenant-Id": TENANT}
+    body = _ok(s["client"].post(
+        f"/r6/fhir/QuestionnaireResponse/{qr_id}/$extract?dryRun=true",
+        headers=read_tier,
+        json={"resourceType": "Parameters", "parameter": [
+            {"name": "questionnaire",
+             "resource": intake_questionnaire()}]}), "$extract dryRun")
+    # The extraction ran: the Patient row is built from the coded gender.
+    entries = json.loads(body)["parameter"][0]["resource"]["entry"]
+    assert [e["resource"]["resourceType"] for e in entries] == ["Patient"]
+    return [("QuestionnaireResponse/{id}/$extract?dryRun=true", body)]
 
 
 #: Every seeded type that references the patient, so the patient filter keeps
@@ -713,11 +758,6 @@ SURFACES = {
 # What each surface may carry. Anything not named here must be absent.
 # ---------------------------------------------------------------------------
 
-#: The %patient projection (council ruling D10; r6/sdc/expressions.py
-#: `_PROJECTED_*`; tests/test_sdc_populate_bounded.py::PERMITTED).
-POPULATE_KEEPS = frozenset({FAMILY, GIVEN, PHONE, EMAIL, ADDR_LINE,
-                            ADDR_CITY, ADDR_POSTAL, DOB})
-
 #: The intake share is identified by design: the Patient's name, birthDate,
 #: address and telecom ship verbatim, and nothing else (#282, owner ruling;
 #: r6/routes.py `_intake_strip`). `name.text` and `address.text` are part of
@@ -735,10 +775,10 @@ DEIDENTIFIED_KEEPS = frozenset({DOB})
 READ_ROWS = [
     (name, driver, frozenset())
     for name, (kind, driver) in SURFACES.items()
-    if kind == READ and name not in ("questionnaire_populate",
-                                     "shl_generate")
+    if kind == READ and name != "shl_generate"
 ] + [
-    ("questionnaire_populate", _questionnaire_populate, POPULATE_KEEPS),
+    ("stored QuestionnaireResponse $extract dryRun",
+     _stored_response_extract, frozenset()),
     ("shl_generate[deidentified]", _share_bundle("deidentified"),
      DEIDENTIFIED_KEEPS),
     ("shl_generate[intake]", _share_bundle("intake"), INTAKE_KEEPS),
