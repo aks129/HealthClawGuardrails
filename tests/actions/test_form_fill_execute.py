@@ -243,7 +243,9 @@ def test_end_to_end_propose_review_confirm_download(client, app, tenant_headers,
     review = client.post('/r6/actions/%s/review' % action_id,
                          headers=approval_helpers.approval_headers(
                              app, auth_headers, action_id),
-                         json={'med-0': 'yes', 'allergy-0': 'confirm'})
+                         json=approval_helpers.reviewed(
+                             client, auth_headers, action_id,
+                             {'med-0': 'yes', 'allergy-0': 'confirm'}))
     assert review.status_code == 200, review.get_data(as_text=True)
     assert review.get_json()['reviewed_qr_id']
 

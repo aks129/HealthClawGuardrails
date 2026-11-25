@@ -16,7 +16,7 @@ from r6.models import AuditEventRecord, R6Resource
 from tests.actions.test_action_approve_page import (CURATR, _post, _staged,
                                                     seeded)  # noqa: F401
 from tests.actions.test_review_flow import PATIENT, _seed, _staged_form_fill
-from tests.approval_helpers import approval_headers
+from tests.approval_helpers import approval_headers, reviewed
 
 # ruff: noqa: F811  (the `seeded` fixture is imported, then requested by name)
 
@@ -134,7 +134,8 @@ def test_a_write_token_cannot_submit_attested_answers(
 
 def _post_answers(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id, headers=headers,
-                       json=body)
+                       json=reviewed(client, headers, action_id, body,
+                                     strict=False))
 
 
 def test_a_credential_for_another_form_is_refused(

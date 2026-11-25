@@ -38,7 +38,8 @@ from r6.sdc import intake
 from r6.sdc.intake import intake_questionnaire
 from tests.actions.test_review_flow import (ALLERGY_A, FORM_FILL_BODY,
                                             PATIENT, _seed, _staged_form_fill)
-from tests.approval_helpers import approval_headers, propose_headers
+from tests.approval_helpers import (approval_headers, propose_headers,
+                                    reviewed)
 
 NKA = 'allergies.no-known-allergies'
 CANON_NKA_TEXT = 'No known allergies (patient confirmed)'
@@ -54,7 +55,8 @@ def _require(cond, msg):
 
 def _review(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id, headers=headers,
-                       json=body)
+                       json=reviewed(client, headers, action_id, body,
+                                     strict=False))
 
 
 def _confirm(client, app, auth_headers, action_id):
@@ -174,9 +176,9 @@ def test_an_action_naming_another_questionnaire_still_uses_the_intake(
 
     qr_id = _review_and_confirm(client, app, auth_headers, action_id)
     with app.app_context():
-        reviewed = R6Resource.query.filter_by(
+        stored_row = R6Resource.query.filter_by(
             resource_type='QuestionnaireResponse', id=qr_id).first()
-        stored = reviewed.resource_json
+        stored = stored_row.resource_json
     assert HIDDEN not in stored, stored
     assert not [r for r in rows if r.endswith(': Yes')], ' | '.join(rows)
     assert calls and calls[-1]['questionnaire']['id'] == 'healthclaw-intake'

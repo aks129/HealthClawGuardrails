@@ -36,3 +36,35 @@ def sms_rail_env(monkeypatch):
     monkeypatch.setenv('TWILIO_ACCOUNT_SID', 'AC-test')
     monkeypatch.setenv('TWILIO_AUTH_TOKEN', 'test-token')
     monkeypatch.setenv('TWILIO_FROM_NUMBER', '+15555550100')
+
+
+def page_digest(client, headers, action_id):
+    """The draft digest from the review page as rendered, the way the
+    person's browser carries it into the submit (#1174). Read off the HTML,
+    never computed here, so a test using it measures the page."""
+    import re
+    page = client.get('/r6/actions/%s/review' % action_id,
+                      headers=propose_headers(headers))
+    match = re.search(r'name="draft_digest" value="([0-9a-f]{64})"',
+                      page.get_data(as_text=True))
+    if page.status_code != 200 or match is None:
+        raise RuntimeError('no draft digest on the review page (%s)'
+                           % page.status_code)
+    return match.group(1)
+
+
+def reviewed(client, headers, action_id, decisions, strict=True):
+    """The decisions plus the digest of the page they were made on.
+
+    strict=False leaves the decisions as they are when no page renders (an
+    unknown or closed action), for tests whose submit is refused before the
+    digest is read."""
+    if not isinstance(decisions, dict) or 'draft_digest' in decisions:
+        return decisions
+    try:
+        digest = page_digest(client, headers, action_id)
+    except RuntimeError:
+        if strict:
+            raise
+        return decisions
+    return dict(decisions, draft_digest=digest)

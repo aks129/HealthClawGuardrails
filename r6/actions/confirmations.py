@@ -91,6 +91,25 @@ def reviewed_answers_digest(action_id, resource_json):
                     hashlib.sha256).hexdigest()
 
 
+_REVIEW_DRAFT_LABEL = 'review-draft:'
+
+
+def review_draft_digest(action_id, draft):
+    """Keyed digest over the review draft as the page rendered it (#1174).
+
+    The page carries it in a hidden input; the submit recomputes it from the
+    draft it re-populates and refuses on any difference, so a record
+    changed between the page and the submit is never what gets signed.
+    `draft` is the JSON-able projection review.py builds; the label keeps
+    it apart from the answers and payload digests on the same key.
+    """
+    canonical = json.dumps(draft, sort_keys=True, separators=(',', ':'),
+                           ensure_ascii=False)
+    message = _REVIEW_DRAFT_LABEL + action_id + ':' + canonical
+    return hmac.new(_digest_key(), message.encode('utf-8'),
+                    hashlib.sha256).hexdigest()
+
+
 def approval_operation(action_id, payload_json):
     """The operation an approval credential is bound to: the action AND the
     keyed digest of the payload the person was shown when it was minted

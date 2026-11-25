@@ -15,7 +15,7 @@ import pytest
 
 from models import db
 from r6.models import R6Resource
-from tests.approval_helpers import propose_headers
+from tests.approval_helpers import propose_headers, reviewed
 from tests.approval_helpers import approval_headers
 
 TENANT = 'test-tenant'
@@ -80,7 +80,8 @@ def _review(client, auth_headers, action_id, **answers):
     return client.post('/r6/actions/%s/review' % action_id,
                        headers=approval_headers(client.application,
                                                 auth_headers, action_id),
-                       json=answers)
+                       json=reviewed(client, auth_headers, action_id, answers,
+                                     strict=False))
 
 
 def test_the_gate_refuses_the_attestation_beside_a_confirmed_allergy(

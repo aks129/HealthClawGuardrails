@@ -17,6 +17,7 @@ Only on a fully rendered+persisted+linked PDF does it return 'completed'.
 
 import json
 import os
+import unicodedata
 
 from r6 import constant_time
 from r6.actions import errors
@@ -117,6 +118,15 @@ class FormFillExecutor:
                 outcome={'reason': 'the reviewed answers include items that '
                                    'are not on the intake form, so no form '
                                    'was made; review it again'})
+        # (3c) The same for a demographic answer outside the printable
+        # bound (#1174): one reviewed before the bound existed could put a
+        # sentence in the title or a row.
+        if not demographics_printable(reviewed_qr):
+            return ExecutionResult(
+                status='needs_review',
+                outcome={'reason': 'a reviewed answer cannot be printed on '
+                                   'the form, so no form was made; review '
+                                   'it again'})
 
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud
         # PROVIDER_ERROR — an exception must never escape as a fake success.
@@ -178,6 +188,40 @@ class FormFillExecutor:
             outcome={'reason': 'form-fill execute() is synchronous and '
                                'terminal — nothing to reconcile'},
         )
+
+
+#: Characters a printed demographic answer may hold beside letters, marks
+#: and digits: enough for names, addresses and phone numbers, and no colon,
+#: so an answer cannot read as a "label: value" row.
+_PRINTABLE_PUNCTUATION = frozenset(" .,'-/#&+()")
+PRINTABLE_MAX = 64
+
+
+def printable_answer(value):
+    """True for a string answer fit to print on the form: at most
+    PRINTABLE_MAX characters of letters, marks, digits and a little
+    punctuation (#1174). One predicate for the review page, the reviewed
+    response and the executor."""
+    if not isinstance(value, str) or not 0 < len(value) <= PRINTABLE_MAX:
+        return False
+    return all(ch.isalnum() or unicodedata.category(ch).startswith('M')
+               or ch in _PRINTABLE_PUNCTUATION for ch in value)
+
+
+def demographics_printable(questionnaire_response):
+    """True when every string answer in the demographics group passes
+    printable_answer."""
+    for group in questionnaire_response.get('item') or []:
+        if not isinstance(group, dict) or group.get('linkId') != 'demographics':
+            continue
+        for item in group.get('item') or []:
+            for answer in (item.get('answer') or []
+                           if isinstance(item, dict) else []):
+                for value in (answer.values()
+                              if isinstance(answer, dict) else ()):
+                    if isinstance(value, str) and not printable_answer(value):
+                        return False
+    return True
 
 
 def _foreign_link_ids(questionnaire_response):
