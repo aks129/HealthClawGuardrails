@@ -102,6 +102,21 @@ class FormFillExecutor:
             )
         reviewed_qr = row.to_fhir_json()
 
+        # (3b) Only the built-in intake's items are rendered (#1170). The
+        # review now builds the response from fixed ids, but one reviewed
+        # before that change still carries whatever leaf a planted
+        # Questionnaire added, under a digest that matches. The PDF labels
+        # an unknown leaf by its linkId, which that Questionnaire chose, so
+        # such a response is refused, never rendered without the leaf: the
+        # person's review covered a form that is not this one.
+        foreign = _foreign_link_ids(reviewed_qr)
+        if foreign:
+            return ExecutionResult(
+                status='needs_review',
+                outcome={'reason': 'the reviewed answers include items that '
+                                   'are not on the intake form, so no form '
+                                   'was made; review it again'})
+
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud
         # PROVIDER_ERROR — an exception must never escape as a fake success.
         try:
@@ -162,6 +177,21 @@ class FormFillExecutor:
             outcome={'reason': 'form-fill execute() is synchronous and '
                                'terminal — nothing to reconcile'},
         )
+
+
+def _foreign_link_ids(questionnaire_response):
+    """The linkIds in a response that the built-in intake does not define."""
+    from r6.sdc.intake import intake_questionnaire
+    known, seen = set(), set()
+
+    def walk(items, into):
+        for item in items or []:
+            if isinstance(item, dict):
+                into.add(item.get('linkId'))
+                walk(item.get('item'), into)
+    walk(intake_questionnaire().get('item'), known)
+    walk(questionnaire_response.get('item'), seen)
+    return seen - known
 
 
 def reviewed_subject_label(reviewed_qr):

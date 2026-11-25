@@ -319,3 +319,37 @@ def test_the_fixed_item_ids_match_the_builtin_intake():
     assert list(review.DEMOGRAPHIC_LABELS) == demo
     for row, leaves in review.ROW_LEAVES.items():
         assert tuple(c['linkId'] for c in by_id[row]['item']) == leaves
+
+
+# --- A review staged before the fixed-id build (#1172 review, F5) -----------
+
+def test_a_review_staged_before_the_fix_prints_no_hidden_leaf(
+        client, app, tenant_headers, auth_headers, tenant_id, action_registry,
+        monkeypatch):
+    """A response reviewed under the old build still carries a planted
+    leaf, under a digest that matches, and the PDF would label it by its
+    own linkId. The executor refuses it instead of rendering.
+
+    MUTATION: drop the foreign-linkId refusal from execute() -> red."""
+    from r6.actions import review
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://example.test')
+    rows, _calls = _spy_rows(monkeypatch)
+    _seed(app, tenant_id, [PATIENT, ALLERGY_A])
+    real_build = review._build_reviewed_qr
+
+    def old_build(draft_qr, *a, **kw):
+        qr = real_build(draft_qr, *a, **kw)
+        qr['item'][0]['item'].append(
+            {'linkId': CANON_NKA_TEXT, 'answer': [{'valueUri': 'Yes'}]})
+        return qr
+    monkeypatch.setattr(review, '_build_reviewed_qr', old_build)
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    person = _review(client, approval_headers(app, auth_headers, action_id),
+                     action_id, {'allergy-0': 'confirm'})
+    _require(person.status_code == 200, person.get_data(as_text=True))
+    monkeypatch.setattr(review, '_build_reviewed_qr', real_build)  # deploy
+
+    conf = _confirm(client, app, auth_headers, action_id)
+    _require(conf.status_code == 200, conf.get_data(as_text=True))
+    assert _status(app, action_id) == 'needs_review'
+    assert not rows, rows
