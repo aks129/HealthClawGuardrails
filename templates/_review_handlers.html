@@ -247,12 +247,14 @@
             return;
           }
 
-          // The relay's confirm-failure: the review WAS saved and the
-          // approval IS recorded (the review route mints it), and only the
-          // completion failed. Its message points the patient at the status,
+          // The relay's confirm-failure: the review reached the engine and
+          // only the confirm failed. For a form the review route has recorded
+          // the answers and an approval (it mints one); for every other kind
+          // it records none since #1104, and the approval exists only once
+          // confirm succeeds. Its message points the patient at the status,
           // so that instruction needs a destination (#419) — and the button
-          // must not be left armed, because since #528 the retry it invites
-          // answers 409.
+          // is not left armed: for a form the retry answers 409 (#528), and
+          // for every kind the status lookup is the honest next step.
           //
           // Keyed on the STATUS as well as the value, not on
           // `confirmed === false` alone: the two 503s carry that same value
@@ -260,7 +262,7 @@
           // approval on file, nothing to look up, and the poll would report
           // on a request that was never made.
           if (res.r.status === 502 && res.b.confirmed === false) {
-            btn.disabled = true;             // its retry now answers 409
+            btn.disabled = true;             // the status lookup decides
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent = res.b.message ||
               'Your review was saved, but we could not complete your ' +
