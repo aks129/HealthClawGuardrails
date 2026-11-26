@@ -49,6 +49,9 @@ _TENANT_TABLES = (
     # Saved contacts name the businesses a person deals with, and their
     # numbers.
     ("delegation_contacts", "delegation_contacts"),
+    # What a person attested about themselves: name, date of birth,
+    # insurance details.
+    ("delegation_facts", "delegation_facts"),
 )
 
 

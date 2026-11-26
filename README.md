@@ -30,7 +30,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-1490%2B%20Python%20%2B%20170%20Node-22c55e?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-7%2C000%2B%20Python%20%2B%20170%2B%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#what-this-grade-means-and-what-it-doesnt)
@@ -53,13 +53,45 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v2.1.0, with 4,000+ Python and 200+ Node tests across 29 MCP tools.
+**At a glance:** v2.1.0, with 29 MCP tools.
 **[CareAgents](https://careagents.cloud)** is the hosted consumer app: passkey sign-in, advisors, and chat on the web. iMessage works where it's offered; Telegram is not open in the beta.
 Two rails run end to end — real-world actions behind a provably out-of-band gate, and forms (`$populate` → human review → provenance PDF).
 Standards: FHIR R4 US Core v9 and R6 v6.0.0-ballot3, HL7 SDC forms, NQF 0018.
 Operations: lab interpreter (`$interpret`), care-gaps reminders (`$care-gaps`) with an embedded MCP-App view, and ChatGPT-connector `search`/`fetch`.
 Connectors: Fasten TEFCA, HealthEx, HBO, Flexpa, Epic, MEDENT, Open Wearables, SMART Health Links.
 Also a Claude Code plugin and OpenAI/Gemini adapters.
+
+## How it stops unauthorized or irreversible agent actions
+
+A short map for a reviewer. Each line links to the detail and to something you can run.
+
+**The problem.** An AI agent connected to a health record can read more than it needs and write what nobody approved. It can also start things that cannot be undone, such as a text message or a submitted form. Most FHIR MCP servers hand the agent the record and the write path as they are.
+
+**The approach.** The agent gets a narrower path than the person it works for:
+
+- **It reads less.** Names, identifiers, addresses and birth dates are redacted before the model sees a record. Reads and writes leave an audit record. Pinned by [`tests/test_claimed_properties_are_pinned.py`](tests/test_claimed_properties_are_pinned.py) (search and read redaction, a read's own audit event), and per write route by the audit column in [`tests/test_write_guard_matrix.py`](tests/test_write_guard_matrix.py).
+- **It cannot write on its session alone.** Each write needs a separate, tenant-bound step-up token that expires in five minutes. Expiry is pinned in `tests/test_claimed_properties_are_pinned.py`; a write without a token is refused in the conformance test.
+- **It cannot approve its own action.** For a real-world action the agent can only *propose*. `commit` submits the action and returns HTTP 202. Nothing runs until a person approves on a separate page, with a single-use credential bound to a digest of the exact payload they were shown. If the payload changes after they saw it, the approval does not match. Pinned by [`tests/test_human_gate_payload_digest.py`](tests/test_human_gate_payload_digest.py) (a changed payload is refused) and [`tests/actions/test_confirmations.py`](tests/actions/test_confirmations.py) (the credential is consumed once).
+- **It fails loudly.** An action kind with no working executor ends as `failed`, not as a simulated success. A decline is recorded as a decline. Pinned by [`tests/actions/test_free_text_calls_cannot_dial.py`](tests/actions/test_free_text_calls_cannot_dial.py) and [`tests/actions/test_decline_is_a_state.py`](tests/actions/test_decline_is_a_state.py).
+- **It stays in its tenant.** A record is not readable from another tenant. Pinned by the tenant-isolation property in [`tests/test_guardrail_conformance.py`](tests/test_guardrail_conformance.py).
+
+**What can run today.** Form filling runs end to end. Text messages run only on a server with a provider configured. Phone calls can be proposed, but no call executor is registered. The approval page offers no Approve for a call, an approval sent another way ends as `failed`, and nothing dials.
+
+**Evidence you can check.**
+
+- Live self-test, no key needed: `curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"` ([what the grade covers](#what-this-grade-means-and-what-it-doesnt)).
+- The same seven properties as a CI test: [`tests/test_guardrail_conformance.py`](tests/test_guardrail_conformance.py).
+- Which control guards which write route, as one table: [`tests/test_write_guard_matrix.py`](tests/test_write_guard_matrix.py).
+- The propose, commit, approve, execute sequence: [`tests/test_actions_routes.py`](tests/test_actions_routes.py).
+- The guardrails in front of a real FHIR server, each property asserted: [Aidbox example](examples/aidbox-healthclaw-guardrails/).
+- Mistakes this codebase has already made, with what each cost: [defect catalogue](docs/defect-catalogue.md).
+- The `python-tests` job runs `pytest tests/` on every pull request ([`ci.yml`](.github/workflows/ci.yml)); the badge above carries the count.
+
+**Where it falls short.** The full list is under [Known Limitations](#known-limitations). The three that matter most here:
+
+- Direct clinical FHIR writes do not have a real human gate. They wait for an `X-Human-Confirmed` header, and the caller sets that header itself ([#214](../../issues/214)). Only the action rail has the out-of-band approval.
+- A step-up token works for several writes inside its five minutes. It is not single-use. No test pins this; validation does not consume the token's nonce unless a caller asks it to (`r6/stepup.py`).
+- The conformance grade is a self-test on synthetic data. No third party has audited this, and no clinician has signed off.
 
 ## Try it in 60 seconds — no clone, no keys
 
@@ -124,7 +156,7 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
                          PHI redaction              Medplum, etc.)
                          Audit trail
                          Step-up auth
-                         Human-in-the-loop
+                         Approval (action rail)
 ```
 
 ### How it differs from a plain FHIR MCP server
@@ -159,6 +191,8 @@ HealthClaw Guardrail Conformance — https://app.healthclaw.io [tenant=desktop-d
   [PASS] Step-Up Authorization    [PASS] Medical Disclaimers
   [PASS] Error Fidelity — A (local-fhir-only)
 ```
+
+"Human-in-the-Loop" is the grader's name for the property. It checks the HTTP 428 on a clinical write without the confirmation header, not that a person approved ([#214](../../issues/214)).
 
 Or hit the **one-URL self-test** on any running deployment — no token needed, it
 self-tenants internally and returns 200 at Grade A (503 otherwise):
@@ -277,7 +311,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | Tool | Description |
 | --- | --- |
 | `fhir_propose_write` | Validate + preview without committing |
-| `fhir_commit_write` | Commit with step-up auth + human-in-the-loop |
+| `fhir_commit_write` | Commit with step-up auth. Clinical writes also wait for the `X-Human-Confirmed` header, which the caller sets ([#214](../../issues/214)) |
 | `questionnaire_extract` | SDC `$extract` — extract resources from a completed QuestionnaireResponse |
 | `curatr_apply_fix` | Apply patient-approved fixes with Provenance tracking |
 | `action_propose` / `action_commit` | Propose / commit a real-world SMS. A phone call can still be proposed but is not placed: an approved one ends failed |
@@ -302,7 +336,7 @@ The 6-step demo at `/r6/fhir/demo/agent-loop` shows the full guardrail sequence:
 2. **$validate Gate** — Agent proposes an Observation, validated before write
 3. **Permission Deny** — No Permission rule exists, access denied with reasoning
 4. **Permission Permit** — Permit rule created, re-evaluation succeeds
-5. **Step-up + Human-in-the-loop** — Write requires both token and human confirmation
+5. **Step-up + confirmation header** — Write requires a token and the `X-Human-Confirmed` header. The caller sets that header, so it is not a human gate ([#214](../../issues/214))
 6. **Commit + Audit** — Write succeeds, full audit trail generated
 
 ## Comparison
@@ -313,7 +347,7 @@ The 6-step demo at `/r6/fhir/demo/agent-loop` shows the full guardrail sequence:
 | PHI redaction on reads | Yes | No | No | No |
 | Immutable audit trail | Yes | CloudTrail (separate) | Partial | No |
 | Step-up auth for writes | Yes | IAM (separate) | Medplum auth | No |
-| Human-in-the-loop | Yes | No | No | No |
+| Out-of-band human approval | Action rail only ([#214](../../issues/214)) | No | No | No |
 | Permission $evaluate (R6) | Yes | No | No | No |
 | Setup time | 10 seconds | 30+ minutes | 15+ minutes | Varies |
 
@@ -329,7 +363,7 @@ Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, a
 ## Testing
 
 ```bash
-# Python tests (1,490+ across 90+ files; includes action-rail, SDC, quality, labs, ops, CareAgents suites)
+# Python tests; the badge counts test functions, not parametrized cases (action-rail, SDC, quality, labs, ops and CareAgents suites among them)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
@@ -393,7 +427,7 @@ FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py
 Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
 
 **Put the guardrails in front of your FHIR server** — recipe for running the
-redaction + audit + step-up + human-in-the-loop stack in front of **Medplum**
+redaction + audit + step-up stack in front of **Medplum**
 (the same pattern works for Aidbox, Google Cloud Healthcare, or any FHIR R4
 server): [docs/recipes/healthclaw-in-front-of-medplum.md](docs/recipes/healthclaw-in-front-of-medplum.md).
 A repeatable integration test (`tests/test_medplum_in_front.py`) proves a
@@ -586,7 +620,7 @@ e2e/                            Playwright end-to-end tests
 templates/                      Jinja2 (landing page, dashboard)
 static/                         CSS + JS for interactive dashboard
 skills/curatr/                  Curatr OpenClaw skill definition
-tests/                          266 pytest tests (8 files, incl. test_us_core_r4.py)
+tests/                          pytest suite (incl. test_us_core_r4.py)
 ```
 
 ## Personal FHIR data store — patient import flow
