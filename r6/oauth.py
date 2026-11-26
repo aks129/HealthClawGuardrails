@@ -543,6 +543,33 @@ def _oauth_store_set(kind, key, value, ttl=None):
     _OAUTH_STORES[kind][key] = value
 
 
+def _oauth_store_add(kind, key, value, ttl=None):
+    """Store `value` only when `key` has no record. True when it was stored.
+
+    One step, so nothing can land between the look and the write: SET NX in
+    Redis, dict.setdefault in memory. A Redis failure in production raises,
+    as _oauth_store_set does: a store that cannot answer is never read as
+    "no record". The in-memory store ignores `ttl`, here as in
+    _oauth_store_set, so without Redis a record lasts until the process
+    restarts.
+    """
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            return bool(client.set(
+                _oauth_key(kind, key),
+                json.dumps(value, separators=(',', ':')),
+                ex=ttl,
+                nx=True,
+            ))
+        except Exception as exc:  # noqa: BLE001 - Redis errors vary
+            logger.error('OAuth Redis conditional write failed: %s',
+                         type(exc).__name__)
+            if _is_production():
+                raise RuntimeError('OAuth state store unavailable') from None
+    return _OAUTH_STORES[kind].setdefault(key, value) is value
+
+
 def _decode_oauth_value(raw):
     if raw is None:
         return None
@@ -939,13 +966,28 @@ def register_oauth_routes(blueprint):
 
         from r6.audit import add_audit_event
         from r6.models import db
-        _oauth_store_set('consent', consent_id, {
+        # Stored only if the consent id has no record, in one step. A record
+        # already there is a replay, or the tombstone a revoke left before
+        # this return arrived (consent_revoke). Neither becomes a live
+        # consent, and neither is overwritten.
+        if not _oauth_store_add('consent', consent_id, {
             'tenant_id': tenant_id,
             'client_id': parked['client_id'],
             'scopes': parked['scopes'],
             'granted_at': time.time(),
             'revoked_at': None,
-        }, ttl=CONSENT_TTL_SECONDS)
+        }, ttl=CONSENT_TTL_SECONDS):
+            # The client sees the same access_denied as a person's "no", so
+            # the refusal is recorded here. No ids in the log line; the
+            # audit row is the tenant's, PHI-free like the approval's.
+            logger.warning('consent_return refused: existing record')
+            add_audit_event('create', 'Consent', consent_id,
+                            agent_id=parked['client_id'], tenant_id=tenant_id,
+                            outcome='failure',
+                            detail=f"client_id={parked['client_id']} refused: "
+                                   'consent id already has a record via=careagents')
+            db.session.commit()
+            return _redirect_to_client(redirect_uri, state, error='access_denied')
         # A consent is a tenant event (§13.4). PHI-free by construction: a
         # client id, the scopes, and the channel. No account, no label.
         add_audit_event('create', 'Consent', consent_id,
@@ -972,12 +1014,37 @@ def register_oauth_routes(blueprint):
     def consent_revoke(consent_id):
         """Take a consent back (§13.4). Every token issued under it, access
         or refresh, stops validating at once; introspection answers inactive.
-        Service credential only; idempotent."""
+        Service credential only.
+
+        Revoking a consent that exists answers 200, every time. Revoking an
+        id with no record answers 404 the first time and leaves a revoked
+        tombstone, so a repeat answers 200 `revoked: true` for an id that
+        never had a consent. No AuditEvent is written for a tombstone: no
+        tenant is known here, and an audit row needs one.
+        """
         if not internal_secret_authorized():
             return jsonify({'error': 'forbidden'}), 403
         consent = _oauth_store_get('consent', consent_id)
         if not consent:
-            return jsonify({'error': 'not_found'}), 404
+            # Not here yet: the person revoked before the signed return
+            # arrived. Remember the revocation so that return stores nothing
+            # live. Still 404, which the caller reads as already gone.
+            #
+            # The tombstone carries revoked_at and nothing else: no tenant
+            # or client is known here, and consent_is_live, its only reader,
+            # needs neither. Written only if the id still has no record, so
+            # it cannot replace a consent a return stored since the read.
+            if _oauth_store_add('consent', consent_id, {'revoked_at': time.time()},
+                                ttl=CONSENT_TTL_SECONDS):
+                logger.info('consent_revoke: tombstone stored for an unknown consent id')
+                return jsonify({'error': 'not_found'}), 404
+            # A return stored the consent between the read and the write:
+            # revoke that one.
+            consent = _oauth_store_get('consent', consent_id)
+            if not consent:
+                # A record exists and cannot be read. Saying "not found"
+                # would report a live consent as gone.
+                return jsonify({'error': 'temporarily_unavailable'}), 503
         if not consent.get('revoked_at'):
             consent['revoked_at'] = time.time()
             _oauth_store_set('consent', consent_id, consent, ttl=CONSENT_TTL_SECONDS)
