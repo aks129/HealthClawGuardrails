@@ -3,13 +3,19 @@
 One entry per rule id in r6/caregaps/evaluate.py: who issued the guideline,
 where it is published, when, and the issuing body's own recommendation
 statement, quoted exactly and kept short. A citation says what the guideline
-says for a group of people. It is not advice to the person reading it, and no
-wording here is ours.
+says for a group of people. It is not advice to the person reading it.
+
+Only `statement` is a quotation. `population`, `title` and `issuing_body` are
+labels written here to say which group and which document a row is about.
+They were not string-matched against the pages. A test pins `population` to
+a second copy of our own label, and none compares it with the guideline, so
+read these as ours, not as the issuing body's words.
 
 How an entry gets in:
 - It is copied from the issuing body's own page and reviewed in the pull
-  request that adds it. Nothing is fetched at run time and no statement is
-  written or paraphrased by a model.
+  request that adds it. No statement is written or paraphrased by a model.
+- Nothing is fetched at run time: this module imports `copy` and nothing
+  else (test_the_table_is_static_data_and_fetches_nothing).
 - `date` is the date the body published the recommendation.
 - `grade` is the body's own grade for that population, and None where the
   body assigns none (ACIP's routine influenza recommendation carries no
@@ -20,8 +26,21 @@ How an entry gets in:
   entry and is named in `UNVERIFIED`. Guessing a quotation is the one thing
   this file must never do.
 
-tests/test_caregaps_citations.py holds a second copy of every statement and
-fails when the two differ.
+The one source check, done by hand and repeated by no test. This is what the
+pull request that added the table (#1177) records, and nothing more:
+- Every row was read on the issuing body's own page on 2026-11-25.
+- Task Force rows: the four pages were downloaded and each `statement` was
+  string-matched against the page text. The tool used and the date of the
+  match are not recorded. How `date` and `grade` were checked is not recorded.
+- CDC row: NOT string-matched. The page refused a direct download, so the
+  statement was read through a page-fetch tool that summarises. Two separate
+  reads returned the same sentence. Open the page and compare before relying
+  on it as an exact quotation.
+
+tests/test_caregaps_citations.py holds a second copy of every statement
+(`FIXTURES`) and fails when the two differ. Both copies have one author, so
+that catches an edit to one copy. It does not show that either matches the
+page.
 """
 
 from __future__ import annotations

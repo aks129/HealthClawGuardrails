@@ -2,23 +2,30 @@
 
 A citation is static data keyed by rule id (r6/caregaps/citations.py). It is
 copied from the issuing body's own page and reviewed in the pull request that
-adds it; nothing here is fetched at run time and nothing is written by a
+adds it; nothing is fetched at run time and no statement is written by a
 model. A rule whose statement could not be read on the issuing body's page
 carries no citation and is named in `UNVERIFIED` with the reason, so "no
 citation" is always a recorded decision and never an oversight.
 
-`FIXTURES` is the second copy on purpose. It was typed from the pages
-separately from the table, so a statement edited in one place and not the
-other fails here rather than reaching a person as a quotation nobody said.
+`FIXTURES` is a second copy of each url, date, grade and statement. It has the
+same author as the table, so it shows one thing only: a value edited in one
+place and not the other fails here. A wrong quotation typed into both passes.
+Whether the table matches the pages was checked by hand once; the
+r6/caregaps/citations.py docstring records how, and that the CDC row was not
+string-matched.
 """
 
 from __future__ import annotations
 
+import ast
+import dataclasses
 import json
 import pathlib
 import re
 from urllib.parse import urlsplit
 
+from r6.brief.engine import build_care_gaps
+from r6.caregaps import citations as citations_module
 from r6.caregaps.citations import (
     CITATIONS, CLINICIAN_SIGNOFF, UNVERIFIED, citation_for)
 from r6.caregaps.evaluate import CARE_GAP_RULES, evaluate_care_gaps
@@ -30,11 +37,11 @@ pytestmark = pytest.mark.extension
 
 RULE_IDS = {r["id"] for r in CARE_GAP_RULES}
 
-#: The issuing bodies' own hosts. A citation anywhere else is a mirror.
-ALLOWED_HOSTS = {"www.uspreventiveservicestaskforce.org", "www.cdc.gov",
-                 "diabetesjournals.org"}
+#: The issuing bodies' own hosts, one per body the table cites today. A
+#: citation anywhere else is a mirror.
+ALLOWED_HOSTS = {"www.uspreventiveservicestaskforce.org", "www.cdc.gov"}
 
-#: {rule_id: (url, date, [(grade, statement), ...])} as read on the page.
+#: {rule_id: (url, date, [(grade, statement), ...])}: the second copy.
 _USPSTF = "https://www.uspreventiveservicestaskforce.org/uspstf/recommendation/"
 FIXTURES = {
     "bp-screening": (_USPSTF + "hypertension-in-adults-screening", "2021-04-27", [
@@ -67,6 +74,18 @@ FIXTURES = {
         ]),
 }
 
+#: Our own population labels, in row order. They are not quotations; this
+#: copy only makes a changed label a deliberate edit in two places.
+POPULATIONS = {
+    "bp-screening": ["Adults 18 years or older without known hypertension"],
+    "colorectal-screening": ["Adults aged 50 to 75 years",
+                             "Adults aged 45 to 49 years"],
+    "cervical-screening": ["Women aged 21 to 29 years",
+                           "Women aged 30 to 65 years"],
+    "mammography": ["Women aged 40 to 74 years"],
+    "flu-immunization": ["All persons aged ≥6 months"],
+}
+
 
 def test_every_rule_is_cited_or_named_as_unverified():
     """MUTATION: delete one entry from either table."""
@@ -75,13 +94,29 @@ def test_every_rule_is_cited_or_named_as_unverified():
     assert all(isinstance(why, str) and why for why in UNVERIFIED.values())
 
 
-def test_the_cited_rules_are_the_ones_read_on_the_page():
-    """A citation added without a fixture has not been read twice."""
+def test_every_cited_rule_has_a_fixture():
+    """MUTATION: add a `lipid-screening` entry to CITATIONS only."""
     assert set(CITATIONS) == set(FIXTURES)
 
 
+def test_the_table_is_static_data_and_fetches_nothing():
+    """MUTATION: add `import urllib.request` to r6/caregaps/citations.py."""
+    tree = ast.parse(pathlib.Path(citations_module.__file__).read_text(
+        encoding="utf-8"))
+    imported = {alias.name for node in ast.walk(tree)
+                if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {node.module for node in ast.walk(tree)
+                 if isinstance(node, ast.ImportFrom)}
+    assert imported == {"__future__", "copy"}
+
+
 @pytest.mark.parametrize("rule_id", sorted(FIXTURES))
-def test_a_citation_is_complete_and_matches_the_page(rule_id):
+def test_a_citation_is_complete_and_the_table_agrees_with_fixtures(rule_id):
+    """MUTATION: edit one statement, date or url in the table only. The
+    host, grade-set and word-count asserts are checked by editing BOTH
+    copies (a mirror host, grade "C", a 26-word statement), since an edit to
+    one copy stops at the equality first. MUTATION: reword one `population`
+    label in the table only."""
     cite = CITATIONS[rule_id]
     url, when, rows = FIXTURES[rule_id]
     assert set(cite) == {"issuing_body", "title", "url", "date",
@@ -93,6 +128,8 @@ def test_a_citation_is_complete_and_matches_the_page(rule_id):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", cite["date"])
     assert [(r["grade"], r["statement"])
             for r in cite["recommendations"]] == rows
+    assert [r["population"]
+            for r in cite["recommendations"]] == POPULATIONS[rule_id]
     for row in cite["recommendations"]:
         # `grade` is a key on every row, and None where the body assigns none.
         assert set(row) == {"population", "grade", "statement"}
@@ -103,6 +140,7 @@ def test_a_citation_is_complete_and_matches_the_page(rule_id):
 
 
 def test_only_the_task_force_rows_carry_a_grade():
+    """MUTATION: grade the influenza row "A" in the table and FIXTURES."""
     for rule_id, cite in CITATIONS.items():
         graded = [r["grade"] is not None for r in cite["recommendations"]]
         if "Task Force" in cite["issuing_body"]:
@@ -113,11 +151,13 @@ def test_only_the_task_force_rows_carry_a_grade():
 
 def test_sign_off_is_pending_for_every_rule():
     """Nobody has signed the rule table yet, and this table must not say
-    otherwise. Changing a value here is the record of a signature."""
+    otherwise. Changing a value here is the record of a signature.
+    MUTATION: set one rule to "signed"."""
     assert CLINICIAN_SIGNOFF == {rule_id: "pending" for rule_id in RULE_IDS}
 
 
 def test_a_caller_cannot_edit_the_table_through_a_result():
+    """MUTATION: return `cite` from citation_for without the deepcopy."""
     citation_for("mammography")["recommendations"][0]["statement"] = "x"
     assert CITATIONS["mammography"]["recommendations"][0]["statement"] != "x"
     assert citation_for("lipid-screening") is None
@@ -138,17 +178,54 @@ def _results():
                               conditions=conditions, as_of="2026-06-01")
 
 
-def test_every_detail_row_carries_its_citation_or_none():
-    rows = {r["rule_id"]: r for r in _results()}
+def _key_names(obj):
+    """Every dict key at any depth, lowercased, letters and digits only."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            yield re.sub(r"[^a-z0-9]", "", str(key).lower())
+            yield from _key_names(value)
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            yield from _key_names(value)
+
+
+_SIGNOFF_SENTINEL = "zz-signoff-sentinel-7f3a"
+
+
+@pytest.fixture
+def signoff_sentinel(monkeypatch):
+    """Every sign-off value becomes a string found nowhere else, so a
+    response that carries one under ANY key name is caught by its value."""
+    for rule_id in list(CLINICIAN_SIGNOFF):
+        monkeypatch.setitem(CLINICIAN_SIGNOFF, rule_id, _SIGNOFF_SENTINEL)
+
+
+def _assert_no_sign_off(payload):
+    """Sign-off is a fact about the rule table. It is not sent anywhere:
+    not under a key that names it, and not by value under any other key."""
+    names = list(_key_names(payload))
+    assert "citation" in names, "walked nothing"
+    assert not [n for n in names if "signoff" in n]
+    assert _SIGNOFF_SENTINEL not in json.dumps(payload)
+
+
+def test_every_detail_row_carries_its_citation_or_none(signoff_sentinel):
+    """MUTATION: send `citation: None` from the engine; or add
+    `"clinicianSignoff": CLINICIAN_SIGNOFF[rule["id"]]` to `base`; or the
+    same value under `"reviewed"`."""
+    results = _results()
+    rows = {r["rule_id"]: r for r in results}
     assert set(rows) == RULE_IDS
     for rule_id, row in rows.items():
         assert "citation" in row
         assert row["citation"] == CITATIONS.get(rule_id)
-        # Sign-off is a fact about the rule table. It is not sent anywhere.
-        assert "clinician_signoff" not in row
+    _assert_no_sign_off(results)
 
 
-def test_a_consumer_line_carries_the_citation_and_its_words_do_not_change():
+def test_a_consumer_line_carries_the_citation_and_its_words_do_not_change(
+        signoff_sentinel):
+    """MUTATION: append the citation's statement to `line["message"]` in
+    r6/caregaps/report.py; or copy the row's sign-off onto the line."""
     results = _results()
     bare = [{k: v for k, v in r.items() if k != "citation"} for r in results]
     lines = build_consumer_summary(results)["lines"]
@@ -156,15 +233,33 @@ def test_a_consumer_line_carries_the_citation_and_its_words_do_not_change():
     assert lines and len(lines) == len(before)
     for line, old in zip(lines, before):
         assert line["citation"] == CITATIONS.get(line["rule_id"])
-        assert "clinician_signoff" not in line
         # The message is the gap's existing wording, to the byte: a citation
         # sits beside it and is never folded into it.
         assert {k: v for k, v in line.items() if k != "citation"} == {
             k: v for k, v in old.items() if k != "citation"}
+    _assert_no_sign_off(lines)
+
+
+def test_the_appointment_brief_does_not_carry_the_citation():
+    """The brief builds its care-gap fields from the same lines
+    (r6/brief/routes.py) and picks title, message and rule id from each.
+    MUTATION: append the line's citation statement to the field's value in
+    r6/brief/engine.py::build_care_gaps."""
+    consumer = build_consumer_summary(_results())
+    section = build_care_gaps({"consumer": consumer})
+    cited = {ln["rule_id"] for ln in consumer["lines"] if ln["citation"]}
+    assert cited & {f.source_id for f in section.fields}
+    sent = json.dumps(dataclasses.asdict(section))
+    assert "citation" not in sent
+    for cite in CITATIONS.values():
+        assert cite["url"] not in sent
+        for row in cite["recommendations"]:
+            assert row["statement"] not in sent
 
 
 def test_a_citation_never_carries_anything_from_the_record():
-    """The table is static, so nothing a record holds can reach it."""
+    """The table is static, so nothing a record holds can reach it.
+    MUTATION: add `"for": patient.get("name")` to the row's citation."""
     payload = json.dumps([r["citation"] for r in _results()])
     assert _CANARY not in payload
     assert payload == json.dumps(
@@ -172,7 +267,8 @@ def test_a_citation_never_carries_anything_from_the_record():
 
 
 def test_the_operation_returns_citations_in_both_payloads(
-        client, app, tenant_id, tenant_headers):
+        client, app, tenant_id, tenant_headers, signoff_sentinel):
+    """MUTATION: as for the detail rows, seen through the route."""
     with app.app_context():
         db.session.add(R6Resource(
             resource_type="Patient", resource_json=json.dumps(_PATIENT),
@@ -191,7 +287,10 @@ def test_the_operation_returns_citations_in_both_payloads(
     assert cited
     for line in cited:
         assert line["citation"]["url"].startswith("https://")
-    assert "pending" not in params["detail"] + params["consumerSummary"]
+    # `detail` and `consumerSummary` are JSON inside a string, so the walk
+    # runs on the parsed objects and the value check on the raw response.
+    _assert_no_sign_off({"detail": detail, "lines": lines})
+    assert _SIGNOFF_SENTINEL not in r.get_data(as_text=True)
 
 
 # --- the page ------------------------------------------------------------
@@ -211,7 +310,8 @@ def _cite_fn():
 
 def test_the_page_draws_the_citation_escaped_and_attributed():
     """CI has no browser for this job, so, as in test_mcp_app_care_gaps.py,
-    this pins the shape of the code. MUTATION: interpolate `c.url` bare."""
+    this pins the shape of the code. MUTATION: interpolate `c.url` bare;
+    or drop `rel="noopener noreferrer"`."""
     src, fn = _cite_fn()
     for field in ("c.url", "c.issuing_body", "c.date", "row.statement",
                   "row.population", "row.grade"):
@@ -221,9 +321,26 @@ def test_the_page_draws_the_citation_escaped_and_attributed():
     for expr in re.findall(r"\$\{([^}]*)\}", fn):
         assert expr.strip().startswith(("esc(", "row.grade ?", "rows")), expr
     assert 'rel="noopener noreferrer"' in fn
-    assert "cite(r.citation)" in src
 
 
-def test_the_page_says_nothing_about_sign_off():
+def test_the_page_draws_a_citation_only_on_a_rule_that_applies():
+    """A guideline for women aged 40 to 74 is not drawn on the card that
+    says the rule does not apply to this person. MUTATION: call
+    `cite(r.citation)` without the status test."""
     src, _ = _cite_fn()
+    calls = re.findall(r"\$\{([^}]*cite\(r\.citation\)[^}]*)\}", src)
+    assert len(calls) == 1
+    assert re.sub(r"\s+", " ", calls[0]).strip() == (
+        "r.status === 'not_applicable' ? '' : cite(r.citation)")
+
+
+def test_the_page_reads_the_citation_fields_and_nothing_else():
+    """An allowlist, not a search for the word: a sign-off read as
+    `c.review_status` has no "signoff" in it. MUTATION: draw
+    `${esc(c.review_status)}` in cite()."""
+    src, fn = _cite_fn()
+    assert set(re.findall(r"\bc\.(\w+)", fn)) == {
+        "url", "issuing_body", "date", "recommendations"}
+    assert set(re.findall(r"\brow\.(\w+)", fn)) == {
+        "population", "statement", "grade"}
     assert "signoff" not in src.lower() and "sign-off" not in src.lower()

@@ -118,7 +118,9 @@
   // What the guideline says for a group of people, in the issuing body's own
   // words, with a link to its page. Static data from the engine
   // (r6/caregaps/citations.py); a rule with no verified citation sends null
-  // and draws nothing.
+  // and draws nothing. Drawn only on a rule that applies to this person: a
+  // guideline for another group under a "not applicable" pill reads as if
+  // it were about them.
   function cite(c){
     if(!c){ return ''; }
     const rows = (c.recommendations || []).map(row => `
@@ -163,7 +165,7 @@
         <div><span class="pill ${esc(r.status)}">${esc(
           (r.status || '').replace(/_/g, ' '))}</span></div>
         ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
-        ${cite(r.citation)}
+        ${r.status === 'not_applicable' ? '' : cite(r.citation)}
       </div>`).join('');
     // A line is {rule_id, title, message}, not a string. Interpolating the
     // object renders "[object Object]" — latent only because this box has
