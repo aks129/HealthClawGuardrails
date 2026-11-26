@@ -13,12 +13,15 @@ does with what the script sends. Neither is decided in this repository.
 
 MUTATION, each run against the committed tree:
   add '/command-center' to the tuple in base.html
-      -> test_a_base_shell_page_loads_analytics_only_if_allowlisted
-         [command_center.html] and test_privacy_names_the_allowlisted_pages
+      -> test_an_app_page_never_loads_analytics[command_center.html],
+         test_no_app_path_is_allowlisted
   remove the `{% if %}` around the script in base.html
-      -> test_the_allowlist_has_one_source, and every app-page row
-  remove the script from base.html -> the same, and every public row
+      -> every test_an_app_page_never_loads_analytics row
+  remove the script from base.html
+      -> every test_an_allowlisted_page_loads_analytics row
   remove the script from index.html -> test_the_landing_page_loads_analytics
+  take the session away from the command-center row
+      -> test_an_app_page_never_loads_analytics[command_center.html]
   add the script, single-quoted and without `defer`, to
   connect_patient_base.html
       -> test_no_other_template_references_analytics,
@@ -51,22 +54,21 @@ BASE_SHELL_MARKER = "js/vendor/bootstrap.bundle.min.js"
 TENANT = "analytics-guard-tenant"
 CLOSED_TENANT = "analytics-guard-closed"
 
-# Every template that extends base.html, and the URL that renders it. A new
-# template in that shell fails test_every_base_shell_template_is_listed until
-# it has a row here.
-BASE_SHELL_PAGES = {
-    "about.html": "/about",
-    "faq.html": "/faq",
-    "wiki.html": "/wiki",
-    "security.html": "/security",
-    "privacy.html": "/privacy",
-    "terms.html": "/terms",
-    "skills.html": "/skills",
-    "r6_dashboard.html": "/r6-dashboard",
-    "fhir_control_panel.html": "/fhir-control-panel",
-    "command_center.html": "/command-center",
-    "command_center_login.html": "/command-center/login",
-    "fasten_connect_disconnected.html": "/connect/" + CLOSED_TENANT,
+# Every template that extends base.html and is not a public information
+# page: the URL that renders it, and words only that template prints. This
+# list is written out, not derived, so that adding one of these paths to the
+# allowlist fails here. A new template in the shell fails
+# test_every_base_shell_template_is_public_or_app until it is on one list.
+APP_PAGES = {
+    "r6_dashboard.html": ("/r6-dashboard", "Guardrail conformance"),
+    "fhir_control_panel.html": ("/fhir-control-panel", "FHIR Control Panel"),
+    "command_center.html": ("/command-center",
+                            'data-tenant="%s"' % TENANT),
+    "command_center_login.html": (
+        "/command-center/login",
+        "The dashboard for private tenants is protected"),
+    "fasten_connect_disconnected.html": ("/connect/" + CLOSED_TENANT,
+                                         "Connection disconnected"),
 }
 
 # How /privacy section 7 names each page that loads the script.
@@ -118,22 +120,33 @@ def test_the_allowlist_has_one_source():
     assert _markup(TEMPLATES / "base.html").count(NEEDLE) == 1
 
 
-def test_every_base_shell_template_is_listed():
-    assert _extends_base() == set(BASE_SHELL_PAGES)
+def test_every_base_shell_template_is_public_or_app():
+    """An allowlisted path /name is served from name.html."""
+    public = {path.lstrip("/") + ".html" for path in _allowlist()}
+    assert not public & set(APP_PAGES)
+    assert _extends_base() == public | set(APP_PAGES)
 
 
-def test_every_allowlisted_path_is_a_listed_page():
-    """An allowlisted path no row below renders would go unexamined."""
-    assert set(_allowlist()) <= set(BASE_SHELL_PAGES.values())
+def test_no_app_path_is_allowlisted():
+    assert not set(_allowlist()) & {url for url, _ in APP_PAGES.values()}
 
 
-@pytest.mark.parametrize("template", sorted(BASE_SHELL_PAGES))
-def test_a_base_shell_page_loads_analytics_only_if_allowlisted(
-        client, template):
-    url = BASE_SHELL_PAGES[template]
+@pytest.mark.parametrize("path", _allowlist())
+def test_an_allowlisted_page_loads_analytics(client, path):
+    response = client.get(path)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert BASE_SHELL_MARKER in body
+    assert body.count(NEEDLE) == 1
+    assert SCRIPT in body
+
+
+@pytest.mark.parametrize("template", sorted(APP_PAGES))
+def test_an_app_page_never_loads_analytics(client, template):
+    url, words = APP_PAGES[template]
     if template == "command_center.html":
-        # The dashboard itself, not the login page it answers without a
-        # session.
+        # A private tenant's dashboard, which only a session opens. Without
+        # one this URL answers with the demo tenant's.
         with client.session_transaction() as session:
             session[TENANT_SESSION_KEY] = TENANT
     if template == "fasten_connect_disconnected.html":
@@ -143,13 +156,12 @@ def test_a_base_shell_page_loads_analytics_only_if_allowlisted(
     response = client.get(url)
     body = response.get_data(as_text=True)
 
+    # The page itself, in the shell that carries the script: an error body
+    # or a redirect also lacks the script, and would pass the last line.
     assert response.status_code == 200
     assert BASE_SHELL_MARKER in body
-    if url in _allowlist():
-        assert body.count(NEEDLE) == 1
-        assert SCRIPT in body
-    else:
-        assert NEEDLE not in body
+    assert words in body
+    assert NEEDLE not in body
 
 
 def test_the_landing_page_loads_analytics(client):
