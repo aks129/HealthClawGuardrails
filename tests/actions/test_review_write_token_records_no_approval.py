@@ -9,6 +9,8 @@ The approval is recorded by the confirm route, under the action-bound
 credential only the approve surface can mint. These tests hold the review
 POST to recording none.
 """
+import json
+
 import pytest
 
 from models import db
@@ -123,6 +125,10 @@ def test_a_write_token_cannot_submit_attested_answers(
         _require('reviewed_qr_id' not in action.payload, 'already reviewed')
     _require(_confirmations(app, action_id) == [], 'already confirmed')
     r = _post_answers(client, auth_headers, action_id, {'nka': 'true'})
+    # Cause proof: a body the handler rejects would fail the assertion below
+    # too, and read as "still open" without reaching the branch that stores
+    # the answers.
+    _require(r.status_code not in (400, 422), 'the answers were rejected')
     assert r.status_code in (401, 403), r.get_data(as_text=True)
     assert _confirmations(app, action_id) == []
     with app.app_context():
@@ -134,3 +140,26 @@ def test_a_write_token_cannot_submit_attested_answers(
 def _post_answers(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id, headers=headers,
                        json=body)
+
+
+def test_the_form_review_still_takes_a_write_token(
+        client, app, tenant_headers, auth_headers, tenant_id):
+    """What is open today, pinned as it is (#1116): the same set-up and the
+    same answers as the strict xfail above, on the write token alone, store
+    a completed QuestionnaireResponse and a confirmation. This is not the
+    wanted behaviour. It shows the xfail's request is accepted, so "still
+    open" there means the write token was taken, and it goes red, with the
+    xfail, when #1116 closes the branch."""
+    _seed(app, tenant_id, [PATIENT])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+    r = _post_answers(client, auth_headers, action_id, {'nka': 'true'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert [c.approved_via for c in _confirmations(app, action_id)] == [
+        'review-page']
+    with app.app_context():
+        stored = R6Resource.query.filter_by(
+            resource_type='QuestionnaireResponse', tenant_id=tenant_id).all()
+        assert len(stored) == 1
+        assert json.loads(stored[0].resource_json)['status'] == 'completed'
+        assert db.session.get(
+            ProposedAction, action_id).payload['reviewed_qr_id']

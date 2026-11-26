@@ -699,7 +699,18 @@ def _approve_submit(action, tenant_id):
     the confirmation, under the approval credential bound to that payload.
     It still answers 200, because the approve surface's relay sends this
     request first and goes on to confirm only on a 200.
+
+    NOT DONE HERE (#1180): the relay's sentence for a confirm that fails
+    after this 200 still says "your approval is recorded" and "approving
+    again here will not resend it". For these kinds neither is true any
+    more. That sentence lives in the caller and moves with the caller-side
+    change (#1116); tests/test_review_write_token_1104_real_relay.py pins the
+    disagreement as a strict xfail until then.
     """
+    # One row per POST, repeats included, and on purpose: with no
+    # confirmation to answer 409 from, a repeated POST is a real access by a
+    # write-token holder, and collapsing repeats would hide it from the
+    # trail. The detail names the kind only.
     _audit_review(action, tenant_id,
                   'review received via review-page; kind=%s; no approval '
                   'recorded' % action.kind)
