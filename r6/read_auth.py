@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from flask import jsonify, request, session
@@ -15,6 +16,7 @@ from r6.runtime_config import is_public_tenant, read_auth_enabled
 from r6.oauth import fhir_resource, validate_bearer_token
 
 
+logger = logging.getLogger(__name__)
 _TRUE_VALUES = frozenset({"1", "true", "yes"})
 _TENANT_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 TENANT_SESSION_KEY = "cc_tenant"
@@ -117,8 +119,66 @@ def authorize_tenant_read(
     auth = (request.headers.get("Authorization") or "").strip()
     bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     if bearer and _oauth_authorizes(bearer, tenant_id):
+        if _oauth_tenant_closed(tenant_id):
+            return None
         return tenant_id
     return None
+
+
+def _oauth_tenant_closed(tenant_id: str) -> bool:
+    """True, with one PHI-free audit row, when a validated OAuth bearer
+    names a tenant its account holder has since disconnected.
+
+    An approved app's token outlives the approval's tenant otherwise: it
+    validates until it expires. Asked only after _oauth_authorizes accepted
+    the token, so an unauthenticated caller learns nothing about which
+    tenants are closed, and that is also why no refusal budget applies. A
+    failed lookup raises, so no data is served.
+    """
+    # Lazy, and resolved by module attribute: r6.fasten imports the access
+    # kernel, which imports this module.
+    from r6.fasten import models as _fasten_models_mod
+
+    if not _fasten_models_mod.tenant_closed(tenant_id):
+        return False
+    _audit_closed_tenant_oauth_refusal(tenant_id)
+    return True
+
+
+def _audit_closed_tenant_oauth_refusal(tenant_id: str) -> None:
+    """Write the refusal's one AuditEvent, as r6.access writes a refusal's.
+
+    Rolls back first so nothing staged before the gate commits with the
+    row. This runs only on the refusal path, so anything the rollback drops
+    belonged to a request that is being refused. A write that fails with a
+    SQLAlchemyError is logged by exception type and the 401 stands: the
+    fail-closed state of a refusal is the refusal itself. Any other
+    exception is not caught and ends the request as a 500, which serves no
+    data either.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from models import db
+    from r6 import access as _access_mod
+
+    try:
+        db.session.rollback()
+        _access_mod.audit(
+            tenant=tenant_id,
+            event_type="read",
+            outcome="failure",
+            detail=(f"OAuth read refused at {request.endpoint or 'unknown'}: "
+                    "tenant disconnected"),
+        )
+        db.session.commit()
+    except SQLAlchemyError as audit_exc:
+        logger.error(
+            "closed-tenant OAuth refusal audit write failed: %s",
+            type(audit_exc).__name__)
+        try:
+            db.session.rollback()
+        except SQLAlchemyError:
+            pass  # the connection is gone; teardown discards the session
 
 
 def authenticate_tenant_read(tenant_id):
