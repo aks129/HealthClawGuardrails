@@ -21,8 +21,8 @@ from dataclasses import asdict
 
 from flask import Blueprint, jsonify, request
 
+from models import db
 from r6 import access, directory
-from r6.audit import record_audit_event
 
 directory_blueprint = Blueprint('directory', __name__,
                                 url_prefix='/r6/directory')
@@ -49,14 +49,17 @@ def search():
         # not echoed back.
         return jsonify({'error': 'invalid_parameters'}), 400
     except directory.Unavailable:
-        record_audit_event(
-            'read', resource_type='Directory', tenant_id=tenant.id,
-            outcome='failure',
-            detail=f'directory search: source={source}; unavailable')
+        access.audit(tenant=tenant, event_type='read',
+                     resource_type='Directory', outcome='failure',
+                     detail=f'directory search: source={source}; unavailable')
+        db.session.commit()
         return jsonify({'status': 'unavailable', 'results': []}), 503
 
-    record_audit_event(
-        'read', resource_type='Directory', tenant_id=tenant.id,
-        detail=f'directory search: source={source}; results={len(found)}')
+    # The commit carries the audit row and nothing else: this GET is
+    # declared for it in the write-guard matrix's KNOWN_GET_MUTATORS.
+    access.audit(tenant=tenant, event_type='read', resource_type='Directory',
+                 detail=f'directory search: source={source}; '
+                        f'results={len(found)}')
+    db.session.commit()
     return jsonify({'status': 'ok',
                     'results': [asdict(entry) for entry in found]})

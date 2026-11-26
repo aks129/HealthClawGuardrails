@@ -669,6 +669,7 @@ KNOWN_GET_MUTATORS = {
     "actions.action_status": "lazy expiry flips a stale proposal to expired",
     "agent_runs.get_agent_worker_health": "expire_overdue_runs() on a probe",
     "wearables.oauth_callback": "upserts WearableConnection (signed state)",
+    "directory.search": "commits its own audit row and nothing else; new audit calls may not use the committing shim (test_ratchets)",
     "shl.fetch_file": "SMART Health Link U flag: a GET by spec; spends one use, drops the ciphertext on the last, audits the read",
 }
 
