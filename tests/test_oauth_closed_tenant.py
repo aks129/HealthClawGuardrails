@@ -99,12 +99,22 @@ def test_an_open_tenant_keeps_reading(client, app, env):
 def test_an_invalid_bearer_on_a_closed_tenant_is_not_told_it_is_closed(
         client, app, env):
     """The closure is asked only after the token is validated, so an
-    unauthenticated caller gets the plain 401 and writes no closure row."""
+    unauthenticated caller cannot tell a closed tenant from an open one: the
+    same status, the same body, the same audit rows, and no closure row.
+
+    MUTATION: ask _oauth_tenant_closed before _oauth_authorizes in
+    r6/read_auth.authorize_tenant_read -> the closed tenant gains a
+    "tenant disconnected" row the open one does not have."""
     _close(app, TENANT)
-    resp = _read(client, TENANT, 'not-a-real-token')
-    assert resp.status_code == 401
-    assert all('disconnected' not in (d or '')
-               for _e, d in _failure_rows(app, TENANT))
+    closed = _read(client, TENANT, 'not-a-real-token')
+    opened = _read(client, OTHER, 'not-a-real-token')
+    assert closed.status_code == opened.status_code == 401
+    # The body names the tenant asked for and nothing else differs.
+    assert (closed.get_data(as_text=True).replace(TENANT, 'T')
+            == opened.get_data(as_text=True).replace(OTHER, 'T'))
+    assert _failure_rows(app, TENANT) == _failure_rows(app, OTHER)
+    assert not [d for _e, d in _failure_rows(app, TENANT)
+                if 'disconnected' in (d or '')]
 
 
 def test_an_audit_store_failure_still_refuses(client, app, env, monkeypatch):
@@ -150,9 +160,35 @@ def test_a_token_that_names_no_tenant_reads_no_tenant(
         client, app, env, token_tenant):
     """tenant_closed answers False for an empty tenant id, so a token with
     none is never refused as closed. It needs no such refusal: the read gate
-    matches the token's tenant to the request's, and no request names an
-    empty tenant, so the token reads nothing, open or closed."""
+    matches the token's tenant to the request's, so the token reads nothing.
+    A token built by the same helper that does name the tenant reads 200
+    (the control), so the missing tenant is what refuses.
+
+    MUTATION: drop the tenant match from r6/read_auth._oauth_authorizes ->
+    the token with no tenant reads 200."""
+    assert _read(client, TENANT, _store_token(TENANT)).status_code == 200
     token = _store_token(token_tenant)
     assert _read(client, TENANT, token).status_code == 401
     _close(app, TENANT)
     assert _read(client, TENANT, token).status_code == 401
+
+
+@pytest.mark.parametrize('token_tenant', [None, ''])
+def test_a_token_that_names_no_tenant_is_inactive_at_introspection(
+        client, app, monkeypatch, token_tenant):
+    """Introspection is what a resource server trusts, and it has no tenant
+    to serve such a token under. A token built by the same helper that does
+    name a tenant answers active (the control).
+
+    MUTATION: drop the empty-tenant check from r6/oauth.py introspect() ->
+    the token answers active."""
+    monkeypatch.setenv('MCP_INTROSPECTION_CLIENT_ID', 'mcp-server')
+    monkeypatch.setenv('MCP_INTROSPECTION_CLIENT_SECRET', 'introspection-secret')
+
+    def _introspect(token):
+        return client.post('/r6/fhir/oauth/introspect', data={
+            'token': token, 'client_id': 'mcp-server',
+            'client_secret': 'introspection-secret'}).get_json()
+
+    assert _introspect(_store_token(OTHER))['active'] is True
+    assert _introspect(_store_token(token_tenant)) == {'active': False}

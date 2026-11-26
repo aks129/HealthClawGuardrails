@@ -930,8 +930,10 @@ def register_oauth_routes(blueprint):
         if (not isinstance(tenant_id, str) or not _TENANT_ID_PATTERN.fullmatch(tenant_id)
                 or not isinstance(consent_id, str) or not consent_id):
             return jsonify({'error': 'invalid_request'}), 400
-        # An approval that arrives after the tenant was closed stores no
-        # consent and issues no code: closure wins the race.
+        # A closure committed before this check refuses the approval: no
+        # consent is stored and no code is issued. One committed between
+        # this check and the consent write below is not caught here (#1188);
+        # the code it leaves is refused at the exchange.
         if tenant_closed(tenant_id):
             return _redirect_to_client(redirect_uri, state, error='access_denied')
 
@@ -1057,6 +1059,12 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_target',
                           'error_description': 'resource does not match the authorization'}), 400
 
+        # A code issued before its tenant was closed mints nothing after.
+        # Asked last, once the code, the client and PKCE have all verified,
+        # so a caller who cannot redeem the code learns nothing about closure.
+        if tenant_closed(auth_code.get('tenant_id')):
+            return jsonify({'error': 'invalid_grant'}), 400
+
         return _issue_tokens(auth_code, chain_id=secrets.token_urlsafe(16))
 
     # --- Token Introspection (RFC 7662) ---
@@ -1084,7 +1092,9 @@ def register_oauth_routes(blueprint):
             return inactive
         # A live token for a tenant its account holder has since closed is
         # inactive here too: introspection is what a resource server trusts.
-        if tenant_closed(info.get('tenant_id')):
+        # So is a token that names no tenant: tenant_closed cannot answer
+        # for it, and a resource server has no tenant to serve it under.
+        if not info.get('tenant_id') or tenant_closed(info.get('tenant_id')):
             return inactive
         response = jsonify({
             'active': True,
@@ -1149,14 +1159,16 @@ def validate_bearer_token(token):
 def tenant_closed(tenant_id):
     """True when the tenant's account holder disconnected or deleted it.
 
-    A closed tenant answers inactive at introspection, refuses a refresh and
-    a consent return, and refuses an OAuth read (r6.read_auth). Resolved by
+    A closed tenant answers inactive at introspection, refuses a code
+    exchange, a refresh and a consent return, and refuses an OAuth read
+    (r6.read_auth). Resolved by
     module attribute at call time, and imported lazily: r6.fasten imports
     the access kernel, which imports this module through r6.read_auth.
 
     False for an empty tenant id: a token that names no tenant names no
-    closed one. The read gate refuses such a token anyway, on the tenant
-    match (tests/test_oauth_closed_tenant.py). A failed lookup raises; no
+    closed one. Introspection answers inactive for such a token on its own
+    check, and the read gate refuses it on the tenant match
+    (tests/test_oauth_closed_tenant.py). A failed lookup raises; no
     caller here catches it, so the request ends as a 500 and answers nothing.
     """
     from r6.fasten import models as _fasten_models_mod
