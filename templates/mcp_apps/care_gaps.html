@@ -41,6 +41,10 @@
     border-radius:8px;padding:16px;margin-bottom:12px}
   .card h3{margin:0 0 6px;font-size:15px;font-weight:600}
   .card .note{color:var(--dim);font-size:13px}
+  .card .cite{color:var(--dim);font-size:12.5px;margin-top:8px;
+    padding-top:8px;border-top:1px solid var(--border)}
+  .card .cite q{color:var(--ink)}
+  .card .cite a{color:var(--cyan)}
   .pill{display:inline-block;padding:3px 10px;border-radius:999px;
     font-size:11.5px;border:1px solid var(--border);background:var(--panel);
     font-family:var(--mono);margin-right:6px}
@@ -111,6 +115,23 @@
       c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // What the guideline says for a group of people, in the issuing body's own
+  // words, with a link to its page. Static data from the engine
+  // (r6/caregaps/citations.py); a rule with no verified citation sends null
+  // and draws nothing. Drawn only on a rule that applies to this person: a
+  // guideline for another group under a "not applicable" pill reads as if
+  // it were about them.
+  function cite(c){
+    if(!c){ return ''; }
+    const rows = (c.recommendations || []).map(row => `
+        <div>${esc(row.population)}: <q>${esc(row.statement)}</q>${
+          row.grade ? ` Grade ${esc(row.grade)}.` : ''}</div>`).join('');
+    return `
+      <div class="cite">${rows}
+        <a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${
+          esc(c.issuing_body)}, ${esc(c.date)}</a></div>`;
+  }
+
   function render(parameters){
     const summary = param(parameters, 'summary') || {};
     const consumer = param(parameters, 'consumerSummary') || {};
@@ -144,6 +165,7 @@
         <div><span class="pill ${esc(r.status)}">${esc(
           (r.status || '').replace(/_/g, ' '))}</span></div>
         ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
+        ${r.status === 'not_applicable' ? '' : cite(r.citation)}
       </div>`).join('');
     // A line is {rule_id, title, message}, not a string. Interpolating the
     // object renders "[object Object]" — latent only because this box has
