@@ -11,7 +11,8 @@ Profiles:
     address/notes, preserves DOB and clinical codes, injects healthclaw
     canonical identifier, stamps meta.tag.
   - intake (default): identified for a clinician, so Patient.name, birthDate,
-    address and telecom ship verbatim. Everything else goes through
+    address and telecom ship, rebuilt from allow-listed sub-elements (#964).
+    Everything else goes through
     apply_redaction — upstream `display`, `CodeableConcept.text` and free text
     stripped, codes relabelled from r6/terminology.py — and top-level note,
     narrative, DiagnosticReport.conclusion and SSN-class identifiers are
@@ -286,7 +287,7 @@ def test_share_bundle_invalid_resource_types_not_list(client, auth_headers):
 
 def test_intake_profile_keeps_identity_fields_and_strips_the_rest(client, auth_headers, app):
     """Intake profile keeps exactly Patient.name, birthDate, address and
-    telecom verbatim. SSN-class identifiers, note and narrative are removed,
+    telecom (allow-listed sub-elements, #964). SSN-class identifiers, note and narrative are removed,
     and every other identifier loses its value like on a standard read — an
     MRN is not one of the four identity fields the owner ruled in (#282)."""
     patient_with_ssn = {
@@ -335,7 +336,7 @@ def test_intake_profile_keeps_identity_fields_and_strips_the_rest(client, auth_h
     assert 'http://example.org/mrn' in systems
     assert 'MRN-12345' not in resp.get_data(as_text=True)
 
-    # address and telecom are identity fields: verbatim
+    # address and telecom are identity fields: every allow-listed element kept
     assert patient['address'] == patient_with_ssn['address']
     assert patient['telecom'] == patient_with_ssn['telecom']
 

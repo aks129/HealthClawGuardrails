@@ -43,7 +43,9 @@ def alembic_config() -> Config:
 def register_model_metadata() -> None:
     """Import every model module so ``db.metadata`` describes every table."""
     import r6.actions.confirmations  # noqa: F401
+    import r6.actions.contacts  # noqa: F401
     import r6.actions.events  # noqa: F401
+    import r6.actions.facts  # noqa: F401
     import r6.actions.models  # noqa: F401
     import r6.fasten.models  # noqa: F401
     import r6.models  # noqa: F401
