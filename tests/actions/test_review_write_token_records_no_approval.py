@@ -116,6 +116,9 @@ def test_a_write_token_cannot_submit_attested_answers(
         _require('reviewed_qr_id' not in action.payload, 'already reviewed')
     _require(_confirmations(app, action_id) == [], 'already confirmed')
     r = _post_answers(client, auth_headers, action_id, {'nka': 'true'})
+    # Cause proof: a body the handler rejects is not the refusal asserted
+    # below; the credential is.
+    _require(r.status_code not in (400, 422), 'the answers were rejected')
     assert r.status_code in (401, 403), r.get_data(as_text=True)
     assert _confirmations(app, action_id) == []
     with app.app_context():

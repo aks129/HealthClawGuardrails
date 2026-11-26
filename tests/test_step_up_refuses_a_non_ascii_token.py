@@ -160,6 +160,8 @@ ROWS = [
         'r6/actions/review.py:_require_approval_credential',
         'POST', '/r6/actions/%s/review' % _FORM_REVIEW_ACTION, 401, body={},
         seed=_seed_form_review),
+    Row('actions-contacts-list', 'r6/actions/contacts.py:list_contacts',
+        'GET', '/r6/actions/contacts', 401),
     Row('smbp-reading', 'r6/smbp/routes.py:reading',
         'POST', '/r6/smbp/reading', 401, body={'systolic': 120,
                                                'diastolic': 80}),
