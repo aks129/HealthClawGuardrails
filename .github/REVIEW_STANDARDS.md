@@ -28,6 +28,90 @@ review bot reads THIS file, so keep it current.)
      known gap tracked in #214, not a control. **Reject new write paths that
      rely on this header**, and reject any text that describes it as human
      confirmation. Route new write paths through the action rail.
+
+   **One exception: person-attested configuration.** A store of what a
+   person has attested for later actions may take its write from the
+   internal secret alone, without `validate_step_up_token`. It covers two
+   stores and no others: saved contacts and attested facts. They are the
+   tables `delegation_contacts` and `delegation_facts`. Saved contacts hold
+   a business's label, kind, phone number and time zone. Attested facts
+   hold what the person says about their own identity and insurance: names,
+   date of birth, a callback number, the insurer's name, and member and
+   group numbers. Neither holds clinical content. Extending it to another
+   store, or adding clinical content to one of these, means editing this
+   standard. The approval-token mint
+   (`r6/actions/routes.py`) already trusts that secret and is the root of the
+   human gate, so this adds no new party the gate does not already trust. It
+   does widen what that party can do: the mint is per-action and single-use,
+   and this write is standing configuration. The compensating control is
+   (d), which can be checked only in the PR that reads a stored value. The
+   engine (the guardrail service in this repository, which holds the stores)
+   records what the secret's holder reports. It does not observe the person,
+   and the write is not human confirmation.
+
+   The exception waives step-up only. Standards 3 and 6 still apply to the
+   stored write: a successful write emits an AuditEvent and is filtered by
+   `tenant_id`, with the tenant taken from `X-Tenant-Id`.
+
+   A PR may use the exception only if all five hold, and it says so in its
+   description:
+   - (a) **The write refuses tenant tokens of every scope.** The party asking
+     for an action must not also set what that action may use. The PR names
+     the test that fails when a tenant token of each scope is accepted, and
+     reports the mutation that turns it red.
+   - (b) **The only caller of the write is a handler on the approval
+     surface**, and that handler is login-required, CSRF-protected and
+     ownership-checked. It lives outside this repository, so no test here
+     fails if it changes. The PR states that dependency beside the claim, in
+     the code and in the description. It also links the handler's change (a
+     link the maintainer can open) and names the test there that fails if
+     login, CSRF or the ownership check is removed. A claim of (b) without
+     that link and that test name is REQUEST_CHANGES. Whether that test
+     really fails when one of the three is removed is not checked here; the
+     linked change is asked to report that mutation.
+   - (c) **The write is never a clinical write, FHIR or otherwise, and
+     never an approval.** It creates or changes no FHIR resource. It stores
+     no clinical content in any other form either: no allergy, medication,
+     diagnosis, result or other statement about the person's health. It
+     approves, commits or executes no action. The PR names the model and
+     table it claims under the exception, and lists every key or column a
+     caller can set.
+   - (d) **Every stored value is shown back verbatim, without truncation or
+     normalisation, on the approval card before anything uses it.** A PR
+     that reads a stored value into an action puts that value, unaltered, on
+     the card the person approves. That approval on the action rail stays
+     the human step.
+   - (e) **Refused calls are audited under a budget (#1131), before the first
+     real call.** The budget is a cap on refusal audit rows per client, so an
+     unauthenticated caller cannot write rows without limit. A PR claims
+     refused calls are audited only by naming the test that fails when a
+     refused call leaves no AuditEvent. Until #1131 has merged no PR can
+     name one, so a store PR does not claim it. It states that #1131 is
+     open, and that the approval-surface handler that will call the write is
+     not deployed, or does not exist yet. It also carries a no-caller test:
+     one that fails when a caller of its write appears in shipped code in
+     this repository, with a failure message that names #1131. That test
+     covers this repository only, and callers outside it are unobserved,
+     which is why the statement about the handler is required. The test
+     reads code, not text (an AST or import scan that cannot match its own
+     failure message), and asserts that it scanned a non-empty set of files.
+     The PR reports the mutation: add a caller, and the test goes red. Such
+     a PR may merge; standard 21 carries the matching sentence. The residual
+     risk is stated, not removed: the route exists and takes the internal
+     secret, and until #1131 merges its refusals leave no AuditEvent. A PR
+     that adds a caller of the write, or reads a stored value into an
+     action, is REQUEST_CHANGES until #1131 has merged and the PR names that
+     test. The change that closes #1131 rewrites this condition and standard
+     21's carve-out to say the audit exists, and moves the pin test's rows,
+     in the same change.
+
+   None of the five is checked mechanically against a PR's code.
+   `tests/test_standard_4_exception_is_pinned.py` checks that this text keeps
+   its heading, its five labels and the phrases that file lists for each
+   condition. It does not check that a PR meets them. A reviewer checks (a),
+   (c), (d) and (e) against the diff and the tests the PR names, and (b)
+   against the linked change. Anything outside those five is standard 4 as
+   written.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
 6. **Tenant isolation:** every `R6Resource` (and sibling-table) query filters
@@ -88,6 +172,9 @@ in CI, on added lines only. The items below need judgment, so they are yours.
 21. **Feature and hardening ship together.** If a PR adds a capability whose
     review raised security findings, both land in the same merge or neither
     does. Splitting them has put live vulnerabilities into production here.
+    One written carve-out: a store under standard 4's exception may merge
+    before its refusal audit (#1131), on the terms of that exception's
+    condition (e) and with the residual risk it names.
 22. **Deep modules.** A new interface should hide more than it exposes. Flag
     wide interfaces over thin wrappers, and any function whose correct use
     requires knowing its internals.

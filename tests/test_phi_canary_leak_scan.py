@@ -29,24 +29,32 @@ otherwise pass the scan while measuring nothing.
 
 ## What a surface may keep
 
-Two surfaces keep identity fields on purpose, and only those canaries are
+One surface keeps identity fields on purpose, and only those canaries are
 excused, only on that surface:
 
-- `questionnaire_populate`: the `%patient` projection keeps name given and
-  family, birthDate, telecom phone/email and address line/city/postalCode
-  (council ruling D10; `r6/sdc/expressions.py::_PROJECTED_*`;
-  `tests/test_sdc_populate_bounded.py::PERMITTED`). `name.text` and
-  `identifier.value` are withheld there, and are scanned.
 - `shl_generate` defaults to the `intake` profile of `$share-bundle`, an
   identified export the patient sends to a clinic
   (`r6/routes.py::_intake_strip`; `tests/test_share_bundle.py`). It keeps
-  the Patient's `name`, `birthDate`, `address` and `telecom` verbatim and
+  the Patient's `name`, `birthDate`, `address` and `telecom`, rebuilt from
+  allow-listed sub-elements (#964: no `name.text` or `address.text`), and
   runs everything else through `apply_redaction` (#282, owner ruling), so
   only those canaries are excused there. Its row asks for every type with a
   patient reference, not the route's default set, so `conclusion`, the
   attachments and the Encounter canaries are on the wire to be scanned. The
   `deidentified` profile keeps top-level `birthDate` verbatim
   (`apply_patient_controlled_redaction`, #617) and nothing else.
+
+`questionnaire_populate` used to be the second. Its `%patient` projection
+filled the intake form's name, birth date, phone, email and street address,
+and the tool handed that to the model. Over HTTP the subject now has its
+identity removed first (spec 2026-11-24 section 7, PR 3), so the row keeps
+nothing. The form-fill rail keeps the name for the person, in process.
+
+One row is a route, not a tool: `QuestionnaireResponse/{id}/$extract
+?dryRun=true` on a STORED response. The `questionnaire_extract` tool sends
+an inline response, but the route is open at read tier, and it echoed
+answers that a read of the same response hides. It is scanned without a
+step-up token, as a read-tier caller reaches it.
 
 ## What it found (2026-09-24)
 
@@ -157,6 +165,18 @@ IMM_TEXT = PREFIX + "IMMTEXT"
 IMM_OCCURRENCE = PREFIX + "IMMOCCURRENCE"
 ENC_REASON = PREFIX + "ENCREASON"
 ENC_PROVIDER = PREFIX + "ENCPROVIDER"
+# Contact and place under keys other than `address`/`telecom`, and device
+# serials (#1161 PR 2).
+EXT_ADDR_LINE = PREFIX + "EXTADDRLINE"
+EXT_ADDR_CITY = PREFIX + "EXTADDRCITY"
+EXT_PHONE = PREFIX + "EXTPHONE"
+EXT_UUID = "urn:uuid:" + PREFIX + "EXTUUID"
+EXT_EXPRESSION = PREFIX + "EXTEXPRESSION"
+LOC_LINE = PREFIX + "LOCLINE"
+DEVICE_SERIAL = PREFIX + "DEVICESERIAL"
+DEVICE_DISTINCT = PREFIX + "DEVICEDISTINCT"
+DEVICE_HRF = PREFIX + "DEVICEHRF"
+DEVICE_AIDC = PREFIX + "DEVICEAIDC"
 # Attachment data is base64, so the prefix does not survive encoding. The
 # encoded form is the token, and it is scanned for literally.
 ATTACH_DATA = base64.b64encode(
@@ -165,11 +185,19 @@ DR_FORM_DATA = base64.b64encode(
     (PREFIX + "DRFORMDATA").encode()).decode()
 # A date cannot carry a prefix. This one is odd enough to be its own token.
 DOB = "1911-11-11"
+# Coordinates are numbers, so the same holds. They are written as strings
+# here and sent as floats; the scan matches the JSON text.
+GEO_LAT = "42.3601987"
+GEO_LON = "-71.0589123"
+POS_LAT = "41.7654321"
+POS_LON = "-70.1234567"
+_NUMBER_CANARIES = (GEO_LAT, GEO_LON, POS_LAT, POS_LON)
 
 CANARIES = frozenset(
     value for name, value in dict(globals()).items()
     if name.isupper() and isinstance(value, str)
-    and (PREFIX in value or value in (ATTACH_DATA, DR_FORM_DATA, DOB))
+    and (PREFIX in value
+         or value in (ATTACH_DATA, DR_FORM_DATA, DOB) + _NUMBER_CANARIES)
     and name not in ("PREFIX",))
 
 PATIENT_ID = "canary-p1"
@@ -180,6 +208,13 @@ RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
 TOTAL_CHOL = "2093-3"
 SMOKING = "72166-2"
 SSN_SYSTEM = "http://hl7.org/fhir/sid/us-ssn"
+
+
+def _geolocation():
+    return {"url": "http://hl7.org/fhir/StructureDefinition/geolocation",
+            "extension": [{"url": "latitude", "valueDecimal": float(GEO_LAT)},
+                          {"url": "longitude",
+                           "valueDecimal": float(GEO_LON)}]}
 
 
 def _bundle():
@@ -203,7 +238,20 @@ def _bundle():
                       "text": ADDR_TEXT, "state": "MA", "country": "US"}],
          "maritalStatus": {"text": MARITAL_TEXT},
          "extension": [{"url": "http://example.org/fhir/free",
-                        "valueString": EXT_STRING}],
+                        "valueString": EXT_STRING},
+                       {"url": "http://hl7.org/fhir/StructureDefinition/"
+                               "patient-birthPlace",
+                        "valueAddress": {
+                            "line": [EXT_ADDR_LINE], "city": EXT_ADDR_CITY,
+                            "state": "MA", "extension": [_geolocation()]}},
+                       {"url": "http://example.org/fhir/outer",
+                        "extension": [
+                            {"url": "phone", "valueContactPoint": {
+                                "system": "phone", "value": EXT_PHONE}},
+                            {"url": "uuid", "valueUuid": EXT_UUID},
+                            {"url": "expr", "valueExpression": {
+                                "language": "text/fhirpath",
+                                "expression": EXT_EXPRESSION}}]}],
          "contact": [{"name": {"family": CONTACT_FAMILY},
                       "telecom": [{"system": "phone",
                                    "value": CONTACT_PHONE}],
@@ -216,6 +264,13 @@ def _bundle():
                               "display": OBS_DISPLAY}],
                   "text": OBS_TEXT},
          "subject": SUBJECT,
+         "contained": [{"resourceType": "Device", "id": "dev1",
+                        "serialNumber": DEVICE_SERIAL,
+                        "distinctIdentifier": DEVICE_DISTINCT,
+                        "lotNumber": "LOT-DEV-1",
+                        "udiCarrier": [{"carrierHRF": DEVICE_HRF,
+                                        "carrierAIDC": DEVICE_AIDC}]}],
+         "device": {"reference": "#dev1"},
          "performer": [{"reference": "Practitioner/canary-pr1",
                         "display": OBS_PERFORMER}],
          "effectiveDateTime": "2026-01-15",
@@ -295,7 +350,13 @@ def _bundle():
          "vaccineCode": {"coding": [{"system": "http://hl7.org/fhir/sid/cvx",
                                      "code": "140"}],
                          "text": IMM_TEXT},
-         "patient": SUBJECT, "occurrenceString": IMM_OCCURRENCE},
+         "patient": SUBJECT, "occurrenceString": IMM_OCCURRENCE,
+         "lotNumber": "LOT-IMM-1"},
+        {"resourceType": "Location", "id": "canary-loc", "mode": "instance",
+         "address": {"line": [LOC_LINE], "state": "MA",
+                     "extension": [_geolocation()]},
+         "position": {"latitude": float(POS_LAT),
+                      "longitude": float(POS_LON)}},
         {"resourceType": "Encounter", "id": "canary-enc",
          "status": "finished",
          "class": {"system": "http://terminology.hl7.org/CodeSystem/"
@@ -581,10 +642,48 @@ def _questionnaire_populate(s):
              "valueReference": {"reference": f"Patient/{PATIENT_ID}"}},
             {"name": "questionnaire",
              "resource": _populate_questionnaire()}]}), "$populate")
-    # The projection must actually have run, or every absence below is
-    # vacuous: the permitted family name is the proof.
-    assert FAMILY in body, body[:400]
+    # Population must actually have run, or every absence below is
+    # vacuous: the cholesterol value matched by code is the proof.
+    answers = {i["linkId"]: i.get("answer")
+               for p in json.loads(body)["parameter"] if p["name"] == "response"
+               for i in p["resource"].get("item", [])}
+    assert "244" in json.dumps(answers.get("chol")), body[:400]
     return [("$populate", body)]
+
+
+def _stored_response_extract(s):
+    from r6.sdc.intake import intake_questionnaire
+    # A subject-less stored response answering the intake demographics with
+    # the Patient's canaries: the shape the dry run used to echo in full.
+    qr = {"resourceType": "QuestionnaireResponse", "status": "completed",
+          "item": [{"linkId": "demographics", "item": [
+              {"linkId": "demographics.given-name",
+               "answer": [{"valueString": GIVEN}]},
+              {"linkId": "demographics.family-name",
+               "answer": [{"valueString": FAMILY}]},
+              {"linkId": "demographics.birth-date",
+               "answer": [{"valueDate": DOB}]},
+              {"linkId": "demographics.gender",
+               "answer": [{"valueCoding": {"code": "female"}}]},
+              {"linkId": "demographics.phone",
+               "answer": [{"valueString": PHONE}]},
+              {"linkId": "demographics.address-line",
+               "answer": [{"valueString": ADDR_LINE}]}]}]}
+    created = s["client"].post("/r6/fhir/QuestionnaireResponse",
+                               headers=s["headers"], json=qr)
+    assert created.status_code == 201, created.get_data(as_text=True)
+    qr_id = created.get_json()["id"]
+    read_tier = {"X-Tenant-Id": TENANT}
+    body = _ok(s["client"].post(
+        f"/r6/fhir/QuestionnaireResponse/{qr_id}/$extract?dryRun=true",
+        headers=read_tier,
+        json={"resourceType": "Parameters", "parameter": [
+            {"name": "questionnaire",
+             "resource": intake_questionnaire()}]}), "$extract dryRun")
+    # The extraction ran: the Patient row is built from the coded gender.
+    entries = json.loads(body)["parameter"][0]["resource"]["entry"]
+    assert [e["resource"]["resourceType"] for e in entries] == ["Patient"]
+    return [("QuestionnaireResponse/{id}/$extract?dryRun=true", body)]
 
 
 #: Every seeded type that references the patient, so the patient filter keeps
@@ -660,20 +759,15 @@ SURFACES = {
 # What each surface may carry. Anything not named here must be absent.
 # ---------------------------------------------------------------------------
 
-#: The %patient projection (council ruling D10; r6/sdc/expressions.py
-#: `_PROJECTED_*`; tests/test_sdc_populate_bounded.py::PERMITTED).
-POPULATE_KEEPS = frozenset({FAMILY, GIVEN, PHONE, EMAIL, ADDR_LINE,
-                            ADDR_CITY, ADDR_POSTAL, DOB})
-
 #: The intake share is identified by design: the Patient's name, birthDate,
-#: address and telecom ship verbatim, and nothing else (#282, owner ruling;
-#: r6/routes.py `_intake_strip`). `name.text` and `address.text` are part of
-#: the HumanName and Address kept whole. Every other canary must be absent:
-#: displays, `CodeableConcept.text`, notes, `conclusion`, the MRN, member
-#: numbers and `Patient.contact`.
-INTAKE_KEEPS = frozenset({FAMILY, GIVEN, NAME_TEXT, DOB, PHONE, EMAIL,
-                          ADDR_LINE, ADDR_CITY, ADDR_DISTRICT, ADDR_POSTAL,
-                          ADDR_TEXT})
+#: address and telecom ship, and nothing else (#282, owner ruling;
+#: r6/routes.py `_intake_strip`). They are rebuilt from allow-listed
+#: sub-elements, so `name.text` and `address.text` are scanned like any other
+#: upstream text (#964). Every other canary must be absent: displays,
+#: `CodeableConcept.text`, notes, `conclusion`, the MRN, member numbers and
+#: `Patient.contact`.
+INTAKE_KEEPS = frozenset({FAMILY, GIVEN, DOB, PHONE, EMAIL,
+                          ADDR_LINE, ADDR_CITY, ADDR_DISTRICT, ADDR_POSTAL})
 
 #: `apply_patient_controlled_redaction` keeps the top-level birthDate
 #: verbatim (#617 docstring); nothing else.
@@ -682,10 +776,10 @@ DEIDENTIFIED_KEEPS = frozenset({DOB})
 READ_ROWS = [
     (name, driver, frozenset())
     for name, (kind, driver) in SURFACES.items()
-    if kind == READ and name not in ("questionnaire_populate",
-                                     "shl_generate")
+    if kind == READ and name != "shl_generate"
 ] + [
-    ("questionnaire_populate", _questionnaire_populate, POPULATE_KEEPS),
+    ("stored QuestionnaireResponse $extract dryRun",
+     _stored_response_extract, frozenset()),
     ("shl_generate[deidentified]", _share_bundle("deidentified"),
      DEIDENTIFIED_KEEPS),
     ("shl_generate[intake]", _share_bundle("intake"), INTAKE_KEEPS),
@@ -740,3 +834,28 @@ def test_no_canary_leaves_a_read_surface(scan, surface, driver, keeps):
     assert not leaks, (
         f"{surface} returned canary PHI the redaction contract does not "
         f"keep there: {leaks}")
+
+
+@pytest.mark.extension
+def test_the_contact_place_and_device_rows_reached_the_reader(scan):
+    """Two-sided for #1161 PR 2. The contained Device, the birthplace
+    extension and the home Location are on the wire with their
+    non-identifying parts, so their canaries above are absent because they
+    were stripped, not because the rows never arrived."""
+    c, h = scan["client"], scan["headers"]
+    obs = json.loads(_ok(c.get("/r6/fhir/Observation/canary-obs-chol",
+                               headers=h), "obs"))
+    assert obs["contained"] == [{"resourceType": "Device", "id": "dev1",
+                                 "lotNumber": "LOT-DEV-1",
+                                 "udiCarrier": [{}]}]
+    imm = json.loads(_ok(c.get("/r6/fhir/Immunization/canary-imm",
+                               headers=h), "imm"))
+    assert imm["lotNumber"] == "LOT-IMM-1"
+    patient = json.loads(_ok(c.get(f"/r6/fhir/Patient/{PATIENT_ID}",
+                                   headers=h), "patient"))
+    birthplace = [e for e in patient["extension"]
+                  if e["url"].endswith("patient-birthPlace")]
+    assert birthplace[0]["valueAddress"] == {"state": "MA"}
+    loc = json.loads(_ok(c.get("/r6/fhir/Location/canary-loc", headers=h),
+                         "loc"))
+    assert loc["address"] == {"state": "MA"} and "position" not in loc

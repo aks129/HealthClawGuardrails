@@ -92,6 +92,10 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   (`r6/actions/`): `commit` only submits the action, and a separate approval
   endpoint consumes a single-use credential bound to that action. Calls,
   texts and forms all go through it.
+- One written exception to step-up: a write of person-attested configuration
+  (saved contacts, attested facts) may take the internal secret alone, under
+  the five conditions in `.github/REVIEW_STANDARDS.md` standard 4. It waives
+  step-up only, and it is not a human gate.
 - **`X-Human-Confirmed` is not a human gate.** Direct clinical FHIR writes
   answer HTTP 428 until the header is present, but the caller sets it about
   itself, so an agent that already holds a write token passes it. It is a

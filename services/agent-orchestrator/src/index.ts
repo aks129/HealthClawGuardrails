@@ -117,7 +117,12 @@ export interface OAuthGrant {
 }
 
 const INTROSPECTION_CACHE = new Map<string, { grant: OAuthGrant; expiresAtMs: number }>();
-const INTROSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+// A deliberate limit, not an oversight: a "yes" is served from here without
+// asking again, so a grant the engine has stopped honouring (consent revoked,
+// or the tenant closed) keeps reading through this server for up to this
+// long. Nothing invalidates the entry early; that is tracked as #1183.
+// revoked-consent-window.test.ts pins the bound and its five-minute ceiling.
+export const INTROSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 // A "no" is remembered too (#675), under the same key, so a client looping on
 // a stale token or a scanner walking the endpoint costs one authorization-
 // server round trip per window, not one per request. Thirty seconds: well
@@ -188,8 +193,9 @@ async function introspect(token: string): Promise<OAuthGrant | "rejected" | "una
 }
 
 // Cached under the token's SHA-256 only, for at most five minutes and never
-// past the token's own expiry, so a revoked consent stops being served within
-// the window and the token value itself is never held (§9.7).
+// past the token's own expiry, so a revoked consent or a closed tenant stops
+// being served within the window (and is still served until it ends, #1183),
+// and the token value itself is never held (§9.7).
 async function resolveOAuthGrant(token: string): Promise<OAuthGrant | null> {
   const key = sha256Hex(token);
   const now = Date.now();
