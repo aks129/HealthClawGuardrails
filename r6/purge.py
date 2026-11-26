@@ -46,6 +46,12 @@ _TENANT_TABLES = (
     # SMART Health Link files hold the patient's encrypted bundle; a link
     # shared before the purge must not keep serving after it.
     ("shl_links", "shl_links"),
+    # Saved contacts name the businesses a person deals with, and their
+    # numbers.
+    ("delegation_contacts", "delegation_contacts"),
+    # What a person attested about themselves: name, date of birth,
+    # insurance details.
+    ("delegation_facts", "delegation_facts"),
 )
 
 
