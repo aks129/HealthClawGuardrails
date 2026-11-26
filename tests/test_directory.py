@@ -1,8 +1,14 @@
 """The provider-directory client (r6/directory.py) and its search route.
 
-No test reaches a directory. The bodies below have the shape both services
-answered with on 2026-11-25; every name, NPI and number in them is made up
-(the NPIs carry a valid check digit).
+No test reaches a directory. What is recorded and what is invented:
+
+- Field names and nesting are the ones both services answered with on
+  2026-11-25. The first commit and the pull request say so; the commands
+  and the raw answers were not recorded, so nothing here can be re-checked
+  against a capture.
+- Every value is invented: names, NPIs (with a valid check digit), numbers,
+  cities, counts and dates. The rows marked "Dropped" and every body built
+  inside a test were constructed for that test and never seen live.
 """
 
 import json
@@ -96,7 +102,9 @@ class FakeSession:
 
 def test_clinician_search_sends_only_name_and_state_and_reads_the_rows():
     session = FakeSession(AINPI_BODY)
-    found = directory.find_clinicians("  Rivera ", "pa", session=session)
+    got = directory.find_clinicians("  Rivera ", "pa", session=session)
+    found = got.listings
+    assert (got.dropped, got.truncated) == (2, False)
     assert session.sent_url() == \
         "https://ainpi.dev/api/npd/search?name=Rivera&state=PA"
     _, kwargs = session.calls[0]
@@ -118,6 +126,8 @@ def test_clinician_search_sends_only_name_and_state_and_reads_the_rows():
     None,
 ])
 def test_rows_are_refused_when_the_echoed_query_is_not_what_was_sent(echo):
+    """MUTATION: `any` -> `all` in the echo check -> one matching term is
+    enough -> red."""
     session = FakeSession({**AINPI_BODY, "query": echo})
     with pytest.raises(directory.Unavailable):
         directory.find_clinicians("Rivera", "PA", session=session)
@@ -137,7 +147,9 @@ def test_a_malformed_clinician_term_sends_nothing(name, state):
 
 def test_pharmacy_search_keeps_practice_locations_in_the_zip_only():
     session = FakeSession(NPPES_BODY)
-    found = directory.find_pharmacies("19103", session=session)
+    got = directory.find_pharmacies("19103", session=session)
+    found = got.listings
+    assert (got.dropped, got.truncated) == (2, False)
     assert session.sent_url() == (
         "https://npiregistry.cms.hhs.gov/api/?version=2.1"
         "&enumeration_type=NPI-2&taxonomy_description=Pharmacy"
@@ -184,13 +196,125 @@ def test_numbers_come_only_from_the_by_npi_call_and_the_location_address():
     FakeSession({"Errors": [{"description": "refused", "number": "06"}]}),
     FakeSession(["not", "an", "object"]),
 ])
-def test_an_outage_is_unavailable_is_not_cached_and_names_no_url(session):
+def test_an_outage_names_no_url_and_is_remembered_briefly_as_a_failure(
+        session, monkeypatch):
+    """MUTATION: keep a failure for CACHE_SECONDS -> the last ask still
+    fails -> red. MUTATION: answer a remembered failure with an empty Found
+    -> the second ask does not raise -> red. MUTATION: do not remember a
+    failure -> two outbound calls -> red."""
+    clock = [1000.0]
+    monkeypatch.setattr(directory.time, "monotonic", lambda: clock[0])
+    session.calls.clear()
     for _ in range(2):
         with pytest.raises(directory.Unavailable) as caught:
             directory.find_pharmacies("19103", session=session)
         assert "example" not in str(caught.value)
         assert caught.value.__cause__ is None
-    assert len(session.calls) == 2
+    assert len(session.calls) == 1
+    clock[0] += directory.UNAVAILABLE_SECONDS + 1
+    back = FakeSession(NPPES_BODY)
+    assert len(directory.find_pharmacies("19103", session=back).listings) == 2
+
+
+def _echoed(body):
+    return {"query": AINPI_BODY["query"], **body}
+
+
+@pytest.mark.parametrize("ask, body", [
+    (lambda s: directory.find_clinicians("Rivera", "PA", session=s),
+     _echoed({})),
+    (lambda s: directory.find_clinicians("Rivera", "PA", session=s),
+     _echoed({"data": {}})),
+    (lambda s: directory.find_clinicians("Rivera", "PA", session=s),
+     _echoed({"data": {"practitioners": [], "organizations": {}}})),
+    (lambda s: directory.find_pharmacies("19103", session=s), {}),
+    (lambda s: directory.find_pharmacies("19103", session=s), {"data": {}}),
+    (lambda s: directory.find_pharmacies("19103", session=s),
+     {"results": {"0": {}}}),
+    (lambda s: directory.contact("1666666668", session=s), {}),
+])
+def test_an_answer_without_its_list_of_rows_is_unavailable_never_none(
+        ask, body, monkeypatch):
+    """MUTATION: `_listed` answers [] for anything but a list -> "none"
+    -> red. MUTATION: drop the `data` check -> AttributeError -> red."""
+    clock = [1000.0]
+    monkeypatch.setattr(directory.time, "monotonic", lambda: clock[0])
+    with pytest.raises(directory.Unavailable):
+        ask(FakeSession(body))
+    assert directory._FAILED in [kept for _, kept in directory._CACHE.values()]
+    # Not kept as an answer: once the short failure memory lapses, the
+    # directory is asked again.
+    clock[0] += directory.UNAVAILABLE_SECONDS + 1
+    again = FakeSession(body)
+    with pytest.raises(directory.Unavailable):
+        ask(again)
+    assert len(again.calls) == 1
+
+
+@pytest.mark.parametrize("name", [
+    "SAMPLE PHARMACY 215-555-0100", "SAMPLE PHARMACY 215 555 0100",
+    "SAMPLE PHARMACY (215) 555-0100", "SAMPLE PHARMACY 555-0100",
+    "SAMPLE PHARMACY 215.555.0100", "CALL 215 OR 555 THEN 0100 PHARMACY",
+])
+def test_no_listing_string_holds_a_phone_shaped_number(name):
+    """MUTATION: search the text as written, not with what sits between
+    the digits removed -> the separated numbers pass -> red. MUTATION: drop
+    the ten-digits-in-all rule -> the last name passes -> red."""
+    rows = [_pharmacy("1666666668", name, "19103"),
+            _pharmacy("1555555550", "NO PHONE PHARMACY", "19103")]
+    got = directory.find_pharmacies("19103", session=FakeSession(
+        {"result_count": 2, "results": rows}))
+    assert [e.name for e in got.listings] == ["NO PHONE PHARMACY"]
+    assert got.dropped == 1
+    assert not any(part in repr(got) for part in NUMBER_PARTS)
+    assert directory._shown(name) is None
+    # A city that holds one is left out; the row's other fields stand.
+    row = _pharmacy("1666666668", "SAMPLE PHARMACY", "19104")
+    row["addresses"][1]["city"] = name
+    got = directory.find_pharmacies("19104", session=FakeSession(
+        {"result_count": 1, "results": [row]}))
+    assert [(e.name, e.city) for e in got.listings] == [
+        ("SAMPLE PHARMACY", None)]
+
+
+def _npi(n):
+    return next(f"1{n:08d}{d}" for d in "0123456789"
+                if directory.is_npi(f"1{n:08d}{d}"))
+
+
+def test_more_matches_than_are_listed_says_truncated():
+    """MUTATION: `truncated` always False -> red. MUTATION: drop the
+    full-page half -> the second assert -> red."""
+    many = [_pharmacy(_npi(n), "SAMPLE PHARMACY", "19103") for n in range(12)]
+    got = directory.find_pharmacies("19103", session=FakeSession(
+        {"result_count": 12, "results": many}))
+    assert (len(got.listings), got.dropped, got.truncated) == (
+        directory.MAX_RESULTS, 0, True)
+    # A full page that kept nothing may be hiding matches on the next one.
+    page = [_pharmacy(_npi(n), "ELSEWHERE PHARMACY", "19147")
+            for n in range(directory.NPPES_PAGE)]
+    got = directory.find_pharmacies("19104", session=FakeSession(
+        {"result_count": 50, "results": page}))
+    assert (got.listings, got.dropped, got.truncated) == (
+        (), directory.NPPES_PAGE, True)
+
+
+def test_the_offline_fixture_fails_a_test_that_reaches_the_real_session(
+        monkeypatch):
+    """The autouse `_directory_stays_offline` (conftest) is what keeps every
+    test here off the network. `requests.Session` is faked so this test is
+    offline even when the fixture is not.
+
+    MUTATION: drop the `patch.setattr(directory, "_session", ...)` line in
+    conftest -> the fake answers and nothing fails -> red."""
+    monkeypatch.setattr(directory, "_SESSION", None)
+    monkeypatch.setattr(directory.requests, "Session",
+                        lambda: FakeSession(NPPES_BODY))
+    # Not an Exception, so the client's own `except Exception` cannot turn
+    # the failure into Unavailable.
+    assert not issubclass(pytest.fail.Exception, Exception)
+    with pytest.raises(pytest.fail.Exception, match="provider directory"):
+        directory.find_pharmacies("19103")
 
 
 def test_an_answer_is_cached_by_its_terms_and_expires(monkeypatch):
@@ -201,8 +325,9 @@ def test_an_answer_is_cached_by_its_terms_and_expires(monkeypatch):
     assert directory.find_pharmacies("19103", session=session) == first
     assert len(session.calls) == 1
     empty = FakeSession({"result_count": 0, "results": []})
-    assert directory.find_pharmacies("19104", session=empty) == ()
-    assert directory.find_pharmacies("19104", session=empty) == ()
+    none = directory.Found((), 0, False)
+    assert directory.find_pharmacies("19104", session=empty) == none
+    assert directory.find_pharmacies("19104", session=empty) == none
     assert len(empty.calls) == 1
     clock[0] += directory.CACHE_SECONDS + 1
     directory.find_pharmacies("19103", session=session)
@@ -223,6 +348,8 @@ def search_on(monkeypatch):
 @pytest.mark.parametrize("with_token", [True, False])
 def test_the_route_is_off_by_default_and_then_does_nothing(
         client, auth_headers, tenant_headers, monkeypatch, with_token):
+    """MUTATION: `search_enabled` returns True -> 200 or 401, not 404 ->
+    red."""
     monkeypatch.delenv("DIRECTORY_SEARCH_ENABLED", raising=False)
     session = FakeSession(NPPES_BODY)
     monkeypatch.setattr(directory, "_session", lambda: session)
@@ -237,20 +364,49 @@ def test_the_route_is_off_by_default_and_then_does_nothing(
 
 def test_the_route_sends_no_tenant_and_returns_no_number(
         client, search_on, auth_headers, tenant_id, monkeypatch):
+    """MUTATION: add the request's X-Tenant-Id to the params `_get` sends
+    -> red."""
     session = FakeSession(NPPES_BODY)
     monkeypatch.setattr(directory, "_session", lambda: session)
     resp = client.get("/r6/directory/search?kind=pharmacy&zip=19103"
                       "&patient=pt-1&note=free+text", headers=auth_headers)
     assert resp.status_code == 200
-    assert set(resp.get_json()["results"][0]) == {
+    answer = resp.get_json()
+    assert set(answer["results"][0]) == {
         "npi", "name", "kind", "taxonomy", "city", "state", "postal_code",
         "has_phone"}
+    assert (answer["dropped"], answer["truncated"]) == (2, False)
     assert not any(part in resp.get_data(as_text=True) for part in NUMBER_PARTS)
     sent = repr(session.calls)
     for leaked in (tenant_id, auth_headers["X-Step-Up-Token"], "pt-1",
                    "free text", "X-Tenant-Id"):
         assert leaked not in sent
-    assert _audits() == [("success", "directory search: source=nppes; results=2")]
+    assert _audits() == [
+        ("success", "directory search: source=nppes; results=2; dropped=2")]
+
+
+def test_the_route_tells_all_rows_dropped_from_none_and_no_list_from_both(
+        client, search_on, auth_headers, monkeypatch):
+    """MUTATION: report `dropped` as 0 in the route -> red."""
+    url = "/r6/directory/search?kind=pharmacy&zip="
+    bodies = iter([
+        {"results": [_pharmacy("1999999992", "MAIL ORDER PHARMACY", "19103",
+                               code="3336M0002X")]},
+        {"results": []}, {}])
+    monkeypatch.setattr(directory, "_session",
+                        lambda: FakeSession(next(bodies)))
+    resp = client.get(url + "19103", headers=auth_headers)
+    assert resp.get_json() == {"status": "ok", "results": [], "dropped": 1,
+                               "truncated": False}
+    resp = client.get(url + "19104", headers=auth_headers)
+    assert resp.get_json() == {"status": "ok", "results": [], "dropped": 0,
+                               "truncated": False}
+    resp = client.get(url + "19105", headers=auth_headers)
+    assert resp.status_code == 503
+    assert _audits() == [
+        ("success", "directory search: source=nppes; results=0; dropped=1"),
+        ("success", "directory search: source=nppes; results=0; dropped=0"),
+        ("failure", "directory search: source=nppes; unavailable")]
 
 
 def test_the_route_needs_a_token_before_anything_is_sent(

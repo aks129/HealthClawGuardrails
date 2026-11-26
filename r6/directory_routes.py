@@ -1,9 +1,9 @@
 """GET /r6/directory/search: find a clinician, practice or pharmacy.
 
 A thin route over ``r6/directory.py`` for an agent tool. It needs a
-tenant-bound step-up token, so the lookup is rate-attributable and audited,
-but the tenant never leaves: the directory client is handed the search terms
-and nothing else.
+tenant-bound step-up token, so each lookup is audited under a tenant, but the
+tenant never leaves: the directory client is handed the search terms and
+nothing else. Nothing limits lookups per tenant yet (#1192).
 
     ?kind=clinician&name=<name>&state=<two letters>
     ?kind=pharmacy&zip=<five digits>
@@ -11,10 +11,13 @@ and nothing else.
 The answer lists NPI, name, type, city, state and ZIP, and ``has_phone``. It
 never carries a phone or fax number. Those come from
 ``r6.directory.contact`` for one chosen NPI, which no route here serves.
+Beside the results it says how many rows the directory returned that are
+not listed (``dropped``) and whether there may be more (``truncated``).
 
 Audit: one AuditEvent per search that reached the client. Its detail is the
-source and the result count. The search terms are not recorded: next to a
-tenant id, a clinician's name says who somebody's doctor is.
+source and two counts, results and dropped. The search terms are not
+recorded: next to a tenant id, a clinician's name says who somebody's doctor
+is.
 
 OFF unless DIRECTORY_SEARCH_ENABLED is set (`search_enabled`): any tenant
 grant could otherwise spend the directories' small anonymous quota, and
@@ -74,7 +77,9 @@ def search():
     # declared for it in the write-guard matrix's KNOWN_GET_MUTATORS.
     access.audit(tenant=tenant, event_type='read', resource_type='Directory',
                  detail=f'directory search: source={source}; '
-                        f'results={len(found)}')
+                        f'results={len(found.listings)}; '
+                        f'dropped={found.dropped}')
     db.session.commit()
     return jsonify({'status': 'ok',
-                    'results': [asdict(entry) for entry in found]})
+                    'results': [asdict(entry) for entry in found.listings],
+                    'dropped': found.dropped, 'truncated': found.truncated})

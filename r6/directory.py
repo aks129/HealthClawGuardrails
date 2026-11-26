@@ -12,19 +12,28 @@ What this must never lose
    valid). Anything else raises ValueError before a URL is formed. No tenant,
    no header of the caller's and nothing read from a record is ever sent.
 2. **A listing has no number.** ``Listing`` carries ``has_phone`` and no
-   phone field. Numbers exist only on ``Contact``, from ``contact(npi)``: a
-   second call, for the one entry a person chose and will check themselves.
+   phone field. A name that holds a phone-shaped number drops its row, and
+   a city that does is left out. Numbers exist only on ``Contact``, from
+   ``contact(npi)``: a second call, for the one entry a person chose and
+   will check themselves.
 3. **A filter the directory ignored is not an answer.** AINPI echoes the
    query it ran, and it silently drops parameters it does not know. If the
    echo does not match what was sent, the rows are unfiltered and refused.
 4. **Three answers, kept apart.** Listings; no listings (asked, and the
-   answer is none); ``Unavailable`` (it could not be asked). The first two
-   are cached for a few minutes, the third never.
+   answer is an empty list); ``Unavailable`` (it could not be asked, or the
+   answer had no list where one belongs). The first two are cached for ten
+   minutes. A failure is remembered for under a minute, so an outage is not
+   asked again at once, and is raised again: it is never an answer.
+   ``Found.dropped`` tells "none" from "rows came back and none was kept".
 5. **One attempt.** A short timeout, no retry, no redirect followed.
 
 Every string taken from a directory is shape-checked and a row that fails is
-dropped whole. A pharmacy's type is named from ``PHARMACY_TYPES`` by code,
-never from the registry's description.
+dropped whole. The check is on shape and nothing more: up to 80 characters
+of a directory's own wording still reach whoever reads a listing, a model
+included. A pharmacy's type is named from ``PHARMACY_TYPES`` by code, never
+from the registry's description.
+
+The cache is per process: each worker asks, and remembers, on its own.
 """
 
 from __future__ import annotations
@@ -41,6 +50,8 @@ NPPES_URL = "https://npiregistry.cms.hhs.gov/api/"
 TIMEOUT = 5  # seconds, per request
 MAX_RESULTS = 10
 CACHE_SECONDS = 600
+UNAVAILABLE_SECONDS = 45  # how long a failed ask is remembered as failed
+NPPES_PAGE = 50  # rows asked of NPPES; a full page may not be all of them
 CACHE_MAX = 256
 
 #: NUCC taxonomy codes for pharmacies a person can walk into or call, with
@@ -60,7 +71,9 @@ _ZIP = re.compile(r"[0-9]{5}")
 _NPI = re.compile(r"[0-9]{10}")
 #: What a directory's own name or city may look like before we repeat it.
 _SHOWN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&#/()-]{0,79}")
-#: Seven digits in a row could be a phone number hiding in a name.
+#: A phone number hiding in a name, however it is broken up: seven digits
+#: in a row once everything between them is gone (555-0100, 215 555 0100).
+_BETWEEN = re.compile(r"[^A-Za-z0-9]")
 _LONG_DIGITS = re.compile(r"[0-9]{7}")
 _PHONE = re.compile(r"[0-9]{3}-?[0-9]{3}-?[0-9]{4}")
 
@@ -71,7 +84,8 @@ class Unavailable(Exception):
 
 @dataclass(frozen=True)
 class Listing:
-    """One directory entry, safe to show a model. There is no phone field.
+    """One directory entry as a search returns it. There is no phone field.
+    ``name`` and ``city`` are the directory's wording, checked for shape only.
 
     ``has_phone`` is True or False when the source lists a practice-location
     number, and None when the source does not say (AINPI). ``taxonomy`` is
@@ -100,6 +114,18 @@ class Contact:
     fax: str | None
 
 
+@dataclass(frozen=True)
+class Found:
+    """A search's answer. ``dropped`` counts rows the directory returned
+    that are not listed (one failed a check, or was not what was asked
+    for). ``truncated`` is True when the directory may hold more matches
+    than are listed."""
+
+    listings: tuple[Listing, ...]
+    dropped: int
+    truncated: bool
+
+
 def is_npi(value) -> bool:
     """Ten ASCII digits whose last is the Luhn check digit over 80840 + NPI."""
     if not (isinstance(value, str) and _NPI.fullmatch(value)):
@@ -116,7 +142,11 @@ def _shown(value) -> str | None:
     if not isinstance(value, str):
         return None
     text = " ".join(value.split())
-    if not _SHOWN.fullmatch(text) or _LONG_DIGITS.search(text):
+    if not _SHOWN.fullmatch(text):
+        return None
+    # Ten digits in all is a number too, whatever sits between them.
+    if _LONG_DIGITS.search(_BETWEEN.sub("", text)) \
+            or sum(c.isdigit() for c in text) >= 10:
         return None
     return text
 
@@ -124,6 +154,7 @@ def _shown(value) -> str | None:
 _SESSION = None
 _LOCK = threading.Lock()
 _CACHE: dict[tuple, tuple[float, object]] = {}
+_FAILED = object()  # a remembered failure; never handed back as an answer
 
 
 def _session():
@@ -154,31 +185,49 @@ def _get(url: str, params: dict, session) -> dict:
 
 
 def _cached(key: tuple, ask):
-    """``ask()``, remembered by its search terms. Unavailable is raised
-    through and never stored."""
+    """``ask()``, remembered by its search terms. A failure is remembered
+    too, for UNAVAILABLE_SECONDS, and raised again as Unavailable."""
     now = time.monotonic()
     with _LOCK:
         hit = _CACHE.get(key)
         if hit and hit[0] > now:
+            if hit[1] is _FAILED:
+                raise Unavailable("asked a moment ago, and it failed")
             return hit[1]
-    value = ask()
+    try:
+        value, keep = ask(), CACHE_SECONDS
+    except Unavailable:
+        value, keep = _FAILED, UNAVAILABLE_SECONDS
     with _LOCK:
         if key not in _CACHE and len(_CACHE) >= CACHE_MAX:
             _CACHE.pop(next(iter(_CACHE)))
-        _CACHE[key] = (now + CACHE_SECONDS, value)
+        _CACHE[key] = (now + keep, value)
+    if value is _FAILED:
+        raise Unavailable("no answer")
     return value
 
 
 def _rows(value) -> list[dict]:
+    """A list inside one row. A row without it is dropped, not refused."""
     return [r for r in value if isinstance(r, dict)] \
         if isinstance(value, list) else []
 
 
-def find_clinicians(name: str, state: str, session=None) -> tuple[Listing, ...]:
+def _listed(value) -> list[dict]:
+    """The list of rows an answer is made of. Anything but a list is an
+    answer that could not be read: only an empty list means none. A row
+    that is not an object becomes an empty one, which fails every check."""
+    if not isinstance(value, list):
+        raise Unavailable("no list of rows in the answer")
+    return [r if isinstance(r, dict) else {} for r in value]
+
+
+def find_clinicians(name: str, state: str, session=None) -> Found:
     """Clinicians and practices AINPI lists under this name in this state.
 
     Raises ValueError, before anything is sent, for a malformed term; raises
-    Unavailable for a failed answer or one whose echoed query differs.
+    Unavailable for a failed answer, one whose echoed query differs, or one
+    without both lists of rows.
     """
     if not (isinstance(name, str) and isinstance(state, str)):
         raise ValueError("name and state are required")
@@ -194,13 +243,15 @@ def find_clinicians(name: str, state: str, session=None) -> tuple[Listing, ...]:
                 or echo[k].casefold() != sent.casefold()
                 for k, sent in (("name", name), ("state", state))):
             raise Unavailable("the directory did not apply the search")
-        data = body.get("data") if isinstance(body.get("data"), dict) else {}
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise Unavailable("no data in the answer")
         found = []
-        for row in _rows(data.get("practitioners")):
+        for row in _listed(data.get("practitioners")):
             shown = _shown(f"{row.get('given_name') or ''} "
                            f"{row.get('family_name') or ''}")
             found.append((row, shown, "clinician"))
-        for row in _rows(data.get("organizations")):
+        for row in _listed(data.get("organizations")):
             found.append((row, _shown(row.get("name")), "practice"))
         out = []
         for row, shown, kind in found:
@@ -211,7 +262,8 @@ def find_clinicians(name: str, state: str, session=None) -> tuple[Listing, ...]:
                     row["state"] if _STATE.fullmatch(str(row.get("state")))
                     else None,
                     zip5 if _ZIP.fullmatch(zip5) else None, None))
-        return tuple(out[:MAX_RESULTS])
+        return Found(tuple(out[:MAX_RESULTS]), len(found) - len(out),
+                     len(out) > MAX_RESULTS)
 
     return _cached(("clinician", name.casefold(), state), ask)
 
@@ -225,11 +277,12 @@ def _location(row: dict) -> dict:
     return {}
 
 
-def find_pharmacies(zip_code: str, session=None) -> tuple[Listing, ...]:
+def find_pharmacies(zip_code: str, session=None) -> Found:
     """Pharmacies NPPES lists with a practice location in this ZIP code.
 
     Raises ValueError, before anything is sent, for anything but five
-    digits; raises Unavailable for a failed answer.
+    digits; raises Unavailable for a failed answer or one without a list of
+    results.
     """
     if not (isinstance(zip_code, str) and _ZIP.fullmatch(zip_code)):
         raise ValueError("malformed ZIP code")
@@ -238,9 +291,10 @@ def find_pharmacies(zip_code: str, session=None) -> tuple[Listing, ...]:
         body = _get(NPPES_URL, {
             "version": "2.1", "enumeration_type": "NPI-2",
             "taxonomy_description": "Pharmacy", "postal_code": zip_code,
-            "limit": "50"}, session)
+            "limit": str(NPPES_PAGE)}, session)
+        rows = _listed(body.get("results"))
         out = []
-        for row in _rows(body.get("results")):
+        for row in rows:
             where = _location(row)
             basic = row.get("basic") if isinstance(row.get("basic"), dict) \
                 else {}
@@ -259,7 +313,8 @@ def find_pharmacies(zip_code: str, session=None) -> tuple[Listing, ...]:
                     where["state"] if _STATE.fullmatch(
                         str(where.get("state"))) else None,
                     zip_code, _phone(where.get("telephone_number")) is not None))
-        return tuple(out[:MAX_RESULTS])
+        return Found(tuple(out[:MAX_RESULTS]), len(rows) - len(out),
+                     len(out) > MAX_RESULTS or len(rows) >= NPPES_PAGE)
 
     return _cached(("pharmacy", zip_code), ask)
 
@@ -284,7 +339,7 @@ def contact(npi: str, session=None) -> Contact | None:
 
     def ask():
         body = _get(NPPES_URL, {"version": "2.1", "number": npi}, session)
-        row = next((r for r in _rows(body.get("results"))
+        row = next((r for r in _listed(body.get("results"))
                     if r.get("number") == npi), None)
         if row is None:
             return None
