@@ -121,19 +121,38 @@ def test_an_audit_store_failure_still_refuses(client, app, env, monkeypatch):
     assert _read(client, TENANT, token).status_code == 401
 
 
-def test_a_closure_lookup_failure_never_answers_with_data(
+def test_a_closure_lookup_failure_answers_500_with_no_data(
         client, app, env, monkeypatch):
     """Fail closed: when the tombstone cannot be read, the bearer is not
-    treated as reading an open tenant."""
+    treated as reading an open tenant. The gate does not catch the failure,
+    so the caller gets the engine's 500 and no Bundle. The lookup was asked,
+    once, about this tenant: an earlier, unrelated failure cannot pass for
+    this one."""
     from r6.fasten import models as fasten_models
+    asked = []
 
-    def _broken_lookup(_tenant_id):
+    def _broken_lookup(tenant_id):
+        asked.append(tenant_id)
         raise OperationalError('SELECT', {}, Exception('store down'))
 
     token = _store_token(TENANT)
     monkeypatch.setattr(fasten_models, 'tenant_closed', _broken_lookup)
-    try:
-        status = _read(client, TENANT, token).status_code
-    except OperationalError:
-        return  # propagated in testing mode: no response, no data
-    assert status != 200
+    # Answer as production does instead of re-raising into the test.
+    monkeypatch.setitem(app.config, 'PROPAGATE_EXCEPTIONS', False)
+    resp = _read(client, TENANT, token)
+    assert resp.status_code == 500, resp.get_data(as_text=True)
+    assert asked == [TENANT]
+    assert 'Bundle' not in resp.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('token_tenant', [None, ''])
+def test_a_token_that_names_no_tenant_reads_no_tenant(
+        client, app, env, token_tenant):
+    """tenant_closed answers False for an empty tenant id, so a token with
+    none is never refused as closed. It needs no such refusal: the read gate
+    matches the token's tenant to the request's, and no request names an
+    empty tenant, so the token reads nothing, open or closed."""
+    token = _store_token(token_tenant)
+    assert _read(client, TENANT, token).status_code == 401
+    _close(app, TENANT)
+    assert _read(client, TENANT, token).status_code == 401

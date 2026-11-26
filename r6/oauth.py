@@ -1153,6 +1153,11 @@ def tenant_closed(tenant_id):
     a consent return, and refuses an OAuth read (r6.read_auth). Resolved by
     module attribute at call time, and imported lazily: r6.fasten imports
     the access kernel, which imports this module through r6.read_auth.
+
+    False for an empty tenant id: a token that names no tenant names no
+    closed one. The read gate refuses such a token anyway, on the tenant
+    match (tests/test_oauth_closed_tenant.py). A failed lookup raises; no
+    caller here catches it, so the request ends as a 500 and answers nothing.
     """
     from r6.fasten import models as _fasten_models_mod
     return _fasten_models_mod.tenant_closed(tenant_id)
@@ -1172,6 +1177,10 @@ def require_scope(*required_scopes):
     Flask route decorator that checks for required OAuth scopes.
     Falls through gracefully if no Authorization header is present
     (allowing HMAC step-up to handle auth instead).
+
+    No route uses this today. It does NOT ask tenant_closed: before a route
+    adopts it, add that check here or move it into validate_bearer_token
+    (#1159), or a closed tenant's token is accepted on that route.
     """
     def decorator(f):
         @wraps(f)

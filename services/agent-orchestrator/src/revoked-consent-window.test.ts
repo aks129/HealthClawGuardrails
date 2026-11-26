@@ -1,13 +1,24 @@
 /**
- * Security review of the closed-tenant refusal (#1157): how long a consented
- * connector keeps reading after its consent is revoked.
+ * How long a consented connector keeps reading through this server after
+ * the engine stops honouring its grant: the consent was revoked, or the
+ * tenant was closed. Both reach this server the same way, as introspection
+ * answering inactive, so one test covers both.
  *
- * Flask is a mock. Introspection answers live, then (after the revoke) not
- * live. The MCP server keeps serving the remembered grant, and its minted
- * read credential, until INTROSPECTION_CACHE_TTL_MS runs out. These tests
- * pin that bound: served at +299 s, refused at +301 s. They pass today and
- * document the window. They turn red if the bound grows, and they need a
- * new number if it shrinks.
+ * The window is a deliberate limit (#1183). A remembered "yes", and the read
+ * credential minted under it, is served until INTROSPECTION_CACHE_TTL_MS
+ * runs out, and nothing invalidates it early. Two things are pinned:
+ *
+ * - The behaviour, read from the constant: served one second before the TTL
+ *   ends, refused one second after. This follows the constant, so it stays
+ *   green when the constant changes and red when the cache stops honouring
+ *   it.
+ * - The ceiling, stated here once: the TTL is at most the five minutes the
+ *   description of the limit promises. Raising the constant past that turns
+ *   this red; lowering it does not.
+ *
+ * The engine is a mock (node-fetch is faked). This proves what this server's
+ * cache does with an inactive answer. It proves nothing about the engine's
+ * own refusal, which tests/test_closed_tenant_connector_exploits.py covers.
  */
 import http from "http";
 import request from "supertest";
@@ -16,6 +27,7 @@ jest.mock("node-fetch", () => jest.fn());
 import fetch from "node-fetch";
 import {
   app,
+  INTROSPECTION_CACHE_TTL_MS,
   closeMCPServerForTests,
   resetOAuthStateForTests,
   resetRateLimitForTests,
@@ -27,6 +39,8 @@ const CANONICAL = "https://mcp.healthclaw.io/mcp";
 const HOST = "mcp.healthclaw.io";
 const TOKEN = "a-consented-connector-token";
 const TENANT = "closed-window-t1";
+//: The longest window the limit is documented to allow (#1183).
+const DOCUMENTED_CEILING_MS = 5 * 60 * 1000;
 
 let live = true;
 let reads = 0;
@@ -96,17 +110,22 @@ async function readOnce(): Promise<number> {
   return res.status;
 }
 
-test("a revoked consent is still served for just under five minutes", async () => {
+test("the window is no longer than the documented five minutes", () => {
+  expect(INTROSPECTION_CACHE_TTL_MS).toBeGreaterThan(0);
+  expect(INTROSPECTION_CACHE_TTL_MS).toBeLessThanOrEqual(DOCUMENTED_CEILING_MS);
+});
+
+test("a grant the engine stopped honouring is served until the cache TTL ends, then refused", async () => {
   expect(await readOnce()).toBe(200);
   expect(reads).toBe(1);
 
-  live = false; // the consent is revoked at the engine
+  live = false; // the engine now answers inactive: consent revoked, or tenant closed
 
-  nowSpy.mockImplementation(() => t0 + 299 * 1000);
+  nowSpy.mockImplementation(() => t0 + INTROSPECTION_CACHE_TTL_MS - 1000);
   expect(await readOnce()).toBe(200);
-  expect(reads).toBe(2); // the closed tenant was read after the revoke
+  expect(reads).toBe(2); // read after the engine said no: the window
 
-  nowSpy.mockImplementation(() => t0 + 301 * 1000);
+  nowSpy.mockImplementation(() => t0 + INTROSPECTION_CACHE_TTL_MS + 1000);
   expect(await readOnce()).toBe(401);
   expect(reads).toBe(2);
 });

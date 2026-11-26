@@ -149,8 +149,10 @@ def _audit_closed_tenant_oauth_refusal(tenant_id: str) -> None:
     """Write the refusal's one AuditEvent, as r6.access writes a refusal's.
 
     Rolls back first so nothing staged before the gate commits with the
-    row. A failed write is logged by exception type and the refusal stands:
-    the fail-closed state of a refusal is the refusal itself.
+    row. This runs only on the refusal path, so anything the rollback drops
+    belonged to a request that is being refused. A failed write is logged by
+    exception type and the refusal stands: the fail-closed state of a
+    refusal is the refusal itself.
     """
     from sqlalchemy.exc import SQLAlchemyError
 
