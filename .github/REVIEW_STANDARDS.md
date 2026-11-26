@@ -32,8 +32,14 @@ review bot reads THIS file, so keep it current.)
    **One exception: person-attested configuration.** A store of what a
    person has attested for later actions may take its write from the
    internal secret alone, without `validate_step_up_token`. It covers two
-   stores and no others: saved contacts and attested facts. Extending it to
-   another store means editing this standard. The approval-token mint
+   stores and no others: saved contacts and attested facts. They are the
+   tables `delegation_contacts` and `delegation_facts`. Saved contacts hold
+   a business's label, kind, phone number and time zone. Attested facts
+   hold what the person says about their own identity and insurance: names,
+   date of birth, a callback number, the insurer's name, and member and
+   group numbers. Neither holds clinical content. Extending it to another
+   store, or adding clinical content to one of these, means editing this
+   standard. The approval-token mint
    (`r6/actions/routes.py`) already trusts that secret and is the root of the
    human gate, so this adds no new party the gate does not already trust. It
    does widen what that party can do: the mint is per-action and single-use,
@@ -63,9 +69,13 @@ review bot reads THIS file, so keep it current.)
      that link and that test name is REQUEST_CHANGES. Whether that test
      really fails when one of the three is removed is not checked here; the
      linked change is asked to report that mutation.
-   - (c) **The write is never a clinical FHIR write and never an approval.**
-     It creates or changes no FHIR resource, and it approves, commits or
-     executes no action.
+   - (c) **The write is never a clinical write, FHIR or otherwise, and
+     never an approval.** It creates or changes no FHIR resource. It stores
+     no clinical content in any other form either: no allergy, medication,
+     diagnosis, result or other statement about the person's health. It
+     approves, commits or executes no action. The PR names the model and
+     table it claims under the exception, and lists every key or column a
+     caller can set.
    - (d) **Every stored value is shown back verbatim, without truncation or
      normalisation, on the approval card before anything uses it.** A PR
      that reads a stored value into an action puts that value, unaltered, on
@@ -91,7 +101,9 @@ review bot reads THIS file, so keep it current.)
      secret, and until #1131 merges its refusals leave no AuditEvent. A PR
      that adds a caller of the write, or reads a stored value into an
      action, is REQUEST_CHANGES until #1131 has merged and the PR names that
-     test.
+     test. The change that closes #1131 rewrites this condition and standard
+     21's carve-out to say the audit exists, and moves the pin test's rows,
+     in the same change.
 
    None of the five is checked mechanically against a PR's code.
    `tests/test_standard_4_exception_is_pinned.py` checks that this text keeps

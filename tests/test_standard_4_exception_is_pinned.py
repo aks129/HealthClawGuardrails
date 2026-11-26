@@ -44,7 +44,9 @@ PHRASES = [
     ("b", "handler on the approval surface"),
     ("b", "login-required, CSRF-protected and ownership-checked"),
     ("b", "is not checked here"),
-    ("c", "never a clinical FHIR write"),
+    ("c", "never a clinical write, FHIR or otherwise"),
+    ("c", "stores no clinical content in any other form"),
+    ("c", "names the model and table it claims under the exception"),
     ("c", "never an approval"),
     ("d", "without truncation or normalisation"),
     ("e", "before the first real call"),
@@ -122,6 +124,11 @@ def test_each_condition_keeps_its_phrase(label, phrase):
       (b) drop "CSRF-protected" -> red
       (b) "is not checked here" -> "is checked here" -> red
       (c) "never a clinical" -> "not usually a clinical" -> red
+      (c) drop ", FHIR or otherwise" -> red
+      (c) "stores no clinical content" -> "stores little clinical content"
+          -> red
+      (c) "names the model and table" -> "may name the model and table"
+          -> red
       (c) "never an approval" -> "rarely an approval" -> red
       (d) drop "without truncation or normalisation" -> red
       (e) "before the first real call" -> "soon" -> red
@@ -149,13 +156,19 @@ def test_the_refusal_audit_condition_names_its_issue():
 
 
 def test_the_exception_names_the_stores_it_covers():
-    """MUTATION: delete "and no others" -> red.
+    """MUTATION: delete "and no others", rename a table, or delete
+    "Neither holds clinical content" -> red.
 
-    Two named stores, so a third needs an edit to the standard.
+    Two named stores, so a third needs an edit to the standard. Named by
+    table, because "attested facts" alone is a label that clinical content
+    could be filed under.
     """
     block = _fold(_standard_4())
     assert ("It covers two stores and no others: saved contacts and "
             "attested facts.") in block
+    assert ("They are the tables `delegation_contacts` and "
+            "`delegation_facts`.") in block
+    assert "Neither holds clinical content." in block
 
 
 def test_the_exception_waives_step_up_only():
