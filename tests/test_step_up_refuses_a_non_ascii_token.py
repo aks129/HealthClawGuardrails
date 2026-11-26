@@ -138,6 +138,8 @@ ROWS = [
         'GET', '/r6/actions/no-such-action/review', 401),
     Row('actions-review-post', 'r6/actions/review.py:_require_step_up',
         'POST', '/r6/actions/no-such-action/review', 401, body={}),
+    Row('actions-contacts-list', 'r6/actions/contacts.py:list_contacts',
+        'GET', '/r6/actions/contacts', 401),
     Row('smbp-reading', 'r6/smbp/routes.py:reading',
         'POST', '/r6/smbp/reading', 401, body={'systolic': 120,
                                                'diastolic': 80}),
