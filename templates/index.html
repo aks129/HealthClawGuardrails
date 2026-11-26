@@ -32,8 +32,10 @@
   <meta name="twitter:title" content="The guardrail layer between AI agents and clinical data">
   <meta name="twitter:description" content="Open-source safety layer for AI + FHIR health data. Try CareAgents — connect your records, spin up a guarded health agent.">
   <meta name="theme-color" content="#FAF9F5">
-  {# Self-hosted. No page on either surface calls a third party on load —
-     see scripts/vendor_frontend_assets.py and the CSP in app.py. #}
+  {# Self-hosted: every asset is requested from this domain — see
+     scripts/vendor_frontend_assets.py and the CSP in app.py. The one script
+     that reports to somebody else is Vercel Web Analytics at the foot of
+     this page, which the host serves from this domain. #}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/healthclaw.css') }}">
 </head>

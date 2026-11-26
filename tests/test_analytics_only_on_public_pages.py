@@ -26,6 +26,19 @@ MUTATION, each run against the committed tree:
          test_the_patient_connect_page_never_loads_analytics
   drop a page name from the list in privacy.html section 7
       -> test_privacy_names_the_allowlisted_pages
+  add the closed tenant's /connect path to the tuple in base.html
+      -> test_an_app_page_never_loads_analytics
+         [fasten_connect_disconnected.html], test_no_app_path_is_allowlisted
+  drop '/faq' from the tuple in base.html
+      -> test_every_base_shell_template_is_public_or_app,
+         test_privacy_names_the_allowlisted_pages
+  add the script with a `//host/` URL to review_base.html
+      -> test_no_other_template_references_analytics
+  put "so no outside party observes a page" back in security.html, or
+  take "Vercel Web Analytics" out of it
+      -> test_the_security_page_names_the_analytics_it_loads
+  drop the Vercel entry from privacy.html section 5
+      -> test_privacy_lists_vercel_among_third_parties
 """
 
 from __future__ import annotations
@@ -100,11 +113,26 @@ def _allowlist() -> tuple:
 
 
 def _extends_base() -> set:
-    # Any `extends` tag that can resolve to base.html: fasten_connect.html
-    # picks its shell with a conditional.
-    names = {path.name for path in TEMPLATES.rglob("*.html")
-             if re.search(r"""\{%-?\s*extends\b[^%]*["']base\.html["']""",
-                          path.read_text(encoding="utf-8"))}
+    """Every template that can end up in base.html's shell.
+
+    Each `extends` tag is read for every template name in it, because
+    fasten_connect.html picks its shell with a conditional, and the chain is
+    followed, so a layout between a page and base.html is counted with the
+    pages under it.
+    """
+    parents = {}
+    for path in TEMPLATES.rglob("*.html"):
+        tags = re.findall(r"\{%-?\s*extends\b([^%]*)%\}",
+                          path.read_text(encoding="utf-8"))
+        parents[path.name] = set(
+            re.findall(r"""["']([^"']+\.html)["']""", " ".join(tags)))
+    names = {"base.html"}
+    while True:
+        more = {name for name, above in parents.items() if above & names}
+        if more <= names:
+            break
+        names |= more
+    names.discard("base.html")
     assert names, "no template extends base.html: this guard read nothing"
     return names
 
@@ -199,6 +227,32 @@ def test_no_other_template_references_analytics():
     assert [path.name for path in others if NEEDLE in _markup(path)] == []
     for name in ("base.html", "index.html"):
         assert _markup(TEMPLATES / name).count(NEEDLE) == 1
+
+
+def test_the_security_page_names_the_analytics_it_loads():
+    """/security loads the script, so it says so.
+
+    It used to say the site loads no third-party script, "so no outside
+    party observes a page a patient opens". Vercel records each view of a
+    page that loads the script, and /security is one of them.
+    """
+    assert "/security" in _allowlist()
+    text = " ".join(_markup(TEMPLATES / "security.html").split())
+    assert "Vercel Web Analytics" in text
+    assert "{{ url_for('privacy') }}#cookies" in text
+    for path in TEMPLATES.rglob("*.html"):
+        assert "no outside party" not in " ".join(_markup(path).split()), (
+            path.name)
+
+
+def test_privacy_lists_vercel_among_third_parties():
+    """Section 5 is where a reader looks for who else receives data."""
+    text = (TEMPLATES / "privacy.html").read_text(encoding="utf-8")
+    start = text.index('<h2 id="third-party">')
+    section = text[start:text.index("<h2 ", start + 1)]
+    assert "<strong>Vercel</strong>" in section
+    assert "Vercel Web Analytics" in section
+    assert 'href="#cookies"' in section
 
 
 def test_privacy_names_the_allowlisted_pages():

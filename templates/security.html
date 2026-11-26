@@ -185,8 +185,13 @@
     <li>Append-only audit, with the audit detail held PHI-free.</li>
     <li>Tenant isolation enforced server-side, never from a client-supplied
       claim alone.</li>
-    <li>A strict content security policy: the site loads no third-party script,
-      stylesheet or font, so no outside party observes a page a patient opens.</li>
+    <li>A strict content security policy: every script, stylesheet and font is
+      served from this site's own domain. The public information pages,
+      this one included, count page views through Vercel Web Analytics,
+      which Vercel serves from this domain as the site's host; the
+      <a href="{{ url_for('privacy') }}#cookies">privacy policy, section 7</a>,
+      says what it records. The connect, review and intake pages do not
+      load it.</li>
     <li>Transport security headers, and framing denied.</li>
   </ul>
 
