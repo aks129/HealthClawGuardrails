@@ -173,11 +173,21 @@ WITHHELD = {
     "obs-text": "%resources.where(resourceType='Observation').code.text",
 }
 
-#: linkId -> an expression that must keep working. An allowlist that breaks
-#: the intake form is not a fix, so these ride on the same request.
+#: linkId -> an expression that must keep working over HTTP. An allowlist
+#: that breaks the form is not a fix, so these ride on the same request.
 PERMITTED = {
+    "gender": "%patient.gender",
+}
+
+#: linkId -> an expression the projection allows, and the HTTP route still
+#: leaves unanswered: the route removes the subject's name, telecom and
+#: address before population, because its answer reaches a model (spec
+#: 2026-11-24 section 7, PR 3). The form-fill rail populates in process and
+#: keeps them; test_the_projection_still_fills_identity_in_process pins that.
+#: birthDate is left off on purpose: the walker cuts it to a year today and
+#: removes it at 90 or older later, so it belongs to neither list.
+IDENTITY_REMOVED_OVER_HTTP = {
     "given": "%patient.name.given.first()",
-    "dob": "%patient.birthDate",
     "email": "%patient.telecom.where(system='email').value",
     "city": "%patient.address.city.first()",
 }
@@ -186,6 +196,8 @@ PERMITTED = {
 def _questionnaire():
     items = [_expr_item(link_id, expr) for link_id, expr in WITHHELD.items()]
     items += [_expr_item(link_id, expr) for link_id, expr in PERMITTED.items()]
+    items += [_expr_item(link_id, expr)
+              for link_id, expr in IDENTITY_REMOVED_OVER_HTTP.items()]
     return {"resourceType": "Questionnaire", "id": "bounded-q",
             "status": "active", "item": items}
 
@@ -302,7 +314,8 @@ def test_a_withheld_expression_is_reported_as_an_issue_naming_its_link_id(
 
     body = _populate(client, tenant_headers).get_json()
 
-    assert sorted(_issue_link_ids(body)) == sorted(WITHHELD)
+    assert sorted(_issue_link_ids(body)) == sorted(
+        list(WITHHELD) + list(IDENTITY_REMOVED_OVER_HTTP))
     outcome = _param(body, "issues")
     explanation = _issue_explanation(body)
     assert "%patient projection" in explanation
@@ -325,12 +338,26 @@ def test_allowlisted_expressions_still_populate(
 
     body = _populate(client, tenant_headers).get_json()
 
-    assert _answers(_param(body, "response")) == {
-        "given": "Ada",
-        "dob": "1815-12-10",
-        "email": "ada@example.org",
-        "city": "London",
-    }
+    assert _answers(_param(body, "response")) == {"gender": "female"}
+
+
+def test_the_projection_still_fills_identity_in_process():
+    """The %patient projection is unchanged. The form-fill rail calls the
+    engine in process with the stored Patient (r6/actions/review.py), and
+    the person checks their own name, email and city on the review page
+    before anything is sent. Only the HTTP route, whose answer reaches a
+    model, removes them first.
+    """
+    from r6.sdc.populate import populate_questionnaire
+
+    qr, _issues = populate_questionnaire(_questionnaire(), _patient(), [])
+
+    answers = _answers(qr)
+    assert {k: answers.get(k) for k in IDENTITY_REMOVED_OVER_HTTP} == {
+        "given": "Ada", "email": "ada@example.org", "city": "London"}
+    assert answers.get("gender") == "female"
+    for link_id in WITHHELD:
+        assert link_id not in answers, link_id
 
 
 def test_an_allowlisted_element_the_patient_lacks_reports_in_the_same_words(
@@ -353,19 +380,19 @@ def test_an_allowlisted_element_the_patient_lacks_reports_in_the_same_words(
     MUTATION: reintroduce any classifier -> `email` goes silent and this
     goes red on the issue list.
     """
-    bare = {"resourceType": "Patient", "id": PATIENT_ID,
-            "name": [{"given": ["Ada"]}]}
+    bare = {"resourceType": "Patient", "id": PATIENT_ID, "gender": "female"}
     _store(app, bare, tenant_id)
     _store(app, {"resourceType": "Questionnaire", "id": "sparse-q",
                  "status": "active",
-                 "item": [_expr_item("email", PERMITTED["email"]),
-                          _expr_item("given", PERMITTED["given"])]}, tenant_id)
+                 "item": [_expr_item("dob", "%patient.birthDate"),
+                          _expr_item("gender", PERMITTED["gender"])]},
+           tenant_id)
 
     body = _populate(client, tenant_headers, "sparse-q").get_json()
 
-    assert _answers(_param(body, "response")) == {"given": "Ada"}
+    assert _answers(_param(body, "response")) == {"gender": "female"}
     # Exactly one issue: the one leaf that got no answer. Not two.
-    assert _issue_link_ids(body) == ["email"]
+    assert _issue_link_ids(body) == ["dob"]
 
     outcome = _param(body, "issues")
     # information, not warning: a form with one empty optional field is an
@@ -792,10 +819,12 @@ def test_the_content_list_handed_to_the_engine_carries_no_subject(
     assert [r for r in content if r.get("resourceType") == "Observation"], (
         "no auto-loaded content at all — the negatives above measure nothing")
     assert OBS_TEXT_NAME_MARKER not in json.dumps(content)
-    # ...the subject still reaches the engine whole, through the argument
-    # that carries it, which is what the reference matching and the %patient
-    # projection are both built from...
+    # ...the subject still reaches the engine through the argument that
+    # carries it, by id, which is what reference matching is built from. Over
+    # HTTP it arrives without the person's identity (spec 2026-11-24 PR 3)...
     assert subject["id"] == PATIENT_ID
-    assert subject["identifier"] == _patient()["identifier"]
+    for key in ("name", "telecom", "address"):
+        assert key not in subject, key
+    assert withheld not in json.dumps(subject)
     # ...and the form still fills in.
     assert set(PERMITTED) <= set(_answers(_param(resp.get_json(), "response")))

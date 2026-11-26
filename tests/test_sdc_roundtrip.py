@@ -81,9 +81,10 @@ def test_full_populate_then_extract_roundtrip(client, app, tenant_id,
                              "valueReference": {"reference": "Patient/p1"}}]})
     assert pop.status_code == 200
     qr = _response_param(pop.get_json())
-    # populate should fill the name from the patient and the weight from the obs
-    given = _answer(qr, "given-name")
-    assert given["valueString"] == "Ada"
+    # populate fills the weight from the obs. Over HTTP it leaves the name
+    # unanswered: this answer reaches a model, so the subject's identity is
+    # removed first (spec 2026-11-24 PR 3; tests/test_sdc_redaction_leaks.py).
+    assert "Ada" not in json.dumps(qr)
     weight = _answer(qr, "body-weight")
     assert weight["valueQuantity"]["value"] == 70
     qr["status"] = "completed"
