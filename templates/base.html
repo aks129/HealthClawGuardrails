@@ -124,7 +124,9 @@
        wraps the dashboards, the command center and /connect, whose paths and
        query strings can carry tenant identifiers; those must never load it.
        Add a path here only for a page with no patient or tenant context, and
-       keep /privacy section 7 in step. #}
+       keep /privacy section 7 in step.
+       tests/test_analytics_only_on_public_pages.py reads this tuple and
+       fails on either. #}
     {% if request.path in ('/about', '/faq', '/wiki', '/security', '/privacy', '/terms', '/skills') %}
     <script defer src="/_vercel/insights/script.js"></script>
     {% endif %}
