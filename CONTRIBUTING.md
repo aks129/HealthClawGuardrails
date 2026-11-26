@@ -83,7 +83,9 @@ and keep these invariants:
   write token and is a **known gap**
   ([#214](https://github.com/aks129/HealthClawGuardrails/issues/214)) rather
   than a control to build on. Do not add new write paths that rely on it.
-  Ingest-class bundle operations are documented as exempt.
+  Ingest-class bundle operations are documented as exempt. One written
+  exception to step-up, for writes of person-attested configuration, is in
+  [`.github/REVIEW_STANDARDS.md`](.github/REVIEW_STANDARDS.md) standard 4.
 - **Reads of non-public tenants are authenticated**, not just tenant-scoped.
 - **No PHI in logs or audit `detail`** — counts, types, and tenant IDs only.
 - `validate_step_up_token` returns a `(bool, str)` tuple — **destructure both**; never coerce the tuple to a boolean (a non-empty tuple is truthy → silent auth bypass).
