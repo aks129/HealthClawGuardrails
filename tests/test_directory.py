@@ -257,9 +257,11 @@ def test_an_answer_without_its_list_of_rows_is_unavailable_never_none(
     "SAMPLE PHARMACY 215.555.0100", "CALL 215 OR 555 THEN 0100 PHARMACY",
 ])
 def test_no_listing_string_holds_a_phone_shaped_number(name):
-    """MUTATION: search the text as written, not with what sits between
-    the digits removed -> the separated numbers pass -> red. MUTATION: drop
-    the ten-digits-in-all rule -> the last name passes -> red."""
+    """MUTATION: put back the old rule alone (seven digits in a row, in the
+    text as written) -> all six names pass -> red. MUTATION: search the
+    text as written but keep the ten-digit rule -> the 555-0100 name passes
+    -> red. MUTATION: drop the ten-digits-in-all rule -> the last name
+    passes -> red."""
     rows = [_pharmacy("1666666668", name, "19103"),
             _pharmacy("1555555550", "NO PHONE PHARMACY", "19103")]
     got = directory.find_pharmacies("19103", session=FakeSession(
@@ -283,13 +285,19 @@ def _npi(n):
 
 
 def test_more_matches_than_are_listed_says_truncated():
-    """MUTATION: `truncated` always False -> red. MUTATION: drop the
-    full-page half -> the second assert -> red."""
+    """MUTATION: `truncated` always False, for either directory -> red.
+    MUTATION: drop the full-page half -> the last assert -> red."""
     many = [_pharmacy(_npi(n), "SAMPLE PHARMACY", "19103") for n in range(12)]
     got = directory.find_pharmacies("19103", session=FakeSession(
         {"result_count": 12, "results": many}))
     assert (len(got.listings), got.dropped, got.truncated) == (
         directory.MAX_RESULTS, 0, True)
+    people = [{**AINPI_BODY["data"]["practitioners"][0], "npi": _npi(n)}
+              for n in range(12)]
+    got = directory.find_clinicians("Rivera", "PA", session=FakeSession(
+        {**AINPI_BODY, "data": {"practitioners": people,
+                                "organizations": []}}))
+    assert (len(got.listings), got.truncated) == (directory.MAX_RESULTS, True)
     # A full page that kept nothing may be hiding matches on the next one.
     page = [_pharmacy(_npi(n), "ELSEWHERE PHARMACY", "19147")
             for n in range(directory.NPPES_PAGE)]
@@ -387,12 +395,15 @@ def test_the_route_sends_no_tenant_and_returns_no_number(
 
 def test_the_route_tells_all_rows_dropped_from_none_and_no_list_from_both(
         client, search_on, auth_headers, monkeypatch):
-    """MUTATION: report `dropped` as 0 in the route -> red."""
+    """MUTATION: report `dropped` as 0 in the route, or `truncated` as
+    False -> red."""
     url = "/r6/directory/search?kind=pharmacy&zip="
     bodies = iter([
         {"results": [_pharmacy("1999999992", "MAIL ORDER PHARMACY", "19103",
                                code="3336M0002X")]},
-        {"results": []}, {}])
+        {"results": []}, {},
+        {"results": [_pharmacy(_npi(n), "SAMPLE PHARMACY", "19106")
+                     for n in range(12)]}])
     monkeypatch.setattr(directory, "_session",
                         lambda: FakeSession(next(bodies)))
     resp = client.get(url + "19103", headers=auth_headers)
@@ -403,7 +414,10 @@ def test_the_route_tells_all_rows_dropped_from_none_and_no_list_from_both(
                                "truncated": False}
     resp = client.get(url + "19105", headers=auth_headers)
     assert resp.status_code == 503
-    assert _audits() == [
+    resp = client.get(url + "19106", headers=auth_headers)
+    assert (len(resp.get_json()["results"]), resp.get_json()["truncated"]) \
+        == (directory.MAX_RESULTS, True)
+    assert _audits()[:3] == [
         ("success", "directory search: source=nppes; results=0; dropped=1"),
         ("success", "directory search: source=nppes; results=0; dropped=0"),
         ("failure", "directory search: source=nppes; unavailable")]
