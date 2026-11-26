@@ -4,7 +4,8 @@ FHIR Resource Redaction.
 Standard redaction profile for PHI protection applied consistently
 on all resource access paths (not just context ingestion).
 
-- Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R.")
+- Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R."),
+  in `name` and in an extension's `valueHumanName`
 - Identifiers: Remove the value from every Identifier under a key in
   `_IDENTIFIER_KEYS` (`identifier`, `accessionIdentifier`, `requisition`,
   `valueIdentifier`, ...); keep `system` and `type`. Safe Harbor
@@ -16,9 +17,13 @@ on all resource access paths (not just context ingestion).
   supported types use; an identifier-like value under any other key is
   not covered, so do not read the Safe Harbor citation as the codebase's
   total Safe Harbor posture.
-- Addresses: Remove line/text/city/district/postalCode, keep state/country,
-  whether the element is a list or a single Address
-- Telecom: Replace values with [Redacted]
+- Addresses: Remove line/text/city/district/postalCode and every
+  extension (geolocation), keep state/country, whether the element is a list
+  or a single Address, under `address` or `valueAddress`
+- Telecom: Replace values with [Redacted], `valueContactPoint` included
+- Location.position: Remove
+- Device serials: Remove serialNumber, distinctIdentifier and the UDI
+  carrier's HRF/AIDC strings at any depth; keep lotNumber
 - Birth dates: Truncate to year only
 - Photos: Remove entirely
 - Narratives: Replace with redacted div
@@ -62,9 +67,18 @@ def apply_redaction(resource):
 
 def _redact_fields(resource, narrative=True):
     """Redact PHI fields from a single resource dict (in-place)."""
-    # Redact names: truncate family and given to first initial only
-    if 'name' in resource and isinstance(resource['name'], list):
-        for name_entry in resource['name']:
+    # Redact names: truncate family and given to first initial only. An
+    # extension's valueHumanName is the same datatype and was kept whole
+    # until #1164; it gets the same rule until names go entirely (#1161 PR 1).
+    names = resource.get('name')
+    names = list(names) if isinstance(names, list) else []
+    human_name = resource.get('valueHumanName')
+    if isinstance(human_name, dict):
+        names.append(human_name)
+    elif isinstance(human_name, list):
+        names.extend(human_name)
+    if names:
+        for name_entry in names:
             if isinstance(name_entry, dict):
                 if 'family' in name_entry and isinstance(name_entry['family'], str):
                     f = name_entry['family']
@@ -112,26 +126,51 @@ def _redact_fields(resource, narrative=True):
                     ident.pop('value', None)
 
     # Remove full addresses. Most resources carry a list; Location.address
-    # is a single Address, and leaked whole until #282.
-    addresses = resource.get('address')
-    if isinstance(addresses, dict):
-        addresses = [addresses]
-    if isinstance(addresses, list):
-        for addr in addresses:
-            if not isinstance(addr, dict):
-                continue
-            addr.pop('line', None)
-            addr.pop('text', None)
-            addr.pop('city', None)
-            addr.pop('district', None)
-            addr.pop('postalCode', None)
-            # State/country remain useful coarse demographics.
+    # is a single Address, and leaked whole until #282. An extension's
+    # valueAddress (patient-birthPlace) is the same datatype and leaked whole
+    # until #1161. Every Address loses its extension: geolocation puts the
+    # home's latitude and longitude there, and an upstream can hang anything
+    # else on it, so there is no URL list to keep.
+    for key in ('address', 'valueAddress'):
+        addresses = resource.get(key)
+        if isinstance(addresses, dict):
+            addresses = [addresses]
+        if isinstance(addresses, list):
+            for addr in addresses:
+                if not isinstance(addr, dict):
+                    continue
+                addr.pop('line', None)
+                addr.pop('text', None)
+                addr.pop('city', None)
+                addr.pop('district', None)
+                addr.pop('postalCode', None)
+                addr.pop('extension', None)
+                # State/country remain useful coarse demographics.
 
     # Redact telecom (phone numbers, emails)
     if 'telecom' in resource and isinstance(resource['telecom'], list):
         for telecom in resource['telecom']:
             if 'value' in telecom and isinstance(telecom['value'], str):
                 telecom['value'] = '[Redacted]'
+    # An extension's ContactPoint, the same number under another key
+    # (#1161). Whatever the value's shape, it is not passed on, and nor is
+    # its `_value` companion, whose extensions can hold the number too.
+    points = resource.get('valueContactPoint')
+    if isinstance(points, dict):
+        points = [points]
+    if isinstance(points, list):
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            if 'value' in point:
+                point['value'] = '[Redacted]'
+            point.pop('_value', None)
+
+    # Location.position is a latitude and longitude, and a Location can be
+    # the person's home (`mode: instance`). `position` is not this element on
+    # other types, so it is scoped by resource type (#1161).
+    if resource.get('resourceType') == 'Location':
+        resource.pop('position', None)
 
     # Redact Patient.contact[] — emergency-contact name / phone / address is
     # PHI and must not pass through on reads (contact.name is a single
@@ -223,6 +262,14 @@ _FREE_TEXT_KEYS = {
     'occurrenceString', 'performedString', 'scheduledString',
     'authorString', 'detailString', 'ageString', 'bornString',
     'deceasedString',
+    # Free strings that can carry anything an upstream wrote (#1161).
+    'valueUuid', 'valueExpression',
+}
+# A device's own serial and the UDI carrier strings that encode it. A
+# contained Device is one person's implant or meter, so these identify the
+# person (Safe Harbor (M)). lotNumber is shared by a batch and stays (#1161).
+_DEVICE_SERIAL_KEYS = {
+    'serialNumber', 'distinctIdentifier', 'carrierHRF', 'carrierAIDC',
 }
 _DATE_KEYS = {
     'birthDate', 'deceasedDateTime', 'valueDate', 'valueDateTime',
@@ -420,13 +467,24 @@ def _redact_recursive(obj):
 
     for key in list(obj):
         value = obj.get(key)
-        if key in _FREE_TEXT_KEYS:
+        if key in _FREE_TEXT_KEYS or key in _DEVICE_SERIAL_KEYS:
             obj.pop(key, None)
             continue
         if key in _DATE_KEYS and isinstance(value, str):
             obj[key] = value[:4]
             continue
         _redact_recursive(value)
+
+
+def _drop_key(obj, key):
+    """Remove `key` from every dict in the tree, in place."""
+    if isinstance(obj, list):
+        for item in obj:
+            _drop_key(item, key)
+    elif isinstance(obj, dict):
+        obj.pop(key, None)
+        for value in obj.values():
+            _drop_key(value, key)
 
 
 def apply_patient_controlled_redaction(resource, patient_id):
@@ -478,6 +536,10 @@ def apply_patient_controlled_redaction(resource, patient_id):
     # generalPractitioner[].display, any reference's .display) survives this
     # untouched, because the walker does not stop at the top level.
     _redact_recursive(result)
+    # The base pass cuts an extension's valueHumanName to initials. This
+    # output is stamped ANONYED, so a name in any extension goes whole, at
+    # any depth (#1164).
+    _drop_key(result, 'valueHumanName')
 
     # Everything below is this function's OWN, stronger, top-level-only
     # policy layered on top of the base pass above.
