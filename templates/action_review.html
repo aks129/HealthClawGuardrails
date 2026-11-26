@@ -56,6 +56,9 @@ Check "I have no known allergies" if that is true for you, to continue.
 
     <form id="review-form" method="post"
           action="/r6/actions/{{ action_id }}/review">
+      {# The draft this page shows, so the submit records it or nothing
+         (#1174). Not a credential: a keyed digest of what is on screen. #}
+      <input type="hidden" name="draft_digest" value="{{ draft_digest }}">
 
       <!-- About you: shown as it is in your records, not edited here.
            Plain words for a phone (#876): not "Demographics", not

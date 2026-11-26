@@ -46,7 +46,7 @@ from r6.sdc import intake
 from r6.sdc.intake import INITIAL_EXPRESSION_URL, intake_questionnaire
 from tests.test_redaction_probes_multistep import pdf_text
 from tests.approval_helpers import propose_headers
-from tests.approval_helpers import approval_headers
+from tests.approval_helpers import approval_headers, reviewed
 
 pytestmark = pytest.mark.extension
 
@@ -167,7 +167,8 @@ def test_the_signed_delivery_link_carries_only_the_allowlisted_demographics(
     review = client.post("/r6/actions/%s/review" % action_id,
                          headers=approval_headers(client.application,
                                                   auth_headers, action_id),
-                         json={"nka": "true"})
+                         json=reviewed(client, auth_headers, action_id,
+                                       {"nka": "true"}, strict=False))
     assert review.status_code == 200, review.get_data(as_text=True)
     reviewed_qr_id = review.get_json()["reviewed_qr_id"]
 
@@ -175,9 +176,9 @@ def test_the_signed_delivery_link_carries_only_the_allowlisted_demographics(
         row = R6Resource.query.filter_by(
             resource_type="QuestionnaireResponse", id=reviewed_qr_id,
             tenant_id=tenant_headers["X-Tenant-Id"]).first()
-        reviewed = row.resource_json
-    assert ALLOWED_FAMILY in reviewed, reviewed
-    assert not [m for m in WITHHELD if m in reviewed], (
+        reviewed_json = row.resource_json
+    assert ALLOWED_FAMILY in reviewed_json, reviewed_json
+    assert not [m for m in WITHHELD if m in reviewed_json], (
         "the reviewed QuestionnaireResponse carries an element outside the "
         "%patient allowlist; the delivery PDF is rendered from it")
 

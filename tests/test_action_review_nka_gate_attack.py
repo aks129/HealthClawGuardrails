@@ -15,7 +15,7 @@ from r6.actions.review import _absence_only_refs, _is_absence_entry
 from r6.models import R6Resource
 from r6.sdc.populate import POPULATED_ROW_SOURCE_URL
 from r6.terminology import ABSENCE_CONCEPTS, LOINC, SNOMED
-from tests.approval_helpers import propose_headers
+from tests.approval_helpers import propose_headers, reviewed
 from tests.approval_helpers import approval_headers
 
 TENANT = 'test-tenant'
@@ -93,7 +93,8 @@ def _post(client, auth_headers, aid, **answers):
     return client.post('/r6/actions/%s/review' % aid,
                        headers=approval_headers(client.application,
                                                 auth_headers, aid),
-                       json=answers)
+                       json=reviewed(client, auth_headers, aid, answers,
+                                     strict=False))
 
 
 def _spellings():

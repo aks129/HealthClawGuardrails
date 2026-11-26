@@ -91,7 +91,7 @@ from r6.models import R6Resource
 from tests.test_redaction_coverage_inventory import (
     NAME_MARKER, OBS_DISPLAY_MARKER, OBS_TEXT_MARKER,
 )
-from tests.approval_helpers import propose_headers
+from tests.approval_helpers import propose_headers, reviewed
 from tests.approval_helpers import approval_headers
 
 pytestmark = pytest.mark.extension
@@ -328,7 +328,9 @@ def _confirm_the_form(client, tenant_headers, auth_headers):
     review = client.post("/r6/actions/%s/review" % action_id,
                          headers=approval_headers(client.application,
                                                   auth_headers, action_id),
-                         json={"med-0": "yes", "allergy-0": "confirm"})
+                         json=reviewed(client, auth_headers, action_id,
+                                       {"med-0": "yes",
+                                       "allergy-0": "confirm"}, strict=False))
     assert review.status_code == 200, review.get_data(as_text=True)
     assert review.get_json()["reviewed_qr_id"], review.get_data(as_text=True)
 

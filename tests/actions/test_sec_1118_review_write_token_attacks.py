@@ -28,7 +28,7 @@ from tests.actions.test_action_approve_page import (CURATR, SMS, _staged,
                                                     seeded)  # noqa: F401
 from tests.actions.test_review_flow import (ALLERGY_A, FORM_FILL_BODY,
                                             PATIENT, _seed, _staged_form_fill)
-from tests.approval_helpers import approval_headers, propose_headers
+from tests.approval_helpers import approval_headers, propose_headers, reviewed
 
 # ruff: noqa: F811  (the `seeded` fixture is imported, then requested by name)
 
@@ -60,7 +60,8 @@ def _status(app, action_id):
 
 def _review(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id, headers=headers,
-                       json=body)
+                       json=reviewed(client, headers, action_id, body,
+                                     strict=False))
 
 
 # --- What #1118 closed: non-form kinds ------------------------------------

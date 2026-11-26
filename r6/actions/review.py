@@ -53,8 +53,10 @@ from models import db
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       approval_operation, has_confirmation,
                                       issue_confirmation,
+                                      review_draft_digest,
                                       reviewed_answers_digest)
 from r6.actions.models import PayloadSealed, ProposedAction
+from r6.actions.rails.form_fill import printable_answer
 from r6.actions.registry import get_executor
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
@@ -65,6 +67,7 @@ from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import POPULATED_ROW_SOURCE_URL, populate_questionnaire
 from r6.terminology import ABSENCE_CONCEPTS, absence_text, is_absence_coding
+from r6 import constant_time
 from r6 import voice as voices
 from r6.access import Scope, require_grant, require_open_tenant
 
@@ -410,23 +413,17 @@ def _demographics(draft_qr):
     """Ordered (label, value) pairs from the populated demographics group,
     as the page shows them."""
     out = []
-    for group in draft_qr.get('item', []):
-        if group.get('linkId') != 'demographics':
-            continue
-        for child in group.get('item', []):
-            if child.get('linkId') not in DEMOGRAPHIC_LABELS:
-                continue
-            value = None
-            for ans in child.get('answer', []):
-                for key in ('valueString', 'valueDate', 'valueBoolean'):
-                    if key in ans:
-                        value = ans[key]
-                if isinstance(ans.get('valueCoding'), dict):
-                    value = ans['valueCoding'].get('display') \
-                        or ans['valueCoding'].get('code')
-            if value is not None:
-                out.append((DEMOGRAPHIC_LABELS[child['linkId']],
-                            _shown(value)))
+    for child in _reviewed_demographics(draft_qr):
+        value = None
+        for ans in child.get('answer', []):
+            for key in ('valueString', 'valueDate', 'valueBoolean'):
+                if key in ans:
+                    value = ans[key]
+            if isinstance(ans.get('valueCoding'), dict):
+                value = ans['valueCoding'].get('display') \
+                    or ans['valueCoding'].get('code')
+        if value is not None:
+            out.append((DEMOGRAPHIC_LABELS[child['linkId']], _shown(value)))
     return out
 
 
@@ -531,6 +528,7 @@ def review_form(action_id):
                   'review page rendered; record unreadable: %s' % content.reason)
         template, context = 'action_review.html', dict(
             action_id=action_id, demographics=demographics,
+            draft_digest=_draft_digest(action_id, draft_qr, content),
             meds=meds, allergies=allergies, conditions=conditions,
             record_readable=content.resolved, record_reason=content.reason)
         if voice == voices.SAMPLE:
@@ -676,6 +674,17 @@ def review_submit(action_id):
         submitted.get('condition-%d' % i, 'confirm').strip().lower()
         for i in range(len(condition_rows))]
 
+    # (4a) The records must be the ones the page showed (#1174). The draft
+    # above is re-populated from live records, so a write between the page
+    # and this submit (a renamed Patient, a swapped allergy) would otherwise
+    # be what the person signs. The page carries the digest of the draft it
+    # rendered; any difference, or none sent, records nothing.
+    if not constant_time.equal(submitted.get('draft_digest', ''),
+                               _draft_digest(action_id, draft_qr, content)):
+        return _error(422, 'Your records changed after this page was shown, '
+                           'so nothing was recorded. Reload the page and '
+                           'review it again.')
+
     # (5) Build the reviewed QuestionnaireResponse from the human's decisions.
     reviewed_qr = _build_reviewed_qr(
         draft_qr, patient, med_rows, med_decisions, allergy_rows,
@@ -805,12 +814,9 @@ def _build_reviewed_qr(draft_qr, patient, med_rows, med_decisions,
     from r6.actions.models import _utcnow
 
     items = []
-    for group in draft_qr.get('item', []):
-        if group.get('linkId') == 'demographics':
-            items.append({'linkId': 'demographics', 'item': [
-                _fixed_item(child) for child in group.get('item', [])
-                if child.get('linkId') in DEMOGRAPHIC_LABELS]})
-            break
+    demographics = _reviewed_demographics(draft_qr)
+    if demographics:
+        items.append({'linkId': 'demographics', 'item': demographics})
 
     med_rows = [_fixed_row(row) for row in med_rows]
     allergy_rows = [_fixed_row(row) for row in allergy_rows]
@@ -873,6 +879,46 @@ def _fixed_item(item):
     if marker:
         out['extension'] = marker
     return out
+
+
+def _reviewed_demographics(draft_qr):
+    """The demographics leaves the page shows and the response stores: the
+    fixed ids, and an answer only if it is fit to print (#1174). One list
+    for both, so a sentence planted in a name is neither shown nor kept."""
+    for group in draft_qr.get('item', []):
+        if group.get('linkId') == 'demographics':
+            return [_printable_only(_fixed_item(child))
+                    for child in group.get('item', [])
+                    if child.get('linkId') in DEMOGRAPHIC_LABELS]
+    return []
+
+
+def _printable_only(item):
+    """The item without its answer when any answer string fails the bound."""
+    values = [v for ans in item.get('answer') or [] for v in ans.values()]
+    if any(isinstance(v, str) and not printable_answer(v) for v in values):
+        item = {k: v for k, v in item.items() if k != 'answer'}
+    return item
+
+
+def _draft_digest(action_id, draft_qr, content):
+    """Keyed digest of the draft as the page renders it (#1174): the fixed
+    demographics, every row in order with the fixed leaves the response
+    would carry, each allergy's absence flag, and whether the record was
+    read. The GET puts it on the page; the POST refuses a submit whose
+    re-populated draft gives another."""
+    absence_refs = _absence_only_refs(content.resources)
+    return review_draft_digest(action_id, {
+        'record': [content.status, content.reason],
+        'demographics': _reviewed_demographics(draft_qr),
+        'medications': [_fixed_row(row) for row in _section_repeats(
+            draft_qr, 'medications', 'medications.item')],
+        'allergies': [[_fixed_row(row), _is_absence_entry(row, absence_refs)]
+                      for row in _section_repeats(draft_qr, 'allergies',
+                                                  'allergies.item')],
+        'conditions': [_fixed_row(row) for row in _section_repeats(
+            draft_qr, 'conditions', 'conditions.item')],
+    })
 
 
 def _fixed_row(row):

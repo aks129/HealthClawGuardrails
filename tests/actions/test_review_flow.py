@@ -21,7 +21,7 @@ import pytest
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
-from tests.approval_helpers import propose_headers
+from tests.approval_helpers import propose_headers, reviewed
 from tests.approval_helpers import approval_headers
 
 # Each clinical row is coded AND carries upstream free text. The page names a
@@ -136,7 +136,9 @@ def _get(client, headers, action_id):
 
 def _post(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id,
-                       headers=headers, json=body)
+                       headers=headers, json=reviewed(client, headers,
+                                                      action_id, body,
+                                                      strict=False))
 
 
 def _person(client, auth_headers, action_id):
@@ -564,8 +566,11 @@ def test_second_submit_answers_409_instead_of_raising_the_seal(
         raise AssertionError('re-read FHIR for an already-submitted review')
 
     monkeypatch.setattr(review, '_draft_qr', _must_not_repopulate)
+    # A digest is supplied so the helper does not fetch the page (which
+    # populates); the 409 is answered before any digest is read.
     second = _post(client, _person(client, auth_headers, action_id), action_id,
-                   {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true'})
+                   {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true',
+                    'draft_digest': '0' * 64})
     monkeypatch.undo()
     assert second.status_code == 409, second.get_data(as_text=True)
 
@@ -638,8 +643,8 @@ def test_post_requires_step_up(client, app, tenant_headers, auth_headers):
     _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
     resp = client.post('/r6/actions/%s/review' % action_id,
-                       headers=tenant_headers, json={'med-0': 'yes',
-                                                     'nka': 'true'})
+                       headers=tenant_headers,
+                       json={'med-0': 'yes', 'nka': 'true'})
     assert resp.status_code == 401
 
 

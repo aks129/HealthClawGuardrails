@@ -16,6 +16,7 @@ Only on a fully rendered+persisted+linked PDF does it return 'completed'.
 """
 
 import os
+import unicodedata
 import uuid
 
 from models import db
@@ -121,6 +122,15 @@ class FormFillExecutor:
                 outcome={'reason': 'the reviewed answers include items that '
                                    'are not on the intake form, so no form '
                                    'was made; review it again'})
+        # (3c) The same for a demographic answer outside the printable
+        # bound (#1174): one reviewed before the bound existed could put a
+        # sentence in the title or a row.
+        if not demographics_printable(reviewed_qr):
+            return ExecutionResult(
+                status='needs_review',
+                outcome={'reason': 'a reviewed answer cannot be printed on '
+                                   'the form, so no form was made; review '
+                                   'it again'})
 
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud
         # PROVIDER_ERROR — an exception must never escape as a fake success.
@@ -197,6 +207,74 @@ class FormFillExecutor:
             outcome={'reason': 'form-fill execute() is synchronous and '
                                'terminal — nothing to reconcile'},
         )
+
+
+#: Characters a printed demographic answer may hold beside letters, marks
+#: and digits: enough for names, addresses and phone numbers, and no colon,
+#: so an answer cannot read as a "label: value" row.
+_PRINTABLE_PUNCTUATION = frozenset(" .,'’-/#&+()")
+
+#: The modifier letters (Lm) that real names are written with: the okina
+#: and modifier apostrophe (Hawaiian, transliterations), the CJK iteration
+#: mark, the katakana long-vowel mark and the Thai repetition mark.
+_NAME_MODIFIER_LETTERS = frozenset('ʻʼ々ーๆ')
+
+#: Same-script signs that read as a colon at a word's end: Devanagari and
+#: Tamil visarga, the Mongolian visarga, the Vedic ardhavisarga.
+_COLON_LIKE_SIGNS = frozenset('ःஃᢁᳲ')
+PRINTABLE_MAX = 64
+
+
+def printable_answer(value):
+    """True for a string answer fit to print on the form: at most
+    PRINTABLE_MAX characters of letters, marks, digits and a little
+    punctuation (#1174). One predicate for the review page, the reviewed
+    response and the executor."""
+    if not isinstance(value, str) or not 0 < len(value) <= PRINTABLE_MAX:
+        return False
+    # An allowlist, not isalnum(): letters of Lu, Ll, Lt and Lo, and only the
+    # modifier letters real names use (_NAME_MODIFIER_LETTERS); the rest of
+    # Lm holds look-alike colons such as U+02D0. A mark is accepted only on
+    # a letter, and only a generic COMBINING diacritic or one of that
+    # letter's own script, so a Devanagari visarga cannot sit on a Latin
+    # name. A same-script sign that reads as a colon is refused at the end
+    # of the value or before a space, where it would act as one (#1175
+    # R2-2, R3-2).
+    script = None
+    for i, ch in enumerate(value):
+        if ch in _COLON_LIKE_SIGNS and (i == len(value) - 1
+                                        or value[i + 1] == ' '):
+            return False
+        category = unicodedata.category(ch)
+        name = unicodedata.name(ch, '')
+        if category in ('Lu', 'Ll', 'Lt', 'Lo') \
+                or ch in _NAME_MODIFIER_LETTERS:
+            script = name.split(' ', 1)[0]
+        elif category.startswith('M') and script and (
+                name.startswith('COMBINING ')
+                or name.split(' ', 1)[0] == script):
+            continue
+        elif category == 'Nd' or ch in _PRINTABLE_PUNCTUATION:
+            script = None
+        else:
+            return False
+    return True
+
+
+def demographics_printable(questionnaire_response):
+    """True when every string answer in the demographics group passes
+    printable_answer."""
+    for group in questionnaire_response.get('item') or []:
+        if not isinstance(group, dict) or group.get('linkId') != 'demographics':
+            continue
+        for item in group.get('item') or []:
+            for answer in (item.get('answer') or []
+                           if isinstance(item, dict) else []):
+                for value in (answer.values()
+                              if isinstance(answer, dict) else ()):
+                    if isinstance(value, str) and not printable_answer(value):
+                        return False
+    return True
 
 
 #: The answer keys each intake item type may carry ("choice" is a string
