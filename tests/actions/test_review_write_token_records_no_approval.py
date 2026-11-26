@@ -9,10 +9,6 @@ The approval is recorded by the confirm route, under the action-bound
 credential only the approve surface can mint. These tests hold the review
 POST to recording none.
 """
-import json
-
-import pytest
-
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
@@ -101,17 +97,12 @@ def test_two_approvals_after_a_write_token_review_execute_once(
 
 
 def _require(cond, msg):
-    """Set-up check. RuntimeError, so the strict xfail below (which expects
-    AssertionError) fails loudly on a broken set-up instead of passing as
-    "still open"."""
+    """Set-up check. RuntimeError, so a broken set-up is told apart from the
+    refusal the test asserts (this was a strict xfail until #1116)."""
     if not cond:
         raise RuntimeError(msg)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    '#1116: the form-fill review POST takes the same write token, and '
-    'closing it needs the approve surface to present the approval '
-    'credential on this request'))
 def test_a_write_token_cannot_submit_attested_answers(
         client, app, tenant_headers, auth_headers, tenant_id):
     _seed(app, tenant_id, [PATIENT])
@@ -125,16 +116,22 @@ def test_a_write_token_cannot_submit_attested_answers(
         _require('reviewed_qr_id' not in action.payload, 'already reviewed')
     _require(_confirmations(app, action_id) == [], 'already confirmed')
     r = _post_answers(client, auth_headers, action_id, {'nka': 'true'})
-    # Cause proof: a body the handler rejects would fail the assertion below
-    # too, and read as "still open" without reaching the branch that stores
-    # the answers.
-    _require(r.status_code not in (400, 422), 'the answers were rejected')
-    assert r.status_code in (401, 403), r.get_data(as_text=True)
+    # The credential's own refusal, exactly: a 403, 404, 409 or 422 here
+    # would be some other gate answering first.
+    assert r.status_code == 401, r.get_data(as_text=True)
     assert _confirmations(app, action_id) == []
     with app.app_context():
         assert R6Resource.query.filter_by(
             resource_type='QuestionnaireResponse',
             tenant_id=tenant_id).count() == 0
+    # Positive control: the same answers on the person's credential land,
+    # so the refusal above is the credential and not a broken request.
+    person = _post_answers(client,
+                           approval_headers(app, auth_headers, action_id),
+                           action_id, {'nka': 'true'})
+    assert person.status_code == 200, person.get_data(as_text=True)
+    assert [c.approved_via for c in _confirmations(app, action_id)] == [
+        'review-page']
 
 
 def _post_answers(client, headers, action_id, body):
@@ -142,24 +139,36 @@ def _post_answers(client, headers, action_id, body):
                        json=body)
 
 
-def test_the_form_review_still_takes_a_write_token(
+def test_a_credential_for_another_form_is_refused(
         client, app, tenant_headers, auth_headers, tenant_id):
-    """What is open today, pinned as it is (#1116): the same set-up and the
-    same answers as the strict xfail above, on the write token alone, store
-    a completed QuestionnaireResponse and a confirmation. This is not the
-    wanted behaviour. It shows the xfail's request is accepted, so "still
-    open" there means the write token was taken, and it goes red, with the
-    xfail, when #1116 closes the branch."""
+    """The credential is bound to one action and its payload (#1116), so an
+    approval minted for another form cannot carry answers into this one.
+
+    MUTATION: drop `operation=` from _require_approval_credential -> red."""
+    _seed(app, tenant_id, [PATIENT])
+    target = _staged_form_fill(client, tenant_headers, auth_headers)
+    other = _staged_form_fill(client, tenant_headers, auth_headers)
+    r = _post_answers(client, approval_headers(app, auth_headers, other),
+                      target, {'nka': 'true'})
+    assert r.status_code == 401, r.get_data(as_text=True)
+    assert _confirmations(app, target) == []
+    with app.app_context():
+        assert 'reviewed_qr_id' not in db.session.get(
+            ProposedAction, target).payload
+    # Positive control: the target's own credential is accepted.
+    own = _post_answers(client, approval_headers(app, auth_headers, target),
+                        target, {'nka': 'true'})
+    assert own.status_code == 200, own.get_data(as_text=True)
+
+
+def test_the_same_credential_works_again_after_a_refused_review(
+        client, app, tenant_headers, auth_headers, tenant_id):
+    """Not nonce-consumed: a review refused 422 (no attestation) is
+    corrected and sent again on the credential the page already holds."""
     _seed(app, tenant_id, [PATIENT])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
-    r = _post_answers(client, auth_headers, action_id, {'nka': 'true'})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    assert [c.approved_via for c in _confirmations(app, action_id)] == [
-        'review-page']
-    with app.app_context():
-        stored = R6Resource.query.filter_by(
-            resource_type='QuestionnaireResponse', tenant_id=tenant_id).all()
-        assert len(stored) == 1
-        assert json.loads(stored[0].resource_json)['status'] == 'completed'
-        assert db.session.get(
-            ProposedAction, action_id).payload['reviewed_qr_id']
+    headers = approval_headers(app, auth_headers, action_id)
+    first = _post_answers(client, headers, action_id, {})
+    assert first.status_code == 422, first.get_data(as_text=True)
+    again = _post_answers(client, headers, action_id, {'nka': 'true'})
+    assert again.status_code == 200, again.get_data(as_text=True)

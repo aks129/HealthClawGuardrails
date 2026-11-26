@@ -13,6 +13,7 @@ from r6.actions.models import ProposedAction
 from tests.actions.test_review_flow import (
     ALLERGY_A, PATIENT, R6, _post, _staged_form_fill,
 )
+from tests.approval_helpers import approval_headers
 
 
 def _no_confirmation(app, action_id):
@@ -40,7 +41,8 @@ def test_fake_extra_allergy_confirm_cannot_bypass_nka_gate(
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
     body = {'allergy-0': 'remove', 'allergy-1': 'confirm'}  # no 'nka'
-    r = _post(client, {**tenant_headers, **auth_headers}, action_id, body)
+    r = _post(client, approval_headers(app, {**tenant_headers, **auth_headers},
+                                  action_id), action_id, body)
 
     assert r.status_code == 422, r.get_data(as_text=True)
     assert _no_confirmation(app, action_id), 'a rejected review must issue NO confirmation'
@@ -59,7 +61,8 @@ def test_removing_real_allergy_without_nka_is_rejected(
         db.session.commit()
 
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
-    r = _post(client, {**tenant_headers, **auth_headers}, action_id,
+    r = _post(client, approval_headers(app, {**tenant_headers, **auth_headers},
+                                  action_id), action_id,
               {'allergy-0': 'remove'})
 
     assert r.status_code == 422, r.get_data(as_text=True)

@@ -164,8 +164,8 @@ not depend on the agent's word: who, when, via which channel. Our rail:
 `ActionConfirmation` (`r6/actions/confirmations.py`) plus an AuditEvent whose
 `detail` stays PHI-free.
 
-**H6 did not hold, and the counter-example was a live route.** It still
-does not hold for form-fill (see the update below and #1116).
+**H6 did not hold, and the counter-example was a live route.** See the
+updates below (#1104, #1116).
 `POST /r6/actions/<id>/review` (`r6/actions/review.py:377`) is gated by
 `X-Tenant-Id` plus `_require_step_up(tenant)` — `Scope.WRITE`, which is inside
 `C_agent`. It then calls
@@ -186,6 +186,14 @@ review POST no longer records a confirmation; the only one is minted at
 from the write token, because the reviewed answers arrive only on that
 request; closing it needs the approve surface to present the approval
 credential there (#1116).
+
+*Update (#1116, #1163):* the form-fill review POST now requires that
+credential, not the write token, so H6 holds for every kind once the approve
+surface sends it. The payload also carries a keyed digest of the reviewed
+QuestionnaireResponse as stored, so the approval covers the answers and not
+only their id. The form-fill executor renders nothing (`needs_review`) when
+the stored response no longer matches it, or when it is absent, as for an id
+planted at propose.
 
 ### 2.3 The in-band tells
 

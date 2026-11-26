@@ -16,6 +16,7 @@ from r6.models import R6Resource
 from r6.sdc.populate import POPULATED_ROW_SOURCE_URL
 from r6.terminology import ABSENCE_CONCEPTS, LOINC, SNOMED
 from tests.approval_helpers import propose_headers
+from tests.approval_helpers import approval_headers
 
 TENANT = 'test-tenant'
 PATIENT_ID = 'fhi58-atk-patient'
@@ -88,7 +89,10 @@ def _page_rows(client, auth_headers, aid):
 
 
 def _post(client, auth_headers, aid, **answers):
-    return client.post('/r6/actions/%s/review' % aid, headers=auth_headers,
+    # The person's credential (#1116): the write token is refused here.
+    return client.post('/r6/actions/%s/review' % aid,
+                       headers=approval_headers(client.application,
+                                                auth_headers, aid),
                        json=answers)
 
 

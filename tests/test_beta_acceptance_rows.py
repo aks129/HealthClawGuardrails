@@ -252,6 +252,18 @@ def test_care_gaps_row_fails_an_item_that_shows_a_record_type(run):
 
 # --- rows 9 and 10 -----------------------------------------------------------
 
+# The engine now refuses a form review sent on the write token: it wants the
+# person's own credential (#1116). The copy of the consumer app in this
+# repository predates that change and is frozen, so its relay still sends the
+# write token, the engine answers 401, and the app shows that as a 503. Strict,
+# so the marker has to come off when the in-repo copy sends the credential.
+_FROZEN_RELAY = pytest.mark.xfail(strict=True, reason=(
+    "the in-repo copy of the consumer app predates the form review's "
+    "credential change and is frozen: its relay still sends the review on "
+    "the write token, which the engine now refuses (401, shown as a 503)"))
+
+
+@_FROZEN_RELAY
 def test_form_rows_review_approve_and_deliver_the_pdf(cfg, svc, monkeypatch, run):
     chain = Chain(cfg, svc, monkeypatch, allergy=True)
     action_id = chain.start_form()
@@ -272,6 +284,7 @@ def test_form_rows_review_approve_and_deliver_the_pdf(cfg, svc, monkeypatch, run
     assert run.steps[-1]["medications_in_pdf"] == page["meds"]
 
 
+@_FROZEN_RELAY
 def test_form_approve_never_attests_no_known_allergies_itself(cfg, svc,
                                                                 monkeypatch, run):
     chain = Chain(cfg, svc, monkeypatch)            # sample: no allergy on file
@@ -290,6 +303,7 @@ def test_form_approve_never_attests_no_known_allergies_itself(cfg, svc,
     assert status["status"] == "awaiting_confirmation"
 
 
+@_FROZEN_RELAY
 def test_form_approve_with_a_person_attesting_nka_delivers(cfg, svc,
                                                             monkeypatch, run):
     chain = Chain(cfg, svc, monkeypatch)
@@ -341,6 +355,7 @@ def test_form_review_fails_a_prechecked_nka_box(run):
 
 # --- row 11 ------------------------------------------------------------------
 
+@_FROZEN_RELAY
 def test_restart_row_finds_the_outcome_and_refuses_a_second_submit(
         cfg, svc, monkeypatch, run):
     chain = Chain(cfg, svc, monkeypatch, allergy=True)

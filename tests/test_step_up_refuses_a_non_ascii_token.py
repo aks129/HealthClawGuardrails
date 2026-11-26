@@ -106,6 +106,24 @@ class Row:
             monkeypatch.setenv(name, value)
 
 
+#: A form-fill action awaiting review, at a fixed id. The form-fill review
+#: POST takes the approval credential (#1116), and which gate runs depends on
+#: the action's kind, so this row needs one that exists.
+_FORM_REVIEW_ACTION = 'non-ascii-form-review'
+
+
+def _seed_form_review(client, tenant_id, step_up_token):
+    from models import db
+    from r6.actions.models import ProposedAction
+    with client.application.app_context():
+        if db.session.get(ProposedAction, _FORM_REVIEW_ACTION) is None:
+            db.session.add(ProposedAction(
+                tenant_id, 'form-fill',
+                {'questionnaire': 'healthclaw-intake', 'body': 'x'},
+                id=_FORM_REVIEW_ACTION, status='awaiting_confirmation'))
+            db.session.commit()
+
+
 ROWS = [
     Row('fhir-create', 'r6/routes.py:create_resource',
         'POST', '/r6/fhir/Observation', 401,
@@ -138,6 +156,10 @@ ROWS = [
         'GET', '/r6/actions/no-such-action/review', 401),
     Row('actions-review-post', 'r6/actions/review.py:_require_step_up',
         'POST', '/r6/actions/no-such-action/review', 401, body={}),
+    Row('actions-review-post-form',
+        'r6/actions/review.py:_require_approval_credential',
+        'POST', '/r6/actions/%s/review' % _FORM_REVIEW_ACTION, 401, body={},
+        seed=_seed_form_review),
     Row('actions-contacts-list', 'r6/actions/contacts.py:list_contacts',
         'GET', '/r6/actions/contacts', 401),
     Row('smbp-reading', 'r6/smbp/routes.py:reading',

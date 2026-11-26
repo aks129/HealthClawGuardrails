@@ -20,6 +20,7 @@ from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
 from tests.approval_helpers import propose_headers
+from tests.approval_helpers import approval_headers
 
 # Each clinical row is coded AND carries upstream free text. The page names a
 # row from r6/terminology.py by code, after redaction; the upstream text is
@@ -134,6 +135,13 @@ def _get(client, headers, action_id):
 def _post(client, headers, action_id, body):
     return client.post('/r6/actions/%s/review' % action_id,
                        headers=headers, json=body)
+
+
+def _person(client, auth_headers, action_id):
+    """The person's credential for a form review (#1116): the approval
+    credential bound to the action as it stands, as the approve surface
+    mints it. The write token is refused there."""
+    return approval_headers(client.application, auth_headers, action_id)
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +347,7 @@ def test_post_omitting_allergy_attestation_is_rejected(
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
     # Every med acted on; the one allergy is REMOVED (not confirmed); no NKA.
-    resp = _post(client, auth_headers, action_id,
+    resp = _post(client, _person(client, auth_headers, action_id), action_id,
                  {'med-0': 'yes', 'med-1': 'no', 'allergy-0': 'remove'})
     assert resp.status_code == 422, resp.get_data(as_text=True)
     assert 'allergy' in resp.get_json()['error'].lower()
@@ -360,7 +368,7 @@ def test_post_no_allergies_still_requires_nka_attestation(
     _seed(app, tenant, [PATIENT, MED_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
-    resp = _post(client, auth_headers, action_id, {'med-0': 'yes'})
+    resp = _post(client, _person(client, auth_headers, action_id), action_id, {'med-0': 'yes'})
     assert resp.status_code == 422
     with app.app_context():
         assert ActionConfirmation.query.filter_by(
@@ -373,7 +381,7 @@ def test_post_missing_med_action_is_rejected(client, app, tenant_headers,
     _seed(app, tenant, [PATIENT, MED_A, MED_B])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
     # med-1 omitted -> a medication row was not acted on.
-    resp = _post(client, auth_headers, action_id,
+    resp = _post(client, _person(client, auth_headers, action_id), action_id,
                  {'med-0': 'yes', 'nka': 'true'})
     assert resp.status_code == 422
     assert 'medication' in resp.get_json()['error'].lower()
@@ -392,7 +400,7 @@ def test_post_with_nka_affirmed_succeeds(client, app, tenant_headers,
     _seed(app, tenant, [PATIENT, MED_A, MED_B])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
-    resp = _post(client, auth_headers, action_id,
+    resp = _post(client, _person(client, auth_headers, action_id), action_id,
                  {'med-0': 'yes', 'med-1': 'no', 'nka': 'true'})
     assert resp.status_code == 200, resp.get_data(as_text=True)
 
@@ -434,7 +442,7 @@ def test_post_next_step_does_not_claim_an_outcome_it_cannot_know(
     _seed(app, tenant, [PATIENT, MED_A, MED_B])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
-    resp = _post(client, auth_headers, action_id,
+    resp = _post(client, _person(client, auth_headers, action_id), action_id,
                  {'med-0': 'yes', 'med-1': 'no', 'nka': 'true'})
     assert resp.status_code == 200, resp.get_data(as_text=True)
     next_step = resp.get_json()['next_step']
@@ -458,7 +466,7 @@ def test_post_confirming_real_allergy_succeeds(client, app, tenant_headers,
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
     # Confirm the real allergy; NO NKA. This satisfies the attestation gate.
-    resp = _post(client, auth_headers, action_id,
+    resp = _post(client, _person(client, auth_headers, action_id), action_id,
                  {'med-0': 'yes', 'allergy-0': 'confirm'})
     assert resp.status_code == 200, resp.get_data(as_text=True)
 
@@ -500,7 +508,7 @@ def test_post_payload_is_final_before_the_confirmation_is_issued(
 
     monkeypatch.setattr(review, 'issue_confirmation', _snapshotting_issue)
 
-    resp = _post(client, auth_headers, action_id,
+    resp = _post(client, _person(client, auth_headers, action_id), action_id,
                  {'med-0': 'yes', 'nka': 'true'})
     assert resp.status_code == 200, resp.get_data(as_text=True)
 
@@ -538,7 +546,7 @@ def test_second_submit_answers_409_instead_of_raising_the_seal(
     _seed(app, tenant, [PATIENT, MED_A, ALLERGY_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
-    first = _post(client, auth_headers, action_id,
+    first = _post(client, _person(client, auth_headers, action_id), action_id,
                   {'med-0': 'yes', 'allergy-0': 'confirm'})
     assert first.status_code == 200, first.get_data(as_text=True)
     with app.app_context():
@@ -554,7 +562,7 @@ def test_second_submit_answers_409_instead_of_raising_the_seal(
         raise AssertionError('re-read FHIR for an already-submitted review')
 
     monkeypatch.setattr(review, '_draft_qr', _must_not_repopulate)
-    second = _post(client, auth_headers, action_id,
+    second = _post(client, _person(client, auth_headers, action_id), action_id,
                    {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true'})
     monkeypatch.undo()
     assert second.status_code == 409, second.get_data(as_text=True)
@@ -610,12 +618,12 @@ def test_second_submit_racing_the_precheck_answers_409_not_500(
     _seed(app, tenant, [PATIENT, MED_A, ALLERGY_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
 
-    first = _post(client, auth_headers, action_id,
+    first = _post(client, _person(client, auth_headers, action_id), action_id,
                   {'med-0': 'yes', 'allergy-0': 'confirm'})
     assert first.status_code == 200, first.get_data(as_text=True)
 
     monkeypatch.setattr(review, 'has_confirmation', lambda _aid: False)
-    second = _post(client, auth_headers, action_id,
+    second = _post(client, _person(client, auth_headers, action_id), action_id,
                    {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true'})
     assert second.status_code == 409, second.get_data(as_text=True)
 
