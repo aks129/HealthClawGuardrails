@@ -92,9 +92,10 @@ def test_a_write_token_saves_nothing(client, app, method, path):
     with app.app_context():
         row = DelegationContact.query.one()
         assert (row.label, row.phone_e164) == (LABEL, NUMBER)
-        # No audit row for the refusal. A bounded refusal row is #1131,
-        # which moves this pin; an unbounded one would let any caller
-        # write rows for a tenant id it names.
+        # No audit row for the refusal. This pins a gap, not a property:
+        # a bounded refusal row is #1131, and the change that lands it
+        # replaces this line with one that expects the row. An unbounded
+        # row would let any caller write rows for a tenant id it names.
         assert len(_audit_rows()) == audited
 
 
@@ -215,9 +216,20 @@ def test_the_agents_list_carries_no_number(client):
     assert NUMBER[2:] not in resp.get_data(as_text=True)
 
 
-def test_a_label_may_carry_a_store_number_but_not_a_phone_number(client):
+def test_a_label_may_carry_a_store_number(client):
     assert _save(client, label='Corner Pharmacy #10442')['label'] == (
         'Corner Pharmacy #10442')
+
+
+def test_a_number_spelled_out_in_a_label_is_not_screened(client):
+    # The limit of the digit rule, pinned so nothing claims more for it:
+    # the label is free text and the agent reads it as typed.
+    spelled = 'Call four one two five five five oh one four two'
+    saved = _save(client, label=spelled)
+    resp = client.get('/r6/actions/contacts', headers=_agent())
+    assert resp.get_json()['contacts'] == [
+        {'id': saved['id'], 'label': spelled, 'callee_kind': 'pharmacy',
+         'status': 'active'}]
 
 
 def test_the_form_read_returns_the_number(client):
@@ -278,6 +290,27 @@ def test_a_re_save_runs_the_same_rules(client, app):
 
 
 # --- audit and purge -------------------------------------------------------
+
+def test_an_agent_id_outside_the_id_rule_is_audited_as_a_hash(client, app):
+    # The list read passes X-Agent-Id to the audit row. The audit writer
+    # keeps one that fits the engine's id rule and hashes any other, so
+    # free text sent in the header does not land in the row.
+    _save(client)
+    with app.app_context():
+        before = len(_audit_rows())
+    resp = client.get('/r6/actions/contacts', headers=dict(
+        _agent(), **{'X-Agent-Id': LABEL + ' ' + NUMBER}))
+    assert resp.status_code == 200
+    with app.app_context():
+        rows = _audit_rows()
+        assert len(rows) == before + 1
+        reads = [row for row in rows if row.event_type == 'read']
+        assert len(reads) == 1
+        agent_id = reads[0].agent_id
+        assert agent_id
+        assert 'Sentinel' not in agent_id
+        assert '4125550142' not in agent_id
+
 
 def test_no_label_or_number_in_audit(client, app):
     saved = _save(client)
