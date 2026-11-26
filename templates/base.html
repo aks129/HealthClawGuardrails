@@ -119,7 +119,8 @@
 
     <script src="{{ url_for('static', filename='js/vendor/bootstrap.bundle.min.js') }}"></script>
     {% block scripts %}{% endblock %}
-    {# Vercel Web Analytics: cookieless page-view counts, same-origin so the
+    {# Vercel Web Analytics: page-view counts (Vercel states it sets no
+       cookies; nothing here checks that), same-origin so the
        CSP stays at 'self'. Public information pages only. This shell also
        wraps the dashboards, the command center and /connect, whose paths and
        query strings can carry tenant identifiers; those must never load it.

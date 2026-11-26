@@ -32,8 +32,8 @@
   <meta name="twitter:title" content="The guardrail layer between AI agents and clinical data">
   <meta name="twitter:description" content="Open-source safety layer for AI + FHIR health data. Try CareAgents — connect your records, spin up a guarded health agent.">
   <meta name="theme-color" content="#FAF9F5">
-  {# Self-hosted: every asset is requested from this domain — see
-     scripts/vendor_frontend_assets.py and the CSP in app.py. The one script
+  {# Self-hosted: the CSP in app.py restricts scripts, stylesheets and fonts
+     to this domain — see scripts/vendor_frontend_assets.py. The one script
      that reports to somebody else is Vercel Web Analytics at the foot of
      this page, which the host serves from this domain. #}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}">
@@ -581,7 +581,7 @@
 </footer>
 
 <script src="{{ url_for('static', filename='js/landing.js') }}" defer></script>
-{# Vercel Web Analytics: cookieless, same-origin. See base.html. #}
+{# Vercel Web Analytics, same-origin. See base.html. #}
 <script defer src="/_vercel/insights/script.js"></script>
 
 </body>

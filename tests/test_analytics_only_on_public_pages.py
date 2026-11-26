@@ -39,6 +39,14 @@ MUTATION, each run against the committed tree:
       -> test_the_security_page_names_the_analytics_it_loads
   drop the Vercel entry from privacy.html section 5
       -> test_privacy_lists_vercel_among_third_parties
+  add a CDN host to script-src, style-src or font-src in app.py's policy
+      -> test_the_csp_names_no_outside_host_for_scripts_styles_or_fonts
+  add a template whose `extends` names a variable
+      -> test_every_extends_names_its_template_in_quotes
+
+Limits of the template scan: it reads `templates/` only (the consumer app
+has its own tree and its own base), and it keys on file names, so two
+templates with one name in different folders would count as one.
 """
 
 from __future__ import annotations
@@ -227,6 +235,36 @@ def test_no_other_template_references_analytics():
     assert [path.name for path in others if NEEDLE in _markup(path)] == []
     for name in ("base.html", "index.html"):
         assert _markup(TEMPLATES / name).count(NEEDLE) == 1
+
+
+def test_every_extends_names_its_template_in_quotes():
+    """_extends_base() reads quoted names; a variable would be invisible."""
+    tags = [(path.name, tag) for path in TEMPLATES.rglob("*.html")
+            for tag in re.findall(r"\{%-?\s*extends\b([^%]*)%\}",
+                                  path.read_text(encoding="utf-8"))]
+    assert tags, "no `extends` tag found: this guard read nothing"
+    quoted = r"""["'][^"']+["']"""
+    for name, tag in tags:
+        # One quoted name, or a conditional between two.
+        assert re.fullmatch(
+            r"\s*%s(\s+if\s+\w+\s+else\s+%s)?\s*-?" % (quoted, quoted),
+            tag), "%s: extends %s" % (name, tag.strip())
+
+
+def test_the_csp_names_no_outside_host_for_scripts_styles_or_fonts(client):
+    """/security says the policy keeps these three on this domain."""
+    response = client.get("/security")
+    assert response.status_code == 200
+    policy = {}
+    for part in response.headers["Content-Security-Policy"].split(";"):
+        words = part.split()
+        if words:
+            policy[words[0]] = words[1:]
+    for directive in ("default-src", "script-src", "style-src", "font-src"):
+        assert directive in policy, directive
+        assert "'self'" in policy[directive]
+        assert set(policy[directive]) <= {"'self'", "'unsafe-inline'"}, (
+            directive)
 
 
 def test_the_security_page_names_the_analytics_it_loads():
