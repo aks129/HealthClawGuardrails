@@ -16,6 +16,8 @@ import json
 
 import pytest
 
+from models import db
+from r6.models import R6Resource
 from r6.redaction import apply_patient_controlled_redaction, apply_redaction
 
 PATIENT_ID = 'sec1162-pt'
@@ -66,15 +68,17 @@ def _coverage():
 
 
 @pytest.fixture
-def seeded(client, auth_headers):
-    resp = client.post('/r6/fhir/Bundle/$ingest-context',
-                       headers=auth_headers,
-                       json={'resourceType': 'Bundle', 'type': 'collection',
-                             'entry': [{'resource': _patient()},
-                                       {'resource': _coverage()}]})
-    body = resp.get_json()
-    assert resp.status_code == 201, resp.get_data(as_text=True)[:300]
-    assert body['resource_count'] == 2 and not body.get('skipped_count')
+def seeded(app, tenant_id):
+    """Stored as they are, not through `$ingest-context`: that operation is
+    an optional module (r6/extensions.py), and the read and share surfaces
+    below are core, so the core-only CI job runs these."""
+    with app.app_context():
+        for resource in (_patient(), _coverage()):
+            db.session.add(R6Resource(
+                resource_type=resource['resourceType'],
+                resource_json=json.dumps(resource),
+                resource_id=resource['id'], tenant_id=tenant_id))
+        db.session.commit()
 
 
 def _share(client, headers, profile):
