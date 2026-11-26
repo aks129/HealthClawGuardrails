@@ -15,21 +15,36 @@ never carries a phone or fax number. Those come from
 Audit: one AuditEvent per search that reached the client. Its detail is the
 source and the result count. The search terms are not recorded: next to a
 tenant id, a clinician's name says who somebody's doctor is.
+
+OFF unless DIRECTORY_SEARCH_ENABLED is set (`search_enabled`): any tenant
+grant could otherwise spend the directories' small anonymous quota, and
+nothing limits searches per tenant yet. Off, the route answers 404 before the
+tenant is read, so nothing is audited and nothing is sent.
 """
 
+import os
 from dataclasses import asdict
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, abort, jsonify, request
 
 from models import db
 from r6 import access, directory
+from r6.runtime_config import TRUE_VALUES
 
 directory_blueprint = Blueprint('directory', __name__,
                                 url_prefix='/r6/directory')
 
 
+def search_enabled():
+    """Whether this engine answers the directory search. Read per request."""
+    return os.environ.get('DIRECTORY_SEARCH_ENABLED', '').strip().lower() \
+        in TRUE_VALUES
+
+
 @directory_blueprint.route('/search', methods=['GET'])
 def search():
+    if not search_enabled():
+        abort(404)
     tenant = access.tenant_from_request(sources=(access.TenantSource.HEADER,))
     access.require_grant(scope=access.Scope.TENANT_BOUND, tenant=tenant)
 

@@ -215,8 +215,28 @@ def _audits():
         resource_type="Directory").all()]
 
 
+@pytest.fixture
+def search_on(monkeypatch):
+    monkeypatch.setenv("DIRECTORY_SEARCH_ENABLED", "true")
+
+
+@pytest.mark.parametrize("with_token", [True, False])
+def test_the_route_is_off_by_default_and_then_does_nothing(
+        client, auth_headers, tenant_headers, monkeypatch, with_token):
+    monkeypatch.delenv("DIRECTORY_SEARCH_ENABLED", raising=False)
+    session = FakeSession(NPPES_BODY)
+    monkeypatch.setattr(directory, "_session", lambda: session)
+    before = AuditEventRecord.query.count()
+    # 404 without a token too: the switch is read before the gate.
+    resp = client.get("/r6/directory/search?kind=pharmacy&zip=19103",
+                      headers=auth_headers if with_token else tenant_headers)
+    assert resp.status_code == 404
+    assert session.calls == []
+    assert AuditEventRecord.query.count() == before
+
+
 def test_the_route_sends_no_tenant_and_returns_no_number(
-        client, auth_headers, tenant_id, monkeypatch):
+        client, search_on, auth_headers, tenant_id, monkeypatch):
     session = FakeSession(NPPES_BODY)
     monkeypatch.setattr(directory, "_session", lambda: session)
     resp = client.get("/r6/directory/search?kind=pharmacy&zip=19103"
@@ -234,7 +254,7 @@ def test_the_route_sends_no_tenant_and_returns_no_number(
 
 
 def test_the_route_needs_a_token_before_anything_is_sent(
-        client, tenant_headers, monkeypatch):
+        client, search_on, tenant_headers, monkeypatch):
     session = FakeSession(NPPES_BODY)
     monkeypatch.setattr(directory, "_session", lambda: session)
     resp = client.get("/r6/directory/search?kind=pharmacy&zip=19103",
@@ -248,7 +268,7 @@ def test_the_route_needs_a_token_before_anything_is_sent(
     "name=Rivera&state=PA",
 ])
 def test_the_route_answers_400_for_bad_terms_and_sends_nothing(
-        client, auth_headers, monkeypatch, query):
+        client, search_on, auth_headers, monkeypatch, query):
     session = FakeSession(AINPI_BODY)
     monkeypatch.setattr(directory, "_session", lambda: session)
     resp = client.get(f"/r6/directory/search?{query}", headers=auth_headers)
@@ -258,7 +278,7 @@ def test_the_route_answers_400_for_bad_terms_and_sends_nothing(
 
 
 def test_the_route_says_unavailable_and_audits_without_the_terms(
-        client, auth_headers, monkeypatch):
+        client, search_on, auth_headers, monkeypatch):
     session = FakeSession({**AINPI_BODY, "query": {"state": "PA"}})
     monkeypatch.setattr(directory, "_session", lambda: session)
     resp = client.get("/r6/directory/search?kind=clinician&name=Rivera"
