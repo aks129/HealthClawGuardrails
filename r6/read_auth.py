@@ -150,9 +150,11 @@ def _audit_closed_tenant_oauth_refusal(tenant_id: str) -> None:
 
     Rolls back first so nothing staged before the gate commits with the
     row. This runs only on the refusal path, so anything the rollback drops
-    belonged to a request that is being refused. A failed write is logged by
-    exception type and the refusal stands: the fail-closed state of a
-    refusal is the refusal itself.
+    belonged to a request that is being refused. A write that fails with a
+    SQLAlchemyError is logged by exception type and the 401 stands: the
+    fail-closed state of a refusal is the refusal itself. Any other
+    exception is not caught and ends the request as a 500, which serves no
+    data either.
     """
     from sqlalchemy.exc import SQLAlchemyError
 

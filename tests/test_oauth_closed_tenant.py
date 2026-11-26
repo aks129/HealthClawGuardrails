@@ -152,7 +152,7 @@ def test_a_closure_lookup_failure_answers_500_with_no_data(
     resp = _read(client, TENANT, token)
     assert resp.status_code == 500, resp.get_data(as_text=True)
     assert asked == [TENANT]
-    assert 'Bundle' not in resp.get_data(as_text=True)
+    assert resp.get_json(silent=True) is None, 'a 500 that still answers'
 
 
 @pytest.mark.parametrize('token_tenant', [None, ''])
