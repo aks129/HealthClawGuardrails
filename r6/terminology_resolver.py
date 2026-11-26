@@ -18,7 +18,9 @@ and the honest "a record is here I could not read" fallback, applied to 25 of
 26 conditions, is not a product.
 
 So the miss path — and only the miss path — now consults the public
-terminology services ``r6/curatr.py`` already talks to.
+terminology services ``r6/curatr.py`` already talks to. RxNorm is the one
+exception: it goes to ``r6/rxnav.py``, which sends only a well-formed code
+and names only an Active concept, by rule.
 
 Three properties this must never lose
 -------------------------------------
@@ -68,6 +70,7 @@ import time
 from flask import has_request_context, request
 
 from r6 import curatr as _curatr_mod
+from r6 import rxnav as _rxnav_mod
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +116,8 @@ def _engine():
     return _ENGINE
 
 
+_RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
+
 _BUDGET_KEY = "r6.terminology_budget"
 
 
@@ -154,6 +159,18 @@ def _budget_spend() -> None:
         state["used"] += 1
 
 
+def _budget_take() -> bool:
+    """Spend one unit if there is room and time left; say whether it was.
+
+    Handed to r6/rxnav.py for a remapped code's second request, so the cap
+    counts outbound requests and the deadline is checked before each one.
+    """
+    if not _budget_allows():
+        return False
+    _budget_spend()
+    return True
+
+
 def resolve(system: str, code: str) -> str | None:
     """A label for this code from a terminology service, or None.
 
@@ -165,6 +182,10 @@ def resolve(system: str, code: str) -> str | None:
     if not system or not code:
         return None
     if system not in RESOLVABLE_SYSTEMS:
+        return None
+    # An RxNorm code that is not shaped like one is never sent, never spends
+    # the budget and is never kept: free text arrives in code slots.
+    if system == _RXNORM and not _rxnav_mod.is_rxcui(code):
         return None
 
     key = (system, code)
@@ -181,14 +202,23 @@ def resolve(system: str, code: str) -> str | None:
     _budget_spend()
     label = None
     try:
-        result = _engine()._lookup_code(system, code)
-        if isinstance(result, dict) and result.get("valid"):
-            display = result.get("display")
-            if isinstance(display, str) and display.strip():
-                label = display.strip()[:512]
+        if system == _RXNORM:
+            # RxNorm goes to r6/rxnav.py, which names only an Active concept
+            # and by rule (a brand by its generic). Unavailable lands in the
+            # except below and is not cached; a concept with no label is an
+            # answer and is.
+            concept = _rxnav_mod.fetch(code, may_follow=_budget_take)
+            label = concept.label if concept is not None else None
+        else:
+            result = _engine()._lookup_code(system, code)
+            if isinstance(result, dict) and result.get("valid"):
+                display = result.get("display")
+                if isinstance(display, str) and display.strip():
+                    label = display.strip()[:512]
     except Exception:  # noqa: BLE001 — a label is never worth failing a read
-        logger.debug("terminology lookup failed for %s (system %s)",
-                     code, system, exc_info=True)
+        # The system only: a code slot can hold free text.
+        logger.debug("terminology lookup failed (system %s)",
+                     system, exc_info=True)
         return None
 
     with _CACHE_LOCK:
