@@ -354,18 +354,31 @@ def test_a_transport_failure_stays_unavailable(monkeypatch):
 def test_the_resolver_now_produces_a_label_for_a_medication_code(monkeypatch):
     """End to end through resolve(), which is what the read path calls.
 
-    MUTATION: restore `"display": None` in _validate_rxnorm. This goes red
-    while every validity assertion above stays green — which is exactly how
-    the defect survived: the code was 'working' at the only thing it was
-    tested for.
+    RxNorm no longer goes through the curatr engine: resolve() asks
+    r6/rxnav.py, which reads historystatus (tests/test_rxnav_client.py pins
+    the rules). The engine here answers only to prove it is not consulted.
+
+    MUTATION: send RxNorm to the engine again (`if system == _RXNORM:` ->
+    `if False:` in resolve()). This goes red: no label comes back and the
+    engine is asked. The mutant this docstring used to name, restoring
+    `"display": None` in _validate_rxnorm, is on a path resolve() no longer
+    takes for RxNorm; test_a_valid_rxcui_returns_the_drug_name above still
+    catches it.
     """
+    from r6 import rxnav
     from r6 import terminology_resolver as resolver
 
-    engine, _ = _engine_with(monkeypatch, {
-        "/rxcui/314076/properties.json": _RxResp(
-            200, {"properties": {"name": "lisinopril 10 MG Oral Tablet"}}),
-    })
+    class _Session:
+        def get(self, url, **_kwargs):
+            assert url.endswith("/rxcui/314076/historystatus.json"), url
+            return _RxResp(200, {"rxcuiStatusHistory": {
+                "metaData": {"status": "Active"},
+                "attributes": {"name": "lisinopril 10 MG Oral Tablet",
+                               "tty": "SCD"}}})
+
+    engine, seen = _engine_with(monkeypatch, {})
     monkeypatch.setattr(resolver, "_engine", lambda: engine)
+    monkeypatch.setattr(rxnav, "_session", lambda: _Session())
     monkeypatch.setenv("TERMINOLOGY_LOOKUP_ENABLED", "true")
     resolver.reset_cache()
 
@@ -373,3 +386,4 @@ def test_the_resolver_now_produces_a_label_for_a_medication_code(monkeypatch):
         "http://www.nlm.nih.gov/research/umls/rxnorm", "314076")
 
     assert label == "lisinopril 10 MG Oral Tablet"
+    assert seen == []

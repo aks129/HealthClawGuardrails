@@ -54,6 +54,7 @@ __all__ = [
     'audit', 'AuditAssertionError',
     'install_audit_assertions', 'install_read_audit_assertion',
     'Profile', 'fhir_response', 'unredacted_response', 'outcome_response',
+    'patient_identity',
 ]
 
 # The tenant-id format enforced everywhere. Same character class as
@@ -1197,7 +1198,9 @@ _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn',
 
 def _intake_profile(resource):
     """Intake profile: identified for clinic check-in, so a Patient's name,
-    birthDate, address and telecom ship verbatim. Everything else goes
+    birthDate, address and telecom ship, rebuilt element by element by
+    patient_identity: nested `text`, `period` and extensions (an
+    extension's valueReference.display) stay behind (#964). Everything else goes
     through apply_redaction (upstream `display`/`CodeableConcept.text` and
     free text stripped, then relabelled by code from r6/terminology.py), and
     top-level note, narrative, DiagnosticReport.conclusion and SSN-class
@@ -1211,8 +1214,8 @@ def _intake_profile(resource):
     res = _redaction_mod.apply_redaction(resource)
     if resource.get('resourceType') == 'Patient':
         for key in ('name', 'birthDate', 'address', 'telecom'):
-            if key in resource:
-                res[key] = resource[key]
+            res.pop(key, None)
+        res.update(patient_identity(resource))
     for key in ('note', 'text', 'conclusion'):
         res.pop(key, None)
     idents = res.get('identifier')
@@ -1503,8 +1506,26 @@ def _element(value, keys):
     return out or None
 
 
-def _patient_identity(original):
-    """name, birthDate, address and telecom, element by element."""
+def patient_identity(original):
+    """A Patient's identity fields, rebuilt element by element.
+
+    The one rule for what an identified export (intake, check-in) carries of
+    a Patient's name, address, telecom and birthDate. r6/routes.py calls it
+    too, so its output shape is a contract:
+
+        {'name':      [{use, family, given, prefix, suffix}],
+         'address':   [{use, type, line, city, district, state, postalCode,
+                        country}],
+         'telecom':   [{system, value, use, rank}],
+         'birthDate': str}
+
+    Every key is optional, at both levels. A sub-element is kept only when it
+    is a string, a non-empty list of strings, or (`rank`) an int. Anything
+    else is dropped: nested `text`, `period`, `extension`, and a value of
+    another type. An entry left with nothing is dropped, so a HumanName or
+    Address that carries only `text` does not appear, and a field left with
+    no entry is absent, never an empty list. `original` is not changed.
+    """
     out = {}
     for key, keys in (('name', _HUMAN_NAME_KEYS), ('address', _ADDRESS_KEYS),
                       ('telecom', _CONTACT_POINT_KEYS)):
@@ -1704,7 +1725,8 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
 
     The intake rules first: apply_redaction (every upstream `display` and
     `text` stripped, then relabelled by code), a Patient's name, birthDate,
-    address and telecom verbatim, top-level note/narrative/conclusion gone.
+    address and telecom from patient_identity, top-level
+    note/narrative/conclusion gone.
     Then the check-in rules on top:
 
     - SSN-class identifiers go by either system spelling AND by v2-0203
@@ -1730,7 +1752,7 @@ def _checkin_profile(resource, *, patient_id, stored_meta=None):
         for key in ('name', 'birthDate', 'address', 'telecom', 'identifier',
                     'extension'):
             res.pop(key, None)
-        res.update(_patient_identity(resource))
+        res.update(patient_identity(resource))
         idents = _patient_identifiers(resource)
         if idents:
             res['identifier'] = idents
