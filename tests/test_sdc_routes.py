@@ -22,7 +22,7 @@ def _store(app, resource, tenant_id):
 
 def test_populate_by_id(client, app, tenant_id, tenant_headers):
     _store(app, {"resourceType": "Patient", "id": "p1",
-                 "name": [{"given": ["Ada"]}]}, tenant_id)
+                 "gender": "female"}, tenant_id)
     _store(app, {"resourceType": "Questionnaire", "id": "q1",
                  "status": "active",
                  "item": [{"linkId": "fn", "type": "string",
@@ -30,7 +30,7 @@ def test_populate_by_id(client, app, tenant_id, tenant_headers):
                                           "valueExpression": {
                                               "language": "text/fhirpath",
                                               "expression":
-                                                  "%patient.name.given.first()"}}]}]},
+                                                  "%patient.gender"}}]}]},
            tenant_id)
 
     resp = client.post(
@@ -44,7 +44,7 @@ def test_populate_by_id(client, app, tenant_id, tenant_headers):
     assert resp.status_code == 200
     params = resp.get_json()
     qr = _param(params, "response")
-    assert qr["item"][0]["answer"][0]["valueString"] == "Ada"
+    assert qr["item"][0]["answer"][0]["valueString"] == "female"
 
 
 def test_populate_auto_loads_medications_allergies_conditions(
