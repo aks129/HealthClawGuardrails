@@ -15,17 +15,15 @@ MUTATION, each run against the committed tree:
   add '/command-center' to the tuple in base.html
       -> test_an_app_page_never_loads_analytics[command_center.html],
          test_no_app_path_is_allowlisted
-  remove the `{% if %}` around the script in base.html
-      -> every test_an_app_page_never_loads_analytics row
-  remove the script from base.html
-      -> every test_an_allowlisted_page_loads_analytics row
+  remove the `{% if %}` around the script in base.html, or the script
+      -> the file does not collect: _allowlist() finds no gated script
   remove the script from index.html -> test_the_landing_page_loads_analytics
   take the session away from the command-center row
       -> test_an_app_page_never_loads_analytics[command_center.html]
   add the script, single-quoted and without `defer`, to
   connect_patient_base.html
       -> test_no_other_template_references_analytics,
-         test_the_live_connect_page_never_loads_analytics
+         test_the_patient_connect_page_never_loads_analytics
   drop a page name from the list in privacy.html section 7
       -> test_privacy_names_the_allowlisted_pages
 """
@@ -38,6 +36,7 @@ import re
 
 import pytest
 
+from app import connect_view_tag
 from models import db
 from r6.fasten.models import TenantClosure
 from r6.read_auth import TENANT_SESSION_KEY
@@ -67,6 +66,9 @@ APP_PAGES = {
     "command_center_login.html": (
         "/command-center/login",
         "The dashboard for private tenants is protected"),
+    # Opened directly, the connect page is in this shell with the tenant id
+    # in its path.
+    "fasten_connect.html": ("/connect/" + TENANT, "Connect your records"),
     "fasten_connect_disconnected.html": ("/connect/" + CLOSED_TENANT,
                                          "Connection disconnected"),
 }
@@ -98,8 +100,10 @@ def _allowlist() -> tuple:
 
 
 def _extends_base() -> set:
+    # Any `extends` tag that can resolve to base.html: fasten_connect.html
+    # picks its shell with a conditional.
     names = {path.name for path in TEMPLATES.rglob("*.html")
-             if re.search(r"""\{%-?\s*extends\s+["']base\.html["']""",
+             if re.search(r"""\{%-?\s*extends\b[^%]*["']base\.html["']""",
                           path.read_text(encoding="utf-8"))}
     assert names, "no template extends base.html: this guard read nothing"
     return names
@@ -174,12 +178,16 @@ def test_the_landing_page_loads_analytics(client):
     assert SCRIPT in body
 
 
-def test_the_live_connect_page_never_loads_analytics(client):
-    """/connect/<tenant> for an open tenant: the tenant id is in the path."""
-    response = client.get("/connect/" + TENANT)
+def test_the_patient_connect_page_never_loads_analytics(
+        client, monkeypatch):
+    """Opened from the consumer app, /connect/<tenant> is in its own shell."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", "analytics-guard-secret")
+    response = client.get("/connect/%s?src=careagents&sig=%s"
+                          % (TENANT, connect_view_tag(TENANT)))
     body = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert TENANT in body
+    assert 'id="back-to-careagents"' in body
+    assert BASE_SHELL_MARKER not in body
     assert NEEDLE not in body
 
 
