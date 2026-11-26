@@ -2,8 +2,8 @@
 
 Rendered from the sealed payload and nothing else: what the person sees is
 what the approval digest binds and what the executor runs. Its POST records
-the review-page confirmation; execution still happens only on the confirm
-route's claim.
+no approval (#1104): the confirmation is minted, and the action executed,
+only on the confirm route's claim.
 """
 import json
 
@@ -134,28 +134,28 @@ def test_the_render_is_audited_without_record_text(
     assert not any(CANARY in (r.detail or '') for r in rows)
 
 
-def test_submit_records_one_confirmation_over_the_sealed_payload_and_executes_nothing(
+def test_submit_records_no_confirmation_and_executes_nothing(
         client, app, tenant_headers, auth_headers, tenant_id, seeded):
     action_id = _staged(client, tenant_headers, auth_headers, CURATR)
     r = _post(client, auth_headers, action_id)
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()
-    assert body['approved_via'] == 'review-page'
+    assert 'approved_via' not in body
     assert body['status'] == 'awaiting_confirmation'   # the page does not execute
     with app.app_context():
         action = ProposedAction.query.get(action_id)
         assert action.status == 'awaiting_confirmation'
-        rows = ActionConfirmation.query.filter_by(action_id=action_id).all()
-        assert len(rows) == 1
-        assert rows[0].payload_digest
+        assert ActionConfirmation.query.filter_by(
+            action_id=action_id).count() == 0
     got = client.get('/r6/fhir/Condition/%s' % RID, headers=tenant_headers).get_json()
     assert got['meta']['versionId'] == '1'
     assert got['clinicalStatus']['coding'][0]['code'] == 'active'
 
+    # Nothing was recorded, so a second submit is not a conflict.
     again = _post(client, auth_headers, action_id)
-    assert again.status_code == 409
+    assert again.status_code == 200
     with app.app_context():
-        assert ActionConfirmation.query.filter_by(action_id=action_id).count() == 1
+        assert ActionConfirmation.query.filter_by(action_id=action_id).count() == 0
 
 
 def test_then_the_approve_credential_carries_out_exactly_what_was_shown(
