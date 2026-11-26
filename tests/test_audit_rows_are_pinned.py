@@ -229,3 +229,28 @@ def test_a_read_whose_audit_cannot_be_written_is_not_served(
         return
     assert resp.status_code >= 500, (
         f'$interpret answered {resp.status_code} with no audit row')
+
+
+def test_a_failed_export_before_any_job_records_a_failed_job(client):
+    """Fasten can report a failure before the ready webhook made a job row.
+    With a known connection, a failed job is recorded so /fasten/jobs says
+    so; otherwise the import reads as never started and the person's
+    screen waits forever. MUTATION: drop the new-row branch -> red."""
+    from r6.fasten.models import FastenJob
+    _fasten_connection('pin-early', 'oc-pin-early')
+
+    resp = _fasten_webhook(client, 'patient.ehi_export_failed', {
+        'org_connection_id': 'oc-pin-early', 'task_id': 'task-pin-early',
+        'failure_reason': 'timeout'})
+
+    assert resp.status_code == 200
+    job = FastenJob.query.filter_by(task_id='task-pin-early').first()
+    assert job is not None
+    assert (job.status, job.failure_reason, job.tenant_id,
+            job.org_connection_id) == ('failed', 'timeout', 'pin-early',
+                                       'oc-pin-early')
+    assert job.completed_at is not None
+    assert _rows('pin-early') == [
+        ('fasten_import_failed', None, None, 'pin-early', 'fasten-connect',
+         'failure', 'job=task-pin-early'),
+    ]
