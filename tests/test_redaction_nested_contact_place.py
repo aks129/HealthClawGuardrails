@@ -18,6 +18,8 @@ import json
 
 import pytest
 
+from models import db
+from r6.models import R6Resource
 from r6.redaction import apply_redaction
 
 ADDR_LINE = 'ZQPR2VALUEADDRLINE'
@@ -115,6 +117,20 @@ SHAPES = {'top-level': _top_level, 'nested-extension': _nested_extension,
           'contained': _contained, 'bundle-entries': _bundle}
 
 
+def _store(app, tenant_id, *resources):
+    """Put records in the store as they are. `$ingest-context` is an
+    optional module (r6/extensions.py), and the read and share surfaces
+    measured below are core, so they are seeded without it and the core-only
+    CI job runs them."""
+    with app.app_context():
+        for resource in resources:
+            db.session.add(R6Resource(
+                resource_type=resource['resourceType'],
+                resource_json=json.dumps(resource),
+                resource_id=resource['id'], tenant_id=tenant_id))
+        db.session.commit()
+
+
 def _walk(obj):
     yield obj
     if isinstance(obj, dict):
@@ -193,15 +209,12 @@ def test_a_contact_point_value_companion_is_removed():
 
 @pytest.mark.parametrize('surface', ['read', 'intake', 'deidentified'])
 def test_a_list_valued_contact_point_leaves_no_phone_on_any_surface(
-        client, auth_headers, surface):
-    patient = {'resourceType': 'Patient', 'id': 'cp-list', 'gender': 'male',
-               'extension': [{'url': 'http://example.org/phone',
-                              'valueContactPoint': [
-                                  {'system': 'phone', 'value': PHONE}]}]}
-    r = client.post('/r6/fhir/Bundle/$ingest-context', headers=auth_headers,
-                    json={'resourceType': 'Bundle', 'type': 'collection',
-                          'entry': [{'resource': patient}]})
-    assert r.status_code == 201, r.get_data(as_text=True)
+        app, client, tenant_id, auth_headers, surface):
+    _store(app, tenant_id, {
+        'resourceType': 'Patient', 'id': 'cp-list', 'gender': 'male',
+        'extension': [{'url': 'http://example.org/phone',
+                       'valueContactPoint': [
+                           {'system': 'phone', 'value': PHONE}]}]})
     if surface == 'read':
         resp = client.get('/r6/fhir/Patient/cp-list', headers=auth_headers)
     else:
@@ -285,13 +298,9 @@ def _f1_positions():
 
 @pytest.mark.parametrize('surface', ['read', 'intake', 'deidentified'])
 def test_f1_extension_positions_leave_no_address_or_phone(
-        client, auth_headers, surface):
+        app, client, tenant_id, auth_headers, surface):
     """The deidentified share is stamped ANONYED, so it matters most there."""
-    r = client.post('/r6/fhir/Bundle/$ingest-context', headers=auth_headers,
-                    json={'resourceType': 'Bundle', 'type': 'collection',
-                          'entry': [{'resource': r}
-                                    for r in _f1_positions()]})
-    assert r.status_code == 201, r.get_data(as_text=True)
+    _store(app, tenant_id, *_f1_positions())
     if surface == 'read':
         bodies = [client.get(f'/r6/fhir/{p}', headers=auth_headers)
                   for p in ('Patient/f1-pt', 'Coverage/f1-cov')]
@@ -307,16 +316,14 @@ def test_f1_extension_positions_leave_no_address_or_phone(
         assert [c for c in (ADDR_LINE, ADDR_CITY, PHONE) if c in body] == []
 
 
-def test_a_patient_read_drops_the_home_geolocation(client, auth_headers):
+def test_a_patient_read_drops_the_home_geolocation(
+        app, client, tenant_id, auth_headers):
     """The measured leak on a real read path. The canary scan keeps its
     geolocation off `Patient.address`, which the intake share ships whole by
     design (#282); this is where that address is measured."""
-    patient = {'resourceType': 'Patient', 'id': 'geo-p1', 'gender': 'female',
-               'address': [_address()], 'extension': _payload_extensions()}
-    r = client.post('/r6/fhir/Bundle/$ingest-context', headers=auth_headers,
-                    json={'resourceType': 'Bundle', 'type': 'collection',
-                          'entry': [{'resource': patient}]})
-    assert r.status_code == 201, r.get_data(as_text=True)
+    _store(app, tenant_id, {
+        'resourceType': 'Patient', 'id': 'geo-p1', 'gender': 'female',
+        'address': [_address()], 'extension': _payload_extensions()})
     r = client.get('/r6/fhir/Patient/geo-p1', headers=auth_headers)
     assert r.status_code == 200
     body = r.get_data(as_text=True)
