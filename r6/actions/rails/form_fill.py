@@ -33,10 +33,15 @@ class FormFillExecutor:
     required_env = ('PUBLIC_BASE_URL',)
 
     def validate(self, payload):
+        from r6.sdc.intake import INTAKE_REFERENCES
         questionnaire = payload.get('questionnaire')
         body = payload.get('body')
         if (not isinstance(questionnaire, str) or not questionnaire
                 or not isinstance(body, str) or not body):
+            return [errors.PAYLOAD_INVALID]
+        # Only the built-in intake (#1170). Refused rather than ignored, so
+        # the proposal on file always names the form that is rendered.
+        if questionnaire.strip() not in INTAKE_REFERENCES:
             return [errors.PAYLOAD_INVALID]
         return []
 
@@ -97,6 +102,24 @@ class FormFillExecutor:
             )
         reviewed_qr = row.to_fhir_json()
 
+        # (3b) Only the built-in intake's items are rendered (#1170). The
+        # review now builds the response from fixed ids, but one reviewed
+        # before that change still carries whatever leaf a planted
+        # Questionnaire added, under a digest that matches. The PDF labels
+        # an unknown leaf by its linkId, which that Questionnaire chose, and
+        # a known linkId out of its place (the attestation inside the
+        # demographics group) prints the intake's own label beside an answer
+        # nobody gave. So each item must sit where the intake puts it, with
+        # the answer type the intake gives it; otherwise the response is
+        # refused, never rendered without the item: the person's review
+        # covered a form that is not this one.
+        if _off_form(reviewed_qr):
+            return ExecutionResult(
+                status='needs_review',
+                outcome={'reason': 'the reviewed answers include items that '
+                                   'are not on the intake form, so no form '
+                                   'was made; review it again'})
+
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud
         # PROVIDER_ERROR — an exception must never escape as a fake success.
         try:
@@ -104,9 +127,14 @@ class FormFillExecutor:
             from r6.sdc.documents import persist_intake_document
             from r6.sdc.delivery import build_document_link
 
-            # (4) Resolve the questionnaire for nicer labels — non-fatal.
-            questionnaire = self._resolve_questionnaire(
-                reviewed_qr.get('questionnaire'), action.tenant_id)
+            # (4) Labels come from the built-in intake, never a stored
+            # Questionnaire (#1169): a write token can store one under any
+            # id after the review, and the label is what the printed answer
+            # reads as. The reviewed response carries no item text of its
+            # own (review.py builds it from fixed ids), so this is the only
+            # source of every label on the form.
+            from r6.sdc.intake import intake_questionnaire
+            questionnaire = intake_questionnaire()
 
             # (5) Render the reviewed answers to a PDF.
             subject_ref = (reviewed_qr.get('subject') or {}).get('reference')
@@ -137,32 +165,6 @@ class FormFillExecutor:
             outcome={'document_reference_id': docref_id,
                      'delivery_link': link,
                      'questionnaire_response_id': reviewed_qr_id})
-
-    @staticmethod
-    def _resolve_questionnaire(questionnaire_ref, tenant_id):
-        """Best-effort load of the stored Questionnaire for nicer labels.
-
-        Falls back to the canonical intake Questionnaire. Never raises — label
-        resolution is a nicety, not a gate on delivering the reviewed answers.
-        """
-        from r6.sdc.intake import intake_questionnaire
-        try:
-            if questionnaire_ref:
-                q_id = str(questionnaire_ref).split('|')[0]
-                if q_id.startswith('Questionnaire/'):
-                    q_id = q_id.split('/', 1)[1]
-                q_id = q_id.rstrip('/').split('/')[-1]
-                row = R6Resource.query.filter_by(
-                    resource_type='Questionnaire', id=q_id,
-                    tenant_id=tenant_id, is_deleted=False).first()
-                if row is not None:
-                    return row.to_fhir_json()
-        except Exception:  # noqa: BLE001 — non-fatal; fall through to canonical
-            pass
-        try:
-            return intake_questionnaire()
-        except Exception:  # noqa: BLE001
-            return None
 
     @staticmethod
     def _subject_label(subject_ref, tenant_id):
@@ -210,6 +212,46 @@ class FormFillExecutor:
             outcome={'reason': 'form-fill execute() is synchronous and '
                                'terminal — nothing to reconcile'},
         )
+
+
+#: The answer keys each intake item type may carry ("choice" is a string
+#: from the Patient, or a coding from an observation).
+_ANSWER_KEYS = {'string': {'valueString'}, 'date': {'valueDate'},
+                'boolean': {'valueBoolean'},
+                'choice': {'valueString', 'valueCoding'}}
+
+
+def _off_form(questionnaire_response):
+    """True when any item is not where the built-in intake puts it: an
+    unknown linkId, a known one under another parent, a second copy of an
+    item that does not repeat, or an answer of another type (#1172)."""
+    from r6.sdc.intake import intake_questionnaire
+
+    def off(items, spec_items):
+        spec = {q['linkId']: q for q in spec_items or []}
+        seen = set()
+        for item in items or []:
+            if not isinstance(item, dict):
+                return True
+            q = spec.get(item.get('linkId'))
+            if q is None or (item['linkId'] in seen and not q.get('repeats')):
+                return True
+            seen.add(item['linkId'])
+            if q['type'] == 'group':
+                if item.get('answer') or off(item.get('item'), q.get('item')):
+                    return True
+                continue
+            keys = _ANSWER_KEYS.get(q['type'], set())
+            answers = item.get('answer') or []
+            # One answer per leaf: two on the attestation printed "No, Yes"
+            # (#1172 R3-1). No intake leaf repeats its answer.
+            if item.get('item') or len(answers) > 1 or not all(
+                    isinstance(a, dict) and a and set(a) <= keys
+                    for a in answers):
+                return True
+        return False
+    return off(questionnaire_response.get('item'),
+               intake_questionnaire().get('item'))
 
 
 def register():
