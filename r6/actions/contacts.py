@@ -19,8 +19,10 @@ number. The secret lists everything, to prefill the person's own form.
 The label reaches the agent as the person typed it, so the agent can tell
 contacts apart when asked to call one. A contact is not a clinical record
 and does not pass through record redaction; the label's own rule (letters,
-business punctuation, 60 characters, at most six digits so it cannot carry
-a phone number) is what bounds it.
+business punctuation, 60 characters, at most six digits) is what bounds it.
+Six digits is fewer than a phone number written in digits. A number
+spelled out in words is not screened, and the label is free text the agent
+reads, so it can carry words meant for the agent as well.
 
 No page that calls these routes is in this repository, and no test here
 fails if the holder of the secret is something else.
@@ -52,14 +54,17 @@ ACCOUNT_HOLDER = 'account-holder'
 # punctuation a business name carries. No angle brackets, quotes or line
 # breaks.
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&()/#-]{0,59}")
-# The agent reads labels and must not read numbers, so a label cannot hold
-# enough digits to be one, however they are spaced or punctuated.
+# The agent reads labels and must not read numbers, so a label holds fewer
+# digits than a phone number has, however they are spaced or punctuated.
+# Digits only: a number spelled out in words passes.
 _LABEL_MAX_DIGITS = 6
 
 
 def _valid_label(label):
     return (_LABEL.fullmatch(label) is not None
             and sum(ch.isdigit() for ch in label) <= _LABEL_MAX_DIGITS)
+
+
 # +1 numbers only: then an area code and an exchange that
 # each start 2-9. ASCII digits only: \d would also take other scripts'
 # digits, which the service-code rules below would not recognize.
