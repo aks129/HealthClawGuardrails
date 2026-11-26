@@ -286,11 +286,12 @@ def test_the_pdf_text_extractor_actually_reads_text():
 
 
 # ---------------------------------------------------------------------------
-# Site 1: r6/actions/rails/form_fill.py — _subject_label reads Patient.name
-# with no redaction and puts it in the rendered PDF's title. The PDF leaves
-# over a signed link that carries NO tenant or step-up header: the signature
-# is the whole credential. Since #367 it reads only the structured parts
-# (given + family), never `name.text`.
+# Site 1: r6/actions/rails/form_fill.py — the patient's name goes, with no
+# redaction, into the rendered PDF's title. The PDF leaves over a signed link
+# that carries NO tenant or step-up header: the signature is the whole
+# credential. Since #367 it reads only the structured parts (given +
+# family), never `name.text`; since #1171 it reads them from the reviewed
+# response (reviewed_subject_label), not the Patient.
 # ---------------------------------------------------------------------------
 
 def _confirm_the_form(client, tenant_headers, auth_headers):
@@ -377,8 +378,10 @@ def form_fill_ready(app, tenant_headers, monkeypatch):
 
 def test_subject_label_is_built_from_the_structured_name_never_text(
         app, tenant_headers, form_fill_ready):
-    """`FormFillExecutor._subject_label` reads `given + family`, never
-    `name[0].text` (#367).
+    """The PDF title name is built from `given + family`, never
+    `name[0].text` (#367). Since #1171 it is read from the reviewed
+    response's name answers, which the populate step fills from the
+    structured name, rather than from the Patient at execution.
 
     `name.text` is the field the redacting read pops outright
     (r6/redaction.py) because upstream feeds put junk there; it was the one
@@ -388,10 +391,19 @@ def test_subject_label_is_built_from_the_structured_name_never_text(
     the questionnaire body too, so a PDF-level check stays green whichever
     path rendered them (the trap the issue records).
     """
-    from r6.actions.rails.form_fill import FormFillExecutor
+    from r6.actions import review
+    from r6.actions.models import ProposedAction
+    from r6.actions.rails.form_fill import reviewed_subject_label
     with app.app_context():
-        label = FormFillExecutor._subject_label(
-            "Patient/" + PROBE_PATIENT_ID, tenant_headers["X-Tenant-Id"])
+        action = ProposedAction(
+            tenant_id=tenant_headers["X-Tenant-Id"], kind="form-fill",
+            payload={"questionnaire": "healthclaw-intake",
+                     "subject": {"reference": "Patient/" + PROBE_PATIENT_ID}})
+        _q, patient, draft, _c = review._draft_qr(
+            action, tenant_headers["X-Tenant-Id"])
+        reviewed = review._build_reviewed_qr(
+            draft, patient, [], [], [], [], True, [], [])
+        label = reviewed_subject_label(reviewed)
     assert label == "Josephine " + NAME_MARKER, label
     assert SUBJECT_LABEL_MARKER not in label
 
@@ -411,7 +423,7 @@ def test_form_fill_pdf_title_carries_the_structured_name_not_name_text(
         "the extracted text does not look like the intake form, so a marker "
         "search over it proves nothing: " + text[:300])
     assert SUBJECT_LABEL_MARKER not in text, (
-        "Patient.name.text reached the PDF; _subject_label is reading the "
+        "Patient.name.text reached the PDF; the title label is reading the "
         "free-text field again (#367)")
     assert NAME_MARKER in text
 
@@ -589,37 +601,30 @@ def test_persist_intake_document_return_value_reaches_no_caller():
     it. `test_the_confirm_response_carries_no_rendered_document` above is the
     behavioural half, and is the one that would survive the function being
     rewritten.
+
+    Since #1173 the rail chooses the document id itself (to lock it before
+    the document exists), so it reads nothing at all off the return value:
+    every call must be a bare expression statement, its value discarded.
     """
     import inspect
     from r6.actions.rails import form_fill
     source = inspect.getsource(form_fill.FormFillExecutor.execute)
-    uses = set(re.findall(r"docref\[([^\]]+)\]", source))
-    assert uses == {"'id'"}, (
-        "form_fill now reads more than the id off persist_intake_document's "
-        "return value (%s); documents.py:72 may now be an exit point and "
-        "needs its own probe" % sorted(uses))
-
     tree = ast.parse(textwrap.dedent(source))
-    loads = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Name) and n.id == "docref"
-             and isinstance(n.ctx, ast.Load)]
-    id_subscripts = [n for n in ast.walk(tree)
-                     if isinstance(n, ast.Subscript)
-                     and isinstance(n.value, ast.Name)
-                     and n.value.id == "docref"
-                     and isinstance(n.slice, ast.Constant)
-                     and n.slice.value == "id"]
-    assert len(id_subscripts) == 1, (
-        "expected exactly one docref['id'] read; found %d, so the shape this "
-        "row measures changed" % len(id_subscripts))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "persist_intake_document"]
+    discarded = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Expr) and n.value in calls]
+    assert len(calls) == 1, (
+        "expected one persist_intake_document call in execute(); found %d, "
+        "so the shape this row measures changed" % len(calls))
     # getsource() starts at the `def`, so an AST lineno is an offset into it.
     offset = form_fill.FormFillExecutor.execute.__code__.co_firstlineno - 1
-    assert len(loads) == 1, (
-        "`docref` is read %d times in execute() but subscripted for 'id' "
-        "once — the dict itself is being passed somewhere, and every field "
-        "persist_intake_document built (including the base64 PDF) travels "
-        "with it. form_fill.py lines: %s"
-        % (len(loads), sorted({n.lineno + offset for n in loads})))
+    assert len(discarded) == 1, (
+        "persist_intake_document's return value is used in execute() "
+        "(form_fill.py line %d): every field it built, including the base64 "
+        "PDF, may now travel with it, and documents.py:72 needs its own "
+        "probe" % (calls[0].lineno + offset))
 
 
 def test_document_reference_read_drops_the_embedded_pdf(

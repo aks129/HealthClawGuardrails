@@ -32,7 +32,8 @@ from werkzeug.http import (
 from models import db
 from r6 import checkin as _checkin, ktc as _ktc
 from r6 import constant_time
-from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
+from r6.models import (R6Resource, ContextEnvelope, ContextItem,
+                       AuditEventRecord, RecordLocked)
 from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.log_safety import loggable_id, payload_shape, vendor_request_id
@@ -518,6 +519,25 @@ def read_resource(resource_type, resource_id):
     return response
 
 
+def _refuse_delivered_record(tenant_id, resource_type, resource_id):
+    """True, with an audited refusal, for a completed form's records."""
+    from r6.actions.rails.form_fill import delivered_record_locked
+    if not delivered_record_locked(tenant_id, resource_type, resource_id):
+        return False
+    _audit_locked_refusal(tenant_id, resource_type, resource_id)
+    return True
+
+
+def _audit_locked_refusal(tenant_id, resource_type, resource_id):
+    """The one PHI-free audit row for a refused write to a locked record."""
+    add_audit_event('update', resource_type=resource_type,
+                    resource_id=resource_id, tenant_id=tenant_id,
+                    agent_id=request.headers.get('X-Agent-Id'),
+                    outcome='failure',
+                    detail='refused: record of a completed form')
+    db.session.commit()
+
+
 @r6_blueprint.route('/<resource_type>/<resource_id>', methods=['PUT'])
 def update_resource(resource_type, resource_id):
     """Update an existing R6 FHIR resource."""
@@ -540,6 +560,11 @@ def update_resource(resource_type, resource_id):
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
     require_open_tenant(tenant)
+    # A completed form's delivered records are system-managed (#1171).
+    if _refuse_delivered_record(tenant_id, resource_type, resource_id):
+        return _operation_outcome('error', 'security',
+                                  'This record belongs to a completed form '
+                                  'and cannot be modified via API'), 403
 
     # Unlike create, update gates before it parses, so only a token holder
     # reaches this line. That is a smaller blast radius, not a closed one: a
@@ -1090,6 +1115,11 @@ def ingest_context():
                                    if types_summary else '')))
         db.session.commit()
         return jsonify(result), 201
+    except RecordLocked as e:
+        # Audited like the PUT refusal; nothing of the bundle is kept.
+        db.session.rollback()
+        _audit_locked_refusal(tenant_id, e.resource_type, e.resource_id)
+        return _operation_outcome('error', 'invalid', str(e)), 400
     except ValueError as e:
         return _operation_outcome('error', 'invalid', str(e)), 400
     except Exception as exc:
@@ -2395,6 +2425,12 @@ def ingest_bundle():
                            'code': 'invalid_resource_id',
                            'message': 'entry.resource.id is not a valid '
                                       'FHIR id and was refused'})
+        elif result == 'locked':
+            skipped += 1
+            errors.append({'index': idx, 'resourceType': rtype,
+                           'code': 'locked_record',
+                           'message': 'This record belongs to a completed '
+                                      'form and cannot be replaced'})
         else:
             skipped += 1
             errors.append({'index': idx, 'resourceType': rtype,

@@ -120,6 +120,8 @@ class ContextBuilder:
                 ).first()
 
                 if existing:
+                    # Raises RecordLocked for a completed form's records
+                    # (#1171); the route answers 400 and audits it.
                     existing.update_resource(resource_json)
                     # A re-ingest of a tombstoned (tenant, type, id) revives
                     # it, as r6/fasten/ingester.py does (#509 defect 2), and

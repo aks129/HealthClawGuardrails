@@ -16,7 +16,9 @@ Only on a fully rendered+persisted+linked PDF does it return 'completed'.
 """
 
 import os
+import uuid
 
+from models import db
 from r6 import constant_time
 from r6.actions import errors
 from r6.actions.confirmations import reviewed_answers_digest
@@ -122,6 +124,7 @@ class FormFillExecutor:
 
         # (4)-(7) Render -> persist -> link. Any failure here maps to a loud
         # PROVIDER_ERROR — an exception must never escape as a fake success.
+        docref_id = None
         try:
             from r6.sdc.pdf import render_questionnaire_response_pdf
             from r6.sdc.documents import persist_intake_document
@@ -136,24 +139,41 @@ class FormFillExecutor:
             from r6.sdc.intake import intake_questionnaire
             questionnaire = intake_questionnaire()
 
-            # (5) Render the reviewed answers to a PDF.
+            # (5) Render the reviewed answers to a PDF. The title name comes
+            # from the reviewed answers (#1171), which the review took and
+            # the digest above binds. The Patient is not read here: a write
+            # token can rename it between the review and this call.
             subject_ref = (reviewed_qr.get('subject') or {}).get('reference')
-            subject_label = self._subject_label(subject_ref, action.tenant_id)
+            subject_label = reviewed_subject_label(reviewed_qr)
             reviewed_on = reviewed_qr.get('authored')
             pdf_bytes = render_questionnaire_response_pdf(
                 reviewed_qr, questionnaire=questionnaire,
                 reviewed_on=reviewed_on, subject_label=subject_label)
 
-            # (6) Persist the PDF as a FHIR DocumentReference.
-            docref = persist_intake_document(
+            # (6) Persist the PDF as a FHIR DocumentReference, and record its
+            # id on the action, in ONE commit (#1173). The lock on a delivered
+            # document keys on that server-owned ref, so it holds from the
+            # document's first moment. The ref is never committed before the
+            # document: the status route shows it to the write token, which
+            # could otherwise create a document under it first (R3-3).
+            docref_id = str(uuid.uuid4())
+            persist_intake_document(
                 action.tenant_id, subject_ref, pdf_bytes,
                 title='Completed intake form',
-                questionnaire_response_id=reviewed_qr_id)
-            docref_id = docref['id']
+                questionnaire_response_id=reviewed_qr_id,
+                resource_id=docref_id, commit=False)
+            _set_ref(action, None, docref_id)
 
             # (7) Build a signed, expiring download link.
             link = build_document_link(action.tenant_id, docref_id)
         except Exception as exc:  # noqa: BLE001 — fail loud, never fake success
+            # A failed execution delivers nothing, so it holds no lock. The
+            # rollback first: a failed flush (an id taken, say) leaves the
+            # session unusable, and the ref update then raised instead,
+            # stranding the action in 'executing' behind a 500.
+            db.session.rollback()
+            if docref_id is not None:
+                _set_ref(action, docref_id, None)
             # Truncate to keep the taxonomy detail PHI-free-ish; do not log PHI.
             return ExecutionResult(status='failed', error=errors.PROVIDER_ERROR,
                                    outcome={'detail': str(exc)[:200]})
@@ -165,41 +185,6 @@ class FormFillExecutor:
             outcome={'document_reference_id': docref_id,
                      'delivery_link': link,
                      'questionnaire_response_id': reviewed_qr_id})
-
-    @staticmethod
-    def _subject_label(subject_ref, tenant_id):
-        """Best-effort human name for the PDF title from the subject Patient.
-
-        Returns None when nothing is easily available — the renderer treats a
-        missing label as "no name", never a hard error.
-        """
-        if not subject_ref or not str(subject_ref).startswith('Patient/'):
-            return None
-        try:
-            patient_id = str(subject_ref).split('/', 1)[1]
-            # A deleted Patient's NAME would otherwise be printed on the
-            # title of a form that gets submitted. The renderer treats a
-            # missing label as "no name", which is the right answer here.
-            row = R6Resource.query.filter_by(
-                resource_type='Patient', id=patient_id,
-                tenant_id=tenant_id, is_deleted=False).first()
-            if row is None:
-                return None
-            names = (row.to_fhir_json().get('name') or [])
-            if not names:
-                return None
-            name = names[0]
-            # Never `name.text`: it is the field the redacting read pops
-            # outright (r6/redaction.py) because upstream feeds put junk
-            # there, and it is the one branch that could print arbitrary
-            # upstream free text on a title a patient signs (#367). The
-            # structured parts are what the populate step fills the same
-            # form from, so the two paths now agree.
-            given = ' '.join(name.get('given') or [])
-            label = ('%s %s' % (given, name.get('family') or '')).strip()
-            return label or None
-        except Exception:  # noqa: BLE001 — label is a nicety, never a gate
-            return None
 
     def reconcile(self, action):
         # form-fill has no async provider webhook (unlike Bland.ai/Twilio) and
@@ -252,6 +237,72 @@ def _off_form(questionnaire_response):
         return False
     return off(questionnaire_response.get('item'),
                intake_questionnaire().get('item'))
+
+
+def reviewed_subject_label(reviewed_qr):
+    """The human name for the PDF title: the first and last name answers in
+    the reviewed response.
+
+    Taken when the review is submitted and bound by the answers digest
+    (#1171), so no write after the submit changes whose form it says it is.
+    The submit re-populates from the live Patient, so a rename between the
+    page being shown and the submit is not caught here (#1174). It is never
+    copied into the payload, which the status and confirm responses return.
+    None when neither answer is present — the renderer treats a missing
+    label as "no name". The populate step reads the structured name only,
+    never `name.text` (#367).
+    """
+    answers = {}
+    for group in reviewed_qr.get('item') or []:
+        if group.get('linkId') != 'demographics':
+            continue
+        for item in group.get('item') or []:
+            for answer in item.get('answer') or []:
+                value = answer.get('valueString')
+                if isinstance(value, str):
+                    answers[item.get('linkId')] = value
+    label = ' '.join(answers[k] for k in ('demographics.given-name',
+                                          'demographics.family-name')
+                     if answers.get(k))
+    return label or None
+
+
+def delivered_record_locked(tenant_id, resource_type, resource_id):
+    """True for the reviewed QuestionnaireResponse and the delivered
+    DocumentReference of a form-fill that is executing or completed (#1171).
+
+    Both were ordinary tenant resources, so the write token the proposing
+    agent holds could rewrite them after the person approved, and the
+    signed link then served the agent's bytes. The lock holds from the
+    moment execution starts, not from 'completed': the PDF is committed
+    inside execute(), before the action is marked completed, and a write in
+    that window was accepted. Keyed on server-owned state only: the
+    action's status, its sealed reviewed_qr_id, and the document id
+    execute() records in external_ref before persisting. Never on the
+    document's own content, which a write token can set on any document
+    (#1173 R2-3: a `relatesTo` key let it pin forged content for good).
+    """
+    from r6.actions.models import ProposedAction
+    if resource_type not in ('DocumentReference', 'QuestionnaireResponse'):
+        return False
+    actions = ProposedAction.query.filter(
+        ProposedAction.tenant_id == tenant_id,
+        ProposedAction.kind == 'form-fill',
+        ProposedAction.status.in_(('executing', 'completed'))).all()
+    if resource_type == 'QuestionnaireResponse':
+        return any(a.payload.get('reviewed_qr_id') == resource_id
+                   for a in actions)
+    return any(a.external_ref == resource_id for a in actions)
+
+
+def _set_ref(action, expected, ref):
+    """Record (or clear) the delivered document's id on the executing
+    action, committed, so another request's lock check reads it."""
+    from r6.actions.models import ProposedAction
+    ProposedAction.query.filter_by(
+        id=action.id, status='executing', external_ref=expected).update(
+        {'external_ref': ref}, synchronize_session=False)
+    db.session.commit()
 
 
 def register():

@@ -38,6 +38,17 @@ _AUDIT_OUTCOME_DETAIL_TEXT = {
 }
 
 
+class RecordLocked(ValueError):
+    """A write to a record the server holds fixed (#1171). The message is a
+    fixed sentence, never record content; type and id are for the audit."""
+
+    def __init__(self, resource_type, resource_id):
+        super().__init__('this record belongs to a completed form and '
+                         'cannot be replaced')
+        self.resource_type = resource_type
+        self.resource_id = resource_id
+
+
 class R6Resource(db.Model):
     """
     Minimal resource store for FHIR R6 resources.
@@ -173,7 +184,15 @@ class R6Resource(db.Model):
         Clears `source`: the tag never claims a channel we cannot vouch for,
         and rewritten content is no longer what that channel delivered.
         `_ingest_one` sets it again afterwards when the rewrite IS an ingest.
+
+        Refuses a completed form's delivered records (#1171) here, on the
+        one method every upsert path calls (PUT, $ingest-context, the
+        upload/SHC/Fasten ingester), so a new door inherits the lock.
         """
+        from r6.actions.rails.form_fill import delivered_record_locked
+        if delivered_record_locked(self.tenant_id, self.resource_type,
+                                   self.id):
+            raise RecordLocked(self.resource_type, self.id)
         self.resource_json = new_json
         self.sha256 = hashlib.sha256(new_json.encode('utf-8')).hexdigest()
         self.version_id += 1
