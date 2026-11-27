@@ -80,6 +80,22 @@ def _rxnav_stays_offline():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _directory_stays_offline():
+    """No test reaches a provider directory, for the same reason and in the
+    same way as RxNav above. The client's cache is emptied too, so one
+    test's recorded answer is never another's."""
+    from r6 import directory
+
+    def _offline():
+        pytest.fail("a test tried to reach a provider directory")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(directory, "_session", _offline)
+        directory._CACHE.clear()
+        yield
+
+
 @pytest.fixture
 def app():
     """Create a test Flask application."""
