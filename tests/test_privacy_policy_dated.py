@@ -19,8 +19,8 @@ from pathlib import Path
 PRIVACY = Path(__file__).resolve().parent.parent / "templates" / "privacy.html"
 DATE_RE = re.compile(r"Last updated: ([A-Z][a-z]+ \d{1,2}, \d{4})")
 
-PINNED_DATE = "October 19, 2026"
-PINNED_BODY_SHA = "e59df7e53d7fa42c78206cc8aa271c72402b2adf4b2daef93e320d555dcc113b"
+PINNED_DATE = "November 26, 2026"
+PINNED_BODY_SHA = "bbb8ef6a847c93cb707f525fef00ac9d0a67ce0806a1a3816c6d14307bb81402"
 
 
 def _date_and_body_sha():
