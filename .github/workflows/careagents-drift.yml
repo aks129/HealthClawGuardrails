@@ -1,13 +1,13 @@
 name: careagents-drift
 
-# Hourly: is careagents.cloud running the newest CareAgents commit on main?
+# Every 4 hours (was hourly; each run billed a full minute, ~540 min/month saved): is careagents.cloud running the newest CareAgents commit on main?
 # Opens one issue when production has been behind for more than two hours,
 # edits it in place while it stays behind, and closes it on an observed pass.
 # Same issue discipline as prod-watch.yml. Logic: scripts/careagents_release.py.
 
 on:
   schedule:
-    - cron: "41 * * * *"
+    - cron: "41 */4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
             const resolved = exit === '0';
             const title = 'careagents-drift: production is behind main';
             // Comment only when the deployed build changes; edit otherwise,
-            // so an hourly check does not train anyone to mute the thread.
+            // so a frequent check does not train anyone to mute the thread.
             const fingerprint = body.match(/^deployed=(.*)$/m)?.[1] ?? `run-${context.runId}`;
             const MARK = `<!-- careagents-drift-fingerprint: ${fingerprint} -->`;
             const FP_RE = /<!-- careagents-drift-fingerprint: (.*?) -->/;
