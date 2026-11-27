@@ -56,7 +56,8 @@ def test_a_form_still_being_made_says_so(cfg, svc, monkeypatch):  # noqa: F811
 def test_a_form_past_review_without_a_pdf_is_already_done(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
-    _past_review(fake, "declined", link=None)
+    # Completed with no PDF. A declined one says it was declined (#1099).
+    _past_review(fake, "completed", link=None)
     r = c.get(f"/review/{agent_id}/act-1")
     page = r.get_data(as_text=True)
     assert r.status_code == 200

@@ -20,6 +20,10 @@
     {% elif state == "preparing" %}
     <h1>{{ "Your form is being prepared" if is_form else "This request is being carried out" }}</h1>
     <p class="setup-sub">You approved it. Check back in a moment.</p>
+    {% elif state == "declined" %}
+    <h1>You declined this request.</h1>
+    <p class="setup-sub">This request was declined and will not be carried out.
+      If you change your mind, ask your assistant to start it again.</p>
     {% elif is_form %}
     <h1>Your form is already done.</h1>
     {% else %}

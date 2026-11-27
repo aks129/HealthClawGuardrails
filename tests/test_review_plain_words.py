@@ -84,8 +84,13 @@ def test_the_heading_and_the_declined_page_read_plainly(app):
     assert HANDLERS.count("ask your assistant to start it again") == 2
     declined = HANDLERS[HANDLERS.index("res.b.declined === true"):]
     declined = declined[:declined.index("return;")]
-    assert "form.querySelectorAll('input')" in declined
-    assert "el.disabled = true;" in declined
+    # The inputs go dead in settleDeclined, which both declined paths call
+    # (#1099 security F2).
+    assert "settleDeclined();" in declined
+    settle = HANDLERS[HANDLERS.index("function settleDeclined()"):]
+    settle = settle[:settle.index("\n    }\n")]
+    assert "form.querySelectorAll('input')" in settle
+    assert "el.disabled = true;" in settle
 
 
 @pytest.mark.extension
