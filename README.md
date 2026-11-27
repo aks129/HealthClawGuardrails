@@ -581,6 +581,7 @@ Coverage, ServiceRequest, Specimen, FamilyMemberHistory
 | `SQLALCHEMY_DATABASE_URI` | Production | `sqlite:///mcp_server.db` | Database connection |
 | `SESSION_SECRET` | No | (dev key) | Flask session secret |
 | `READ_AUTH_ENABLED` | Production | `false` | Require tenant-bound credentials on protected reads |
+| `DIRECTORY_SEARCH_ENABLED` | No | `false` | Answer `GET /r6/directory/search` (public provider-directory lookups). Off, the route is a 404. Leave off until lookups are limited per tenant |
 | `PUBLIC_TENANTS` | Production | — | Explicit comma-separated synthetic/demo tenant allowlist |
 | `REDIS_URL` | Production | — | Shared nonce, OAuth, rate-limit, and worker state |
 | `MCP_AUTH_TOKEN` | HTTP MCP | — | Bearer credential required by MCP HTTP transports |

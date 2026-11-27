@@ -3,19 +3,18 @@
 ``find_clinicians`` asks AINPI (ainpi.dev, a published audit of the CMS
 National Provider Directory) for a clinician or practice by name and state.
 ``find_pharmacies`` asks the NPPES NPI Registry (CMS) for pharmacies in a ZIP
-code. ``contact`` asks NPPES for one NPI's practice-location phone and fax.
+code. Neither returns a phone or fax number, and nothing else here does.
 
 What this must never lose
 -------------------------
 1. **Only search terms leave.** A name (letters and ``' . -``, 2-40), a state
-   (two letters), a ZIP (five digits) or an NPI (ten digits, check digit
-   valid). Anything else raises ValueError before a URL is formed. No tenant,
-   no header of the caller's and nothing read from a record is ever sent.
+   (two letters) or a ZIP (five digits). Anything else raises ValueError
+   before a URL is formed. No tenant, no header of the caller's and nothing
+   read from a record is ever sent.
 2. **A listing has no number.** ``Listing`` carries ``has_phone`` and no
    phone field. A name that holds a phone-shaped number drops its row, and
-   a city that does is left out. Numbers exist only on ``Contact``, from
-   ``contact(npi)``: a second call, for the one entry a person chose and
-   will check themselves.
+   a city that does is left out. Looking up one entry's number is a
+   separate step that does not exist yet; it arrives with its caller.
 3. **A filter the directory ignored is not an answer.** AINPI echoes the
    query it ran, and it silently drops parameters it does not know. If the
    echo does not match what was sent, the rows are unfiltered and refused.
@@ -55,9 +54,10 @@ NPPES_PAGE = 50  # rows asked of NPPES; a full page may not be all of them
 CACHE_MAX = 256
 
 #: NUCC taxonomy codes for pharmacies a person can walk into or call, with
-#: our own wording. Each code was seen with this meaning in NPPES answers on
-#: 2026-11-25. Mail-order, managed-care and home-infusion pharmacies are
-#: left out on purpose; a code not listed here is not shown.
+#: our own wording. Each code was in the NPPES answer captured on 2026-11-27
+#: with a description that starts "Pharmacy" (the fixture's header lists
+#: them). Mail-order, managed-care and home-infusion pharmacies are left out
+#: on purpose; a code not listed here is not shown.
 PHARMACY_TYPES = {
     "333600000X": "Pharmacy",
     "3336C0003X": "Community pharmacy",
@@ -75,7 +75,6 @@ _SHOWN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,'&#/()-]{0,79}")
 #: in a row once everything between them is gone (555-0100, 215 555 0100).
 _BETWEEN = re.compile(r"[^A-Za-z0-9]")
 _LONG_DIGITS = re.compile(r"[0-9]{7}")
-_PHONE = re.compile(r"[0-9]{3}-?[0-9]{3}-?[0-9]{4}")
 
 
 class Unavailable(Exception):
@@ -101,17 +100,6 @@ class Listing:
     state: str | None
     postal_code: str | None
     has_phone: bool | None
-
-
-@dataclass(frozen=True)
-class Contact:
-    """The practice-location numbers NPPES lists for one NPI. For a person
-    to check and confirm; never part of a search result."""
-
-    npi: str
-    name: str | None
-    phone: str | None
-    fax: str | None
 
 
 @dataclass(frozen=True)
@@ -222,6 +210,25 @@ def _listed(value) -> list[dict]:
     return [r if isinstance(r, dict) else {} for r in value]
 
 
+def clinician_terms(name, state) -> tuple[str, str]:
+    """The name and state as they will be sent, or ValueError for a
+    malformed one. Sends nothing."""
+    if not (isinstance(name, str) and isinstance(state, str)):
+        raise ValueError("name and state are required")
+    name, state = " ".join(name.split()), state.strip().upper()
+    if not _NAME.fullmatch(name) or not _STATE.fullmatch(state):
+        raise ValueError("malformed name or state")
+    return name, state
+
+
+def pharmacy_term(zip_code) -> str:
+    """The ZIP code as it will be sent, or ValueError for anything but five
+    digits. Sends nothing."""
+    if not (isinstance(zip_code, str) and _ZIP.fullmatch(zip_code)):
+        raise ValueError("malformed ZIP code")
+    return zip_code
+
+
 def find_clinicians(name: str, state: str, session=None) -> Found:
     """Clinicians and practices AINPI lists under this name in this state.
 
@@ -229,11 +236,7 @@ def find_clinicians(name: str, state: str, session=None) -> Found:
     Unavailable for a failed answer, one whose echoed query differs, or one
     without both lists of rows.
     """
-    if not (isinstance(name, str) and isinstance(state, str)):
-        raise ValueError("name and state are required")
-    name, state = " ".join(name.split()), state.strip().upper()
-    if not _NAME.fullmatch(name) or not _STATE.fullmatch(state):
-        raise ValueError("malformed name or state")
+    name, state = clinician_terms(name, state)
 
     def ask():
         body = _get(AINPI_SEARCH_URL, {"name": name, "state": state}, session)
@@ -268,11 +271,15 @@ def find_clinicians(name: str, state: str, session=None) -> Found:
     return _cached(("clinician", name.casefold(), state), ask)
 
 
-def _location(row: dict) -> dict:
-    """The practice-location address. A mailing address is never used: it
-    is often a head office in another state."""
-    for address in _rows(row.get("addresses")):
-        if address.get("address_purpose") == "LOCATION":
+def _location(row: dict, zip_code: str) -> dict:
+    """The row's practice location in this ZIP code, or {}. NPPES keeps the
+    first practice location in ``addresses`` and any others in
+    ``practiceLocations``, and matches a ZIP on all of them. A mailing
+    address is never used: it is often a head office in another state."""
+    for address in (_rows(row.get("addresses"))
+                    + _rows(row.get("practiceLocations"))):
+        if (address.get("address_purpose") == "LOCATION"
+                and str(address.get("postal_code") or "")[:5] == zip_code):
             return address
     return {}
 
@@ -284,8 +291,7 @@ def find_pharmacies(zip_code: str, session=None) -> Found:
     digits; raises Unavailable for a failed answer or one without a list of
     results.
     """
-    if not (isinstance(zip_code, str) and _ZIP.fullmatch(zip_code)):
-        raise ValueError("malformed ZIP code")
+    zip_code = pharmacy_term(zip_code)
 
     def ask():
         body = _get(NPPES_URL, {
@@ -295,7 +301,8 @@ def find_pharmacies(zip_code: str, session=None) -> Found:
         rows = _listed(body.get("results"))
         out = []
         for row in rows:
-            where = _location(row)
+            where = _location(row, zip_code)
+            phone = where.get("telephone_number")
             basic = row.get("basic") if isinstance(row.get("basic"), dict) \
                 else {}
             label = next((PHARMACY_TYPES[t["code"]]
@@ -303,51 +310,18 @@ def find_pharmacies(zip_code: str, session=None) -> Found:
                           if isinstance(t.get("code"), str)
                           and t["code"] in PHARMACY_TYPES), None)
             shown = _shown(basic.get("organization_name"))
-            # NPPES matches a ZIP on the mailing address too.
-            if (label and shown and is_npi(row.get("number"))
-                    and basic.get("status") == "A"
-                    and str(where.get("postal_code") or "")[:5] == zip_code):
+            # NPPES matches a ZIP on the mailing address too: no location
+            # in the ZIP, no listing.
+            if (label and shown and where and is_npi(row.get("number"))
+                    and basic.get("status") == "A"):
                 out.append(Listing(
                     row["number"], shown, "pharmacy", label,
                     _shown(where.get("city")),
                     where["state"] if _STATE.fullmatch(
                         str(where.get("state"))) else None,
-                    zip_code, _phone(where.get("telephone_number")) is not None))
+                    zip_code, isinstance(phone, str)
+                    and sum(c.isdigit() for c in phone) == 10))
         return Found(tuple(out[:MAX_RESULTS]), len(rows) - len(out),
                      len(out) > MAX_RESULTS or len(rows) >= NPPES_PAGE)
 
     return _cached(("pharmacy", zip_code), ask)
-
-
-def _phone(value) -> str | None:
-    """Ten digits, or None for anything that is not a US number."""
-    if not (isinstance(value, str) and _PHONE.fullmatch(value)):
-        return None
-    return value.replace("-", "")
-
-
-def contact(npi: str, session=None) -> Contact | None:
-    """The practice-location phone and fax NPPES lists for one NPI, or None
-    if NPPES has no such NPI. Not for a model: the person who chose this
-    entry checks the number before anything uses it.
-
-    Raises ValueError, before anything is sent, for a malformed NPI; raises
-    Unavailable for a failed answer.
-    """
-    if not is_npi(npi):
-        raise ValueError("malformed NPI")
-
-    def ask():
-        body = _get(NPPES_URL, {"version": "2.1", "number": npi}, session)
-        row = next((r for r in _listed(body.get("results"))
-                    if r.get("number") == npi), None)
-        if row is None:
-            return None
-        where = _location(row)
-        basic = row.get("basic") if isinstance(row.get("basic"), dict) else {}
-        name = basic.get("organization_name") or (
-            f"{basic.get('first_name') or ''} {basic.get('last_name') or ''}")
-        return Contact(npi, _shown(name), _phone(where.get("telephone_number")),
-                       _phone(where.get("fax_number")))
-
-    return _cached(("contact", npi), ask)

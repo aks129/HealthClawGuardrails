@@ -1,0 +1,470 @@
+{
+ "captured": {
+  "date": "2026-11-27T14:22:46Z",
+  "request": "GET https://npiregistry.cms.hhs.gov/api/?version=2.1&enumeration_type=NPI-2&taxonomy_description=Pharmacy&postal_code=19103&limit=50",
+  "status": 200,
+  "rows_in_the_answer": 17,
+  "rows_kept_here": 5,
+  "pharmacy_taxonomies_in_the_full_answer": {
+   "333600000X": "Pharmacy",
+   "3336C0002X": "Pharmacy, Clinic Pharmacy",
+   "3336C0003X": "Pharmacy, Community/Retail Pharmacy",
+   "3336M0002X": "Pharmacy, Mail Order Pharmacy",
+   "3336S0011X": "Pharmacy, Specialty Pharmacy"
+  },
+  "about_that_list": "A summary written at capture time of every pharmacy-family taxonomy code in the full answer, with its description. It is not part of the payload: some of these codes are in none of the rows kept here.",
+  "values": "Keys, nesting and types are as answered. Every name, NPI, phone and fax number, address, date and free-text value was replaced with an invented one. Taxonomy codes and descriptions, and the registry's own enumerations (status, address_purpose, endpoint and name types, country), are as answered. Rows were cut to the few that carry every key the answer had, each row's taxonomies were cut to the pharmacy ones and a few others, the others were all given the commonest non-pharmacy code in the answer, and result_count was lowered to match."
+ },
+ "body": {
+  "result_count": 5,
+  "results": [
+   {
+    "addresses": [
+     {
+      "address_1": "1 SAMPLE STREET",
+      "address_2": "SUITE 1",
+      "address_purpose": "MAILING",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "fax_number": "215-555-0101",
+      "postal_code": "191030000",
+      "state": "PA",
+      "telephone_number": "215-555-0102"
+     },
+     {
+      "address_1": "1 SAMPLE STREET",
+      "address_2": "SUITE 1",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "fax_number": "215-555-0103",
+      "postal_code": "191030000",
+      "state": "PA",
+      "telephone_number": "215-555-0104"
+     }
+    ],
+    "basic": {
+     "authorized_official_credential": "RPH",
+     "authorized_official_first_name": "SAMPLE",
+     "authorized_official_last_name": "PERSON",
+     "authorized_official_middle_name": "X",
+     "authorized_official_name_prefix": "Dr.",
+     "authorized_official_name_suffix": "Jr.",
+     "authorized_official_telephone_number": "2155550105",
+     "authorized_official_title_or_position": "OWNER",
+     "enumeration_date": "2020-01-01",
+     "last_updated": "2020-01-01",
+     "organization_name": "SAMPLE PHARMACY A",
+     "organizational_subpart": "NO",
+     "status": "A"
+    },
+    "created_epoch": "1577836800000",
+    "endpoints": [],
+    "enumeration_type": "NPI-2",
+    "identifiers": [],
+    "last_updated_epoch": "1577836800000",
+    "number": "1999900008",
+    "other_names": [
+     {
+      "code": "3",
+      "organization_name": "SAMPLE PHARMACY A",
+      "type": "Doing Business As"
+     }
+    ],
+    "practiceLocations": [],
+    "taxonomies": [
+     {
+      "code": "3336C0003X",
+      "desc": "Pharmacy, Community/Retail Pharmacy",
+      "license": "XX000000",
+      "primary": true,
+      "state": "PA",
+      "taxonomy_group": ""
+     }
+    ]
+   },
+   {
+    "addresses": [
+     {
+      "address_1": "2 SAMPLE STREET",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "NEW YORK",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "100010000",
+      "state": "NY",
+      "telephone_number": "215-555-0106"
+     },
+     {
+      "address_1": "2 SAMPLE STREET",
+      "address_purpose": "MAILING",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "191030000",
+      "state": "PA",
+      "telephone_number": "215-555-0107"
+     }
+    ],
+    "basic": {
+     "authorized_official_first_name": "SAMPLE",
+     "authorized_official_last_name": "PERSON",
+     "authorized_official_telephone_number": "2155550108",
+     "authorized_official_title_or_position": "OWNER",
+     "certification_date": "2020-01-01",
+     "enumeration_date": "2020-01-01",
+     "last_updated": "2020-01-01",
+     "organization_name": "SAMPLE PHARMACY B",
+     "organizational_subpart": "NO",
+     "status": "A"
+    },
+    "created_epoch": "1577836800000",
+    "endpoints": [
+     {
+      "address_1": "2 SAMPLE STREET",
+      "address_type": "DOM",
+      "affiliation": "N",
+      "city": "NEW YORK",
+      "contentType": "CSV",
+      "contentTypeDescription": "CSV",
+      "country_code": "US",
+      "country_name": "United States",
+      "endpoint": "sample@example.invalid",
+      "endpointDescription": "SAMPLE",
+      "endpointType": "CONNECT",
+      "endpointTypeDescription": "CONNECT URL",
+      "postal_code": "100010000",
+      "state": "NY",
+      "use": "HIE",
+      "useDescription": "Health Information Exchange (HIE)"
+     },
+     {
+      "address_1": "2 SAMPLE STREET",
+      "address_type": "DOM",
+      "affiliation": "N",
+      "city": "PHILADELPHIA",
+      "contentType": "CSV",
+      "contentTypeDescription": "CSV",
+      "country_code": "US",
+      "country_name": "United States",
+      "endpoint": "sample@example.invalid",
+      "endpointType": "CONNECT",
+      "endpointTypeDescription": "CONNECT URL",
+      "postal_code": "191030000",
+      "state": "PA",
+      "use": "HIE",
+      "useDescription": "Health Information Exchange (HIE)"
+     }
+    ],
+    "enumeration_type": "NPI-2",
+    "identifiers": [],
+    "last_updated_epoch": "1577836800000",
+    "number": "1999900016",
+    "other_names": [
+     {
+      "code": "3",
+      "organization_name": "SAMPLE PHARMACY B",
+      "type": "Doing Business As"
+     }
+    ],
+    "practiceLocations": [
+     {
+      "address_1": "2 SAMPLE STREET",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "NEW YORK",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "100010000",
+      "state": "NY",
+      "telephone_number": "215-555-0109"
+     },
+     {
+      "address_1": "2 SAMPLE STREET",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "191030000",
+      "state": "PA",
+      "telephone_number": "215-555-0110"
+     }
+    ],
+    "taxonomies": [
+     {
+      "code": "3336S0011X",
+      "desc": "Pharmacy, Specialty Pharmacy",
+      "license": null,
+      "primary": false,
+      "state": null,
+      "taxonomy_group": ""
+     },
+     {
+      "code": "332B00000X",
+      "desc": "Durable Medical Equipment & Medical Supplies",
+      "license": null,
+      "primary": false,
+      "state": null,
+      "taxonomy_group": "SAMPLE GROUP"
+     }
+    ]
+   },
+   {
+    "addresses": [
+     {
+      "address_1": "3 SAMPLE STREET",
+      "address_purpose": "MAILING",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "191030000",
+      "state": "PA"
+     },
+     {
+      "address_1": "3 SAMPLE STREET",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "NEW YORK",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "100010000",
+      "state": "NY",
+      "telephone_number": "215-555-0111"
+     }
+    ],
+    "basic": {
+     "authorized_official_first_name": "SAMPLE",
+     "authorized_official_last_name": "PERSON",
+     "authorized_official_telephone_number": "2155550112",
+     "authorized_official_title_or_position": "OWNER",
+     "certification_date": "2020-01-01",
+     "enumeration_date": "2020-01-01",
+     "last_updated": "2020-01-01",
+     "organization_name": "SAMPLE PHARMACY C",
+     "organizational_subpart": "NO",
+     "status": "A"
+    },
+    "created_epoch": "1577836800000",
+    "endpoints": [
+     {
+      "address_1": "3 SAMPLE STREET",
+      "address_type": "DOM",
+      "affiliation": "N",
+      "city": "PHILADELPHIA",
+      "contentType": "CSV",
+      "contentTypeDescription": "CSV",
+      "country_code": "US",
+      "country_name": "United States",
+      "endpoint": "sample@example.invalid",
+      "endpointType": "CONNECT",
+      "endpointTypeDescription": "CONNECT URL",
+      "postal_code": "191030000",
+      "state": "PA",
+      "use": "HIE",
+      "useDescription": "Health Information Exchange (HIE)"
+     },
+     {
+      "address_1": "3 SAMPLE STREET",
+      "address_type": "DOM",
+      "affiliation": "N",
+      "city": "NEW YORK",
+      "contentType": "CSV",
+      "contentTypeDescription": "CSV",
+      "country_code": "US",
+      "country_name": "United States",
+      "endpoint": "sample@example.invalid",
+      "endpointType": "CONNECT",
+      "endpointTypeDescription": "CONNECT URL",
+      "postal_code": "100010000",
+      "state": "NY",
+      "use": "HIE",
+      "useDescription": "Health Information Exchange (HIE)"
+     }
+    ],
+    "enumeration_type": "NPI-2",
+    "identifiers": [],
+    "last_updated_epoch": "1577836800000",
+    "number": "1999900024",
+    "other_names": [
+     {
+      "code": "3",
+      "organization_name": "SAMPLE PHARMACY C",
+      "type": "Doing Business As"
+     }
+    ],
+    "practiceLocations": [],
+    "taxonomies": [
+     {
+      "code": "333600000X",
+      "desc": "Pharmacy",
+      "license": null,
+      "primary": false,
+      "state": null,
+      "taxonomy_group": ""
+     },
+     {
+      "code": "332B00000X",
+      "desc": "Durable Medical Equipment & Medical Supplies",
+      "license": null,
+      "primary": false,
+      "state": null,
+      "taxonomy_group": ""
+     }
+    ]
+   },
+   {
+    "addresses": [
+     {
+      "address_1": "4 SAMPLE STREET",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "191030000",
+      "state": "PA",
+      "telephone_number": "215-555-0113"
+     },
+     {
+      "address_1": "4 SAMPLE STREET",
+      "address_purpose": "MAILING",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "postal_code": "191030000",
+      "state": "PA"
+     }
+    ],
+    "basic": {
+     "authorized_official_credential": "RPH",
+     "authorized_official_first_name": "SAMPLE",
+     "authorized_official_last_name": "PERSON",
+     "authorized_official_middle_name": "X",
+     "authorized_official_name_prefix": "Dr.",
+     "authorized_official_telephone_number": "2155550114",
+     "authorized_official_title_or_position": "OWNER",
+     "certification_date": "2020-01-01",
+     "enumeration_date": "2020-01-01",
+     "last_updated": "2020-01-01",
+     "organization_name": "SAMPLE PHARMACY D",
+     "organizational_subpart": "NO",
+     "status": "A"
+    },
+    "created_epoch": "1577836800000",
+    "endpoints": [],
+    "enumeration_type": "NPI-2",
+    "identifiers": [],
+    "last_updated_epoch": "1577836800000",
+    "number": "1999900032",
+    "other_names": [
+     {
+      "code": "5",
+      "organization_name": "SAMPLE PHARMACY D",
+      "type": "Other Name"
+     }
+    ],
+    "practiceLocations": [],
+    "taxonomies": [
+     {
+      "code": "3336M0002X",
+      "desc": "Pharmacy, Mail Order Pharmacy",
+      "license": null,
+      "primary": false,
+      "state": null,
+      "taxonomy_group": ""
+     },
+     {
+      "code": "332B00000X",
+      "desc": "Durable Medical Equipment & Medical Supplies",
+      "license": null,
+      "primary": false,
+      "state": null,
+      "taxonomy_group": ""
+     },
+     {
+      "code": "332B00000X",
+      "desc": "Durable Medical Equipment & Medical Supplies",
+      "license": null,
+      "primary": true,
+      "state": "PA",
+      "taxonomy_group": "SAMPLE GROUP"
+     }
+    ]
+   },
+   {
+    "addresses": [
+     {
+      "address_1": "5 SAMPLE STREET",
+      "address_purpose": "LOCATION",
+      "address_type": "DOM",
+      "city": "PHILADELPHIA",
+      "country_code": "US",
+      "country_name": "United States",
+      "fax_number": "215-555-0115",
+      "postal_code": "191030000",
+      "state": "PA",
+      "telephone_number": "215-555-0116"
+     },
+     {
+      "address_1": "5 SAMPLE STREET",
+      "address_purpose": "MAILING",
+      "address_type": "DOM",
+      "city": "NEW YORK",
+      "country_code": "US",
+      "country_name": "United States",
+      "fax_number": "215-555-0117",
+      "postal_code": "100010000",
+      "state": "NY",
+      "telephone_number": "215-555-0118"
+     }
+    ],
+    "basic": {
+     "authorized_official_first_name": "SAMPLE",
+     "authorized_official_last_name": "PERSON",
+     "authorized_official_telephone_number": "2155550119",
+     "authorized_official_title_or_position": "OWNER",
+     "certification_date": "2020-01-01",
+     "enumeration_date": "2020-01-01",
+     "last_updated": "2020-01-01",
+     "organization_name": "SAMPLE PHARMACY E",
+     "organizational_subpart": "YES",
+     "parent_organization_legal_business_name": "SAMPLE PHARMACY E",
+     "status": "A"
+    },
+    "created_epoch": "1577836800000",
+    "endpoints": [],
+    "enumeration_type": "NPI-2",
+    "identifiers": [],
+    "last_updated_epoch": "1577836800000",
+    "number": "1999900040",
+    "other_names": [
+     {
+      "code": "3",
+      "organization_name": "SAMPLE PHARMACY E",
+      "type": "Doing Business As"
+     }
+    ],
+    "practiceLocations": [],
+    "taxonomies": [
+     {
+      "code": "3336C0003X",
+      "desc": "Pharmacy, Community/Retail Pharmacy",
+      "license": null,
+      "primary": true,
+      "state": null,
+      "taxonomy_group": ""
+     }
+    ]
+   }
+  ]
+ }
+}

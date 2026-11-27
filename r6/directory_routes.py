@@ -9,9 +9,8 @@ nothing else. Nothing limits lookups per tenant yet (#1192).
     ?kind=pharmacy&zip=<five digits>
 
 The answer lists NPI, name, type, city, state and ZIP, and ``has_phone``. It
-never carries a phone or fax number. Those come from
-``r6.directory.contact`` for one chosen NPI, which no route here serves.
-Beside the results it says how many rows the directory returned that are
+never carries a phone or fax number, and no route here serves one. Beside
+the results it says how many rows the directory returned that are
 not listed (``dropped``) and whether there may be more (``truncated``).
 
 Audit: one AuditEvent per search that reached the client. Its detail is the
@@ -19,10 +18,15 @@ source and two counts, results and dropped. The search terms are not
 recorded: next to a tenant id, a clinician's name says who somebody's doctor
 is.
 
+The answer is public directory data. No patient record is read to build it,
+so there is nothing for redaction to strip and it is not passed through it.
+
 OFF unless DIRECTORY_SEARCH_ENABLED is set (`search_enabled`): any tenant
 grant could otherwise spend the directories' small anonymous quota, and
 nothing limits searches per tenant yet. Off, the route answers 404 before the
-tenant is read, so nothing is audited and nothing is sent.
+tenant is read, so nothing is audited and nothing is sent. Turning it on is
+the maintainer's call, per deployment, and waits for the per-tenant limit
+(#1192) and the follow-ups in #1194.
 """
 
 import os
@@ -52,20 +56,24 @@ def search():
     access.require_grant(scope=access.Scope.TENANT_BOUND, tenant=tenant)
 
     kind = request.args.get('kind')
+    # The terms are checked on their own, so a 400 can only mean the terms.
+    # An error raised while a directory's answer is read is not one.
     try:
         if kind == 'clinician':
-            source = 'ainpi'
-            found = directory.find_clinicians(request.args.get('name'),
+            source, find = 'ainpi', directory.find_clinicians
+            terms = directory.clinician_terms(request.args.get('name'),
                                               request.args.get('state'))
         elif kind == 'pharmacy':
-            source = 'nppes'
-            found = directory.find_pharmacies(request.args.get('zip'))
+            source, find = 'nppes', directory.find_pharmacies
+            terms = (directory.pharmacy_term(request.args.get('zip')),)
         else:
             raise ValueError('kind must be clinician or pharmacy')
     except ValueError:
         # Refused before anything was sent. Fixed wording: the terms are
         # not echoed back.
         return jsonify({'error': 'invalid_parameters'}), 400
+    try:
+        found = find(*terms)
     except directory.Unavailable:
         access.audit(tenant=tenant, event_type='read',
                      resource_type='Directory', outcome='failure',

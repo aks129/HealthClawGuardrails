@@ -2,16 +2,21 @@
 
 No test reaches a directory. What is recorded and what is invented:
 
-- Field names and nesting are the ones both services answered with on
-  2026-11-25. The first commit and the pull request say so; the commands
-  and the raw answers were not recorded, so nothing here can be re-checked
-  against a capture.
+- NPPES: tests/fixtures/directory_nppes_capture.json is one answer captured
+  on 2026-11-27. Its header gives the exact request and what was replaced:
+  keys, nesting and types are as answered, every value that could name a
+  provider is invented. The hand-built NPPES rows below are checked against
+  it (`test_the_hand_built_rows_have_the_captured_shape`).
+- AINPI: no capture is checked in. Its field names and nesting are the ones
+  it answered with on 2026-11-25, as the first commit and the pull request
+  say; the command and the raw answer were not recorded.
 - Every value is invented: names, NPIs (with a valid check digit), numbers,
   cities, counts and dates. The rows marked "Dropped" and every body built
   inside a test were constructed for that test and never seen live.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 import requests
@@ -162,32 +167,73 @@ def test_pharmacy_search_keeps_practice_locations_in_the_zip_only():
          "PHILADELPHIA", "PA", False),
     ]
     assert not hasattr(found[0], "phone")
+    # has_phone is a yes or no about ten digits, and keeps none of them.
+    worded = _pharmacy("1666666668", "SAMPLE PHARMACY", "19104", phone="CALL")
+    assert directory.find_pharmacies("19104", session=FakeSession(
+        {"results": [worded]})).listings[0].has_phone is False
     assert not any(part in repr(found) for part in NUMBER_PARTS)
     assert "upstream wording" not in repr(found)
 
 
 @pytest.mark.parametrize("bad", ["1910", "191034606", "19103*", "abcde", None])
-def test_a_malformed_zip_or_npi_sends_nothing(bad):
+def test_a_malformed_zip_sends_nothing(bad):
     session = FakeSession(NPPES_BODY)
     with pytest.raises(ValueError):
         directory.find_pharmacies(bad, session=session)
-    with pytest.raises(ValueError):
-        directory.contact(bad, session=session)
-    with pytest.raises(ValueError):
-        directory.contact("1666666669", session=session)  # check digit
     assert session.calls == []
 
 
-def test_numbers_come_only_from_the_by_npi_call_and_the_location_address():
-    session = FakeSession({"result_count": 1, "results": [NPPES_BODY["results"][0]]})
-    got = directory.contact("1666666668", session=session)
-    assert session.sent_url() == \
-        "https://npiregistry.cms.hhs.gov/api/?version=2.1&number=1666666668"
-    assert got == directory.Contact("1666666668", "SAMPLE PHARMACY #12",
-                                    "2155550100", "2155550101")
-    assert directory.contact(
-        "1234567893", session=FakeSession({"result_count": 0, "results": []})
-    ) is None
+CAPTURE = json.loads((Path(__file__).parent / "fixtures"
+                      / "directory_nppes_capture.json").read_text())
+
+
+def test_the_client_reads_the_captured_nppes_answer():
+    """The capture is a real answer with its values replaced (see its
+    header). Rows, in order: a pharmacy in the ZIP; one whose second
+    practice location is in the ZIP; one with only a mailing address there;
+    one in the ZIP with no listed pharmacy type; a pharmacy in the ZIP.
+
+    MUTATION: read `addresses` only, not `practiceLocations` -> the second
+    row is dropped -> red. MUTATION: match `address_purpose` on a value the
+    registry does not use -> nothing is listed -> red. MUTATION: add a code
+    to PHARMACY_TYPES that was not in the answer -> KeyError -> red."""
+    session = FakeSession(CAPTURE["body"])
+    got = directory.find_pharmacies("19103", session=session)
+    # The request the capture was made with is the one the client sends.
+    assert "GET " + session.sent_url() == CAPTURE["captured"]["request"]
+    assert [(e.name, e.taxonomy, e.city, e.state, e.postal_code, e.has_phone)
+            for e in got.listings] == [
+        ("SAMPLE PHARMACY A", "Community pharmacy", "PHILADELPHIA", "PA",
+         "19103", True),
+        ("SAMPLE PHARMACY B", "Specialty pharmacy", "PHILADELPHIA", "PA",
+         "19103", True),
+        ("SAMPLE PHARMACY E", "Community pharmacy", "PHILADELPHIA", "PA",
+         "19103", True),
+    ]
+    assert (got.dropped, got.truncated) == (2, False)
+    assert all(directory.is_npi(e.npi) for e in got.listings)
+    # Every type the client lists was in the full answer, as a pharmacy.
+    seen = CAPTURE["captured"]["pharmacy_taxonomies_in_the_full_answer"]
+    assert all(seen[code].startswith("Pharmacy")
+               for code in directory.PHARMACY_TYPES)
+
+
+def _paths(value, at=""):
+    """Every key path in a body, with the type found at its end."""
+    if isinstance(value, dict):
+        return set().union(*(_paths(v, f"{at}.{k}") for k, v in value.items()))
+    if isinstance(value, list):
+        return set().union(*(_paths(v, at + "[]") for v in value))
+    return {f"{at}:{type(value).__name__}"}
+
+
+def test_the_hand_built_rows_have_the_captured_shape():
+    """MUTATION: rename a key in `_pharmacy`, or change a value's type ->
+    red."""
+    assert _paths([_pharmacy("1666666668", "SAMPLE PHARMACY", "191034606")]) \
+        <= _paths(CAPTURE["body"]["results"])
+    assert _paths({k: v for k, v in NPPES_BODY.items() if k != "results"}) \
+        <= _paths({k: v for k, v in CAPTURE["body"].items() if k != "results"})
 
 
 @pytest.mark.parametrize("session", [
@@ -231,7 +277,6 @@ def _echoed(body):
     (lambda s: directory.find_pharmacies("19103", session=s), {"data": {}}),
     (lambda s: directory.find_pharmacies("19103", session=s),
      {"results": {"0": {}}}),
-    (lambda s: directory.contact("1666666668", session=s), {}),
 ])
 def test_an_answer_without_its_list_of_rows_is_unavailable_never_none(
         ask, body, monkeypatch):
@@ -345,7 +390,7 @@ def test_an_answer_is_cached_by_its_terms_and_expires(monkeypatch):
 
 def _audits():
     return [(a.outcome, a.detail) for a in AuditEventRecord.query.filter_by(
-        resource_type="Directory").all()]
+        resource_type="Directory").order_by(AuditEventRecord.recorded).all()]
 
 
 @pytest.fixture
@@ -445,6 +490,22 @@ def test_the_route_answers_400_for_bad_terms_and_sends_nothing(
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "invalid_parameters"}
     assert session.calls == []
+
+
+def test_only_the_terms_can_answer_400(
+        client, search_on, auth_headers, monkeypatch):
+    """MUTATION: call the finder inside the route's validation `try` -> its
+    ValueError is answered 400 invalid_parameters -> red."""
+    def broken(*terms):
+        raise ValueError("raised while a directory's answer was read")
+
+    monkeypatch.setattr(directory, "find_pharmacies", broken)
+    try:
+        status = client.get("/r6/directory/search?kind=pharmacy&zip=19103",
+                            headers=auth_headers).status_code
+    except ValueError:
+        status = 500  # the test client re-raises what a server answers 500
+    assert status == 500
 
 
 def test_the_route_says_unavailable_and_audits_without_the_terms(
