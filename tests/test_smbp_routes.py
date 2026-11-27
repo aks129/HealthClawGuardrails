@@ -113,3 +113,15 @@ def test_report_skips_a_deleted_reading(client, app, tenant_id, auth_headers,
     assert b"128/78" in html.data
     assert b"188/118" not in html.data, (
         "a reading the patient deleted is in the clinician's report")
+
+
+def test_reading_rejects_transposed_pair_without_storing(client, auth_headers, tenant_id, app):
+    resp = client.post("/r6/smbp/reading", headers=auth_headers,
+                       json={"patient_ref": "Patient/p1", "systolic": 80,
+                             "diastolic": 120, "effective": "2026-06-04T08:00:00Z"})
+    assert resp.status_code == 400
+    assert "take it again" in resp.get_json()["issue"][0]["diagnostics"]
+    with app.app_context():
+        n = R6Resource.query.filter_by(resource_type="Observation",
+                                       tenant_id=tenant_id).count()
+        assert n == 0
