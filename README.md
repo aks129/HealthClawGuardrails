@@ -14,6 +14,11 @@
 **[▶ Watch the 90-second demo](https://healthclaw.io/#demo)**<br/>
 <sub>All records are synthetic. The chat ran on a third-party model, best of four takes. No clinician has signed off yet. [How it was made](docs/video/2.0-demo/disclosures.md).</sub>
 
+<a href="https://careagents.cloud/beta#overview"><img src=".github/assets/careagents-demo-preview.jpg" alt="CareAgents overview video preview" width="640"></a>
+
+**[▶ Watch CareAgents, the consumer app built on HealthClaw (96 seconds)](https://careagents.cloud/beta#overview)**<br/>
+<sub>All records are synthetic. Narration and music are AI-generated. Recorded on a pre-release build. Calls and booking, shown as "coming next", are not built.</sub>
+
 <br/>
 
 <!-- Project -->
