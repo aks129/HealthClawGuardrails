@@ -1,9 +1,19 @@
 name: security-baseline
-on: [pull_request, push]
+# PRs run once on pull_request; a push trigger on every branch ran the scan a
+# second time per push. main still scans on push.
+on:
+  pull_request:
+  push:
+    branches: [main, master]
 
 # The reusable scan workflow declares `contents: read`; grant exactly that.
 permissions:
   contents: read
+
+# A new push to a PR supersedes the scan in flight; main keeps every run.
+concurrency:
+  group: security-baseline-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scan:

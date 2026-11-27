@@ -11,6 +11,9 @@ on:
   # job below is read-only reporting, so it is safe on any base; if one ever
   # becomes too expensive for a stack, gate that job, not the workflow.
   pull_request:
+    # Default types plus ready_for_review: heavy jobs skip drafts (below), so
+    # marking a draft ready must start them.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege: every job here only reads the repo (tests, lint, gitleaks,
 # audits). No job writes contents, comments, or uploads results.
@@ -25,6 +28,7 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # Full history: the table-stakes check diffs against the merge base, so
       # a shallow clone would silently find no added lines and pass.
@@ -57,6 +61,7 @@ jobs:
 
   python-tests:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # Normal run is under 10 minutes in parallel; a stalled one (68 min on
     # #1000) should fail fast and be re-run, not hold the merge queue.
     timeout-minutes: 25
@@ -88,6 +93,7 @@ jobs:
   # No coverage floor: the full run above owns that.
   core-only-tests:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -132,6 +138,7 @@ jobs:
   # ─────────────────────────────────────────────
   postgres-tests:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # A row-lock wait that never ends hangs the run until GitHub's 6-hour
     # limit (#1007). The lane takes about 20 minutes serial; -n auto gives
     # each worker its own database (tests/conftest.py).
@@ -182,6 +189,8 @@ jobs:
 
   node-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     defaults:
       run:
         working-directory: services/agent-orchestrator
@@ -192,6 +201,8 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: services/agent-orchestrator/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -204,6 +215,8 @@ jobs:
 
   playwright-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     defaults:
       run:
         working-directory: e2e
@@ -246,6 +259,8 @@ jobs:
 
   compose-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # MCP_AUTH_TOKEN is a required compose variable (the MCP transports are
     # auth-gated); docker compose interpolates the whole file even when only
     # the Flask service is started, so it must be set for the lane to run.
@@ -322,6 +337,7 @@ jobs:
   # ─────────────────────────────────────────────
   secret-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -338,6 +354,8 @@ jobs:
   # ─────────────────────────────────────────────
   dependency-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     steps:
       - uses: actions/checkout@v7
 
@@ -411,6 +429,7 @@ jobs:
   # ─────────────────────────────────────────────
   compliance-gates:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: [compose-smoke]
     env:
       STEP_UP_SECRET: ci-compliance-secret
